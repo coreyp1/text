@@ -3,9 +3,11 @@
 #include <text/json.h>
 #include <text/json_dom.h>
 #include <text/json_writer.h>
+#include <text/json_stream.h>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // Include internal header for testing internal functions
 extern "C" {
@@ -2758,6 +2760,143 @@ TEST(DOMWrite, RoundTrip) {
     text_json_sink_buffer_free(&sink);
     text_json_free(parsed);
     text_json_free(reparsed);
+}
+
+/**
+ * Test streaming parser - stream creation and destruction
+ */
+TEST(StreamingParser, CreationAndDestruction) {
+    // Test creation with NULL callback (should fail)
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_stream* st = text_json_stream_new(&opts, nullptr, nullptr);
+    EXPECT_EQ(st, nullptr);
+
+    // Test creation with valid callback
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)user;
+        (void)evt;
+        (void)err;
+        return TEXT_JSON_OK;
+    };
+    st = text_json_stream_new(&opts, callback, nullptr);
+    EXPECT_NE(st, nullptr);
+
+    // Test destruction
+    text_json_stream_free(st);
+    text_json_stream_free(nullptr);  // Should be safe
+
+    // Test creation with NULL options (should use defaults)
+    st = text_json_stream_new(nullptr, callback, nullptr);
+    EXPECT_NE(st, nullptr);
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - callback invocation (basic)
+ *
+ * For Task 15, we just test that the stream can be created and that
+ * callbacks can be set up. Actual parsing will be tested in Task 16.
+ */
+TEST(StreamingParser, CallbackSetup) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    // Track callback invocations
+    struct {
+        std::vector<text_json_event_type> events;
+        void* user_data;
+    } context = {{}, (void*)0x12345};
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* ctx = static_cast<decltype(context)*>(user);
+        if (ctx) {
+            ctx->events.push_back(evt->type);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &context);
+    ASSERT_NE(st, nullptr);
+
+    // For Task 15, we just verify the stream is set up correctly
+    // Actual event emission will be tested in Task 16
+    EXPECT_EQ(context.events.size(), 0u);
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - stream state persistence
+ *
+ * Test that the stream maintains state across feed calls.
+ * For Task 15, we just verify the infrastructure is in place.
+ */
+TEST(StreamingParser, StatePersistence) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)user;
+        (void)evt;
+        (void)err;
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, nullptr);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Feed empty input (should be OK)
+    text_json_status status = text_json_stream_feed(st, "", 0, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Feed some data (will be buffered, parsing happens in Task 16)
+    const char* data = "null";
+    status = text_json_stream_feed(st, data, strlen(data), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Feed more data
+    status = text_json_stream_feed(st, " true", 5, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Finish should validate state (but won't parse yet in Task 15)
+    status = text_json_stream_finish(st, &err);
+    // This will fail because we haven't parsed anything, but that's expected for Task 15
+    // In Task 16, this will succeed after parsing
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - error handling
+ */
+TEST(StreamingParser, ErrorHandling) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)user;
+        (void)evt;
+        (void)err;
+        return TEXT_JSON_OK;
+    };
+
+    text_json_error err;
+
+    // NULL stream
+    text_json_status status = text_json_stream_feed(nullptr, "null", 4, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    status = text_json_stream_finish(nullptr, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // NULL bytes with non-zero length
+    text_json_stream* st = text_json_stream_new(&opts, callback, nullptr);
+    ASSERT_NE(st, nullptr);
+
+    status = text_json_stream_feed(st, nullptr, 10, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    text_json_stream_free(st);
 }
 
 int main(int argc, char **argv) {

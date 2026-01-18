@@ -17,12 +17,6 @@
 // Forward declaration (json_context is defined in json_dom.c)
 typedef struct json_context json_context;
 
-// Default limits (used when opts->max_* is 0)
-#define JSON_DEFAULT_MAX_DEPTH 256
-#define JSON_DEFAULT_MAX_STRING_BYTES (16 * 1024 * 1024)  // 16MB
-#define JSON_DEFAULT_MAX_CONTAINER_ELEMS (1024 * 1024)     // 1M
-#define JSON_DEFAULT_MAX_TOTAL_BYTES (64 * 1024 * 1024)    // 64MB
-
 // Parser state structure
 typedef struct {
     json_lexer lexer;                    ///< Lexer for tokenization
@@ -1087,7 +1081,7 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
         case JSON_TOKEN_INFINITY:
         case JSON_TOKEN_NEG_INFINITY:
             // Nonfinite numbers - create as number with special lexeme
-            // For now, treat as error if not allowed (Task 11 will handle this properly)
+            // TODO: Handle extension options (comments, trailing commas, etc.) if needed
             if (!parser->opts || !parser->opts->allow_nonfinite_numbers) {
                 result = json_parser_set_error(
                     parser,

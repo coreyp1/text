@@ -18,6 +18,14 @@ extern "C" {
 #endif
 
 /**
+ * @brief Default limits for JSON parsing (used when opts->max_* is 0)
+ */
+#define JSON_DEFAULT_MAX_DEPTH 256
+#define JSON_DEFAULT_MAX_STRING_BYTES (16 * 1024 * 1024)  // 16MB
+#define JSON_DEFAULT_MAX_CONTAINER_ELEMS (1024 * 1024)     // 1M
+#define JSON_DEFAULT_MAX_TOTAL_BYTES (64 * 1024 * 1024)    // 64MB
+
+/**
  * @brief Position tracking structure for string processing
  */
 typedef struct {
