@@ -16,10 +16,11 @@
 // Streaming parser state machine states
 typedef enum {
     JSON_STREAM_STATE_INIT,        ///< Initial state, waiting for first value
-    JSON_STREAM_STATE_VALUE,       ///< Parsing a value
-    JSON_STREAM_STATE_ARRAY,       ///< Inside an array
-    JSON_STREAM_STATE_OBJECT_KEY,  ///< Expecting object key
-    JSON_STREAM_STATE_OBJECT_VALUE,///< Expecting object value (after key)
+    JSON_STREAM_STATE_VALUE,       ///< Just processed a value, waiting for comma or closing bracket/brace
+    JSON_STREAM_STATE_ARRAY,       ///< Inside an array, expecting value or ]
+    JSON_STREAM_STATE_OBJECT_KEY,  ///< Inside object, expecting key
+    JSON_STREAM_STATE_OBJECT_VALUE,///< Just processed key, expecting colon
+    JSON_STREAM_STATE_EXPECT_VALUE,///< Expecting a value (after colon in object, or in array)
     JSON_STREAM_STATE_DONE,        ///< Parsing complete
     JSON_STREAM_STATE_ERROR        ///< Error state
 } json_stream_state;
@@ -28,6 +29,7 @@ typedef enum {
 typedef struct {
     json_stream_state state;       ///< State when entering this level
     int is_array;                  ///< 1 if array, 0 if object
+    int has_elements;              ///< 1 if container has at least one element
 } json_stream_stack_entry;
 
 // Internal streaming parser structure
@@ -46,6 +48,7 @@ struct text_json_stream {
     size_t input_buffer_size;      ///< Allocated size of buffer
     size_t input_buffer_used;      ///< Used portion of buffer
     size_t input_buffer_processed; ///< Processed portion of buffer
+    size_t buffer_start_offset;    ///< Absolute offset where buffer starts in total input
 
     // Lexer state (will be initialized when we have enough input)
     json_lexer lexer;              ///< Lexer instance
@@ -191,6 +194,7 @@ static text_json_status json_stream_push(
 
     st->stack[st->stack_size].state = state;
     st->stack[st->stack_size].is_array = is_array;
+    st->stack[st->stack_size].has_elements = 0;
     st->stack_size++;
     st->depth++;
 
@@ -211,6 +215,618 @@ static json_stream_stack_entry* json_stream_top(text_json_stream* st) {
         return NULL;
     }
     return &st->stack[st->stack_size - 1];
+}
+
+// Forward declarations
+static text_json_status json_stream_handle_token(
+    text_json_stream* st,
+    const json_token* token,
+    text_json_error* err
+);
+static text_json_status json_stream_handle_value_token(
+    text_json_stream* st,
+    const json_token* token,
+    text_json_error* err
+);
+
+// Emit an event through the callback
+static text_json_status json_stream_emit_event(
+    text_json_stream* st,
+    text_json_event_type type,
+    const text_json_event* evt_data
+) {
+    text_json_event evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.type = type;
+
+    if (evt_data) {
+        evt = *evt_data;
+    }
+
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+    text_json_status status = st->callback(st->user_data, &evt, &err);
+
+    if (status != TEXT_JSON_OK) {
+        st->state = JSON_STREAM_STATE_ERROR;
+        return status;
+    }
+
+    return TEXT_JSON_OK;
+}
+
+// Compact the input buffer by shifting unprocessed data to the start
+static void json_stream_compact_buffer(text_json_stream* st) {
+    if (st->input_buffer_processed == 0) {
+        return;  // Nothing to compact
+    }
+
+    if (st->input_buffer_processed >= st->input_buffer_used) {
+        // All data processed, reset buffer
+        st->input_buffer_used = 0;
+        st->input_buffer_processed = 0;
+        st->buffer_start_offset = st->total_bytes_consumed;
+        return;
+    }
+
+    // Shift remaining data to start of buffer
+    size_t remaining = st->input_buffer_used - st->input_buffer_processed;
+    memmove(st->input_buffer, st->input_buffer + st->input_buffer_processed, remaining);
+
+    // Update buffer start offset to reflect the new buffer position
+    st->buffer_start_offset += st->input_buffer_processed;
+    st->input_buffer_used = remaining;
+    st->input_buffer_processed = 0;
+}
+
+// Process tokens from the buffered input
+static text_json_status json_stream_process_tokens(
+    text_json_stream* st,
+    text_json_error* err
+) {
+    // Compact buffer if needed (shift unprocessed data to start)
+    json_stream_compact_buffer(st);
+
+    // If no unprocessed data, nothing to do
+    if (st->input_buffer_used == 0) {
+        return TEXT_JSON_OK;
+    }
+
+    // Initialize or reinitialize lexer with current buffer
+    // We reinitialize after compacting to ensure the input pointer is valid
+    text_json_status status = json_lexer_init(
+        &st->lexer,
+        st->input_buffer,
+        st->input_buffer_used,
+        &st->opts
+    );
+    if (status != TEXT_JSON_OK) {
+        st->state = JSON_STREAM_STATE_ERROR;
+        if (err) {
+            err->code = status;
+            err->message = "Failed to initialize lexer";
+                err->offset = st->buffer_start_offset;
+            err->line = 1;
+            err->col = 1;
+        }
+        return status;
+    }
+    st->lexer_initialized = 1;
+
+    // Process tokens until we can't continue (EOF or error)
+    json_token token;
+    while (1) {
+        memset(&token, 0, sizeof(token));
+
+        text_json_status status = json_lexer_next(&st->lexer, &token);
+        if (status != TEXT_JSON_OK) {
+            // Error tokenizing - might be incomplete input or actual error
+            // If it's a string/number parsing error, might need more input
+            if (token.type == JSON_TOKEN_ERROR) {
+                // Check if we're at EOF - if so, we might need more input
+                if (st->lexer.current_offset >= st->lexer.input_len) {
+                    // At end of current buffer, wait for more input
+                    json_token_cleanup(&token);
+                    return TEXT_JSON_OK;
+                }
+            }
+
+            // Real error
+            st->state = JSON_STREAM_STATE_ERROR;
+            if (err) {
+                err->code = status;
+                err->message = "Tokenization error";
+                err->offset = st->total_bytes_consumed - st->input_buffer_used + token.pos.offset;
+                err->line = token.pos.line;
+                err->col = token.pos.col;
+            }
+            json_token_cleanup(&token);
+            return status;
+        }
+
+        // Update processed offset
+        st->input_buffer_processed = st->lexer.current_offset;
+
+        // Handle EOF
+        if (token.type == JSON_TOKEN_EOF) {
+            json_token_cleanup(&token);
+            // At end of buffer, wait for more input (unless finish() was called)
+            return TEXT_JSON_OK;
+        }
+
+        // Process token based on current state
+        status = json_stream_handle_token(st, &token, err);
+        json_token_cleanup(&token);
+
+        if (status != TEXT_JSON_OK) {
+            return status;
+        }
+
+        // If we're in error or done state, stop processing
+        if (st->state == JSON_STREAM_STATE_ERROR || st->state == JSON_STREAM_STATE_DONE) {
+            return status;
+        }
+    }
+}
+
+// Handle a token based on current parser state
+static text_json_status json_stream_handle_token(
+    text_json_stream* st,
+    const json_token* token,
+    text_json_error* err
+) {
+    text_json_status status;
+
+    // Handle based on current state
+    switch (st->state) {
+        case JSON_STREAM_STATE_INIT:
+            // Expecting first value
+            return json_stream_handle_value_token(st, token, err);
+
+        case JSON_STREAM_STATE_VALUE:
+            // Just processed a value, expect comma or closing bracket/brace
+            if (token->type == JSON_TOKEN_COMMA) {
+                // Continue to next value
+                json_stream_stack_entry* top = json_stream_top(st);
+                if (!top) {
+                    // Comma at root level - invalid
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                    err->code = TEXT_JSON_E_BAD_TOKEN;
+                    err->message = "Unexpected comma at root level";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Update state based on container type
+                if (top->is_array) {
+                    st->state = JSON_STREAM_STATE_EXPECT_VALUE;
+                } else {
+                    st->state = JSON_STREAM_STATE_OBJECT_KEY;
+                }
+                return TEXT_JSON_OK;
+            } else if (token->type == JSON_TOKEN_RBRACKET) {
+                // End of array
+                json_stream_stack_entry* top = json_stream_top(st);
+                if (!top || !top->is_array) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Unexpected ]";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Check for trailing comma (if container has elements and we're expecting a value)
+                if (top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE && !st->opts.allow_trailing_commas) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Trailing comma not allowed";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Emit array end event
+                text_json_event evt;
+                evt.type = TEXT_JSON_EVT_ARRAY_END;
+                status = json_stream_emit_event(st, TEXT_JSON_EVT_ARRAY_END, &evt);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+
+                json_stream_pop(st);
+                if (st->stack_size == 0) {
+                    st->state = JSON_STREAM_STATE_DONE;
+                } else {
+                    // Mark that parent container has elements (nested array counts as element)
+                    json_stream_stack_entry* top = json_stream_top(st);
+                    if (top) {
+                        top->has_elements = 1;
+                    }
+                    st->state = JSON_STREAM_STATE_VALUE;
+                }
+                return TEXT_JSON_OK;
+            } else if (token->type == JSON_TOKEN_RBRACE) {
+                // End of object
+                json_stream_stack_entry* top = json_stream_top(st);
+                if (!top || top->is_array) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Unexpected }";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Check for trailing comma (if container has elements and we're expecting a key)
+                if (top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY && !st->opts.allow_trailing_commas) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Trailing comma not allowed";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Emit object end event
+                text_json_event evt;
+                evt.type = TEXT_JSON_EVT_OBJECT_END;
+                status = json_stream_emit_event(st, TEXT_JSON_EVT_OBJECT_END, &evt);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+
+                json_stream_pop(st);
+                if (st->stack_size == 0) {
+                    st->state = JSON_STREAM_STATE_DONE;
+                } else {
+                    // Mark that parent container has elements (nested object counts as element)
+                    json_stream_stack_entry* top = json_stream_top(st);
+                    if (top) {
+                        top->has_elements = 1;
+                    }
+                    st->state = JSON_STREAM_STATE_VALUE;
+                }
+                return TEXT_JSON_OK;
+            } else {
+                // Unexpected token
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = TEXT_JSON_E_BAD_TOKEN;
+                    err->message = "Unexpected token after value";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                }
+                return TEXT_JSON_E_BAD_TOKEN;
+            }
+
+        case JSON_STREAM_STATE_ARRAY:
+            // Expecting array element value
+            return json_stream_handle_value_token(st, token, err);
+
+        case JSON_STREAM_STATE_EXPECT_VALUE:
+            // Expecting a value (after colon in object, or first element in array)
+            // But also check for empty containers (closing bracket/brace)
+            if (token->type == JSON_TOKEN_RBRACKET) {
+                // End of array (empty array)
+                json_stream_stack_entry* top = json_stream_top(st);
+                if (!top || !top->is_array) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Unexpected ]";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Emit array end event
+                text_json_event evt;
+                evt.type = TEXT_JSON_EVT_ARRAY_END;
+                status = json_stream_emit_event(st, TEXT_JSON_EVT_ARRAY_END, &evt);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+
+                json_stream_pop(st);
+                if (st->stack_size == 0) {
+                    st->state = JSON_STREAM_STATE_DONE;
+                } else {
+                    json_stream_stack_entry* parent = json_stream_top(st);
+                    if (parent) {
+                        parent->has_elements = 1;
+                    }
+                    st->state = JSON_STREAM_STATE_VALUE;
+                }
+                return TEXT_JSON_OK;
+            } else if (token->type == JSON_TOKEN_RBRACE) {
+                // End of object (empty object)
+                json_stream_stack_entry* top = json_stream_top(st);
+                if (!top || top->is_array) {
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_BAD_TOKEN;
+                        err->message = "Unexpected }";
+                        err->offset = st->buffer_start_offset + token->pos.offset;
+                        err->line = token->pos.line;
+                        err->col = token->pos.col;
+                    }
+                    return TEXT_JSON_E_BAD_TOKEN;
+                }
+
+                // Emit object end event
+                text_json_event evt;
+                evt.type = TEXT_JSON_EVT_OBJECT_END;
+                status = json_stream_emit_event(st, TEXT_JSON_EVT_OBJECT_END, &evt);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+
+                json_stream_pop(st);
+                if (st->stack_size == 0) {
+                    st->state = JSON_STREAM_STATE_DONE;
+                } else {
+                    json_stream_stack_entry* parent = json_stream_top(st);
+                    if (parent) {
+                        parent->has_elements = 1;
+                    }
+                    st->state = JSON_STREAM_STATE_VALUE;
+                }
+                return TEXT_JSON_OK;
+            }
+            // Otherwise, handle as value token
+            return json_stream_handle_value_token(st, token, err);
+
+        case JSON_STREAM_STATE_OBJECT_KEY:
+            // Expecting object key
+            if (token->type != JSON_TOKEN_STRING) {
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = TEXT_JSON_E_BAD_TOKEN;
+                    err->message = "Expected object key (string)";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                }
+                return TEXT_JSON_E_BAD_TOKEN;
+            }
+
+            // Emit key event
+            {
+                text_json_event evt;
+                evt.type = TEXT_JSON_EVT_KEY;
+                evt.as.str.s = token->data.string.value;
+                evt.as.str.len = token->data.string.value_len;
+                status = json_stream_emit_event(st, TEXT_JSON_EVT_KEY, &evt);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
+
+            st->state = JSON_STREAM_STATE_OBJECT_VALUE;
+            return TEXT_JSON_OK;
+
+        case JSON_STREAM_STATE_OBJECT_VALUE:
+            // Expecting colon after key
+            if (token->type != JSON_TOKEN_COLON) {
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = TEXT_JSON_E_BAD_TOKEN;
+                    err->message = "Expected colon after object key";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                }
+                return TEXT_JSON_E_BAD_TOKEN;
+            }
+
+            // After colon, expect value
+            st->state = JSON_STREAM_STATE_EXPECT_VALUE;
+            return TEXT_JSON_OK;
+
+        default:
+            st->state = JSON_STREAM_STATE_ERROR;
+            if (err) {
+                err->code = TEXT_JSON_E_STATE;
+                err->message = "Invalid parser state";
+                err->offset = st->total_bytes_consumed - st->input_buffer_used + token->pos.offset;
+                err->line = token->pos.line;
+                err->col = token->pos.col;
+            }
+            return TEXT_JSON_E_STATE;
+    }
+}
+
+// Handle a value token (null, bool, number, string, array begin, object begin)
+static text_json_status json_stream_handle_value_token(
+    text_json_stream* st,
+    const json_token* token,
+    text_json_error* err
+) {
+    text_json_status status;
+    text_json_event evt;
+
+    switch (token->type) {
+        case JSON_TOKEN_NULL:
+            evt.type = TEXT_JSON_EVT_NULL;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_NULL, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+            break;
+
+        case JSON_TOKEN_TRUE:
+        case JSON_TOKEN_FALSE:
+            evt.type = TEXT_JSON_EVT_BOOL;
+            evt.as.boolean = (token->type == JSON_TOKEN_TRUE) ? 1 : 0;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_BOOL, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+            break;
+
+        case JSON_TOKEN_NUMBER:
+            evt.type = TEXT_JSON_EVT_NUMBER;
+            evt.as.number.s = token->data.number.lexeme;
+            evt.as.number.len = token->data.number.lexeme_len;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_NUMBER, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+            break;
+
+        case JSON_TOKEN_STRING:
+            evt.type = TEXT_JSON_EVT_STRING;
+            evt.as.str.s = token->data.string.value;
+            evt.as.str.len = token->data.string.value_len;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_STRING, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+            break;
+
+        case JSON_TOKEN_LBRACKET:
+            // Array begin
+            status = json_stream_push(st, st->state, 1);
+            if (status != TEXT_JSON_OK) {
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = status;
+                    err->message = "Failed to push array onto stack";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                }
+                return status;
+            }
+
+            // Reset element count for new container
+            st->container_elem_count = 0;
+
+            evt.type = TEXT_JSON_EVT_ARRAY_BEGIN;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_ARRAY_BEGIN, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+
+            st->state = JSON_STREAM_STATE_EXPECT_VALUE;
+            return TEXT_JSON_OK;
+
+        case JSON_TOKEN_LBRACE:
+            // Object begin
+            status = json_stream_push(st, st->state, 0);
+            if (status != TEXT_JSON_OK) {
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = status;
+                    err->message = "Failed to push object onto stack";
+                    err->offset = st->buffer_start_offset + token->pos.offset;
+                    err->line = token->pos.line;
+                    err->col = token->pos.col;
+                }
+                return status;
+            }
+
+            // Reset element count for new container
+            st->container_elem_count = 0;
+
+            evt.type = TEXT_JSON_EVT_OBJECT_BEGIN;
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_OBJECT_BEGIN, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+
+            st->state = JSON_STREAM_STATE_OBJECT_KEY;
+            return TEXT_JSON_OK;
+
+        case JSON_TOKEN_NAN:
+        case JSON_TOKEN_INFINITY:
+        case JSON_TOKEN_NEG_INFINITY:
+            // Nonfinite numbers - emit as number event with lexeme
+            evt.type = TEXT_JSON_EVT_NUMBER;
+            // For nonfinite numbers, we need to get the lexeme from the token
+            // The lexer should have stored it in the number structure
+            if (token->type == JSON_TOKEN_NAN) {
+                evt.as.number.s = "NaN";
+                evt.as.number.len = 3;
+            } else if (token->type == JSON_TOKEN_INFINITY) {
+                evt.as.number.s = "Infinity";
+                evt.as.number.len = 8;
+            } else {
+                evt.as.number.s = "-Infinity";
+                evt.as.number.len = 9;
+            }
+            status = json_stream_emit_event(st, TEXT_JSON_EVT_NUMBER, &evt);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+            break;
+
+        default:
+            st->state = JSON_STREAM_STATE_ERROR;
+            if (err) {
+                err->code = TEXT_JSON_E_BAD_TOKEN;
+                err->message = "Unexpected token, expected value";
+                err->offset = st->total_bytes_consumed - st->input_buffer_used + token->pos.offset;
+                err->line = token->pos.line;
+                err->col = token->pos.col;
+            }
+            return TEXT_JSON_E_BAD_TOKEN;
+    }
+
+    // After emitting a scalar value, update state
+    if (st->stack_size == 0) {
+        // Root level value - we're done
+        st->state = JSON_STREAM_STATE_DONE;
+    } else {
+        // Mark that container has elements
+        json_stream_stack_entry* top = json_stream_top(st);
+        if (top) {
+            top->has_elements = 1;
+        }
+
+        // Check container element limit
+        st->container_elem_count++;
+        size_t max_elems = json_get_limit(
+            st->opts.max_container_elems,
+            JSON_DEFAULT_MAX_CONTAINER_ELEMS
+        );
+        if (st->container_elem_count > max_elems) {
+            st->state = JSON_STREAM_STATE_ERROR;
+            if (err) {
+                err->code = TEXT_JSON_E_LIMIT;
+                err->message = "Maximum container element count exceeded";
+                err->offset = st->buffer_start_offset + token->pos.offset;
+                err->line = token->pos.line;
+                err->col = token->pos.col;
+            }
+            return TEXT_JSON_E_LIMIT;
+        }
+
+        // Inside container - expect comma or closing bracket/brace
+        st->state = JSON_STREAM_STATE_VALUE;
+    }
+
+    return TEXT_JSON_OK;
 }
 
 TEXT_API text_json_stream* text_json_stream_new(
@@ -239,6 +855,7 @@ TEXT_API text_json_stream* text_json_stream_new(
     st->state = JSON_STREAM_STATE_INIT;
     st->depth = 0;
     st->lexer_initialized = 0;
+    st->buffer_start_offset = 0;
 
     // Initialize buffers with reasonable starting sizes
     st->input_buffer_size = 4096;
@@ -388,6 +1005,11 @@ TEXT_API text_json_status text_json_stream_feed(
     memcpy(st->input_buffer + st->input_buffer_used, bytes, len);
     st->input_buffer_used += len;
 
+    // Update buffer start offset if this is the first chunk
+    if (st->buffer_start_offset == 0 && st->input_buffer_used == len) {
+        st->buffer_start_offset = 0;  // First chunk starts at offset 0
+    }
+
     // Check for integer overflow before updating total_bytes_consumed
     if (st->total_bytes_consumed > SIZE_MAX - len) {
         st->state = JSON_STREAM_STATE_ERROR;
@@ -419,12 +1041,8 @@ TEXT_API text_json_status text_json_stream_feed(
         return TEXT_JSON_E_LIMIT;
     }
 
-    // TODO: Process buffered input and emit events through callback
-    // - Initialize lexer when we have enough input
-    // - Tokenize and parse incrementally
-    // - Emit events for each value encountered
-    // - Handle string/number buffering (complete tokens before emitting)
-    return TEXT_JSON_OK;
+    // Process buffered input and emit events through callback
+    return json_stream_process_tokens(st, err);
 }
 
 TEXT_API text_json_status text_json_stream_finish(
@@ -466,10 +1084,43 @@ TEXT_API text_json_status text_json_stream_finish(
         return TEXT_JSON_E_INCOMPLETE;
     }
 
-    // TODO: Complete parsing of any remaining buffered input
-    // - Process any remaining tokens
-    // - Validate structure is complete
-    // - Emit final events if needed
+    // Complete parsing of any remaining buffered input
+    text_json_status status = json_stream_process_tokens(st, err);
+    if (status != TEXT_JSON_OK) {
+        return status;
+    }
+
+    // Check if we're in a valid final state
+    if (st->state != JSON_STREAM_STATE_DONE && st->state != JSON_STREAM_STATE_INIT) {
+        // Still have unprocessed input or incomplete structure
+        if (st->input_buffer_used > st->input_buffer_processed) {
+            // Have unprocessed input - might be incomplete token
+            st->state = JSON_STREAM_STATE_ERROR;
+            if (err) {
+                err->code = TEXT_JSON_E_INCOMPLETE;
+                err->message = "Incomplete JSON input";
+                err->offset = st->total_bytes_consumed;
+                err->line = 1;
+                err->col = 1;
+            }
+            return TEXT_JSON_E_INCOMPLETE;
+        }
+    }
+
+    // Validate final state
+    if (st->state == JSON_STREAM_STATE_INIT) {
+        // No input was provided
+        st->state = JSON_STREAM_STATE_ERROR;
+        if (err) {
+            err->code = TEXT_JSON_E_INCOMPLETE;
+            err->message = "No JSON value provided";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        return TEXT_JSON_E_INCOMPLETE;
+    }
+
     st->state = JSON_STREAM_STATE_DONE;
     return TEXT_JSON_OK;
 }

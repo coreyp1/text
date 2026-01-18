@@ -2850,19 +2850,18 @@ TEST(StreamingParser, StatePersistence) {
     text_json_status status = text_json_stream_feed(st, "", 0, &err);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
-    // Feed some data (will be buffered, parsing happens in Task 16)
+    // Feed some data - should parse successfully
     const char* data = "null";
     status = text_json_stream_feed(st, data, strlen(data), &err);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
-    // Feed more data
-    status = text_json_stream_feed(st, " true", 5, &err);
+    // Finish should succeed after parsing a complete value
+    status = text_json_stream_finish(st, &err);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
-    // Finish should validate state (but won't parse yet in Task 15)
-    status = text_json_stream_finish(st, &err);
-    // This will fail because we haven't parsed anything, but that's expected for Task 15
-    // In Task 16, this will succeed after parsing
+    // After finish, stream is in DONE state - feeding more should fail
+    status = text_json_stream_feed(st, " true", 5, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);  // Should fail - stream is done
 
     text_json_stream_free(st);
 }
@@ -2895,6 +2894,236 @@ TEST(StreamingParser, ErrorHandling) {
 
     status = text_json_stream_feed(st, nullptr, 10, &err);
     EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - basic value parsing (null, bool, number, string)
+ */
+TEST(StreamingParser, BasicValues) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    struct {
+        const char* input;
+        text_json_event_type expected_type;
+    } tests[] = {
+        {"null", TEXT_JSON_EVT_NULL},
+        {"true", TEXT_JSON_EVT_BOOL},
+        {"false", TEXT_JSON_EVT_BOOL},
+        {"123", TEXT_JSON_EVT_NUMBER},
+        {"\"hello\"", TEXT_JSON_EVT_STRING},
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        std::vector<text_json_event_type> events;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            auto* evts = static_cast<std::vector<text_json_event_type>*>(user);
+            evts->push_back(evt->type);
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &events);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+        text_json_status status = text_json_stream_feed(st, tests[i].input, strlen(tests[i].input), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed to finish for input: " << tests[i].input;
+
+        EXPECT_EQ(events.size(), 1u) << "Expected 1 event for: " << tests[i].input;
+        if (events.size() == 1) {
+            EXPECT_EQ(events[0], tests[i].expected_type) << "Event type mismatch for: " << tests[i].input;
+        }
+
+        text_json_stream_free(st);
+    }
+}
+
+/**
+ * Test streaming parser - array parsing
+ */
+TEST(StreamingParser, Arrays) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<text_json_event_type> events;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* evts = static_cast<std::vector<text_json_event_type>*>(user);
+        evts->push_back(evt->type);
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &events);
+    ASSERT_NE(st, nullptr);
+
+    const char* input = "[1, 2, 3]";
+    text_json_error err;
+    text_json_status status = text_json_stream_feed(st, input, strlen(input), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Expected events: ARRAY_BEGIN, NUMBER, NUMBER, NUMBER, ARRAY_END
+    EXPECT_EQ(events.size(), 5u);
+    if (events.size() >= 5) {
+        EXPECT_EQ(events[0], TEXT_JSON_EVT_ARRAY_BEGIN);
+        EXPECT_EQ(events[1], TEXT_JSON_EVT_NUMBER);
+        EXPECT_EQ(events[2], TEXT_JSON_EVT_NUMBER);
+        EXPECT_EQ(events[3], TEXT_JSON_EVT_NUMBER);
+        EXPECT_EQ(events[4], TEXT_JSON_EVT_ARRAY_END);
+    }
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - object parsing
+ */
+TEST(StreamingParser, Objects) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<text_json_event_type> events;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* evts = static_cast<std::vector<text_json_event_type>*>(user);
+        evts->push_back(evt->type);
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &events);
+    ASSERT_NE(st, nullptr);
+
+    const char* input = "{\"key\": \"value\"}";
+    text_json_error err;
+    text_json_status status = text_json_stream_feed(st, input, strlen(input), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Expected events: OBJECT_BEGIN, KEY, STRING, OBJECT_END
+    EXPECT_EQ(events.size(), 4u);
+    if (events.size() >= 4) {
+        EXPECT_EQ(events[0], TEXT_JSON_EVT_OBJECT_BEGIN);
+        EXPECT_EQ(events[1], TEXT_JSON_EVT_KEY);
+        EXPECT_EQ(events[2], TEXT_JSON_EVT_STRING);
+        EXPECT_EQ(events[3], TEXT_JSON_EVT_OBJECT_END);
+    }
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - incremental/chunked input
+ */
+TEST(StreamingParser, IncrementalInput) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<text_json_event_type> events;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* evts = static_cast<std::vector<text_json_event_type>*>(user);
+        evts->push_back(evt->type);
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &events);
+    ASSERT_NE(st, nullptr);
+
+    const char* input = "[1, 2, 3]";
+    text_json_error err;
+
+    // Feed byte by byte
+    for (size_t i = 0; i < strlen(input); ++i) {
+        text_json_status status = text_json_stream_feed(st, input + i, 1, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed at byte " << i;
+    }
+
+    text_json_status status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received all events
+    EXPECT_EQ(events.size(), 5u);
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - nested structures
+ */
+TEST(StreamingParser, NestedStructures) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<text_json_event_type> events;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* evts = static_cast<std::vector<text_json_event_type>*>(user);
+        evts->push_back(evt->type);
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &events);
+    ASSERT_NE(st, nullptr);
+
+    const char* input = "{\"arr\": [1, 2], \"obj\": {\"key\": \"value\"}}";
+    text_json_error err;
+    text_json_status status = text_json_stream_feed(st, input, strlen(input), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received events for nested structure
+    EXPECT_GT(events.size(), 5u);
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - error handling (invalid JSON)
+ */
+TEST(StreamingParser, InvalidJSON) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)user;
+        (void)evt;
+        (void)err;
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, nullptr);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Invalid: missing comma
+    const char* invalid1 = "[1 2]";
+    text_json_status status = text_json_stream_feed(st, invalid1, strlen(invalid1), &err);
+    // Should either succeed (buffering) or fail
+    status = text_json_stream_finish(st, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);  // Should fail on invalid JSON
+
+    text_json_stream_free(st);
+
+    // Invalid: incomplete structure
+    st = text_json_stream_new(&opts, callback, nullptr);
+    ASSERT_NE(st, nullptr);
+
+    const char* invalid2 = "[1, 2";
+    status = text_json_stream_feed(st, invalid2, strlen(invalid2), &err);
+    status = text_json_stream_finish(st, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);  // Should fail on incomplete structure
 
     text_json_stream_free(st);
 }
