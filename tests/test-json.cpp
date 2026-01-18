@@ -2444,6 +2444,318 @@ TEST(SinkAbstraction, ErrorPropagation) {
     EXPECT_NE(result, 0); // Should propagate error
 }
 
+/**
+ * Test DOM write - null value
+ */
+TEST(DOMWrite, Null) {
+    text_json_value* v = text_json_new_null();
+    ASSERT_NE(v, nullptr);
+
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+    status = text_json_write_value(&sink, &opts, v, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "null");
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(v);
+}
+
+/**
+ * Test DOM write - boolean values
+ */
+TEST(DOMWrite, Boolean) {
+    text_json_value* v_true = text_json_new_bool(1);
+    text_json_value* v_false = text_json_new_bool(0);
+    ASSERT_NE(v_true, nullptr);
+    ASSERT_NE(v_false, nullptr);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    text_json_write_value(&sink, &opts, v_true, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "true");
+
+    text_json_sink_buffer_free(&sink);
+    text_json_sink_buffer(&sink);
+
+    text_json_write_value(&sink, &opts, v_false, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "false");
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(v_true);
+    text_json_free(v_false);
+}
+
+/**
+ * Test DOM write - string values with escaping
+ */
+TEST(DOMWrite, StringEscaping) {
+    text_json_value* v1 = text_json_new_string("hello", 5);
+    text_json_value* v2 = text_json_new_string("he\"llo", 6);
+    text_json_value* v3 = text_json_new_string("he\\llo", 6);
+    text_json_value* v4 = text_json_new_string("he\nllo", 6);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+    ASSERT_NE(v3, nullptr);
+    ASSERT_NE(v4, nullptr);
+
+    text_json_sink sink;
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v1, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "\"hello\"");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v2, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "\"he\\\"llo\"");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v3, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "\"he\\\\llo\"");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v4, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "\"he\\nllo\"");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_free(v1);
+    text_json_free(v2);
+    text_json_free(v3);
+    text_json_free(v4);
+}
+
+/**
+ * Test DOM write - number values
+ */
+TEST(DOMWrite, Number) {
+    text_json_value* v1 = text_json_new_number_i64(123);
+    text_json_value* v2 = text_json_new_number_u64(456u);
+    text_json_value* v3 = text_json_new_number_double(3.14);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+    ASSERT_NE(v3, nullptr);
+
+    text_json_sink sink;
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v1, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "123");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v2, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "456");
+    text_json_sink_buffer_free(&sink);
+
+    text_json_sink_buffer(&sink);
+    text_json_write_value(&sink, &opts, v3, &err);
+    // Double output format may vary, just check it's not empty
+    EXPECT_GT(text_json_sink_buffer_size(&sink), 0u);
+    text_json_sink_buffer_free(&sink);
+
+    text_json_free(v1);
+    text_json_free(v2);
+    text_json_free(v3);
+}
+
+/**
+ * Test DOM write - array values
+ */
+TEST(DOMWrite, Array) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    text_json_value* v1 = text_json_new_number_i64(1);
+    text_json_value* v2 = text_json_new_string("two", 3);
+    text_json_value* v3 = text_json_new_bool(1);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+    ASSERT_NE(v3, nullptr);
+
+    text_json_array_push(arr, v1);
+    text_json_array_push(arr, v2);
+    text_json_array_push(arr, v3);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    text_json_write_value(&sink, &opts, arr, &err);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "[1,\"two\",true]");
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(arr);
+}
+
+/**
+ * Test DOM write - object values
+ */
+TEST(DOMWrite, Object) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    text_json_value* v1 = text_json_new_number_i64(42);
+    text_json_value* v2 = text_json_new_string("value", 5);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+
+    text_json_object_put(obj, "key1", 4, v1);
+    text_json_object_put(obj, "key2", 4, v2);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    text_json_write_value(&sink, &opts, obj, &err);
+    // Output order may vary, check it contains both keys
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_NE(strstr(output, "key1"), nullptr);
+    EXPECT_NE(strstr(output, "key2"), nullptr);
+    EXPECT_NE(strstr(output, "42"), nullptr);
+    EXPECT_NE(strstr(output, "value"), nullptr);
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(obj);
+}
+
+/**
+ * Test DOM write - pretty printing
+ */
+TEST(DOMWrite, PrettyPrint) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    text_json_value* arr = text_json_new_array();
+    text_json_value* v1 = text_json_new_number_i64(1);
+    text_json_value* v2 = text_json_new_string("test", 4);
+    text_json_array_push(arr, v1);
+    text_json_array_push(arr, v2);
+
+    text_json_object_put(obj, "array", 5, arr);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+    text_json_write_options opts = text_json_write_options_default();
+    opts.pretty = 1;
+    opts.indent_spaces = 2;
+    text_json_error err;
+
+    text_json_write_value(&sink, &opts, obj, &err);
+    const char* output = text_json_sink_buffer_data(&sink);
+    // Pretty print should contain newlines
+    EXPECT_NE(strchr(output, '\n'), nullptr);
+    // Should contain indentation
+    EXPECT_NE(strstr(output, "  "), nullptr);
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(obj);
+}
+
+/**
+ * Test DOM write - key sorting for canonical output
+ */
+TEST(DOMWrite, KeySorting) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    text_json_value* v1 = text_json_new_string("first", 5);
+    text_json_value* v2 = text_json_new_string("second", 6);
+    text_json_value* v3 = text_json_new_string("third", 5);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+    ASSERT_NE(v3, nullptr);
+
+    // Add keys in non-alphabetical order
+    text_json_object_put(obj, "zebra", 5, v1);
+    text_json_object_put(obj, "apple", 5, v2);
+    text_json_object_put(obj, "banana", 6, v3);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+    text_json_write_options opts = text_json_write_options_default();
+    opts.sort_object_keys = 1;
+    text_json_error err;
+
+    text_json_write_value(&sink, &opts, obj, &err);
+    const char* output = text_json_sink_buffer_data(&sink);
+    // With sorting, "apple" should come before "banana", and "banana" before "zebra"
+    const char* apple_pos = strstr(output, "apple");
+    const char* banana_pos = strstr(output, "banana");
+    const char* zebra_pos = strstr(output, "zebra");
+    ASSERT_NE(apple_pos, nullptr);
+    ASSERT_NE(banana_pos, nullptr);
+    ASSERT_NE(zebra_pos, nullptr);
+    EXPECT_LT(apple_pos, banana_pos);
+    EXPECT_LT(banana_pos, zebra_pos);
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(obj);
+}
+
+/**
+ * Test DOM write - error handling
+ */
+TEST(DOMWrite, ErrorHandling) {
+    text_json_sink sink;
+    text_json_write_options opts = text_json_write_options_default();
+    text_json_error err;
+
+    // NULL sink
+    text_json_value* v = text_json_new_null();
+    text_json_status status = text_json_write_value(nullptr, &opts, v, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+    text_json_free(v);
+
+    // NULL value
+    text_json_sink_buffer(&sink);
+    status = text_json_write_value(&sink, &opts, nullptr, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test DOM write - round trip (parse then write)
+ */
+TEST(DOMWrite, RoundTrip) {
+    const char* input = "{\"key\":[1,2,\"three\",true,null]}";
+    text_json_parse_options parse_opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* parsed = text_json_parse(input, strlen(input), &parse_opts, &err);
+    ASSERT_NE(parsed, nullptr);
+
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+    text_json_write_options write_opts = text_json_write_options_default();
+    text_json_write_value(&sink, &write_opts, parsed, &err);
+
+    const char* output = text_json_sink_buffer_data(&sink);
+    // Output should be valid JSON (we can parse it again)
+    text_json_value* reparsed = text_json_parse(output, text_json_sink_buffer_size(&sink), &parse_opts, &err);
+    EXPECT_NE(reparsed, nullptr);
+
+    text_json_sink_buffer_free(&sink);
+    text_json_free(parsed);
+    text_json_free(reparsed);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

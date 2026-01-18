@@ -8,10 +8,15 @@
 
 #include <text/json_writer.h>
 #include <text/json.h>
+#include <text/json_dom.h>
+#include "json_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <limits.h>
+#include <stdio.h>
+#include <math.h>
+#include <ctype.h>
 
 // Internal write callback for growable buffer sink
 static int buffer_write_fn(void* user, const char* bytes, size_t len) {
@@ -230,4 +235,466 @@ int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
   }
 
   return buf->truncated;
+}
+
+// Helper function to write bytes to sink
+static int write_bytes(text_json_sink* sink, const char* bytes, size_t len) {
+  if (!sink || !sink->write || !bytes) {
+    return 1;
+  }
+  return sink->write(sink->user, bytes, len);
+}
+
+// Helper function to write a single character
+static int write_char(text_json_sink* sink, char c) {
+  return write_bytes(sink, &c, 1);
+}
+
+// Helper function to write a string
+static int write_string(text_json_sink* sink, const char* s) {
+  if (!s) {
+    return 0;
+  }
+  return write_bytes(sink, s, strlen(s));
+}
+
+// Write Unicode escape sequence \uXXXX
+static int write_unicode_escape(text_json_sink* sink, unsigned int codepoint) {
+  char buf[7];
+  int len = snprintf(buf, sizeof(buf), "\\u%04X", codepoint);
+  if (len < 0 || (size_t)len >= sizeof(buf)) {
+    return 1;
+  }
+  return write_bytes(sink, buf, (size_t)len);
+}
+
+// Escape and write a string value
+static int write_escaped_string(
+  text_json_sink* sink,
+  const char* str,
+  size_t len,
+  const text_json_write_options* opt
+) {
+  if (write_char(sink, '"') != 0) {
+    return 1;
+  }
+
+  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+  int escape_solidus = opts->escape_solidus;
+  int escape_unicode = opts->escape_unicode;
+  int escape_all_non_ascii = opts->escape_all_non_ascii;
+
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+
+    // Standard escape sequences
+    switch (c) {
+      case '"':
+        if (write_string(sink, "\\\"") != 0) return 1;
+        continue;
+      case '\\':
+        if (write_string(sink, "\\\\") != 0) return 1;
+        continue;
+      case '/':
+        if (escape_solidus) {
+          if (write_string(sink, "\\/") != 0) return 1;
+        } else {
+          if (write_char(sink, '/') != 0) return 1;
+        }
+        continue;
+      case '\b':
+        if (write_string(sink, "\\b") != 0) return 1;
+        continue;
+      case '\f':
+        if (write_string(sink, "\\f") != 0) return 1;
+        continue;
+      case '\n':
+        if (write_string(sink, "\\n") != 0) return 1;
+        continue;
+      case '\r':
+        if (write_string(sink, "\\r") != 0) return 1;
+        continue;
+      case '\t':
+        if (write_string(sink, "\\t") != 0) return 1;
+        continue;
+    }
+
+    // Control characters (0x00-0x1F) must be escaped as \uXXXX
+    if (c < 0x20) {
+      if (write_unicode_escape(sink, c) != 0) return 1;
+      continue;
+    }
+
+    // Non-ASCII characters
+    if (c >= 0x80) {
+      if (escape_all_non_ascii) {
+        // Escape all non-ASCII as \uXXXX
+        if (write_unicode_escape(sink, c) != 0) return 1;
+        continue;
+      } else if (escape_unicode) {
+        // For escape_unicode, we need to handle UTF-8 sequences properly
+        // For now, escape individual bytes if they're >= 0x80
+        // A more sophisticated implementation would decode UTF-8 and escape codepoints
+        if (write_unicode_escape(sink, c) != 0) return 1;
+        continue;
+      }
+    }
+
+    // Regular character - write as-is
+    if (write_char(sink, (char)c) != 0) return 1;
+  }
+
+  if (write_char(sink, '"') != 0) {
+    return 1;
+  }
+
+  return 0;
+}
+
+// Write indentation for pretty printing
+static int write_indent(text_json_sink* sink, int depth, const text_json_write_options* opt) {
+  if (!opt || !opt->pretty) {
+    return 0;
+  }
+
+  const char* newline = opt->newline ? opt->newline : "\n";
+  if (write_string(sink, newline) != 0) {
+    return 1;
+  }
+
+  int spaces = opt->indent_spaces > 0 ? opt->indent_spaces : 2;
+
+  // Check for integer overflow: depth * spaces
+  // INT_MAX / spaces gives max safe depth
+  // Avoid division by zero and check overflow correctly
+  if (spaces > 0 && depth > INT_MAX / spaces) {
+    return 1; // Overflow would occur
+  }
+
+  int total_spaces = depth * spaces;
+
+  for (int i = 0; i < total_spaces; i++) {
+    if (write_char(sink, ' ') != 0) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+// Write a number value
+static int write_number(
+  text_json_sink* sink,
+  const text_json_value* v,
+  const text_json_write_options* opt
+) {
+  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+
+  // Check for nonfinite numbers
+  if (v->as.number.has_dbl) {
+    double d = v->as.number.dbl;
+    if (!isfinite(d)) {
+      if (!opts->allow_nonfinite_numbers) {
+        return 1; // Error: nonfinite not allowed
+      }
+      if (isnan(d)) {
+        return write_string(sink, "NaN");
+      } else if (isinf(d)) {
+        if (d < 0) {
+          return write_string(sink, "-Infinity");
+        } else {
+          return write_string(sink, "Infinity");
+        }
+      }
+    }
+  }
+
+  // Prefer lexeme if available and canonical_numbers is off
+  if (v->as.number.lexeme && v->as.number.lexeme_len > 0 && !opts->canonical_numbers) {
+    // Check for integer overflow in lexeme_len (defensive, though unlikely)
+    if (v->as.number.lexeme_len > SIZE_MAX) {
+      return 1; // Invalid length
+    }
+    return write_bytes(sink, v->as.number.lexeme, v->as.number.lexeme_len);
+  }
+
+  // Format from available representation
+  char num_buf[64];
+  int len = 0;
+
+  // Try int64 first (if available and fits)
+  if (v->as.number.has_i64) {
+    int64_t i64 = v->as.number.i64;
+    len = snprintf(num_buf, sizeof(num_buf), "%lld", (long long)i64);
+    if (len > 0 && (size_t)len < sizeof(num_buf)) {
+      return write_bytes(sink, num_buf, (size_t)len);
+    }
+  }
+
+  // Try uint64 next
+  if (v->as.number.has_u64) {
+    uint64_t u64 = v->as.number.u64;
+    len = snprintf(num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
+    if (len > 0 && (size_t)len < sizeof(num_buf)) {
+      return write_bytes(sink, num_buf, (size_t)len);
+    }
+  }
+
+  // Use double (or format from lexeme if available)
+  if (v->as.number.has_dbl) {
+    double d = v->as.number.dbl;
+    len = snprintf(num_buf, sizeof(num_buf), "%.17g", d);
+    if (len > 0 && (size_t)len < sizeof(num_buf)) {
+      return write_bytes(sink, num_buf, (size_t)len);
+    }
+  }
+
+  // Fallback: use lexeme if available
+  if (v->as.number.lexeme && v->as.number.lexeme_len > 0) {
+    return write_bytes(sink, v->as.number.lexeme, v->as.number.lexeme_len);
+  }
+
+  // No valid representation
+  return 1;
+}
+
+// Recursive write function
+static int write_value_recursive(
+  text_json_sink* sink,
+  const text_json_value* v,
+  const text_json_write_options* opt,
+  int depth
+) {
+  if (!v) {
+    return write_string(sink, "null");
+  }
+
+  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+
+  switch (v->type) {
+    case TEXT_JSON_NULL:
+      return write_string(sink, "null");
+
+    case TEXT_JSON_BOOL:
+      return write_string(sink, v->as.boolean ? "true" : "false");
+
+    case TEXT_JSON_NUMBER:
+      return write_number(sink, v, opts);
+
+    case TEXT_JSON_STRING:
+      // Check for NULL string data (empty string is valid, but NULL pointer is not)
+      if (!v->as.string.data && v->as.string.len > 0) {
+        return 1; // Invalid string state
+      }
+      return write_escaped_string(sink, v->as.string.data, v->as.string.len, opts);
+
+    case TEXT_JSON_ARRAY: {
+      if (write_char(sink, '[') != 0) return 1;
+
+      size_t size = v->as.array.count;
+
+      // Check for NULL elems pointer (defensive)
+      if (size > 0 && !v->as.array.elems) {
+        return 1; // Invalid array state
+      }
+
+      for (size_t i = 0; i < size; i++) {
+        if (i > 0) {
+          if (write_char(sink, ',') != 0) return 1;
+        }
+
+        if (opts->pretty) {
+          if (write_indent(sink, depth + 1, opts) != 0) return 1;
+        }
+
+        // Bounds check: i < size already checked, but verify elems[i] is valid
+        if (!v->as.array.elems || i >= v->as.array.capacity) {
+          return 1; // Out of bounds
+        }
+
+        if (write_value_recursive(sink, v->as.array.elems[i], opts, depth + 1) != 0) {
+          return 1;
+        }
+      }
+
+      if (opts->pretty && size > 0) {
+        if (write_indent(sink, depth, opts) != 0) return 1;
+      }
+
+      return write_char(sink, ']');
+    }
+
+    case TEXT_JSON_OBJECT: {
+      if (write_char(sink, '{') != 0) return 1;
+
+      size_t size = v->as.object.count;
+
+      // Check for NULL pairs pointer (defensive)
+      if (size > 0 && !v->as.object.pairs) {
+        return 1; // Invalid object state
+      }
+
+      // Create index array for sorting if needed
+      size_t* indices = NULL;
+      if (opts->sort_object_keys && size > 0) {
+        // Check for integer overflow in malloc
+        if (size > SIZE_MAX / sizeof(size_t)) {
+          return 1; // Overflow
+        }
+
+        indices = (size_t*)malloc(size * sizeof(size_t));
+        if (!indices) {
+          return 1; // Out of memory
+        }
+        for (size_t i = 0; i < size; i++) {
+          indices[i] = i;
+        }
+        // Sort indices by key - use a wrapper function
+        // We need to pass the pairs array to the comparison function
+        // Since qsort doesn't support context, we'll use a different approach
+        // For now, we'll do a simple bubble sort (not optimal but works)
+        for (size_t i = 0; i < size - 1; i++) {
+          for (size_t j = 0; j < size - 1 - i; j++) {
+            size_t idx_a = indices[j];
+            size_t idx_b = indices[j + 1];
+
+            // Bounds check indices
+            if (idx_a >= size || idx_b >= size || idx_a >= v->as.object.capacity || idx_b >= v->as.object.capacity) {
+              free(indices);
+              return 1; // Out of bounds
+            }
+
+            const char* key_a = v->as.object.pairs[idx_a].key;
+            size_t len_a = v->as.object.pairs[idx_a].key_len;
+            const char* key_b = v->as.object.pairs[idx_b].key;
+            size_t len_b = v->as.object.pairs[idx_b].key_len;
+
+            // Check for NULL keys
+            if (!key_a || !key_b) {
+              free(indices);
+              return 1; // Invalid key
+            }
+
+            size_t min_len = len_a < len_b ? len_a : len_b;
+            int cmp = memcmp(key_a, key_b, min_len);
+            if (cmp > 0 || (cmp == 0 && len_a > len_b)) {
+              size_t tmp = indices[j];
+              indices[j] = indices[j + 1];
+              indices[j + 1] = tmp;
+            }
+          }
+        }
+      }
+
+      for (size_t i = 0; i < size; i++) {
+        size_t idx = indices ? indices[i] : i;
+
+        // Bounds check index
+        if (idx >= size || idx >= v->as.object.capacity) {
+          if (indices) free(indices);
+          return 1; // Out of bounds
+        }
+
+        if (i > 0) {
+          if (write_char(sink, ',') != 0) {
+            if (indices) free(indices);
+            return 1;
+          }
+        }
+
+        if (opts->pretty) {
+          if (write_indent(sink, depth + 1, opts) != 0) {
+            if (indices) free(indices);
+            return 1;
+          }
+        }
+
+        // Check for NULL key
+        if (!v->as.object.pairs[idx].key) {
+          if (indices) free(indices);
+          return 1; // Invalid key
+        }
+
+        // Write key
+        if (write_escaped_string(sink, v->as.object.pairs[idx].key, v->as.object.pairs[idx].key_len, opts) != 0) {
+          if (indices) free(indices);
+          return 1;
+        }
+
+        if (opts->pretty) {
+          if (write_string(sink, ": ") != 0) {
+            if (indices) free(indices);
+            return 1;
+          }
+        } else {
+          if (write_char(sink, ':') != 0) {
+            if (indices) free(indices);
+            return 1;
+          }
+        }
+
+        // Write value
+        if (write_value_recursive(sink, v->as.object.pairs[idx].value, opts, depth + 1) != 0) {
+          if (indices) free(indices);
+          return 1;
+        }
+      }
+
+      if (indices) {
+        free(indices);
+      }
+
+      if (opts->pretty && size > 0) {
+        if (write_indent(sink, depth, opts) != 0) return 1;
+      }
+
+      return write_char(sink, '}');
+    }
+
+    default:
+      return 1; // Unknown type
+  }
+}
+
+text_json_status text_json_write_value(
+  text_json_sink* sink,
+  const text_json_write_options* opt,
+  const text_json_value* v,
+  text_json_error* err
+) {
+  if (!sink || !v) {
+    if (err) {
+      err->code = TEXT_JSON_E_INVALID;
+      err->message = "Invalid arguments: sink and value must not be NULL";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (!sink->write) {
+    if (err) {
+      err->code = TEXT_JSON_E_INVALID;
+      err->message = "Invalid sink: write callback is NULL";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_INVALID;
+  }
+
+  int result = write_value_recursive(sink, v, opt, 0);
+  if (result != 0) {
+    if (err) {
+      err->code = TEXT_JSON_E_WRITE;
+      err->message = "Write operation failed";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_WRITE;
+  }
+
+  return TEXT_JSON_OK;
 }

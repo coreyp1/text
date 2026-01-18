@@ -12,6 +12,7 @@
 
 #include <text/macros.h>
 #include <text/json.h>
+#include <text/json_dom.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -156,6 +157,26 @@ TEXT_API size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink);
  * @return Non-zero if truncated, zero otherwise
  */
 TEXT_API int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink);
+
+/**
+ * @brief Write a JSON value to a sink
+ *
+ * Serializes a JSON DOM value to JSON text using the provided sink and
+ * write options. Supports both compact and pretty-print output modes,
+ * configurable escaping, and canonical output options.
+ *
+ * @param sink Output sink (must not be NULL)
+ * @param opt Write options (can be NULL for defaults)
+ * @param v JSON value to write (must not be NULL)
+ * @param err Error output structure (can be NULL if error details not needed)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_write_value(
+  text_json_sink* sink,
+  const text_json_write_options* opt,
+  const text_json_value* v,
+  text_json_error* err
+);
 
 #ifdef __cplusplus
 }
