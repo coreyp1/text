@@ -709,6 +709,401 @@ TEST(JsonTests, NumberPositionTracking) {
     json_number_destroy(&num);
 }
 
+/**
+ * Test lexer correctly identifies all token types in valid JSON
+ */
+TEST(JsonTests, LexerTokenTypes) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "{}[]:,";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Test LBRACE
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_LBRACE);
+    json_token_cleanup(&token);
+
+    // Test RBRACE
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_RBRACE);
+    json_token_cleanup(&token);
+
+    // Test LBRACKET
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_LBRACKET);
+    json_token_cleanup(&token);
+
+    // Test RBRACKET
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_RBRACKET);
+    json_token_cleanup(&token);
+
+    // Test COLON
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_COLON);
+    json_token_cleanup(&token);
+
+    // Test COMMA
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_COMMA);
+    json_token_cleanup(&token);
+
+    // Test EOF
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_EOF);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test lexer keyword tokenization
+ */
+TEST(JsonTests, LexerKeywords) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "null true false";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Test null
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NULL);
+    json_token_cleanup(&token);
+
+    // Test true
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_TRUE);
+    json_token_cleanup(&token);
+
+    // Test false
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_FALSE);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test lexer string tokenization with escape sequences
+ */
+TEST(JsonTests, LexerStringTokenization) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "\"hello\\nworld\"";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.data.string.value_len, 11u);  // "hello\nworld" = 11 chars
+    EXPECT_EQ(memcmp(token.data.string.value, "hello\nworld", 11), 0);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test lexer number tokenization
+ */
+TEST(JsonTests, LexerNumberTokenization) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "123 -456 789.012";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Test integer
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    EXPECT_TRUE(token.data.number.flags & JSON_NUMBER_HAS_I64);
+    EXPECT_EQ(token.data.number.i64, 123);
+    json_token_cleanup(&token);
+
+    // Test negative integer
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    EXPECT_TRUE(token.data.number.flags & JSON_NUMBER_HAS_I64);
+    EXPECT_EQ(token.data.number.i64, -456);
+    json_token_cleanup(&token);
+
+    // Test decimal
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    EXPECT_TRUE(token.data.number.flags & JSON_NUMBER_HAS_DOUBLE);
+    EXPECT_NEAR(token.data.number.dbl, 789.012, 0.001);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test comment lexing (single-line and multi-line)
+ */
+TEST(JsonTests, LexerComments) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_comments = 1;
+
+    const char* input = "// comment\n123 /* multi\nline */ 456";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should skip comment and get first number
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    EXPECT_EQ(token.data.number.i64, 123);
+    json_token_cleanup(&token);
+
+    // Should skip multi-line comment and get second number
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    EXPECT_EQ(token.data.number.i64, 456);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test that comments are rejected when disabled
+ */
+TEST(JsonTests, LexerCommentsRejected) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_comments = 0;
+
+    const char* input = "// comment\n123";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should treat // as invalid token
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test position tracking accuracy
+ */
+TEST(JsonTests, LexerPositionTracking) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "{\n  \"key\": 123\n}";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // LBRACE at line 1, col 1
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_LBRACE);
+    EXPECT_EQ(token.pos.line, 1);
+    EXPECT_EQ(token.pos.col, 1);
+    json_token_cleanup(&token);
+
+    // STRING at line 2, col 3
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.pos.line, 2);
+    EXPECT_EQ(token.pos.col, 3);
+    json_token_cleanup(&token);
+
+    // COLON at line 2
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_COLON);
+    json_token_cleanup(&token);
+
+    // NUMBER at line 2
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    json_token_cleanup(&token);
+
+    // RBRACE at line 3, col 1
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_RBRACE);
+    EXPECT_EQ(token.pos.line, 3);
+    EXPECT_EQ(token.pos.col, 1);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test extension tokens (NaN, Infinity, -Infinity) when enabled
+ */
+TEST(JsonTests, LexerExtensionTokens) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_nonfinite_numbers = 1;
+
+    const char* input = "NaN Infinity -Infinity";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Test NaN
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NAN);
+    json_token_cleanup(&token);
+
+    // Test Infinity
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_INFINITY);
+    json_token_cleanup(&token);
+
+    // Test -Infinity
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NEG_INFINITY);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test that extension tokens are rejected when disabled
+ */
+TEST(JsonTests, LexerExtensionTokensRejected) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_nonfinite_numbers = 0;
+
+    const char* input = "NaN";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should treat NaN as invalid token (not a keyword)
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test whitespace handling
+ */
+TEST(JsonTests, LexerWhitespaceHandling) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "  {  }  [  ]  ";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should skip leading whitespace
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_LBRACE);
+    json_token_cleanup(&token);
+
+    // Should skip whitespace between tokens
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_RBRACE);
+    json_token_cleanup(&token);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_LBRACKET);
+    json_token_cleanup(&token);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_RBRACKET);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test lexer error reporting with accurate positions
+ */
+TEST(JsonTests, LexerErrorReporting) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "123 @ invalid";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should successfully parse number
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NUMBER);
+    json_token_cleanup(&token);
+
+    // Should fail on invalid character
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    EXPECT_EQ(status, TEXT_JSON_E_BAD_TOKEN);
+    // Position should be accurate
+    EXPECT_EQ(token.pos.offset, 4u);  // After "123 "
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test single-quote strings when enabled
+ */
+TEST(JsonTests, LexerSingleQuoteStrings) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_single_quotes = 1;
+
+    const char* input = "'hello world'";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.data.string.value_len, 11u);
+    EXPECT_EQ(memcmp(token.data.string.value, "hello world", 11), 0);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test that single-quote strings are rejected when disabled
+ */
+TEST(JsonTests, LexerSingleQuoteStringsRejected) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_single_quotes = 0;
+
+    const char* input = "'hello'";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

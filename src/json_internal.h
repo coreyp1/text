@@ -170,6 +170,101 @@ text_json_status json_parse_number(
  */
 void json_number_destroy(json_number* num);
 
+/**
+ * @brief JSON token types
+ */
+typedef enum {
+    JSON_TOKEN_EOF,          ///< End of input
+    JSON_TOKEN_ERROR,        ///< Error token
+    JSON_TOKEN_LBRACE,       ///< {
+    JSON_TOKEN_RBRACE,       ///< }
+    JSON_TOKEN_LBRACKET,     ///< [
+    JSON_TOKEN_RBRACKET,     ///< ]
+    JSON_TOKEN_COLON,        ///< :
+    JSON_TOKEN_COMMA,        ///< ,
+    JSON_TOKEN_NULL,         ///< null keyword
+    JSON_TOKEN_TRUE,         ///< true keyword
+    JSON_TOKEN_FALSE,        ///< false keyword
+    JSON_TOKEN_STRING,       ///< String value
+    JSON_TOKEN_NUMBER,       ///< Number value
+    JSON_TOKEN_NAN,          ///< NaN (extension)
+    JSON_TOKEN_INFINITY,     ///< Infinity (extension)
+    JSON_TOKEN_NEG_INFINITY  ///< -Infinity (extension)
+} json_token_type;
+
+/**
+ * @brief JSON token structure
+ *
+ * Represents a single token from the lexer, including its type,
+ * position information, and value data.
+ */
+typedef struct {
+    json_token_type type;        ///< Token type
+    json_position pos;           ///< Position where token starts
+    size_t length;               ///< Length of token in input (bytes)
+
+    // Value data (only valid for certain token types)
+    union {
+        struct {
+            char* value;         ///< Decoded string value (allocated, caller must free)
+            size_t value_len;    ///< Length of decoded string
+        } string;
+        json_number number;      ///< Parsed number (temporary, use json_number_destroy)
+    } data;
+} json_token;
+
+/**
+ * @brief JSON lexer structure
+ *
+ * Internal lexer state for tokenizing JSON input.
+ */
+typedef struct {
+    const char* input;           ///< Input buffer
+    size_t input_len;            ///< Total input length
+    size_t current_offset;      ///< Current position in input
+    json_position pos;           ///< Current position (offset, line, col)
+    const text_json_parse_options* opts; ///< Parse options
+} json_lexer;
+
+/**
+ * @brief Initialize a lexer
+ *
+ * @param lexer Lexer structure to initialize
+ * @param input Input buffer (must remain valid for lexer lifetime)
+ * @param input_len Length of input buffer
+ * @param opts Parse options (can be NULL for defaults)
+ * @return TEXT_JSON_OK on success
+ */
+text_json_status json_lexer_init(
+    json_lexer* lexer,
+    const char* input,
+    size_t input_len,
+    const text_json_parse_options* opts
+);
+
+/**
+ * @brief Get the next token from the lexer
+ *
+ * Advances the lexer position and returns the next token.
+ * The token's data (string value, number) must be cleaned up
+ * by the caller using json_token_cleanup().
+ *
+ * @param lexer Lexer instance
+ * @param token Output token structure
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+text_json_status json_lexer_next(json_lexer* lexer, json_token* token);
+
+/**
+ * @brief Clean up resources allocated by a token
+ *
+ * Frees any memory allocated for token data (string values,
+ * number lexemes). Should be called after processing a token.
+ *
+ * @param token Token to clean up
+ */
+void json_token_cleanup(json_token* token);
+
 #ifdef __cplusplus
 }
 #endif
