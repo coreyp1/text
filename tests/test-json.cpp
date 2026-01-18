@@ -2600,6 +2600,7 @@ TEST(DOMWrite, Array) {
     EXPECT_STREQ(text_json_sink_buffer_data(&sink), "[1,\"two\",true]");
 
     text_json_sink_buffer_free(&sink);
+    // Freeing the parent should automatically free all children
     text_json_free(arr);
 }
 
@@ -2632,6 +2633,7 @@ TEST(DOMWrite, Object) {
     EXPECT_NE(strstr(output, "value"), nullptr);
 
     text_json_sink_buffer_free(&sink);
+    // Freeing the parent should automatically free all children
     text_json_free(obj);
 }
 
@@ -2665,6 +2667,7 @@ TEST(DOMWrite, PrettyPrint) {
     EXPECT_NE(strstr(output, "  "), nullptr);
 
     text_json_sink_buffer_free(&sink);
+    // Freeing the parent should automatically free all children
     text_json_free(obj);
 }
 
@@ -2706,6 +2709,7 @@ TEST(DOMWrite, KeySorting) {
     EXPECT_LT(banana_pos, zebra_pos);
 
     text_json_sink_buffer_free(&sink);
+    // Freeing the parent should automatically free all children
     text_json_free(obj);
 }
 

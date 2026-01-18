@@ -186,12 +186,50 @@ static void json_context_free(json_context* ctx) {
     free(ctx);
 }
 
+// Recursively free child values that have different contexts
+static void json_free_children_recursive(text_json_value* v) {
+    if (!v) {
+        return;
+    }
+
+    json_context* parent_ctx = v->ctx;
+
+    if (v->type == TEXT_JSON_ARRAY && v->as.array.elems) {
+        for (size_t i = 0; i < v->as.array.count; i++) {
+            text_json_value* child = v->as.array.elems[i];
+            if (child && child->ctx && child->ctx != parent_ctx) {
+                // Save child context before freeing (child structure will be freed)
+                json_context* child_ctx = child->ctx;
+                // Recursively free child's children first
+                json_free_children_recursive(child);
+                // Now free the child's context (this frees the child value structure itself)
+                json_context_free(child_ctx);
+            }
+        }
+    } else if (v->type == TEXT_JSON_OBJECT && v->as.object.pairs) {
+        for (size_t i = 0; i < v->as.object.count; i++) {
+            text_json_value* child = v->as.object.pairs[i].value;
+            if (child && child->ctx && child->ctx != parent_ctx) {
+                // Save child context before freeing (child structure will be freed)
+                json_context* child_ctx = child->ctx;
+                // Recursively free child's children first
+                json_free_children_recursive(child);
+                // Now free the child's context (this frees the child value structure itself)
+                json_context_free(child_ctx);
+            }
+        }
+    }
+}
+
 void text_json_free(text_json_value* v) {
     if (!v || !v->ctx) {
         return;
     }
 
-    // Free the context, which frees the arena and all memory
+    // First, recursively free any children that have different contexts
+    json_free_children_recursive(v);
+
+    // Then free this value's context, which frees the arena and all memory
     json_context* ctx = v->ctx;
     json_context_free(ctx);
 }
