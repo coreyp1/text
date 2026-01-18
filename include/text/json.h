@@ -9,6 +9,7 @@
 #ifndef GHOTI_IO_TEXT_JSON_H
 #define GHOTI_IO_TEXT_JSON_H
 
+#include <text/macros.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -162,7 +163,7 @@ typedef struct {
  *
  * @return Initialized parse options structure
  */
-text_json_parse_options text_json_parse_options_default(void);
+TEXT_API text_json_parse_options text_json_parse_options_default(void);
 
 /**
  * @brief Initialize write options with compact output defaults
@@ -174,7 +175,7 @@ text_json_parse_options text_json_parse_options_default(void);
  *
  * @return Initialized write options structure
  */
-text_json_write_options text_json_write_options_default(void);
+TEXT_API text_json_write_options text_json_write_options_default(void);
 
 /**
  * @brief Free a JSON value and its entire DOM tree
@@ -185,7 +186,7 @@ text_json_write_options text_json_write_options_default(void);
  *
  * @param v Value to free (can be NULL, in which case this is a no-op)
  */
-void text_json_free(text_json_value* v);
+TEXT_API void text_json_free(text_json_value* v);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@
 #ifndef GHOTI_IO_TEXT_H
 #define GHOTI_IO_TEXT_H
 
+#include <text/macros.h>
 #include <stdint.h>
 
 /**
@@ -22,24 +23,24 @@
  * @brief Get the major version number
  * @return The major version number
  */
-uint32_t text_version_major(void);
+TEXT_API uint32_t text_version_major(void);
 
 /**
  * @brief Get the minor version number
  * @return The minor version number
  */
-uint32_t text_version_minor(void);
+TEXT_API uint32_t text_version_minor(void);
 
 /**
  * @brief Get the patch version number
  * @return The patch version number
  */
-uint32_t text_version_patch(void);
+TEXT_API uint32_t text_version_patch(void);
 
 /**
  * @brief Get the version string
  * @return A string representation of the version (e.g., "0.0.0")
  */
-const char* text_version_string(void);
+TEXT_API const char* text_version_string(void);
 
 #endif /* GHOTI_IO_TEXT_H */
