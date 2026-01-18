@@ -330,7 +330,8 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
         &decoded_len,
         &decode_pos,
         lexer->opts ? lexer->opts->validate_utf8 : 1,
-        JSON_UTF8_REJECT
+        JSON_UTF8_REJECT,
+        lexer->opts ? lexer->opts->allow_unescaped_controls : 0
     );
 
     if (status != TEXT_JSON_OK) {

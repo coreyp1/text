@@ -754,12 +754,182 @@ text_json_status json_object_add_pair(
 
     // Add pair (check for overflow before incrementing)
     if (object->as.object.count == SIZE_MAX) {
-        free(key_copy);  // Free the key we just allocated
+        // Note: key_copy was allocated from arena, so it will be freed when arena is freed
         return TEXT_JSON_E_LIMIT;
     }
     size_t idx = object->as.object.count++;
     object->as.object.pairs[idx].key = key_copy;
     object->as.object.pairs[idx].key_len = key_len;
     object->as.object.pairs[idx].value = value;
+    return TEXT_JSON_OK;
+}
+
+// Public mutation API functions
+
+TEXT_API text_json_status text_json_array_push(text_json_value* arr, text_json_value* child) {
+    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Use the internal helper function which handles growing the array
+    return json_array_add_element(arr, child);
+}
+
+TEXT_API text_json_status text_json_array_set(text_json_value* arr, size_t idx, text_json_value* child) {
+    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Check bounds
+    if (idx >= arr->as.array.count) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Set element at index (replacing existing element)
+    arr->as.array.elems[idx] = child;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_array_insert(text_json_value* arr, size_t idx, text_json_value* child) {
+    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Check bounds - allow inserting at count (same as push)
+    if (idx > arr->as.array.count) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // If inserting at the end, use push logic
+    if (idx == arr->as.array.count) {
+        return json_array_add_element(arr, child);
+    }
+
+    // Need to insert in the middle - grow array if needed first
+    if (arr->as.array.count >= arr->as.array.capacity) {
+        size_t new_capacity = arr->as.array.capacity == 0 ? 8 : arr->as.array.capacity * 2;
+
+        // Check for overflow
+        if (new_capacity < arr->as.array.capacity) {
+            return TEXT_JSON_E_LIMIT;
+        }
+
+        // Allocate new array
+        if (new_capacity > SIZE_MAX / sizeof(text_json_value*)) {
+            return TEXT_JSON_E_LIMIT;
+        }
+        text_json_value** new_elems = (text_json_value**)json_arena_alloc_for_context(
+            arr->ctx,
+            new_capacity * sizeof(text_json_value*),
+            sizeof(void*)
+        );
+        if (!new_elems) {
+            return TEXT_JSON_E_OOM;
+        }
+
+        // Copy existing elements: [0..idx) to [0..idx), then [idx..count) to [idx+1..count+1)
+        if (arr->as.array.elems) {
+            // Copy elements before insertion point
+            if (idx > 0) {
+                memcpy(new_elems, arr->as.array.elems, idx * sizeof(text_json_value*));
+            }
+            // Copy elements after insertion point, shifted right by one
+            if (idx < arr->as.array.count) {
+                memcpy(new_elems + idx + 1, arr->as.array.elems + idx,
+                       (arr->as.array.count - idx) * sizeof(text_json_value*));
+            }
+        }
+
+        arr->as.array.elems = new_elems;
+        arr->as.array.capacity = new_capacity;
+    } else {
+        // Have capacity - shift elements in place to make room
+        // Shift elements from idx to count-1 one position to the right
+        // Note: Writing to elems[count] is safe because we're in the else branch,
+        // which means count < capacity, so elems[count] is within allocated bounds.
+        for (size_t i = arr->as.array.count; i > idx; --i) {
+            arr->as.array.elems[i] = arr->as.array.elems[i - 1];
+        }
+    }
+
+    // Insert new element at idx
+    arr->as.array.elems[idx] = child;
+
+    // Increment count (check for overflow)
+    if (arr->as.array.count == SIZE_MAX) {
+        return TEXT_JSON_E_LIMIT;
+    }
+    arr->as.array.count++;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_array_remove(text_json_value* arr, size_t idx) {
+    if (!arr || arr->type != TEXT_JSON_ARRAY) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Check bounds
+    if (idx >= arr->as.array.count) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Shift elements to the left to fill the gap
+    for (size_t i = idx; i + 1 < arr->as.array.count; ++i) {
+        arr->as.array.elems[i] = arr->as.array.elems[i + 1];
+    }
+
+    // Decrement count
+    arr->as.array.count--;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_object_put(text_json_value* obj, const char* key, size_t key_len, text_json_value* val) {
+    if (!obj || obj->type != TEXT_JSON_OBJECT || !key || !val) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Check if key already exists - if so, replace the value
+    for (size_t i = 0; i < obj->as.object.count; ++i) {
+        if (obj->as.object.pairs[i].key_len == key_len) {
+            if (key_len == 0 || memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
+                // Key exists - replace value
+                obj->as.object.pairs[i].value = val;
+                return TEXT_JSON_OK;
+            }
+        }
+    }
+
+    // Key doesn't exist - add new pair using internal helper
+    return json_object_add_pair(obj, key, key_len, val);
+}
+
+TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const char* key, size_t key_len) {
+    if (!obj || obj->type != TEXT_JSON_OBJECT || !key) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Find the key
+    size_t found_idx = SIZE_MAX;
+    for (size_t i = 0; i < obj->as.object.count; ++i) {
+        if (obj->as.object.pairs[i].key_len == key_len) {
+            if (key_len == 0 || memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
+                found_idx = i;
+                break;
+            }
+        }
+    }
+
+    // Key not found
+    if (found_idx == SIZE_MAX) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Shift pairs to the left to fill the gap
+    for (size_t i = found_idx; i + 1 < obj->as.object.count; ++i) {
+        obj->as.object.pairs[i] = obj->as.object.pairs[i + 1];
+    }
+
+    // Decrement count
+    obj->as.object.count--;
     return TEXT_JSON_OK;
 }

@@ -69,6 +69,7 @@ int json_matches(const char* input, size_t len, const char* keyword);
  * @param pos Input/output: position tracking (can be NULL)
  * @param validate_utf8 Whether to validate UTF-8
  * @param utf8_mode UTF-8 handling mode if validation fails
+ * @param allow_unescaped_controls Whether to allow unescaped control characters (0x00-0x1F)
  * @return TEXT_JSON_OK on success, error code on failure
  */
 text_json_status json_decode_string(
@@ -79,7 +80,8 @@ text_json_status json_decode_string(
     size_t* output_len,
     json_position* pos,
     int validate_utf8,
-    json_utf8_mode utf8_mode
+    json_utf8_mode utf8_mode,
+    int allow_unescaped_controls
 );
 
 /**

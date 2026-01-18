@@ -119,7 +119,8 @@ TEST(StringHandling, EscapeSequences) {
             &output_len,
             &pos,
             0,  // don't validate UTF-8 for these tests
-            JSON_UTF8_REJECT
+            JSON_UTF8_REJECT,
+            0   // don't allow unescaped controls
         );
 
         EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
@@ -162,7 +163,8 @@ TEST(StringHandling, UnicodeEscapes) {
             &output_len,
             &pos,
             0,
-            JSON_UTF8_REJECT
+            JSON_UTF8_REJECT,
+            0   // don't allow unescaped controls
         );
 
         EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
@@ -194,7 +196,8 @@ TEST(StringHandling, SurrogatePairs) {
         &output_len,
         &pos,
         0,
-        JSON_UTF8_REJECT
+        JSON_UTF8_REJECT,
+        0   // don't allow unescaped controls
     );
 
     EXPECT_EQ(status, TEXT_JSON_OK);
@@ -234,7 +237,8 @@ TEST(StringHandling, InvalidEscapes) {
             &output_len,
             &pos,
             0,
-            JSON_UTF8_REJECT
+            JSON_UTF8_REJECT,
+            0   // don't allow unescaped controls
         );
 
         EXPECT_NE(status, TEXT_JSON_OK) << "Should reject: " << invalid_escapes[i];
@@ -258,7 +262,8 @@ TEST(StringHandling, PositionTracking) {
         &output_len,
         &pos,
         0,
-        JSON_UTF8_REJECT
+        JSON_UTF8_REJECT,
+        0   // don't allow unescaped controls
     );
 
     EXPECT_EQ(status, TEXT_JSON_OK);
@@ -284,7 +289,8 @@ TEST(StringHandling, BufferOverflowProtection) {
         &output_len,
         &pos,
         0,
-        JSON_UTF8_REJECT
+        JSON_UTF8_REJECT,
+        0   // don't allow unescaped controls
     );
 
     EXPECT_EQ(status, TEXT_JSON_E_LIMIT);
@@ -308,7 +314,8 @@ TEST(StringHandling, BufferOverflowUnicode) {
         &output_len,
         &pos,
         0,
-        JSON_UTF8_REJECT
+        JSON_UTF8_REJECT,
+        0   // don't allow unescaped controls
     );
 
     EXPECT_EQ(status, TEXT_JSON_E_LIMIT);
@@ -1106,6 +1113,147 @@ TEST(Lexer, SingleQuoteStringsRejected) {
 }
 
 /**
+ * Test unescaped control characters are rejected by default
+ */
+TEST(Lexer, UnescapedControlsRejected) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_unescaped_controls = 0;
+
+    // Test with tab character (0x09) - should be rejected
+    const char* input = "\"hello\tworld\"";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+
+    // Test with newline (0x0A) - should be rejected
+    const char* input2 = "\"hello\nworld\"";
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+
+    // Test with null byte (0x00) - should be rejected
+    const char input3[] = "\"hello\0world\"";
+    status = json_lexer_init(&lexer, input3, sizeof(input3) - 1, &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test unescaped control characters are allowed when option enabled
+ */
+TEST(Lexer, UnescapedControlsAllowed) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_unescaped_controls = 1;
+
+    // Test with tab character (0x09) - should be allowed
+    const char* input = "\"hello\tworld\"";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.data.string.value_len, 11u);  // "hello\tworld" = 11 bytes
+    EXPECT_EQ(memcmp(token.data.string.value, "hello\tworld", 11), 0);
+    json_token_cleanup(&token);
+
+    // Test with newline (0x0A) - should be allowed
+    const char* input2 = "\"hello\nworld\"";
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.data.string.value_len, 11u);  // "hello\nworld" = 11 bytes
+    EXPECT_EQ(memcmp(token.data.string.value, "hello\nworld", 11), 0);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test that all extensions work together
+ */
+TEST(Lexer, AllExtensionsCombined) {
+    json_lexer lexer;
+    json_token token;
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_comments = 1;
+    opts.allow_nonfinite_numbers = 1;
+    opts.allow_single_quotes = 1;
+    opts.allow_unescaped_controls = 1;
+
+    // Input with comments, single quotes, nonfinite numbers, and unescaped controls
+    const char* input = "// comment\n'hello\tworld' Infinity NaN";
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should skip comment and get single-quoted string with tab
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_STRING);
+    EXPECT_EQ(token.data.string.value_len, 11u);
+    EXPECT_EQ(memcmp(token.data.string.value, "hello\tworld", 11), 0);
+    json_token_cleanup(&token);
+
+    // Should get Infinity
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_INFINITY);
+    json_token_cleanup(&token);
+
+    // Should get NaN
+    status = json_lexer_next(&lexer, &token);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(token.type, JSON_TOKEN_NAN);
+    json_token_cleanup(&token);
+}
+
+/**
+ * Test that extensions are opt-in (strict by default)
+ */
+TEST(Parser, ExtensionsOptIn) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    // Verify all extensions are off by default
+    EXPECT_EQ(opts.allow_comments, 0);
+    EXPECT_EQ(opts.allow_trailing_commas, 0);
+    EXPECT_EQ(opts.allow_nonfinite_numbers, 0);
+    EXPECT_EQ(opts.allow_single_quotes, 0);
+    EXPECT_EQ(opts.allow_unescaped_controls, 0);
+
+    // Test that strict JSON is parsed correctly
+    const char* strict_json = "{\"key\": \"value\", \"number\": 123}";
+    text_json_value* val = text_json_parse(strict_json, strlen(strict_json), &opts, NULL);
+    EXPECT_NE(val, nullptr);
+    text_json_free(val);
+
+    // Test that extensions are rejected by default
+    const char* with_comment = "{\"key\": \"value\" // comment\n}";
+    text_json_value* val2 = text_json_parse(with_comment, strlen(with_comment), &opts, NULL);
+    EXPECT_EQ(val2, nullptr);  // Should fail because comments are disabled
+
+    const char* with_trailing = "{\"key\": \"value\",}";
+    text_json_value* val3 = text_json_parse(with_trailing, strlen(with_trailing), &opts, NULL);
+    EXPECT_EQ(val3, nullptr);  // Should fail because trailing commas are disabled
+}
+
+/**
  * Test value creation for null
  */
 TEST(DOMValueCreation, Null) {
@@ -1485,6 +1633,334 @@ TEST(DOMAccessors, NumberAccessorMissingRepresentations) {
     EXPECT_EQ(status, TEXT_JSON_E_INVALID);
 
     text_json_free(num);
+}
+
+/**
+ * Test array mutation - push, set, insert, remove
+ */
+TEST(DOMMutation, ArrayPush) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    // Push some elements
+    text_json_value* val1 = text_json_new_number_i64(42);
+    text_json_value* val2 = text_json_new_string("hello", 5);
+    text_json_value* val3 = text_json_new_bool(1);
+
+    EXPECT_EQ(text_json_array_push(arr, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val3), TEXT_JSON_OK);
+
+    // Verify array size and contents
+    EXPECT_EQ(text_json_array_size(arr), 3u);
+    EXPECT_EQ(text_json_array_get(arr, 0), val1);
+    EXPECT_EQ(text_json_array_get(arr, 1), val2);
+    EXPECT_EQ(text_json_array_get(arr, 2), val3);
+
+    // Verify values
+    int64_t i64_out = 0;
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 0), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 42);
+
+    const char* str_out = nullptr;
+    size_t str_len = 0;
+    EXPECT_EQ(text_json_get_string(text_json_array_get(arr, 1), &str_out, &str_len), TEXT_JSON_OK);
+    EXPECT_EQ(str_len, 5u);
+    EXPECT_STREQ(str_out, "hello");
+
+    int bool_out = 0;
+    EXPECT_EQ(text_json_get_bool(text_json_array_get(arr, 2), &bool_out), TEXT_JSON_OK);
+    EXPECT_NE(bool_out, 0);
+
+    text_json_free(arr);
+}
+
+TEST(DOMMutation, ArraySet) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    // Push initial elements
+    text_json_value* val1 = text_json_new_number_i64(1);
+    text_json_value* val2 = text_json_new_number_i64(2);
+    text_json_value* val3 = text_json_new_number_i64(3);
+
+    EXPECT_EQ(text_json_array_push(arr, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val3), TEXT_JSON_OK);
+
+    // Replace element at index 1
+    text_json_value* new_val = text_json_new_number_i64(99);
+    EXPECT_EQ(text_json_array_set(arr, 1, new_val), TEXT_JSON_OK);
+
+    // Verify
+    int64_t i64_out = 0;
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 0), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 1), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 99);  // Changed
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 2), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 3);
+
+    // Test out of bounds
+    text_json_value* val4 = text_json_new_number_i64(4);
+    EXPECT_EQ(text_json_array_set(arr, 10, val4), TEXT_JSON_E_INVALID);
+    text_json_free(val4);
+
+    text_json_free(arr);
+}
+
+TEST(DOMMutation, ArrayInsert) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    // Push initial elements
+    text_json_value* val1 = text_json_new_number_i64(1);
+    text_json_value* val2 = text_json_new_number_i64(2);
+    text_json_value* val3 = text_json_new_number_i64(3);
+
+    EXPECT_EQ(text_json_array_push(arr, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val3), TEXT_JSON_OK);
+
+    // Insert at index 1
+    text_json_value* new_val = text_json_new_number_i64(99);
+    EXPECT_EQ(text_json_array_insert(arr, 1, new_val), TEXT_JSON_OK);
+
+    // Verify: [1, 99, 2, 3]
+    EXPECT_EQ(text_json_array_size(arr), 4u);
+    int64_t i64_out = 0;
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 0), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 1), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 99);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 2), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 2);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 3), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 3);
+
+    // Insert at end (should work like push)
+    text_json_value* val_end = text_json_new_number_i64(100);
+    EXPECT_EQ(text_json_array_insert(arr, 4, val_end), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_size(arr), 5u);
+
+    // Test out of bounds
+    text_json_value* val4 = text_json_new_number_i64(4);
+    EXPECT_EQ(text_json_array_insert(arr, 10, val4), TEXT_JSON_E_INVALID);
+    text_json_free(val4);
+
+    text_json_free(arr);
+}
+
+TEST(DOMMutation, ArrayRemove) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    // Push initial elements
+    text_json_value* val1 = text_json_new_number_i64(1);
+    text_json_value* val2 = text_json_new_number_i64(2);
+    text_json_value* val3 = text_json_new_number_i64(3);
+    text_json_value* val4 = text_json_new_number_i64(4);
+
+    EXPECT_EQ(text_json_array_push(arr, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val3), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, val4), TEXT_JSON_OK);
+
+    // Remove element at index 1 (value 2)
+    EXPECT_EQ(text_json_array_remove(arr, 1), TEXT_JSON_OK);
+
+    // Verify: [1, 3, 4]
+    EXPECT_EQ(text_json_array_size(arr), 3u);
+    int64_t i64_out = 0;
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 0), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 1), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 3);
+    EXPECT_EQ(text_json_get_i64(text_json_array_get(arr, 2), &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 4);
+
+    // Remove first element
+    EXPECT_EQ(text_json_array_remove(arr, 0), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_size(arr), 2u);
+
+    // Remove last element
+    EXPECT_EQ(text_json_array_remove(arr, 1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_size(arr), 1u);
+
+    // Test out of bounds
+    EXPECT_EQ(text_json_array_remove(arr, 10), TEXT_JSON_E_INVALID);
+
+    text_json_free(arr);
+}
+
+TEST(DOMMutation, ObjectPut) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    // Add key-value pairs
+    text_json_value* val1 = text_json_new_number_i64(42);
+    text_json_value* val2 = text_json_new_string("hello", 5);
+    text_json_value* val3 = text_json_new_bool(1);
+
+    EXPECT_EQ(text_json_object_put(obj, "key1", 4, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_put(obj, "key2", 4, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_put(obj, "key3", 4, val3), TEXT_JSON_OK);
+
+    // Verify object size
+    EXPECT_EQ(text_json_object_size(obj), 3u);
+
+    // Verify values
+    const text_json_value* v1 = text_json_object_get(obj, "key1", 4);
+    ASSERT_NE(v1, nullptr);
+    int64_t i64_out = 0;
+    EXPECT_EQ(text_json_get_i64(v1, &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 42);
+
+    const text_json_value* v2 = text_json_object_get(obj, "key2", 4);
+    ASSERT_NE(v2, nullptr);
+    const char* str_out = nullptr;
+    size_t str_len = 0;
+    EXPECT_EQ(text_json_get_string(v2, &str_out, &str_len), TEXT_JSON_OK);
+    EXPECT_STREQ(str_out, "hello");
+
+    // Replace existing key
+    text_json_value* new_val = text_json_new_number_i64(99);
+    EXPECT_EQ(text_json_object_put(obj, "key1", 4, new_val), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_size(obj), 3u);  // Size should not change
+
+    const text_json_value* v1_new = text_json_object_get(obj, "key1", 4);
+    ASSERT_NE(v1_new, nullptr);
+    EXPECT_EQ(text_json_get_i64(v1_new, &i64_out), TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 99);  // Changed
+
+    text_json_free(obj);
+}
+
+TEST(DOMMutation, ObjectRemove) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    // Add key-value pairs
+    text_json_value* val1 = text_json_new_number_i64(1);
+    text_json_value* val2 = text_json_new_number_i64(2);
+    text_json_value* val3 = text_json_new_number_i64(3);
+
+    EXPECT_EQ(text_json_object_put(obj, "key1", 4, val1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_put(obj, "key2", 4, val2), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_put(obj, "key3", 4, val3), TEXT_JSON_OK);
+
+    EXPECT_EQ(text_json_object_size(obj), 3u);
+
+    // Remove middle key
+    EXPECT_EQ(text_json_object_remove(obj, "key2", 4), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_size(obj), 2u);
+
+    // Verify key2 is gone
+    EXPECT_EQ(text_json_object_get(obj, "key2", 4), nullptr);
+    EXPECT_NE(text_json_object_get(obj, "key1", 4), nullptr);
+    EXPECT_NE(text_json_object_get(obj, "key3", 4), nullptr);
+
+    // Remove first key
+    EXPECT_EQ(text_json_object_remove(obj, "key1", 4), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_size(obj), 1u);
+
+    // Remove last key
+    EXPECT_EQ(text_json_object_remove(obj, "key3", 4), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_object_size(obj), 0u);
+
+    // Try to remove non-existent key
+    EXPECT_EQ(text_json_object_remove(obj, "nonexistent", 11), TEXT_JSON_E_INVALID);
+
+    text_json_free(obj);
+}
+
+TEST(DOMMutation, NestedStructures) {
+    // Test building nested structures
+    text_json_value* root = text_json_new_object();
+    ASSERT_NE(root, nullptr);
+
+    // Create nested array
+    text_json_value* arr = text_json_new_array();
+    text_json_value* elem1 = text_json_new_number_i64(1);
+    text_json_value* elem2 = text_json_new_number_i64(2);
+    EXPECT_EQ(text_json_array_push(arr, elem1), TEXT_JSON_OK);
+    EXPECT_EQ(text_json_array_push(arr, elem2), TEXT_JSON_OK);
+
+    // Add array to object
+    EXPECT_EQ(text_json_object_put(root, "array", 5, arr), TEXT_JSON_OK);
+
+    // Create nested object
+    text_json_value* nested_obj = text_json_new_object();
+    text_json_value* nested_val = text_json_new_string("nested", 6);
+    EXPECT_EQ(text_json_object_put(nested_obj, "key", 3, nested_val), TEXT_JSON_OK);
+
+    // Add nested object to root
+    EXPECT_EQ(text_json_object_put(root, "object", 6, nested_obj), TEXT_JSON_OK);
+
+    // Verify structure
+    EXPECT_EQ(text_json_object_size(root), 2u);
+
+    const text_json_value* arr_val = text_json_object_get(root, "array", 5);
+    ASSERT_NE(arr_val, nullptr);
+    EXPECT_EQ(text_json_typeof(arr_val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(arr_val), 2u);
+
+    const text_json_value* obj_val = text_json_object_get(root, "object", 6);
+    ASSERT_NE(obj_val, nullptr);
+    EXPECT_EQ(text_json_typeof(obj_val), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(obj_val), 1u);
+
+    text_json_free(root);
+}
+
+TEST(DOMMutation, ErrorCases) {
+    // Test error cases for array operations
+    text_json_value* arr = text_json_new_array();
+    text_json_value* val = text_json_new_number_i64(1);
+
+    // NULL array
+    EXPECT_EQ(text_json_array_push(nullptr, val), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_set(nullptr, 0, val), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_insert(nullptr, 0, val), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_remove(nullptr, 0), TEXT_JSON_E_INVALID);
+
+    // NULL value
+    EXPECT_EQ(text_json_array_push(arr, nullptr), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_set(arr, 0, nullptr), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_insert(arr, 0, nullptr), TEXT_JSON_E_INVALID);
+
+    // Wrong type
+    text_json_value* obj = text_json_new_object();
+    EXPECT_EQ(text_json_array_push(obj, val), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_array_set(obj, 0, val), TEXT_JSON_E_INVALID);
+
+    text_json_free(arr);
+    text_json_free(val);
+    text_json_free(obj);
+
+    // Test error cases for object operations
+    text_json_value* obj2 = text_json_new_object();
+    text_json_value* val2 = text_json_new_number_i64(2);
+
+    // NULL object
+    EXPECT_EQ(text_json_object_put(nullptr, "key", 3, val2), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_object_remove(nullptr, "key", 3), TEXT_JSON_E_INVALID);
+
+    // NULL key
+    EXPECT_EQ(text_json_object_put(obj2, nullptr, 3, val2), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_object_remove(obj2, nullptr, 3), TEXT_JSON_E_INVALID);
+
+    // NULL value
+    EXPECT_EQ(text_json_object_put(obj2, "key", 3, nullptr), TEXT_JSON_E_INVALID);
+
+    // Wrong type
+    text_json_value* arr2 = text_json_new_array();
+    EXPECT_EQ(text_json_object_put(arr2, "key", 3, val2), TEXT_JSON_E_INVALID);
+    EXPECT_EQ(text_json_object_remove(arr2, "key", 3), TEXT_JSON_E_INVALID);
+
+    text_json_free(obj2);
+    text_json_free(val2);
+    text_json_free(arr2);
 }
 
 /**

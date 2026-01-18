@@ -295,6 +295,87 @@ TEXT_API const text_json_value* text_json_object_value(const text_json_value* v,
 TEXT_API const text_json_value* text_json_object_get(const text_json_value* v, const char* key, size_t key_len);
 
 /**
+ * @brief Add an element to the end of a JSON array
+ *
+ * Appends a value to the end of an array. The array will grow automatically
+ * if needed. The value becomes part of the array's DOM tree.
+ *
+ * @param arr Array value (must not be NULL, must be TEXT_JSON_ARRAY type)
+ * @param child Value to add to the array (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_array_push(text_json_value* arr, text_json_value* child);
+
+/**
+ * @brief Set an element in a JSON array by index
+ *
+ * Replaces the value at the specified index in the array. The index must
+ * be within the current bounds of the array.
+ *
+ * @param arr Array value (must not be NULL, must be TEXT_JSON_ARRAY type)
+ * @param idx Index of the element to set (0-based, must be < array size)
+ * @param child Value to set at the index (must not be NULL)
+ * @return TEXT_JSON_OK on success, TEXT_JSON_E_INVALID if index is out of bounds
+ */
+TEXT_API text_json_status text_json_array_set(text_json_value* arr, size_t idx, text_json_value* child);
+
+/**
+ * @brief Insert an element into a JSON array at a specific index
+ *
+ * Inserts a value at the specified index, shifting existing elements to
+ * the right. The index can be equal to the array size (equivalent to push).
+ * The array will grow automatically if needed.
+ *
+ * @param arr Array value (must not be NULL, must be TEXT_JSON_ARRAY type)
+ * @param idx Index where to insert (0-based, must be <= array size)
+ * @param child Value to insert (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_array_insert(text_json_value* arr, size_t idx, text_json_value* child);
+
+/**
+ * @brief Remove an element from a JSON array by index
+ *
+ * Removes the value at the specified index, shifting remaining elements
+ * to the left to fill the gap. The index must be within the current
+ * bounds of the array.
+ *
+ * @param arr Array value (must not be NULL, must be TEXT_JSON_ARRAY type)
+ * @param idx Index of the element to remove (0-based, must be < array size)
+ * @return TEXT_JSON_OK on success, TEXT_JSON_E_INVALID if index is out of bounds
+ */
+TEXT_API text_json_status text_json_array_remove(text_json_value* arr, size_t idx);
+
+/**
+ * @brief Add or replace a key-value pair in a JSON object
+ *
+ * If the key already exists in the object, its value is replaced.
+ * If the key does not exist, a new key-value pair is added.
+ * The key string is copied into the object's arena.
+ *
+ * @param obj Object value (must not be NULL, must be TEXT_JSON_OBJECT type)
+ * @param key Key string (must not be NULL)
+ * @param key_len Length of key string in bytes
+ * @param val Value to associate with the key (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_object_put(text_json_value* obj, const char* key, size_t key_len, text_json_value* val);
+
+/**
+ * @brief Remove a key-value pair from a JSON object
+ *
+ * Removes the key-value pair with the specified key from the object.
+ * If the key is not found, returns an error. The key comparison is
+ * exact (case-sensitive, byte-for-byte).
+ *
+ * @param obj Object value (must not be NULL, must be TEXT_JSON_OBJECT type)
+ * @param key Key string to remove (must not be NULL)
+ * @param key_len Length of key string in bytes
+ * @return TEXT_JSON_OK on success, TEXT_JSON_E_INVALID if key is not found
+ */
+TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const char* key, size_t key_len);
+
+/**
  * @brief Parse JSON input into a DOM tree
  *
  * Parses a JSON input string and returns a DOM tree representing the JSON

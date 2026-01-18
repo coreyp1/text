@@ -198,7 +198,8 @@ text_json_status json_decode_string(
     size_t* output_len,
     json_position* pos,
     int validate_utf8,
-    json_utf8_mode utf8_mode
+    json_utf8_mode utf8_mode,
+    int allow_unescaped_controls
 ) {
     size_t out_idx = 0;
     size_t in_idx = 0;
@@ -294,6 +295,14 @@ text_json_status json_decode_string(
             }
         } else {
             // Regular character
+            unsigned char c = (unsigned char)input[in_idx];
+
+            // Check for control characters (0x00-0x1F) unless allowed
+            // Note: JSON spec requires control characters to be escaped
+            if (!allow_unescaped_controls && c < 0x20) {
+                return TEXT_JSON_E_BAD_TOKEN;  // Unescaped control character
+            }
+
             if (out_idx >= output_capacity) {
                 return TEXT_JSON_E_LIMIT;
             }
