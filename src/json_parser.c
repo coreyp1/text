@@ -131,8 +131,193 @@ static text_json_status json_parser_check_container_elems(json_parser* parser, s
     return TEXT_JSON_OK;
 }
 
-// Forward declaration
+// Forward declarations
 static text_json_status json_parse_value(json_parser* parser, text_json_value** out, json_context* ctx);
+static text_json_status json_parse_object(json_parser* parser, text_json_value** out, json_context* ctx);
+static text_json_status json_parse_array(json_parser* parser, text_json_value** out, json_context* ctx);
+
+// Helper to parse an array element from a token (inline parsing to avoid double token consumption)
+// The token is consumed/cleaned up by this function
+static text_json_status json_parse_array_element(
+    json_parser* parser,
+    json_token* token,
+    json_context* ctx,
+    text_json_value** out
+) {
+    text_json_value* element = NULL;
+    text_json_status result = TEXT_JSON_OK;
+
+    switch (token->type) {
+        case JSON_TOKEN_NULL:
+            element = json_value_new_with_existing_context(TEXT_JSON_NULL, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+            }
+            json_token_cleanup(token);
+            break;
+
+        case JSON_TOKEN_TRUE:
+            element = json_value_new_with_existing_context(TEXT_JSON_BOOL, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+            } else {
+                element->as.boolean = 1;
+            }
+            json_token_cleanup(token);
+            break;
+
+        case JSON_TOKEN_FALSE:
+            element = json_value_new_with_existing_context(TEXT_JSON_BOOL, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+            } else {
+                element->as.boolean = 0;
+            }
+            json_token_cleanup(token);
+            break;
+
+        case JSON_TOKEN_STRING: {
+            element = json_value_new_with_existing_context(TEXT_JSON_STRING, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+                json_token_cleanup(token);
+                break;
+            }
+
+            // Copy string data
+            size_t str_len = token->data.string.value_len;
+            if (str_len > SIZE_MAX - 1) {
+                result = TEXT_JSON_E_LIMIT;
+                text_json_free(element);
+                json_token_cleanup(token);
+                break;
+            }
+            char* str_data = (char*)json_arena_alloc_for_context(ctx, str_len + 1, 1);
+            if (!str_data) {
+                result = TEXT_JSON_E_OOM;
+                text_json_free(element);
+                json_token_cleanup(token);
+                break;
+            }
+            memcpy(str_data, token->data.string.value, str_len);
+            str_data[str_len] = '\0';
+
+            element->as.string.data = str_data;
+            element->as.string.len = str_len;
+
+            json_token_cleanup(token);
+            break;
+        }
+
+        case JSON_TOKEN_NUMBER: {
+            json_number* num = &token->data.number;
+            element = json_value_new_with_existing_context(TEXT_JSON_NUMBER, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+                json_token_cleanup(token);
+                break;
+            }
+
+            // Copy lexeme if available
+            if (num->lexeme) {
+                size_t lexeme_len = num->lexeme_len;
+                if (lexeme_len > SIZE_MAX - 1) {
+                    result = TEXT_JSON_E_LIMIT;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                char* lexeme = (char*)json_arena_alloc_for_context(ctx, lexeme_len + 1, 1);
+                if (!lexeme) {
+                    result = TEXT_JSON_E_OOM;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                memcpy(lexeme, num->lexeme, lexeme_len);
+                lexeme[lexeme_len] = '\0';
+                element->as.number.lexeme = lexeme;
+                element->as.number.lexeme_len = lexeme_len;
+            }
+
+            // Copy numeric representations
+            if (num->flags & JSON_NUMBER_HAS_I64) {
+                element->as.number.i64 = num->i64;
+                element->as.number.has_i64 = 1;
+            }
+            if (num->flags & JSON_NUMBER_HAS_U64) {
+                element->as.number.u64 = num->u64;
+                element->as.number.has_u64 = 1;
+            }
+            if (num->flags & JSON_NUMBER_HAS_DOUBLE) {
+                element->as.number.dbl = num->dbl;
+                element->as.number.has_dbl = 1;
+            }
+
+            json_token_cleanup(token);
+            break;
+        }
+
+        case JSON_TOKEN_LBRACKET:
+            // Nested array - call json_parse_array recursively
+            json_token_cleanup(token);
+            result = json_parse_array(parser, &element, ctx);
+            break;
+
+        case JSON_TOKEN_LBRACE:
+            // Nested object - call json_parse_object recursively
+            json_token_cleanup(token);
+            result = json_parse_object(parser, &element, ctx);
+            break;
+
+        default:
+            // Invalid token for array element
+            result = json_parser_set_error(
+                parser,
+                TEXT_JSON_E_BAD_TOKEN,
+                "Unexpected token in array",
+                token->pos
+            );
+            json_token_cleanup(token);
+            break;
+    }
+
+    if (result != TEXT_JSON_OK) {
+        *out = NULL;
+        return result;
+    }
+
+    if (!element) {
+        *out = NULL;
+        return TEXT_JSON_E_OOM;
+    }
+
+    *out = element;
+    return TEXT_JSON_OK;
+}
+
+// Helper to find an existing key in an object
+// Returns the index of the key if found, or SIZE_MAX if not found
+static size_t json_object_find_key(const text_json_value* object, const char* key, size_t key_len) {
+    if (!object || object->type != TEXT_JSON_OBJECT || !key) {
+        return SIZE_MAX;
+    }
+
+    // Defensive check: pairs might be NULL if object is empty
+    if (!object->as.object.pairs || object->as.object.count == 0) {
+        return SIZE_MAX;
+    }
+
+    for (size_t i = 0; i < object->as.object.count; ++i) {
+        if (object->as.object.pairs[i].key_len == key_len) {
+            if (key_len == 0 || memcmp(object->as.object.pairs[i].key, key, key_len) == 0) {
+                return i;
+            }
+        }
+    }
+
+    return SIZE_MAX;
+}
 
 // Parse a JSON array
 static text_json_status json_parse_array(json_parser* parser, text_json_value** out, json_context* ctx) {
@@ -144,6 +329,9 @@ static text_json_status json_parse_array(json_parser* parser, text_json_value** 
 
     parser->depth++;
     text_json_status result = TEXT_JSON_OK;
+
+    // Track if this is a root array (has its own context)
+    int is_root_array = (ctx == NULL);
 
     // Create array value
     text_json_value* array;
@@ -183,57 +371,65 @@ static text_json_status json_parse_array(json_parser* parser, text_json_value** 
     int first = 1;
 
     while (1) {
-        // Get next token
-        status = json_lexer_next(&parser->lexer, &token);
-        if (status != TEXT_JSON_OK) {
-            result = status;
-            json_token_cleanup(&token);
-            break;
-        }
-
-        // Check for closing bracket
-        if (token.type == JSON_TOKEN_RBRACKET) {
-            json_token_cleanup(&token);
-            break;
-        }
-
-        // Check for trailing comma (if not first element and not allowed)
-        if (!first && token.type == JSON_TOKEN_COMMA) {
-            if (!parser->opts || !parser->opts->allow_trailing_commas) {
-                result = json_parser_set_error(
-                    parser,
-                    TEXT_JSON_E_BAD_TOKEN,
-                    "Trailing comma not allowed",
-                    token.pos
-                );
-                json_token_cleanup(&token);
-                break;
-            }
-            // Trailing comma - consume it and check for closing bracket
-            json_token_cleanup(&token);
+        if (first) {
+            // Get next token to check if array is empty
             status = json_lexer_next(&parser->lexer, &token);
             if (status != TEXT_JSON_OK) {
                 result = status;
                 json_token_cleanup(&token);
                 break;
             }
+
+            // Check for closing bracket (empty array)
             if (token.type == JSON_TOKEN_RBRACKET) {
                 json_token_cleanup(&token);
                 break;
             }
-            // Not a closing bracket after trailing comma - error
-            result = json_parser_set_error(
-                parser,
-                TEXT_JSON_E_BAD_TOKEN,
-                "Expected value or closing bracket after comma",
-                token.pos
-            );
-            json_token_cleanup(&token);
-            break;
-        }
 
-        // Check for comma between elements
-        if (!first) {
+            // Parse first element inline to avoid double token consumption
+            // (json_parse_value would call json_lexer_next again, skipping this token)
+
+            // Check container element limit
+            status = json_parser_check_container_elems(parser, array->as.array.count);
+            if (status != TEXT_JSON_OK) {
+                result = status;
+                json_token_cleanup(&token);
+                break;
+            }
+
+            // Parse value based on token type (inline to avoid double token consumption)
+            text_json_value* element = NULL;
+            result = json_parse_array_element(parser, &token, array->ctx, &element);
+            if (result != TEXT_JSON_OK) {
+                break;
+            }
+
+            // Add element to array
+            status = json_array_add_element(array, element);
+            if (status != TEXT_JSON_OK) {
+                result = status;
+                break;
+            }
+
+            first = 0;
+            continue;
+        } else {
+            // Subsequent elements: We need to get comma, then value
+            // Get next token (should be comma or closing bracket)
+            status = json_lexer_next(&parser->lexer, &token);
+            if (status != TEXT_JSON_OK) {
+                result = status;
+                json_token_cleanup(&token);
+                break;
+            }
+
+            // Check for closing bracket
+            if (token.type == JSON_TOKEN_RBRACKET) {
+                json_token_cleanup(&token);
+                break;
+            }
+
+            // Should be comma between elements
             if (token.type != JSON_TOKEN_COMMA) {
                 result = json_parser_set_error(
                     parser,
@@ -245,49 +441,67 @@ static text_json_status json_parse_array(json_parser* parser, text_json_value** 
                 break;
             }
             json_token_cleanup(&token);
-            // Get value token
+
+            // Get the value token after the comma
             status = json_lexer_next(&parser->lexer, &token);
             if (status != TEXT_JSON_OK) {
                 result = status;
                 json_token_cleanup(&token);
                 break;
             }
-        }
 
-        // Check container element limit
-        status = json_parser_check_container_elems(parser, array->as.array.count);
-        if (status != TEXT_JSON_OK) {
-            result = status;
-            json_token_cleanup(&token);
-            break;
-        }
+            // Check if this is a trailing comma (comma followed by closing bracket)
+            if (token.type == JSON_TOKEN_RBRACKET) {
+                if (!parser->opts || !parser->opts->allow_trailing_commas) {
+                    result = json_parser_set_error(
+                        parser,
+                        TEXT_JSON_E_BAD_TOKEN,
+                        "Trailing comma not allowed",
+                        token.pos
+                    );
+                    json_token_cleanup(&token);
+                    break;
+                }
+                // Trailing comma allowed - consume closing bracket and exit
+                json_token_cleanup(&token);
+                break;
+            }
 
-        // Parse value (use array's context)
-        text_json_value* element = NULL;
-        status = json_parse_value(parser, &element, array->ctx);
-        if (status != TEXT_JSON_OK) {
-            result = status;
-            json_token_cleanup(&token);
-            break;
-        }
+            // Check container element limit
+            status = json_parser_check_container_elems(parser, array->as.array.count);
+            if (status != TEXT_JSON_OK) {
+                result = status;
+                json_token_cleanup(&token);
+                break;
+            }
 
-        // Add element to array
-        status = json_array_add_element(array, element);
-        if (status != TEXT_JSON_OK) {
-            text_json_free(element);
-            result = status;
-            json_token_cleanup(&token);
-            break;
-        }
+            // Parse value using the token we already have (inline to avoid double consumption)
+            text_json_value* element = NULL;
+            result = json_parse_array_element(parser, &token, array->ctx, &element);
+            if (result != TEXT_JSON_OK) {
+                break;
+            }
 
-        first = 0;
-        json_token_cleanup(&token);
+            // Add element to array
+            status = json_array_add_element(array, element);
+            if (status != TEXT_JSON_OK) {
+                result = status;
+                break;
+            }
+        }
     }
 
     parser->depth--;
 
     if (result != TEXT_JSON_OK) {
-        text_json_free(array);
+        // Only free array if it has its own context (root case).
+        // If ctx was provided, array is in that context and will be freed
+        // when the parent object/value is freed.
+        if (is_root_array) {
+            // Root array - has its own context, free it
+            text_json_free(array);
+        }
+        // Otherwise, array is in parent's context, don't free it here
         return result;
     }
 
@@ -358,42 +572,7 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
             break;
         }
 
-        // Check for trailing comma (if not first element and not allowed)
-        if (!first && token.type == JSON_TOKEN_COMMA) {
-            if (!parser->opts || !parser->opts->allow_trailing_commas) {
-                result = json_parser_set_error(
-                    parser,
-                    TEXT_JSON_E_BAD_TOKEN,
-                    "Trailing comma not allowed",
-                    token.pos
-                );
-                json_token_cleanup(&token);
-                break;
-            }
-            // Trailing comma - consume it and check for closing brace
-            json_token_cleanup(&token);
-            status = json_lexer_next(&parser->lexer, &token);
-            if (status != TEXT_JSON_OK) {
-                result = status;
-                json_token_cleanup(&token);
-                break;
-            }
-            if (token.type == JSON_TOKEN_RBRACE) {
-                json_token_cleanup(&token);
-                break;
-            }
-            // Not a closing brace after trailing comma - error
-            result = json_parser_set_error(
-                parser,
-                TEXT_JSON_E_BAD_TOKEN,
-                "Expected key or closing brace after comma",
-                token.pos
-            );
-            json_token_cleanup(&token);
-            break;
-        }
-
-        // Check for comma between pairs
+        // Check for comma between pairs (if not first element)
         if (!first) {
             if (token.type != JSON_TOKEN_COMMA) {
                 result = json_parser_set_error(
@@ -405,14 +584,31 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
                 json_token_cleanup(&token);
                 break;
             }
+            // Consume comma and check next token
             json_token_cleanup(&token);
-            // Get key token
             status = json_lexer_next(&parser->lexer, &token);
             if (status != TEXT_JSON_OK) {
                 result = status;
                 json_token_cleanup(&token);
                 break;
             }
+            // Check if this is a trailing comma (comma followed by closing brace)
+            if (token.type == JSON_TOKEN_RBRACE) {
+                if (!parser->opts || !parser->opts->allow_trailing_commas) {
+                    result = json_parser_set_error(
+                        parser,
+                        TEXT_JSON_E_BAD_TOKEN,
+                        "Trailing comma not allowed",
+                        token.pos
+                    );
+                    json_token_cleanup(&token);
+                    break;
+                }
+                // Trailing comma allowed - consume closing brace and exit
+                json_token_cleanup(&token);
+                break;
+            }
+            // Not a trailing comma - continue with key parsing (token is already the key)
         }
 
         // Key must be a string
@@ -438,6 +634,7 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
         // Store key and length (must save before cleanup since token.data.string.value is freed)
         const char* key = token.data.string.value;
         size_t key_len = token.data.string.value_len;
+        json_position key_pos = token.pos;  // Save position for error reporting
 
         // Allocate temporary copy of key to avoid use-after-free
         // (we'll use it after json_token_cleanup frees the original)
@@ -507,23 +704,181 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
             break;
         }
 
-        // TODO: Implement duplicate key handling policies (ERROR, FIRST_WINS, LAST_WINS, COLLECT)
-        // For now, just add the pair (first wins by default since we're adding sequentially)
-        // json_object_add_pair copies the key into the arena
-        status = json_object_add_pair(object, key_copy ? key_copy : "", key_len, value);
-        if (status != TEXT_JSON_OK) {
-            text_json_free(value);
-            result = status;
+        // Handle duplicate key policies
+        text_json_dupkey_mode dupkey_mode = parser->opts ? parser->opts->dupkeys : TEXT_JSON_DUPKEY_ERROR;
+        size_t existing_idx = json_object_find_key(object, key_copy ? key_copy : "", key_len);
+        int handled_duplicate = 0;  // Flag to track if we handled a duplicate
+
+        if (existing_idx != SIZE_MAX) {
+            // Duplicate key found - handle according to policy
+            int should_break = 0;  // Flag to break from while loop
+
+            switch (dupkey_mode) {
+                case TEXT_JSON_DUPKEY_ERROR: {
+                    // Fail parse on duplicate key
+                    // Note: Don't free value here - it's part of object's arena.
+                    // Freeing object at the end will free everything including value.
+                    result = json_parser_set_error(
+                        parser,
+                        TEXT_JSON_E_DUPKEY,
+                        "Duplicate key in object",
+                        key_pos
+                    );
+                    if (key_copy) {
+                        free(key_copy);
+                    }
+                    should_break = 1;
+                    break;
+                }
+
+                case TEXT_JSON_DUPKEY_FIRST_WINS: {
+                    // Keep first occurrence, discard new value
+                    // Note: Don't free value here - it's part of object's arena.
+                    // It will be freed when the object is freed. Just don't add it to the object.
+                    // Free temporary key copy (not needed)
+                    if (key_copy) {
+                        free(key_copy);
+                    }
+                    // Continue to next pair (don't break)
+                    status = TEXT_JSON_OK;
+                    handled_duplicate = 1;
+                    break;
+                }
+
+                case TEXT_JSON_DUPKEY_LAST_WINS: {
+                    // Replace existing value with new one
+                    // Note: Don't free the old value - it's part of object's arena.
+                    // It will be freed when the object is freed. Just overwrite the pointer.
+                    // Set the new value
+                    object->as.object.pairs[existing_idx].value = value;
+                    // Free temporary key copy (key already in arena)
+                    if (key_copy) {
+                        free(key_copy);
+                    }
+                    // Continue to next pair (don't break)
+                    status = TEXT_JSON_OK;
+                    handled_duplicate = 1;
+                    break;
+                }
+
+                case TEXT_JSON_DUPKEY_COLLECT: {
+                    // Convert to array on collision
+                    text_json_value* existing_value = object->as.object.pairs[existing_idx].value;
+
+                    // Check if existing value is already an array
+                    if (existing_value->type == TEXT_JSON_ARRAY) {
+                        // Append new value to existing array
+                        status = json_array_add_element(existing_value, value);
+                        if (status != TEXT_JSON_OK) {
+                            // Note: Don't free value here - it's part of object's arena.
+                            // Freeing object at the end will free everything including value.
+                            result = status;
+                            if (key_copy) {
+                                free(key_copy);
+                            }
+                            should_break = 1;
+                            break;
+                        }
+                        // Free temporary key copy (not needed)
+                        if (key_copy) {
+                            free(key_copy);
+                        }
+                        // Continue to next pair (don't break)
+                        status = TEXT_JSON_OK;
+                    } else {
+                        // Convert single value to array [old_value, new_value]
+                        text_json_value* array = json_value_new_with_existing_context(TEXT_JSON_ARRAY, object->ctx);
+                        if (!array) {
+                            // Note: Don't free value here - it's part of object's arena.
+                            result = TEXT_JSON_E_OOM;
+                            if (key_copy) {
+                                free(key_copy);
+                            }
+                            should_break = 1;
+                            break;
+                        }
+
+                        // Add old value to array
+                        status = json_array_add_element(array, existing_value);
+                        if (status != TEXT_JSON_OK) {
+                            // Note: Don't free array or value here - they're part of object's arena.
+                            // Freeing object at the end will free everything.
+                            result = status;
+                            if (key_copy) {
+                                free(key_copy);
+                            }
+                            should_break = 1;
+                            break;
+                        }
+
+                        // Add new value to array
+                        status = json_array_add_element(array, value);
+                        if (status != TEXT_JSON_OK) {
+                            // Note: Don't free array or value here - they're part of object's arena.
+                            // Freeing object at the end will free everything.
+                            result = status;
+                            if (key_copy) {
+                                free(key_copy);
+                            }
+                            should_break = 1;
+                            break;
+                        }
+
+                        // Replace old value with array
+                        object->as.object.pairs[existing_idx].value = array;
+                        // Free temporary key copy (key already in arena)
+                        if (key_copy) {
+                            free(key_copy);
+                        }
+                        // Continue to next pair (don't break)
+                        status = TEXT_JSON_OK;
+                    }
+                    handled_duplicate = 1;
+                    break;
+                }
+
+                default: {
+                    // Unknown mode - treat as error
+                    // Note: Don't free value here - it's part of object's arena.
+                    result = TEXT_JSON_E_INVALID;
+                    if (key_copy) {
+                        free(key_copy);
+                    }
+                    should_break = 1;
+                    break;
+                }
+            }
+
+            if (should_break) {
+                break;
+            }
+            // If we handled a duplicate and didn't break, continue to next iteration
+            // Skip the else block which would try to add the pair again
+            if (handled_duplicate) {
+                first = 0;
+                continue;  // Continue to next iteration of while loop
+            }
+        } else {
+            // No duplicate - add pair normally
+            // json_object_add_pair copies the key into the arena
+            status = json_object_add_pair(object, key_copy ? key_copy : "", key_len, value);
+            if (status != TEXT_JSON_OK) {
+                text_json_free(value);
+                result = status;
+                if (key_copy) {
+                    free(key_copy);
+                }
+                break;
+            }
+
+            // Free temporary key copy (json_object_add_pair copied it to arena)
             if (key_copy) {
                 free(key_copy);
             }
-            break;
         }
 
-        // Free temporary key copy (json_object_add_pair copied it to arena)
-        if (key_copy) {
-            free(key_copy);
-        }
+        // After handling a pair (duplicate or not), continue to next iteration
+        // This will consume the next token (comma or closing brace) in the next loop iteration
 
         first = 0;
     }
@@ -638,10 +993,9 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                 value->as.string.len = token.data.string.value_len;
             }
 
-            // Free the lexer-allocated string
-            if (value) {
-                free((void*)token.data.string.value);
-            }
+            // Note: We've copied the string to the arena. The lexer-allocated string
+            // will be freed by json_token_cleanup, so we don't need to free it manually.
+            // Just let json_token_cleanup handle the cleanup.
             json_token_cleanup(&token);
             break;
         }
@@ -755,6 +1109,8 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
             break;
 
         default:
+            // This should not happen for valid JSON input
+            // Common causes: lexer error, incomplete input, or internal bug
             result = json_parser_set_error(
                 parser,
                 TEXT_JSON_E_BAD_TOKEN,
@@ -766,9 +1122,14 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
     }
 
     if (result != TEXT_JSON_OK) {
-        if (value) {
+        // Only free value if it has its own context (root case).
+        // If ctx was provided, value is in that context and will be freed
+        // when the parent object/array is freed.
+        if (is_root && value) {
+            // Root value - has its own context, free it
             text_json_free(value);
         }
+        // Otherwise, value is in parent's context, don't free it here
         return result;
     }
 

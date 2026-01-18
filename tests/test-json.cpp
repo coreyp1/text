@@ -1487,6 +1487,282 @@ TEST(JsonTests, NumberAccessorMissingRepresentations) {
     text_json_free(num);
 }
 
+/**
+ * Test duplicate key handling - ERROR policy
+ */
+TEST(JsonTests, DuplicateKeyError) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_ERROR;
+
+    const char* input = R"({"key": 1, "key": 2})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    EXPECT_EQ(value, nullptr);
+    EXPECT_EQ(err.code, TEXT_JSON_E_DUPKEY);
+    EXPECT_STREQ(err.message, "Duplicate key in object");
+}
+
+/**
+ * Test duplicate key handling - FIRST_WINS policy
+ */
+TEST(JsonTests, DuplicateKeyFirstWins) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_FIRST_WINS;
+
+    const char* input = R"({"key": 1, "key": 2})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have first value (1)
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+
+    int64_t i64_out = 0;
+    text_json_status status = text_json_get_i64(val, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - LAST_WINS policy
+ */
+TEST(JsonTests, DuplicateKeyLastWins) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_LAST_WINS;
+
+    const char* input = R"({"key": 1, "key": 2})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have last value (2)
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+
+    int64_t i64_out = 0;
+    text_json_status status = text_json_get_i64(val, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 2);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - COLLECT policy (single value to array)
+ */
+TEST(JsonTests, DuplicateKeyCollectSingle) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
+
+    const char* input = R"({"key": 1, "key": 2})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have array with [1, 2]
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(val), 2u);
+
+    // First element should be 1
+    const text_json_value* elem0 = text_json_array_get(val, 0);
+    ASSERT_NE(elem0, nullptr);
+    int64_t i64_out = 0;
+    text_json_status status = text_json_get_i64(elem0, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+
+    // Second element should be 2
+    const text_json_value* elem1 = text_json_array_get(val, 1);
+    ASSERT_NE(elem1, nullptr);
+    status = text_json_get_i64(elem1, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 2);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - COLLECT policy (array to array)
+ */
+TEST(JsonTests, DuplicateKeyCollectArray) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
+
+    const char* input = R"({"key": [1, 2], "key": 3})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    if (!value) {
+        printf("DEBUG: Parse failed: code=%d, message=%s, offset=%zu, line=%d, col=%d\n", 
+               err.code, err.message ? err.message : "(null)", err.offset, err.line, err.col);
+        printf("DEBUG: Input around offset: ");
+        size_t start = err.offset > 10 ? err.offset - 10 : 0;
+        size_t len = strlen(input);
+        size_t end = err.offset + 10 < len ? err.offset + 10 : len;
+        for (size_t i = start; i < end; i++) {
+            printf("%c", input[i]);
+        }
+        printf("\n");
+    }
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have array with [1, 2, 3]
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(val), 3u);
+
+    // Check elements
+    const text_json_value* elem0 = text_json_array_get(val, 0);
+    ASSERT_NE(elem0, nullptr);
+    int64_t i64_out = 0;
+    text_json_status status = text_json_get_i64(elem0, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 1);
+
+    const text_json_value* elem1 = text_json_array_get(val, 1);
+    ASSERT_NE(elem1, nullptr);
+    status = text_json_get_i64(elem1, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 2);
+
+    const text_json_value* elem2 = text_json_array_get(val, 2);
+    ASSERT_NE(elem2, nullptr);
+    status = text_json_get_i64(elem2, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 3);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - multiple duplicates with COLLECT
+ */
+TEST(JsonTests, DuplicateKeyCollectMultiple) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
+
+    const char* input = R"({"key": 1, "key": 2, "key": 3})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have array with [1, 2, 3]
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(val), 3u);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - nested objects
+ */
+TEST(JsonTests, DuplicateKeyNested) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_LAST_WINS;
+
+    const char* input = R"({"outer": {"key": 1, "key": 2}, "outer": {"key": 3}})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have last outer object
+    const text_json_value* outer = text_json_object_get(value, "outer", 5);
+    ASSERT_NE(outer, nullptr);
+    EXPECT_EQ(text_json_typeof(outer), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(outer), 1u);
+
+    // Inner object should have last value (3)
+    const text_json_value* inner = text_json_object_get(outer, "key", 3);
+    ASSERT_NE(inner, nullptr);
+    int64_t i64_out = 0;
+    text_json_status status = text_json_get_i64(inner, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 3);
+
+    text_json_free(value);
+}
+
+/**
+ * Test duplicate key handling - different value types with COLLECT
+ */
+TEST(JsonTests, DuplicateKeyCollectDifferentTypes) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
+
+    const char* input = R"({"key": "first", "key": 42, "key": true})";
+    text_json_error err;
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(value), 1u);
+
+    // Should have array with ["first", 42, true]
+    const text_json_value* val = text_json_object_get(value, "key", 3);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(val), 3u);
+
+    // First element should be string "first"
+    const text_json_value* elem0 = text_json_array_get(val, 0);
+    ASSERT_NE(elem0, nullptr);
+    EXPECT_EQ(text_json_typeof(elem0), TEXT_JSON_STRING);
+    const char* str_out = nullptr;
+    size_t str_len = 0;
+    text_json_status status = text_json_get_string(elem0, &str_out, &str_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(str_len, 5u);
+    EXPECT_STREQ(str_out, "first");
+
+    // Second element should be number 42
+    const text_json_value* elem1 = text_json_array_get(val, 1);
+    ASSERT_NE(elem1, nullptr);
+    EXPECT_EQ(text_json_typeof(elem1), TEXT_JSON_NUMBER);
+    int64_t i64_out = 0;
+    status = text_json_get_i64(elem1, &i64_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(i64_out, 42);
+
+    // Third element should be boolean true
+    const text_json_value* elem2 = text_json_array_get(val, 2);
+    ASSERT_NE(elem2, nullptr);
+    EXPECT_EQ(text_json_typeof(elem2), TEXT_JSON_BOOL);
+    int bool_out = 0;
+    status = text_json_get_bool(elem2, &bool_out);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_NE(bool_out, 0);
+
+    text_json_free(value);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
