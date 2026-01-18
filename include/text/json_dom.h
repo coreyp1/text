@@ -294,6 +294,29 @@ TEXT_API const text_json_value* text_json_object_value(const text_json_value* v,
  */
 TEXT_API const text_json_value* text_json_object_get(const text_json_value* v, const char* key, size_t key_len);
 
+/**
+ * @brief Parse JSON input into a DOM tree
+ *
+ * Parses a JSON input string and returns a DOM tree representing the JSON
+ * structure. The returned value and all its descendants are allocated from
+ * an arena and must be freed using text_json_free().
+ *
+ * The parser enforces strict JSON grammar by default, but can be configured
+ * via parse options to allow extensions like comments, trailing commas, etc.
+ *
+ * @param bytes Input JSON string (must not be NULL)
+ * @param len Length of input string in bytes
+ * @param opt Parse options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL if error details not needed)
+ * @return Root JSON value on success, NULL on error (check err for details)
+ */
+TEXT_API text_json_value* text_json_parse(
+    const char* bytes,
+    size_t len,
+    const text_json_parse_options* opt,
+    text_json_error* err
+);
+
 #ifdef __cplusplus
 }
 #endif

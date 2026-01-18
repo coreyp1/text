@@ -265,6 +265,104 @@ text_json_status json_lexer_next(json_lexer* lexer, json_token* token);
  */
 void json_token_cleanup(json_token* token);
 
+// Forward declaration
+typedef struct json_context json_context;
+
+// Internal structure definition for text_json_value
+// This is needed by the parser to manipulate arrays and objects
+struct text_json_value {
+    text_json_type type;              ///< Type of this value
+    json_context* ctx;                ///< Context (arena) for this value tree
+
+    union {
+        int boolean;                  ///< For TEXT_JSON_BOOL
+        struct {
+            char* data;               ///< String data (null-terminated)
+            size_t len;               ///< String length in bytes
+        } string;                     ///< For TEXT_JSON_STRING
+        struct {
+            char* lexeme;             ///< Original number lexeme
+            size_t lexeme_len;        ///< Length of lexeme
+            int64_t i64;              ///< int64 representation (if valid)
+            uint64_t u64;             ///< uint64 representation (if valid)
+            double dbl;               ///< double representation (if valid)
+            int has_i64;              ///< 1 if i64 is valid
+            int has_u64;              ///< 1 if u64 is valid
+            int has_dbl;              ///< 1 if dbl is valid
+        } number;                     ///< For TEXT_JSON_NUMBER
+        struct {
+            text_json_value** elems;  ///< Array of value pointers
+            size_t count;             ///< Number of elements
+            size_t capacity;          ///< Allocated capacity
+        } array;                      ///< For TEXT_JSON_ARRAY
+        struct {
+            struct {
+                char* key;            ///< Object key
+                size_t key_len;       ///< Key length
+                text_json_value* value; ///< Object value
+            }* pairs;                 ///< Array of key-value pairs
+            size_t count;             ///< Number of pairs
+            size_t capacity;          ///< Allocated capacity
+        } object;                     ///< For TEXT_JSON_OBJECT
+    } as;
+};
+
+/**
+ * @brief Create a JSON value using an existing context
+ *
+ * Internal function for parser use. Creates a value that shares
+ * the same context (arena) as other values in the parse tree.
+ *
+ * @param type Type of value to create
+ * @param ctx Existing context to use
+ * @return New value, or NULL on failure
+ */
+text_json_value* json_value_new_with_existing_context(text_json_type type, json_context* ctx);
+
+/**
+ * @brief Allocate memory from a context's arena
+ *
+ * Internal function for parser use. Allocates memory from the
+ * arena associated with a context.
+ *
+ * @param ctx Context containing the arena
+ * @param size Size in bytes to allocate
+ * @param align Alignment requirement (must be power of 2)
+ * @return Pointer to allocated memory, or NULL on failure
+ */
+void* json_arena_alloc_for_context(json_context* ctx, size_t size, size_t align);
+
+/**
+ * @brief Add an element to a JSON array
+ *
+ * Internal function for parser use. Adds an element to an array,
+ * growing the array if necessary.
+ *
+ * @param array Array value (must be TEXT_JSON_ARRAY type)
+ * @param element Element value to add
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+text_json_status json_array_add_element(text_json_value* array, text_json_value* element);
+
+/**
+ * @brief Add a key-value pair to a JSON object
+ *
+ * Internal function for parser use. Adds a key-value pair to an object,
+ * growing the object if necessary.
+ *
+ * @param object Object value (must be TEXT_JSON_OBJECT type)
+ * @param key Key string (will be copied into arena)
+ * @param key_len Length of key string
+ * @param value Value to associate with key
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+text_json_status json_object_add_pair(
+    text_json_value* object,
+    const char* key,
+    size_t key_len,
+    text_json_value* value
+);
+
 #ifdef __cplusplus
 }
 #endif

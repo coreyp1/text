@@ -150,48 +150,10 @@ static void json_arena_free(json_arena* arena) {
 // JSON context structure
 // Holds the arena allocator and other context information
 // for a JSON DOM tree.
-typedef struct {
+typedef struct json_context {
     json_arena* arena;                ///< Arena allocator for this DOM
 } json_context;
 
-// JSON value structure
-// The actual DOM node structure. Allocated from the arena.
-struct text_json_value {
-    text_json_type type;              ///< Type of this value
-    json_context* ctx;                ///< Context (arena) for this value tree
-
-    union {
-        int boolean;                  ///< For TEXT_JSON_BOOL
-        struct {
-            char* data;               ///< String data (null-terminated)
-            size_t len;               ///< String length in bytes
-        } string;                     ///< For TEXT_JSON_STRING
-        struct {
-            char* lexeme;             ///< Original number lexeme
-            size_t lexeme_len;        ///< Length of lexeme
-            int64_t i64;              ///< int64 representation (if valid)
-            uint64_t u64;             ///< uint64 representation (if valid)
-            double dbl;               ///< double representation (if valid)
-            int has_i64;              ///< 1 if i64 is valid
-            int has_u64;              ///< 1 if u64 is valid
-            int has_dbl;              ///< 1 if dbl is valid
-        } number;                     ///< For TEXT_JSON_NUMBER
-        struct {
-            text_json_value** elems;  ///< Array of value pointers
-            size_t count;             ///< Number of elements
-            size_t capacity;          ///< Allocated capacity
-        } array;                      ///< For TEXT_JSON_ARRAY
-        struct {
-            struct {
-                char* key;            ///< Object key
-                size_t key_len;       ///< Key length
-                text_json_value* value; ///< Object value
-            }* pairs;                 ///< Array of key-value pairs
-            size_t count;             ///< Number of pairs
-            size_t capacity;          ///< Allocated capacity
-        } object;                     ///< For TEXT_JSON_OBJECT
-    } as;
-};
 
 // Create a new context with an arena
 // Allocates a context and arena for a new DOM tree.
@@ -253,6 +215,20 @@ static text_json_value* json_value_new_with_context(text_json_type type, json_co
     memset(&val->as, 0, sizeof(val->as));
 
     return val;
+}
+
+// Internal helper to create a value using an existing context (for parser)
+// This allows all values in a parse tree to share the same context
+text_json_value* json_value_new_with_existing_context(text_json_type type, json_context* ctx) {
+    return json_value_new_with_context(type, ctx);
+}
+
+// Internal helper to allocate from an arena (for parser)
+void* json_arena_alloc_for_context(json_context* ctx, size_t size, size_t align) {
+    if (!ctx || !ctx->arena) {
+        return NULL;
+    }
+    return json_arena_alloc(ctx->arena, size, align);
 }
 
 TEXT_API text_json_value* text_json_new_null(void) {
@@ -670,4 +646,120 @@ TEXT_API const text_json_value* text_json_object_get(const text_json_value* v, c
     }
 
     return NULL;
+}
+
+// Internal helper functions for parser
+
+text_json_status json_array_add_element(text_json_value* array, text_json_value* element) {
+    if (!array || array->type != TEXT_JSON_ARRAY || !element) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Grow array if needed
+    if (array->as.array.count >= array->as.array.capacity) {
+        size_t new_capacity = array->as.array.capacity == 0 ? 8 : array->as.array.capacity * 2;
+
+        // Check for overflow
+        if (new_capacity < array->as.array.capacity) {
+            return TEXT_JSON_E_LIMIT;
+        }
+
+        // Allocate new array (using arena from the array's context)
+        // Check for overflow in multiplication
+        if (new_capacity > SIZE_MAX / sizeof(text_json_value*)) {
+            return TEXT_JSON_E_LIMIT;
+        }
+        text_json_value** new_elems = (text_json_value**)json_arena_alloc_for_context(
+            array->ctx,
+            new_capacity * sizeof(text_json_value*),
+            sizeof(void*)
+        );
+        if (!new_elems) {
+            return TEXT_JSON_E_OOM;
+        }
+
+        // Copy existing elements
+        if (array->as.array.elems) {
+            memcpy(new_elems, array->as.array.elems, array->as.array.count * sizeof(text_json_value*));
+        }
+
+        array->as.array.elems = new_elems;
+        array->as.array.capacity = new_capacity;
+    }
+
+    // Add element (check for overflow before incrementing)
+    if (array->as.array.count == SIZE_MAX) {
+        return TEXT_JSON_E_LIMIT;
+    }
+    array->as.array.elems[array->as.array.count++] = element;
+    return TEXT_JSON_OK;
+}
+
+text_json_status json_object_add_pair(
+    text_json_value* object,
+    const char* key,
+    size_t key_len,
+    text_json_value* value
+) {
+    if (!object || object->type != TEXT_JSON_OBJECT || !key || !value) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Grow object if needed
+    if (object->as.object.count >= object->as.object.capacity) {
+        size_t new_capacity = object->as.object.capacity == 0 ? 8 : object->as.object.capacity * 2;
+
+        // Check for overflow
+        if (new_capacity < object->as.object.capacity) {
+            return TEXT_JSON_E_LIMIT;
+        }
+
+        // Allocate new pairs array (using arena from the object's context)
+        // Check for overflow in multiplication
+        size_t pair_size = sizeof(*(object->as.object.pairs));
+        if (new_capacity > SIZE_MAX / pair_size) {
+            return TEXT_JSON_E_LIMIT;
+        }
+        // Cast through void* to avoid anonymous struct type mismatch issues
+        void* new_pairs_ptr = json_arena_alloc_for_context(
+            object->ctx,
+            new_capacity * pair_size,
+            sizeof(void*)
+        );
+        if (!new_pairs_ptr) {
+            return TEXT_JSON_E_OOM;
+        }
+
+        // Copy existing pairs
+        if (object->as.object.pairs) {
+            memcpy(new_pairs_ptr, object->as.object.pairs, object->as.object.count * sizeof(*(object->as.object.pairs)));
+        }
+
+        // Assign through void* to avoid type checking (we know the types match)
+        object->as.object.pairs = (void*)new_pairs_ptr;
+        object->as.object.capacity = new_capacity;
+    }
+
+    // Allocate key string in arena
+    // Check for overflow in key_len + 1
+    if (key_len > SIZE_MAX - 1) {
+        return TEXT_JSON_E_LIMIT;
+    }
+    char* key_copy = (char*)json_arena_alloc_for_context(object->ctx, key_len + 1, 1);
+    if (!key_copy) {
+        return TEXT_JSON_E_OOM;
+    }
+    memcpy(key_copy, key, key_len);
+    key_copy[key_len] = '\0';
+
+    // Add pair (check for overflow before incrementing)
+    if (object->as.object.count == SIZE_MAX) {
+        free(key_copy);  // Free the key we just allocated
+        return TEXT_JSON_E_LIMIT;
+    }
+    size_t idx = object->as.object.count++;
+    object->as.object.pairs[idx].key = key_copy;
+    object->as.object.pairs[idx].key_len = key_len;
+    object->as.object.pairs[idx].value = value;
+    return TEXT_JSON_OK;
 }
