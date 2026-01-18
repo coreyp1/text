@@ -823,6 +823,18 @@ TEXT_API text_json_status text_json_array_set(text_json_value* arr, size_t idx, 
         return TEXT_JSON_E_INVALID;
     }
 
+    // Get the old value to be replaced
+    text_json_value* old_value = arr->as.array.elems[idx];
+
+    // If the old value has a different context, free it recursively
+    if (old_value && old_value->ctx && old_value->ctx != arr->ctx) {
+        json_context* child_ctx = old_value->ctx;
+        // Recursively free child's children first
+        json_free_children_recursive(old_value);
+        // Now free the child's context (this frees the child value structure itself)
+        json_context_free(child_ctx);
+    }
+
     // Set element at index (replacing existing element)
     arr->as.array.elems[idx] = child;
     return TEXT_JSON_OK;
@@ -911,6 +923,18 @@ TEXT_API text_json_status text_json_array_remove(text_json_value* arr, size_t id
         return TEXT_JSON_E_INVALID;
     }
 
+    // Get the value to be removed
+    text_json_value* removed_value = arr->as.array.elems[idx];
+
+    // If the removed value has a different context, free it recursively
+    if (removed_value && removed_value->ctx && removed_value->ctx != arr->ctx) {
+        json_context* child_ctx = removed_value->ctx;
+        // Recursively free child's children first
+        json_free_children_recursive(removed_value);
+        // Now free the child's context (this frees the child value structure itself)
+        json_context_free(child_ctx);
+    }
+
     // Shift elements to the left to fill the gap
     for (size_t i = idx; i + 1 < arr->as.array.count; ++i) {
         arr->as.array.elems[i] = arr->as.array.elems[i + 1];
@@ -931,6 +955,17 @@ TEXT_API text_json_status text_json_object_put(text_json_value* obj, const char*
         if (obj->as.object.pairs[i].key_len == key_len) {
             if (key_len == 0 || memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
                 // Key exists - replace value
+                text_json_value* old_value = obj->as.object.pairs[i].value;
+
+                // If the old value has a different context, free it recursively
+                if (old_value && old_value->ctx && old_value->ctx != obj->ctx) {
+                    json_context* child_ctx = old_value->ctx;
+                    // Recursively free child's children first
+                    json_free_children_recursive(old_value);
+                    // Now free the child's context (this frees the child value structure itself)
+                    json_context_free(child_ctx);
+                }
+
                 obj->as.object.pairs[i].value = val;
                 return TEXT_JSON_OK;
             }
@@ -960,6 +995,18 @@ TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const ch
     // Key not found
     if (found_idx == SIZE_MAX) {
         return TEXT_JSON_E_INVALID;
+    }
+
+    // Get the value to be removed
+    text_json_value* removed_value = obj->as.object.pairs[found_idx].value;
+
+    // If the removed value has a different context, free it recursively
+    if (removed_value && removed_value->ctx && removed_value->ctx != obj->ctx) {
+        json_context* child_ctx = removed_value->ctx;
+        // Recursively free child's children first
+        json_free_children_recursive(removed_value);
+        // Now free the child's context (this frees the child value structure itself)
+        json_context_free(child_ctx);
     }
 
     // Shift pairs to the left to fill the gap

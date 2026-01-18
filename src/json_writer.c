@@ -237,6 +237,19 @@ int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
   return buf->truncated;
 }
 
+void text_json_sink_fixed_buffer_free(text_json_sink* sink) {
+  if (!sink || sink->write != fixed_buffer_write_fn) {
+    return;
+  }
+
+  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)sink->user;
+  if (buf) {
+    free(buf);
+    sink->user = NULL;
+    sink->write = NULL;
+  }
+}
+
 // Helper function to write bytes to sink
 static int write_bytes(text_json_sink* sink, const char* bytes, size_t len) {
   if (!sink || !sink->write || !bytes) {

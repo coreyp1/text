@@ -2365,6 +2365,9 @@ TEST(SinkAbstraction, FixedBuffer) {
     EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 1);
     // Should have written up to buffer limit (63 bytes, leaving 1 for null terminator)
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), sizeof(buffer) - 1);
+
+    // Clean up
+    text_json_sink_fixed_buffer_free(&sink);
 }
 
 /**
@@ -2396,6 +2399,9 @@ TEST(SinkAbstraction, FixedBufferEdgeCases) {
 
     status = text_json_sink_fixed_buffer(&sink, buf, 0);
     EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Clean up
+    text_json_sink_fixed_buffer_free(&sink);
 }
 
 /**

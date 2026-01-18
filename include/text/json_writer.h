@@ -159,6 +159,17 @@ TEXT_API size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink);
 TEXT_API int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink);
 
 /**
+ * @brief Free a fixed buffer sink
+ *
+ * Frees the internal structure allocated by text_json_sink_fixed_buffer().
+ * After calling this function, the sink is invalid and should not be used.
+ * Note: This does NOT free the buffer itself (it's owned by the caller).
+ *
+ * @param sink Sink created by text_json_sink_fixed_buffer()
+ */
+TEXT_API void text_json_sink_fixed_buffer_free(text_json_sink* sink);
+
+/**
  * @brief Write a JSON value to a sink
  *
  * Serializes a JSON DOM value to JSON text using the provided sink and
