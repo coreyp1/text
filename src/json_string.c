@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 
 /**
  * @brief Decode a standard escape sequence
@@ -302,11 +303,17 @@ text_json_status json_decode_string(
         // Update position
         if (pos) {
             pos->offset = in_idx;
-            if (input[in_idx - 1] == '\n') {
-                pos->line++;
+            if (in_idx > 0 && input[in_idx - 1] == '\n') {
+                // Check for integer overflow in line
+                if (pos->line < INT_MAX) {
+                    pos->line++;
+                }
                 pos->col = 1;
             } else {
-                pos->col++;
+                // Check for integer overflow in column
+                if (pos->col < INT_MAX) {
+                    pos->col++;
+                }
             }
         }
     }

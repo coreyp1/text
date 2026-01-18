@@ -90,11 +90,20 @@ static void* json_arena_alloc(json_arena* arena, size_t size, size_t align) {
     // Need a new block
     // Block size should be at least size + alignment overhead
     size_t block_size = arena->block_size;
+    // Check for overflow in size + align
+    if (size > SIZE_MAX - align) {
+        return NULL;  // Overflow
+    }
     if (size + align > block_size) {
         block_size = size + align;
     }
 
-    json_arena_block* block = malloc(sizeof(json_arena_block) + block_size);
+    // Check for overflow in sizeof + block_size
+    size_t block_alloc_size = sizeof(json_arena_block) + block_size;
+    if (block_alloc_size < block_size) {  // Overflow check
+        return NULL;
+    }
+    json_arena_block* block = malloc(block_alloc_size);
     if (!block) {
         return NULL;
     }

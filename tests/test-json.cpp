@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <text/text.h>
 #include <text/json.h>
+#include <cmath>
+#include <cstring>
 
 // Include internal header for testing internal functions
 extern "C" {
@@ -309,6 +311,402 @@ TEST(JsonTests, StringBufferOverflowUnicode) {
     );
 
     EXPECT_EQ(status, TEXT_JSON_E_LIMIT);
+}
+
+/**
+ * Test valid number formats
+ */
+TEST(JsonTests, NumberValidFormats) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    struct {
+        const char* input;
+        int64_t expected_i64;
+        uint64_t expected_u64;
+    } tests[] = {
+        {"0", 0, 0},
+        {"123", 123, 123},
+        {"-123", -123, 0},  // negative can't be uint64
+        {"0.5", 0, 0},      // has fractional part
+        {"123.456", 0, 0},  // has fractional part
+        {"1e2", 0, 0},      // has exponent
+        {"-1e-2", 0, 0},    // has exponent
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            tests[i].input,
+            strlen(tests[i].input),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+        EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_LEXEME) << "Should preserve lexeme: " << tests[i].input;
+        EXPECT_STREQ(num.lexeme, tests[i].input) << "Lexeme mismatch: " << tests[i].input;
+
+        if (tests[i].expected_i64 != 0 || strcmp(tests[i].input, "0") == 0) {
+            if (num.flags & JSON_NUMBER_HAS_I64) {
+                EXPECT_EQ(num.i64, tests[i].expected_i64) << "int64 mismatch: " << tests[i].input;
+            }
+        }
+
+        if (tests[i].expected_u64 != 0 || strcmp(tests[i].input, "0") == 0) {
+            if (num.flags & JSON_NUMBER_HAS_U64) {
+                EXPECT_EQ(num.u64, tests[i].expected_u64) << "uint64 mismatch: " << tests[i].input;
+            }
+        }
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test invalid number formats are rejected
+ */
+TEST(JsonTests, NumberInvalidFormats) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* invalid_numbers[] = {
+        "01",        // Leading zero
+        "1.",        // Trailing decimal point
+        ".1",        // Leading decimal point (without leading zero)
+        "-",         // Just minus sign
+        "--1",       // Double minus
+        "1e",        // Incomplete exponent
+        "1e+",       // Incomplete exponent
+        "1e-",       // Incomplete exponent
+        "abc",       // Not a number
+    };
+
+    for (size_t i = 0; i < sizeof(invalid_numbers) / sizeof(invalid_numbers[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            invalid_numbers[i],
+            strlen(invalid_numbers[i]),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_NE(status, TEXT_JSON_OK) << "Should reject: " << invalid_numbers[i];
+        EXPECT_EQ(status, TEXT_JSON_E_BAD_NUMBER) << "Should return BAD_NUMBER for: " << invalid_numbers[i];
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test int64 boundary values and overflow detection
+ */
+TEST(JsonTests, NumberInt64Boundaries) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    struct {
+        const char* input;
+        int64_t expected;
+        int should_have_i64;
+    } tests[] = {
+        {"9223372036854775807", INT64_MAX, 1},      // Max int64
+        {"-9223372036854775808", INT64_MIN, 1},     // Min int64
+        {"9223372036854775808", 0, 0},              // Overflow (max + 1)
+        {"-9223372036854775809", 0, 0},             // Underflow (min - 1)
+        {"0", 0, 1},
+        {"-1", -1, 1},
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            tests[i].input,
+            strlen(tests[i].input),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+
+        if (tests[i].should_have_i64) {
+            EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_I64) << "Should have int64: " << tests[i].input;
+            EXPECT_EQ(num.i64, tests[i].expected) << "int64 value mismatch: " << tests[i].input;
+        } else {
+            // Overflow case - may or may not have int64, but if it does, it's wrong
+            if (num.flags & JSON_NUMBER_HAS_I64) {
+                EXPECT_NE(num.i64, tests[i].expected) << "Should not have correct int64 due to overflow: " << tests[i].input;
+            }
+        }
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test uint64 boundary values and overflow detection
+ */
+TEST(JsonTests, NumberUint64Boundaries) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    struct {
+        const char* input;
+        uint64_t expected;
+        int should_have_u64;
+    } tests[] = {
+        {"18446744073709551615", UINT64_MAX, 1},     // Max uint64
+        {"18446744073709551616", 0, 0},              // Overflow (max + 1)
+        {"0", 0, 1},
+        {"123", 123, 1},
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            tests[i].input,
+            strlen(tests[i].input),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+
+        if (tests[i].should_have_u64) {
+            EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_U64) << "Should have uint64: " << tests[i].input;
+            EXPECT_EQ(num.u64, tests[i].expected) << "uint64 value mismatch: " << tests[i].input;
+        }
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test double parsing
+ */
+TEST(JsonTests, NumberDoubleParsing) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    struct {
+        const char* input;
+        double expected;
+        double tolerance;
+    } tests[] = {
+        {"0.0", 0.0, 0.0},
+        {"123.456", 123.456, 0.001},
+        {"-123.456", -123.456, 0.001},
+        {"1e2", 100.0, 0.0},
+        {"1.5e-2", 0.015, 0.0001},
+        {"-1.5e-2", -0.015, 0.0001},
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            tests[i].input,
+            strlen(tests[i].input),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+        EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_DOUBLE) << "Should have double: " << tests[i].input;
+        EXPECT_NEAR(num.dbl, tests[i].expected, tests[i].tolerance)
+            << "Double value mismatch: " << tests[i].input;
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test nonfinite number parsing (when enabled)
+ */
+TEST(JsonTests, NumberNonfiniteNumbers) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_nonfinite_numbers = 1;
+
+    struct {
+        const char* input;
+        int is_nan;
+        int is_inf;
+        int is_neg_inf;
+    } tests[] = {
+        {"NaN", 1, 0, 0},
+        {"Infinity", 0, 1, 0},
+        {"-Infinity", 0, 0, 1},
+    };
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            tests[i].input,
+            strlen(tests[i].input),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << tests[i].input;
+        EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_DOUBLE) << "Should have double: " << tests[i].input;
+        EXPECT_TRUE(num.flags & JSON_NUMBER_IS_NONFINITE) << "Should be nonfinite: " << tests[i].input;
+
+        if (tests[i].is_nan) {
+            EXPECT_TRUE(std::isnan(num.dbl)) << "Should be NaN: " << tests[i].input;
+        } else if (tests[i].is_inf) {
+            EXPECT_TRUE(std::isinf(num.dbl) && num.dbl > 0) << "Should be +Infinity: " << tests[i].input;
+        } else if (tests[i].is_neg_inf) {
+            EXPECT_TRUE(std::isinf(num.dbl) && num.dbl < 0) << "Should be -Infinity: " << tests[i].input;
+        }
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test that nonfinite numbers are rejected when disabled
+ */
+TEST(JsonTests, NumberNonfiniteRejected) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.allow_nonfinite_numbers = 0;
+
+    const char* nonfinite[] = {
+        "NaN",
+        "Infinity",
+        "-Infinity",
+    };
+
+    for (size_t i = 0; i < sizeof(nonfinite) / sizeof(nonfinite[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            nonfinite[i],
+            strlen(nonfinite[i]),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_NE(status, TEXT_JSON_OK) << "Should reject nonfinite when disabled: " << nonfinite[i];
+        EXPECT_EQ(status, TEXT_JSON_E_BAD_NUMBER) << "Should return BAD_NUMBER: " << nonfinite[i];
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test lexeme preservation
+ */
+TEST(JsonTests, NumberLexemePreservation) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.preserve_number_lexeme = 1;
+
+    const char* numbers[] = {
+        "0",
+        "123",
+        "-456",
+        "123.456",
+        "1e10",
+        "-1.5e-2",
+    };
+
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
+        memset(&num, 0, sizeof(num));
+        pos.offset = 0;
+        pos.line = 1;
+        pos.col = 1;
+
+        text_json_status status = json_parse_number(
+            numbers[i],
+            strlen(numbers[i]),
+            &num,
+            &pos,
+            &opts
+        );
+
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed for input: " << numbers[i];
+        EXPECT_TRUE(num.flags & JSON_NUMBER_HAS_LEXEME) << "Should preserve lexeme: " << numbers[i];
+        EXPECT_STREQ(num.lexeme, numbers[i]) << "Lexeme mismatch: " << numbers[i];
+        EXPECT_EQ(num.lexeme_len, strlen(numbers[i])) << "Lexeme length mismatch: " << numbers[i];
+
+        // Clean up
+        json_number_destroy(&num);
+    }
+}
+
+/**
+ * Test position tracking during number parsing
+ */
+TEST(JsonTests, NumberPositionTracking) {
+    json_number num;
+    json_position pos = {0, 1, 1};
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    const char* input = "123.456";
+    text_json_status status = json_parse_number(
+        input,
+        strlen(input),
+        &num,
+        &pos,
+        &opts
+    );
+
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(pos.offset, strlen(input));
+    EXPECT_EQ(pos.col, (int)strlen(input) + 1);  // col is 1-based
+
+    // Clean up
+    json_number_destroy(&num);
 }
 
 int main(int argc, char **argv) {
