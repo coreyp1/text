@@ -2,8 +2,10 @@
 #include <text/text.h>
 #include <text/json.h>
 #include <text/json_dom.h>
+#include <text/json_writer.h>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 // Include internal header for testing internal functions
 extern "C" {
@@ -2237,6 +2239,209 @@ TEST(DuplicateKeyHandling, CollectDifferentTypes) {
     EXPECT_NE(bool_out, 0);
 
     text_json_free(value);
+}
+
+/**
+ * Test sink abstraction - custom callback sink
+ */
+TEST(SinkAbstraction, CallbackSink) {
+    std::string output;
+
+    // Custom write callback that appends to string
+    auto write_callback = [](void* user, const char* bytes, size_t len) -> int {
+        std::string* str = (std::string*)user;
+        str->append(bytes, len);
+        return 0;
+    };
+
+    text_json_sink sink;
+    sink.write = write_callback;
+    sink.user = &output;
+
+    // Write some data
+    const char* test_data = "Hello, World!";
+    int result = sink.write(sink.user, test_data, strlen(test_data));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(output, "Hello, World!");
+
+    // Write more data
+    const char* more_data = " Test";
+    result = sink.write(sink.user, more_data, strlen(more_data));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(output, "Hello, World! Test");
+}
+
+/**
+ * Test sink abstraction - growable buffer sink
+ */
+TEST(SinkAbstraction, GrowableBuffer) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Initially empty
+    EXPECT_EQ(text_json_sink_buffer_size(&sink), 0u);
+    const char* data = text_json_sink_buffer_data(&sink);
+    ASSERT_NE(data, nullptr);
+    EXPECT_STREQ(data, "");
+
+    // Write some data
+    const char* test1 = "Hello";
+    int result = sink.write(sink.user, test1, strlen(test1));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_buffer_size(&sink), 5u);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "Hello");
+
+    // Write more data
+    const char* test2 = ", World!";
+    result = sink.write(sink.user, test2, strlen(test2));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_buffer_size(&sink), 13u);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "Hello, World!");
+
+    // Write large amount of data to test growth
+    std::string large_data(1000, 'A');
+    result = sink.write(sink.user, large_data.c_str(), large_data.size());
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_buffer_size(&sink), 1013u);
+
+    // Verify data integrity
+    data = text_json_sink_buffer_data(&sink);
+    EXPECT_EQ(strncmp(data, "Hello, World!", 13), 0);
+    EXPECT_EQ(data[1012], 'A');
+
+    // Clean up
+    text_json_sink_buffer_free(&sink);
+    EXPECT_EQ(sink.write, nullptr);
+    EXPECT_EQ(sink.user, nullptr);
+}
+
+/**
+ * Test sink abstraction - fixed buffer sink
+ */
+TEST(SinkAbstraction, FixedBuffer) {
+    char buffer[64];
+    text_json_sink sink;
+
+    text_json_status status = text_json_sink_fixed_buffer(&sink, buffer, sizeof(buffer));
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Initially empty
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 0u);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_STREQ(buffer, "");
+
+    // Write some data
+    const char* test1 = "Hello";
+    int result = sink.write(sink.user, test1, strlen(test1));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 5u);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_STREQ(buffer, "Hello");
+
+    // Write more data
+    const char* test2 = ", World!";
+    result = sink.write(sink.user, test2, strlen(test2));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 13u);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_STREQ(buffer, "Hello, World!");
+
+    // Write data that fits exactly
+    const char* test3 = " This fits";
+    result = sink.write(sink.user, test3, strlen(test3));
+    EXPECT_EQ(result, 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 23u);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+
+    // Write data that exceeds buffer (should truncate)
+    // After 23 bytes, we have 64 - 23 - 1 = 40 bytes available
+    // This string is 50 bytes, so it will exceed and truncate
+    const char* test4 = " This is way too long and will definitely be truncated";
+    result = sink.write(sink.user, test4, strlen(test4));
+    EXPECT_NE(result, 0); // Should return error on truncation
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 1);
+    // Should have written up to buffer limit (63 bytes, leaving 1 for null terminator)
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), sizeof(buffer) - 1);
+}
+
+/**
+ * Test sink abstraction - fixed buffer edge cases
+ */
+TEST(SinkAbstraction, FixedBufferEdgeCases) {
+    // Test with size 1 buffer (only null terminator)
+    char tiny_buffer[1];
+    text_json_sink sink;
+
+    text_json_status status = text_json_sink_fixed_buffer(&sink, tiny_buffer, 1);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Try to write (should truncate immediately)
+    const char* test = "X";
+    int result = sink.write(sink.user, test, 1);
+    EXPECT_NE(result, 0); // Should return error
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 1);
+    EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 0u);
+    EXPECT_EQ(tiny_buffer[0], '\0');
+
+    // Test invalid parameters
+    status = text_json_sink_fixed_buffer(nullptr, tiny_buffer, 1);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    char buf[10];
+    status = text_json_sink_fixed_buffer(&sink, nullptr, 10);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    status = text_json_sink_fixed_buffer(&sink, buf, 0);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+}
+
+/**
+ * Test sink abstraction - growable buffer edge cases
+ */
+TEST(SinkAbstraction, GrowableBufferEdgeCases) {
+    // Test invalid parameters
+    text_json_status status = text_json_sink_buffer(nullptr);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Test empty buffer access
+    text_json_sink sink;
+    status = text_json_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    const char* data = text_json_sink_buffer_data(nullptr);
+    EXPECT_EQ(data, nullptr);
+
+    size_t size = text_json_sink_buffer_size(nullptr);
+    EXPECT_EQ(size, 0u);
+
+    // Test free with invalid sink
+    text_json_sink invalid_sink = {nullptr, nullptr};
+    text_json_sink_buffer_free(&invalid_sink); // Should not crash
+
+    // Clean up valid sink
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test sink abstraction - error propagation
+ */
+TEST(SinkAbstraction, ErrorPropagation) {
+    // Custom callback that returns error
+    auto error_callback = [](void* user, const char* bytes, size_t len) -> int {
+        (void)user;
+        (void)bytes;
+        (void)len;
+        return 1; // Error
+    };
+
+    text_json_sink sink;
+    sink.write = error_callback;
+    sink.user = nullptr;
+
+    const char* test = "test";
+    int result = sink.write(sink.user, test, strlen(test));
+    EXPECT_NE(result, 0); // Should propagate error
 }
 
 int main(int argc, char **argv) {
