@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <limits>
 
 // Include internal header for testing internal functions
 extern "C" {
@@ -3132,6 +3133,595 @@ TEST(StreamingParser, InvalidJSON) {
     EXPECT_NE(status, TEXT_JSON_OK);  // Should fail on incomplete structure
 
     text_json_stream_free(st);
+}
+
+// ============================================================================
+// Streaming Writer Tests
+// ============================================================================
+
+/**
+ * Test streaming writer - creation and destruction
+ */
+TEST(StreamingWriter, Creation) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - NULL sink
+ */
+TEST(StreamingWriter, NullSink) {
+    text_json_sink sink = {nullptr, nullptr};
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    EXPECT_EQ(w, nullptr);
+}
+
+/**
+ * Test streaming writer - basic value writing (null, bool, number, string)
+ */
+TEST(StreamingWriter, BasicValues) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Write null
+    status = text_json_writer_null(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Finish
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify output
+    const char* output = text_json_sink_buffer_data(&sink);
+    size_t output_len = text_json_sink_buffer_size(&sink);
+    EXPECT_STREQ(output, "null");
+    EXPECT_EQ(output_len, 4u);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test bool
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_bool(w, 1);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    output = text_json_sink_buffer_data(&sink);
+    EXPECT_STREQ(output, "true");
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test number (i64)
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_number_i64(w, 12345);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    output = text_json_sink_buffer_data(&sink);
+    EXPECT_STREQ(output, "12345");
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test string
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_string(w, "hello", 5);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    output = text_json_sink_buffer_data(&sink);
+    EXPECT_STREQ(output, "\"hello\"");
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - array writing
+ */
+TEST(StreamingWriter, Arrays) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Write array: [1, 2, 3]
+    status = text_json_writer_array_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_number_i64(w, 1);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_number_i64(w, 2);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_number_i64(w, 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_array_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify output
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_STREQ(output, "[1, 2, 3]");
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - object writing
+ */
+TEST(StreamingWriter, Objects) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Write object: {"key": "value"}
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_string(w, "value", 5);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_object_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify output
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_STREQ(output, "{\"key\":\"value\"}");
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - structural enforcement (invalid sequences)
+ */
+TEST(StreamingWriter, StructuralEnforcement) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Try to write value without key in object - should fail
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_null(w);  // Should fail - need key first
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_STATE);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Try to write key when not in object - should fail
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_key(w, "key", 3);  // Should fail - not in object
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_STATE);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Try to end object when expecting key - should fail
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Now try to end object without writing value - should fail
+    status = text_json_writer_object_end(w);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_STATE);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - finish validation (incomplete structure)
+ */
+TEST(StreamingWriter, FinishValidation) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Start object but don't close it
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INCOMPLETE);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Start array but don't close it
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    status = text_json_writer_array_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_finish(w, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INCOMPLETE);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - pretty-print mode
+ */
+TEST(StreamingWriter, PrettyPrint) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_write_options opts = text_json_write_options_default();
+    opts.pretty = 1;
+    opts.indent_spaces = 2;
+
+    text_json_writer* w = text_json_writer_new(sink, &opts);
+    ASSERT_NE(w, nullptr);
+
+    // Write object with pretty printing
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_string(w, "value", 5);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_object_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify output has newlines and indentation
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_NE(strstr(output, "\n"), nullptr);  // Should have newline
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - nested structures
+ */
+TEST(StreamingWriter, NestedStructures) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Write: {"arr": [1, 2], "obj": {"key": "value"}}
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_key(w, "arr", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_array_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_number_i64(w, 1);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_number_i64(w, 2);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_array_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_key(w, "obj", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_string(w, "value", 5);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_object_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_object_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify output
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_NE(strstr(output, "\"arr\""), nullptr);
+    EXPECT_NE(strstr(output, "\"obj\""), nullptr);
+    EXPECT_NE(strstr(output, "\"key\""), nullptr);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - number formats (i64, u64, double, lexeme)
+ */
+TEST(StreamingWriter, NumberFormats) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Test i64
+    status = text_json_writer_number_i64(w, -12345);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "-12345");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test u64
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_u64(w, 12345ULL);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "12345");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test double
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_double(w, 3.14159);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    const char* output = text_json_sink_buffer_data(&sink);
+    EXPECT_NE(strstr(output, "3.14"), nullptr);  // Should contain the number
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test lexeme
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_lexeme(w, "123.456", 7);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "123.456");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - nonfinite numbers
+ */
+TEST(StreamingWriter, NonfiniteNumbers) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_write_options opts = text_json_write_options_default();
+    opts.allow_nonfinite_numbers = 1;
+
+    text_json_writer* w = text_json_writer_new(sink, &opts);
+    ASSERT_NE(w, nullptr);
+
+    // Test NaN
+    status = text_json_writer_number_double(w, std::nan(""));
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "NaN");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test Infinity
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, &opts);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_double(w, std::numeric_limits<double>::infinity());
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "Infinity");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test -Infinity
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, &opts);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_double(w, -std::numeric_limits<double>::infinity());
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_finish(w, nullptr);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(text_json_sink_buffer_data(&sink), "-Infinity");
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+
+    // Test that nonfinite numbers are rejected when option is off
+    opts.allow_nonfinite_numbers = 0;
+    status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+    w = text_json_writer_new(sink, &opts);
+    ASSERT_NE(w, nullptr);
+    status = text_json_writer_number_double(w, std::nan(""));
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_NONFINITE);
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - round-trip (write then parse)
+ */
+TEST(StreamingWriter, RoundTrip) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Write: {"key": [1, 2, 3]}
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_array_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_number_i64(w, 1);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_number_i64(w, 2);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_number_i64(w, 3);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_array_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    status = text_json_writer_object_end(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Parse the output
+    const char* output = text_json_sink_buffer_data(&sink);
+    size_t output_len = text_json_sink_buffer_size(&sink);
+
+    text_json_parse_options parse_opts = text_json_parse_options_default();
+    text_json_value* v = text_json_parse(output, output_len, &parse_opts, &err);
+    ASSERT_NE(v, nullptr);
+
+    // Verify structure
+    EXPECT_EQ(text_json_typeof(v), TEXT_JSON_OBJECT);
+    const text_json_value* arr = text_json_object_get(v, "key", 3);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(text_json_typeof(arr), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(arr), 3u);
+
+    text_json_free(v);
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test streaming writer - error state handling
+ */
+TEST(StreamingWriter, ErrorState) {
+    text_json_sink sink;
+    text_json_status status = text_json_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_JSON_OK);
+
+    text_json_writer* w = text_json_writer_new(sink, nullptr);
+    ASSERT_NE(w, nullptr);
+
+    // Cause an error (try to write value without key in object)
+    status = text_json_writer_object_begin(w);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_writer_null(w);  // Should fail
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    // After error, subsequent operations should fail
+    status = text_json_writer_key(w, "key", 3);
+    EXPECT_NE(status, TEXT_JSON_OK);  // Actually, this might succeed, but finish should fail
+
+    text_json_error err;
+    status = text_json_writer_finish(w, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    text_json_writer_free(w);
+    text_json_sink_buffer_free(&sink);
 }
 
 int main(int argc, char **argv) {

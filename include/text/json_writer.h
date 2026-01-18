@@ -189,6 +189,217 @@ TEXT_API text_json_status text_json_write_value(
   text_json_error* err
 );
 
+/**
+ * @brief Forward declaration of streaming writer structure
+ *
+ * The streaming writer maintains internal state to enforce structural
+ * correctness (e.g., preventing values without keys inside objects).
+ */
+typedef struct text_json_writer text_json_writer;
+
+/**
+ * @brief Create a new streaming JSON writer
+ *
+ * Creates a new streaming writer that writes JSON output to the provided
+ * sink using the specified write options. The writer enforces structural
+ * correctness (e.g., prevents writing values without keys inside objects).
+ *
+ * @param sink Output sink (must not be NULL)
+ * @param opt Write options (can be NULL for defaults)
+ * @return New writer instance, or NULL on allocation failure
+ */
+TEXT_API text_json_writer* text_json_writer_new(
+  text_json_sink sink,
+  const text_json_write_options* opt
+);
+
+/**
+ * @brief Free a streaming JSON writer
+ *
+ * Frees all resources associated with the writer. After calling this
+ * function, the writer pointer is invalid and must not be used.
+ *
+ * @param w Writer to free (can be NULL, in which case this is a no-op)
+ */
+TEXT_API void text_json_writer_free(text_json_writer* w);
+
+/**
+ * @brief Begin writing an object
+ *
+ * Writes the opening brace `{` for a JSON object. Must be followed by
+ * key-value pairs or be closed immediately with text_json_writer_object_end().
+ *
+ * @param w Writer instance (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., invalid state)
+ */
+TEXT_API text_json_status text_json_writer_object_begin(text_json_writer* w);
+
+/**
+ * @brief End writing an object
+ *
+ * Writes the closing brace `}` for a JSON object. The object must have
+ * been started with text_json_writer_object_begin().
+ *
+ * @param w Writer instance (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete object)
+ */
+TEXT_API text_json_status text_json_writer_object_end(text_json_writer* w);
+
+/**
+ * @brief Begin writing an array
+ *
+ * Writes the opening bracket `[` for a JSON array. Must be followed by
+ * values or be closed immediately with text_json_writer_array_end().
+ *
+ * @param w Writer instance (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., invalid state)
+ */
+TEXT_API text_json_status text_json_writer_array_begin(text_json_writer* w);
+
+/**
+ * @brief End writing an array
+ *
+ * Writes the closing bracket `]` for a JSON array. The array must have
+ * been started with text_json_writer_array_begin().
+ *
+ * @param w Writer instance (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete array)
+ */
+TEXT_API text_json_status text_json_writer_array_end(text_json_writer* w);
+
+/**
+ * @brief Write an object key
+ *
+ * Writes a key string for an object key-value pair. Must be called inside
+ * an object context (after object_begin, before the corresponding value).
+ * The key will be properly escaped according to write options.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param key Key string (must not be NULL)
+ * @param len Length of key string in bytes
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., not in object context)
+ */
+TEXT_API text_json_status text_json_writer_key(
+  text_json_writer* w,
+  const char* key,
+  size_t len
+);
+
+/**
+ * @brief Write a null value
+ *
+ * Writes the JSON null value. Can be used in arrays or as object values.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_null(text_json_writer* w);
+
+/**
+ * @brief Write a boolean value
+ *
+ * Writes a JSON boolean value (true or false).
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param b Boolean value (0 = false, non-zero = true)
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_bool(text_json_writer* w, int b);
+
+/**
+ * @brief Write a number value from lexeme
+ *
+ * Writes a JSON number value using the exact lexeme string. The lexeme
+ * should be a valid JSON number format.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param s Number lexeme string (must not be NULL)
+ * @param len Length of lexeme string in bytes
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_number_lexeme(
+  text_json_writer* w,
+  const char* s,
+  size_t len
+);
+
+/**
+ * @brief Write a number value from int64
+ *
+ * Writes a JSON number value formatted from a signed 64-bit integer.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param x Integer value to write
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_number_i64(
+  text_json_writer* w,
+  long long x
+);
+
+/**
+ * @brief Write a number value from uint64
+ *
+ * Writes a JSON number value formatted from an unsigned 64-bit integer.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param x Unsigned integer value to write
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_number_u64(
+  text_json_writer* w,
+  unsigned long long x
+);
+
+/**
+ * @brief Write a number value from double
+ *
+ * Writes a JSON number value formatted from a double-precision floating-point
+ * number. Non-finite numbers (NaN, Infinity) are only written if the
+ * allow_nonfinite_numbers option is enabled.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param x Floating-point value to write
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_number_double(
+  text_json_writer* w,
+  double x
+);
+
+/**
+ * @brief Write a string value
+ *
+ * Writes a JSON string value. The string will be properly escaped according
+ * to write options (escape sequences, Unicode escaping, etc.).
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param s String data (must not be NULL)
+ * @param len Length of string in bytes
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_writer_string(
+  text_json_writer* w,
+  const char* s,
+  size_t len
+);
+
+/**
+ * @brief Finish writing and validate structure
+ *
+ * Completes the JSON output and validates that the structure is complete
+ * (all objects and arrays are properly closed). Returns an error if the
+ * structure is incomplete or invalid.
+ *
+ * @param w Writer instance (must not be NULL)
+ * @param err Error output structure (can be NULL if error details not needed)
+ * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete structure)
+ */
+TEXT_API text_json_status text_json_writer_finish(
+  text_json_writer* w,
+  text_json_error* err
+);
+
 #ifdef __cplusplus
 }
 #endif

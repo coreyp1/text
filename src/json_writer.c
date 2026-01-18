@@ -711,3 +711,884 @@ text_json_status text_json_write_value(
 
   return TEXT_JSON_OK;
 }
+
+// ============================================================================
+// Streaming Writer Implementation
+// ============================================================================
+
+// Stack entry type for tracking nesting
+typedef enum {
+  JSON_WRITER_STACK_OBJECT,
+  JSON_WRITER_STACK_ARRAY
+} json_writer_stack_type;
+
+// Stack entry for tracking nesting
+typedef struct {
+  json_writer_stack_type type;  // Object or array
+  int has_elements;              // Whether any elements have been written
+  int expecting_key;             // For objects: 1 if expecting key, 0 if expecting value
+} json_writer_stack_entry;
+
+// Streaming writer structure
+struct text_json_writer {
+  text_json_sink sink;                    // Output sink
+  text_json_write_options opts;          // Write options (copy)
+  json_writer_stack_entry* stack;         // Stack for tracking nesting
+  size_t stack_capacity;                  // Stack capacity
+  size_t stack_size;                      // Current stack depth
+  int error;                              // Error flag (1 if error occurred)
+};
+
+// Default stack capacity
+#define JSON_WRITER_DEFAULT_STACK_CAPACITY 32
+
+// Helper to write bytes through writer's sink
+static int writer_write_bytes(text_json_writer* w, const char* bytes, size_t len) {
+  if (!w || !w->sink.write || !bytes) {
+    return 1;
+  }
+  int result = w->sink.write(w->sink.user, bytes, len);
+  if (result != 0) {
+    w->error = 1;
+  }
+  return result;
+}
+
+// Helper to write a single character
+static int writer_write_char(text_json_writer* w, char c) {
+  return writer_write_bytes(w, &c, 1);
+}
+
+// Helper to write a string
+static int writer_write_string(text_json_writer* w, const char* s) {
+  if (!s) {
+    return 0;
+  }
+  return writer_write_bytes(w, s, strlen(s));
+}
+
+// Write indentation for pretty printing
+static int writer_write_indent(text_json_writer* w, int depth) {
+  if (!w->opts.pretty) {
+    return 0;
+  }
+
+  const char* newline = w->opts.newline ? w->opts.newline : "\n";
+  if (writer_write_string(w, newline) != 0) {
+    return 1;
+  }
+
+  int spaces = w->opts.indent_spaces > 0 ? w->opts.indent_spaces : 2;
+
+  // Check for integer overflow: depth * spaces
+  if (spaces > 0 && depth > INT_MAX / spaces) {
+    return 1; // Overflow would occur
+  }
+
+  int total_spaces = depth * spaces;
+  for (int i = 0; i < total_spaces; i++) {
+    if (writer_write_char(w, ' ') != 0) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+// Ensure stack has capacity for at least one more entry
+static int writer_ensure_stack(text_json_writer* w) {
+  if (w->stack_size >= w->stack_capacity) {
+    size_t new_capacity = w->stack_capacity == 0
+      ? JSON_WRITER_DEFAULT_STACK_CAPACITY
+      : w->stack_capacity * 2;
+
+    // Check for overflow
+    if (new_capacity < w->stack_capacity) {
+      return 1; // Overflow
+    }
+
+    // Check for reasonable maximum (prevent excessive allocation)
+    if (new_capacity > 1024 * 1024) { // 1M entries is more than enough
+      return 1;
+    }
+
+    // Check for overflow in multiplication: new_capacity * sizeof(json_writer_stack_entry)
+    size_t entry_size = sizeof(json_writer_stack_entry);
+    if (entry_size > 0 && new_capacity > SIZE_MAX / entry_size) {
+      return 1; // Overflow
+    }
+
+    json_writer_stack_entry* new_stack = (json_writer_stack_entry*)realloc(
+      w->stack,
+      new_capacity * entry_size
+    );
+    if (!new_stack) {
+      return 1; // Out of memory
+    }
+
+    w->stack = new_stack;
+    w->stack_capacity = new_capacity;
+  }
+  return 0;
+}
+
+// Push a stack entry
+static int writer_push_stack(text_json_writer* w, json_writer_stack_type type) {
+  if (writer_ensure_stack(w) != 0) {
+    return 1;
+  }
+
+  json_writer_stack_entry entry = {
+    .type = type,
+    .has_elements = 0,
+    .expecting_key = (type == JSON_WRITER_STACK_OBJECT) ? 1 : 0
+  };
+
+  w->stack[w->stack_size++] = entry;
+  return 0;
+}
+
+// Pop a stack entry
+static int writer_pop_stack(text_json_writer* w) {
+  if (w->stack_size == 0) {
+    return 1; // Stack underflow
+  }
+  w->stack_size--;
+  return 0;
+}
+
+// Get top stack entry (or NULL if empty)
+static json_writer_stack_entry* writer_top_stack(text_json_writer* w) {
+  if (w->stack_size == 0) {
+    return NULL;
+  }
+  return &w->stack[w->stack_size - 1];
+}
+
+// Write comma if needed (before next element)
+static int writer_write_comma_if_needed(text_json_writer* w) {
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (!top) {
+    return 0; // No stack, no comma needed
+  }
+
+  if (top->has_elements) {
+    if (writer_write_char(w, ',') != 0) {
+      return 1;
+    }
+    if (w->opts.pretty) {
+      // Write newline and indent for next element
+      // Check that stack_size fits in int (defensive, should always be true due to capacity limit)
+      if (w->stack_size > (size_t)INT_MAX) {
+        return 1; // Stack size too large
+      }
+      if (writer_write_indent(w, (int)w->stack_size) != 0) {
+        return 1;
+      }
+    } else {
+      // In compact mode, just add space after comma
+      if (writer_write_char(w, ' ') != 0) {
+        return 1;
+      }
+    }
+  } else {
+    // First element - write indent if pretty
+    if (w->opts.pretty) {
+      // Check that stack_size fits in int (defensive, should always be true due to capacity limit)
+      if (w->stack_size > (size_t)INT_MAX) {
+        return 1; // Stack size too large
+      }
+      if (writer_write_indent(w, (int)w->stack_size) != 0) {
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+text_json_writer* text_json_writer_new(
+  text_json_sink sink,
+  const text_json_write_options* opt
+) {
+  if (!sink.write) {
+    return NULL;
+  }
+
+  text_json_writer* w = (text_json_writer*)calloc(1, sizeof(text_json_writer));
+  if (!w) {
+    return NULL;
+  }
+
+  w->sink = sink;
+  if (opt) {
+    w->opts = *opt;
+  } else {
+    w->opts = text_json_write_options_default();
+  }
+
+  w->stack_capacity = JSON_WRITER_DEFAULT_STACK_CAPACITY;
+  w->stack = (json_writer_stack_entry*)calloc(
+    w->stack_capacity,
+    sizeof(json_writer_stack_entry)
+  );
+  if (!w->stack) {
+    free(w);
+    return NULL;
+  }
+
+  w->stack_size = 0;
+  w->error = 0;
+
+  return w;
+}
+
+void text_json_writer_free(text_json_writer* w) {
+  if (!w) {
+    return;
+  }
+
+  if (w->stack) {
+    free(w->stack);
+  }
+  free(w);
+}
+
+text_json_status text_json_writer_object_begin(text_json_writer* w) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  // Check if we're in an object expecting a key (can't write value without key)
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (top && top->type == JSON_WRITER_STACK_OBJECT && top->expecting_key) {
+    return TEXT_JSON_E_STATE; // Can't start object as value - need key first
+  }
+
+  // Write comma if needed (for arrays) or handle first element
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write opening brace
+  if (writer_write_char(w, '{') != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Push object onto stack
+  if (writer_push_stack(w, JSON_WRITER_STACK_OBJECT) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_OOM;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_object_end(text_json_writer* w) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (!top || top->type != JSON_WRITER_STACK_OBJECT) {
+    return TEXT_JSON_E_STATE; // Not in an object
+  }
+
+  if (!top->expecting_key) {
+    return TEXT_JSON_E_STATE; // Incomplete: expecting value after key
+  }
+
+  // Write closing brace
+  if (w->opts.pretty && top->has_elements) {
+    // Indent to parent level (stack_size - 1)
+    int indent_depth = (int)w->stack_size - 1;
+    if (indent_depth < 0) indent_depth = 0;
+    if (writer_write_indent(w, indent_depth) != 0) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+  }
+
+  if (writer_write_char(w, '}') != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Pop object from stack
+  if (writer_pop_stack(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_STATE;
+  }
+
+  // Mark parent as having elements and reset expecting_key if it's an object
+  top = writer_top_stack(w);
+  if (top) {
+    top->has_elements = 1;
+    // If parent is an object, we just finished writing a value, so reset to expecting key
+    if (top->type == JSON_WRITER_STACK_OBJECT) {
+      top->expecting_key = 1;
+    }
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_array_begin(text_json_writer* w) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  // Check if we're in an object expecting a key (can't write value without key)
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (top && top->type == JSON_WRITER_STACK_OBJECT && top->expecting_key) {
+    return TEXT_JSON_E_STATE; // Can't start array as value - need key first
+  }
+
+  // Write comma if needed (for arrays) or handle first element
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write opening bracket
+  if (writer_write_char(w, '[') != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Push array onto stack
+  if (writer_push_stack(w, JSON_WRITER_STACK_ARRAY) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_OOM;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_array_end(text_json_writer* w) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (!top || top->type != JSON_WRITER_STACK_ARRAY) {
+    return TEXT_JSON_E_STATE; // Not in an array
+  }
+
+  // Write closing bracket
+  if (w->opts.pretty && top->has_elements) {
+    // Indent to parent level (stack_size - 1)
+    int indent_depth = (int)w->stack_size - 1;
+    if (indent_depth < 0) indent_depth = 0;
+    if (writer_write_indent(w, indent_depth) != 0) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+  }
+
+  if (writer_write_char(w, ']') != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Pop array from stack
+  if (writer_pop_stack(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_STATE;
+  }
+
+  // Mark parent as having elements and reset expecting_key if it's an object
+  top = writer_top_stack(w);
+  if (top) {
+    top->has_elements = 1;
+    // If parent is an object, we just finished writing a value, so reset to expecting key
+    if (top->type == JSON_WRITER_STACK_OBJECT) {
+      top->expecting_key = 1;
+    }
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_key(
+  text_json_writer* w,
+  const char* key,
+  size_t len
+) {
+  if (!w || !key) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+  if (!top || top->type != JSON_WRITER_STACK_OBJECT) {
+    return TEXT_JSON_E_STATE; // Not in an object
+  }
+
+  if (!top->expecting_key) {
+    return TEXT_JSON_E_STATE; // Not expecting a key
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write key
+  if (write_escaped_string(&w->sink, key, len, &w->opts) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write colon
+  if (w->opts.pretty) {
+    if (writer_write_string(w, ": ") != 0) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+  } else {
+    if (writer_write_char(w, ':') != 0) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+  }
+
+  // Now expecting value
+  top->expecting_key = 0;
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_null(text_json_writer* w) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write null
+  if (writer_write_string(w, "null") != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_bool(text_json_writer* w, int b) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write boolean
+  if (writer_write_string(w, b ? "true" : "false") != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_number_lexeme(
+  text_json_writer* w,
+  const char* s,
+  size_t len
+) {
+  if (!w || !s) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write number lexeme
+  if (writer_write_bytes(w, s, len) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_number_i64(
+  text_json_writer* w,
+  long long x
+) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Format number
+  char num_buf[64];
+  int len = snprintf(num_buf, sizeof(num_buf), "%lld", x);
+  if (len < 0 || (size_t)len >= sizeof(num_buf)) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_number_u64(
+  text_json_writer* w,
+  unsigned long long x
+) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Format number
+  char num_buf[64];
+  int len = snprintf(num_buf, sizeof(num_buf), "%llu", x);
+  if (len < 0 || (size_t)len >= sizeof(num_buf)) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_number_double(
+  text_json_writer* w,
+  double x
+) {
+  if (!w) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Check for nonfinite numbers
+  if (!isfinite(x)) {
+    if (!w->opts.allow_nonfinite_numbers) {
+      w->error = 1;
+      return TEXT_JSON_E_NONFINITE;
+    }
+    if (isnan(x)) {
+      if (writer_write_string(w, "NaN") != 0) {
+        w->error = 1;
+        return TEXT_JSON_E_WRITE;
+      }
+    } else if (isinf(x)) {
+      if (x < 0) {
+        if (writer_write_string(w, "-Infinity") != 0) {
+          w->error = 1;
+          return TEXT_JSON_E_WRITE;
+        }
+      } else {
+        if (writer_write_string(w, "Infinity") != 0) {
+          w->error = 1;
+          return TEXT_JSON_E_WRITE;
+        }
+      }
+    }
+  } else {
+    // Format finite number
+    char num_buf[64];
+    int len = snprintf(num_buf, sizeof(num_buf), "%.17g", x);
+    if (len < 0 || (size_t)len >= sizeof(num_buf)) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+
+    if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
+      w->error = 1;
+      return TEXT_JSON_E_WRITE;
+    }
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_string(
+  text_json_writer* w,
+  const char* s,
+  size_t len
+) {
+  if (!w || !s) {
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    return TEXT_JSON_E_STATE;
+  }
+
+  json_writer_stack_entry* top = writer_top_stack(w);
+
+  // If in object, must have written key first
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    if (top->expecting_key) {
+      w->error = 1;
+      return TEXT_JSON_E_STATE; // Must write key before value
+    }
+  }
+
+  // Write comma if needed
+  if (writer_write_comma_if_needed(w) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Write escaped string
+  if (write_escaped_string(&w->sink, s, len, &w->opts) != 0) {
+    w->error = 1;
+    return TEXT_JSON_E_WRITE;
+  }
+
+  // Mark current container as having elements
+  if (top) {
+    top->has_elements = 1;
+  }
+
+  // If in object, reset to expecting key
+  if (top && top->type == JSON_WRITER_STACK_OBJECT) {
+    top->expecting_key = 1;
+  }
+
+  return TEXT_JSON_OK;
+}
+
+text_json_status text_json_writer_finish(
+  text_json_writer* w,
+  text_json_error* err
+) {
+  if (!w) {
+    if (err) {
+      err->code = TEXT_JSON_E_INVALID;
+      err->message = "Writer is NULL";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_INVALID;
+  }
+
+  if (w->error) {
+    if (err) {
+      err->code = TEXT_JSON_E_STATE;
+      err->message = "Writer is in error state";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_STATE;
+  }
+
+  // Check if stack is empty (structure is complete)
+  if (w->stack_size != 0) {
+    if (err) {
+      err->code = TEXT_JSON_E_INCOMPLETE;
+      err->message = "Incomplete JSON structure: unclosed containers";
+      err->offset = 0;
+      err->line = 0;
+      err->col = 0;
+    }
+    return TEXT_JSON_E_INCOMPLETE;
+  }
+
+  return TEXT_JSON_OK;
+}
