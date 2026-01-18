@@ -13,7 +13,7 @@ extern "C" {
 /**
  * Test default parse options match specification (strict JSON by default)
  */
-TEST(JsonTests, ParseOptionsDefault) {
+TEST(ParseOptions, Default) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     // Strictness / extensions - all should be off (strict JSON)
@@ -48,7 +48,7 @@ TEST(JsonTests, ParseOptionsDefault) {
 /**
  * Test default write options match specification (compact output)
  */
-TEST(JsonTests, WriteOptionsDefault) {
+TEST(WriteOptions, Default) {
     text_json_write_options opts = text_json_write_options_default();
 
     // Formatting
@@ -73,7 +73,7 @@ TEST(JsonTests, WriteOptionsDefault) {
 /**
  * Test that text_json_free can be called with NULL
  */
-TEST(JsonTests, FreeNullValue) {
+TEST(MemoryManagement, FreeNullValue) {
     // Should not crash
     text_json_free(nullptr);
     EXPECT_TRUE(true);  // If we get here, it worked
@@ -82,7 +82,7 @@ TEST(JsonTests, FreeNullValue) {
 /**
  * Test standard escape sequence decoding
  */
-TEST(JsonTests, StringEscapeSequences) {
+TEST(StringHandling, EscapeSequences) {
     char output[256];
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -132,7 +132,7 @@ TEST(JsonTests, StringEscapeSequences) {
 /**
  * Test Unicode escape sequence decoding
  */
-TEST(JsonTests, StringUnicodeEscapes) {
+TEST(StringHandling, UnicodeEscapes) {
     char output[256];
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -175,7 +175,7 @@ TEST(JsonTests, StringUnicodeEscapes) {
 /**
  * Test surrogate pair decoding
  */
-TEST(JsonTests, StringSurrogatePairs) {
+TEST(StringHandling, SurrogatePairs) {
     char output[256];
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -205,7 +205,7 @@ TEST(JsonTests, StringSurrogatePairs) {
 /**
  * Test invalid escape sequences are rejected
  */
-TEST(JsonTests, StringInvalidEscapes) {
+TEST(StringHandling, InvalidEscapes) {
     char output[256];
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -244,7 +244,7 @@ TEST(JsonTests, StringInvalidEscapes) {
 /**
  * Test position tracking during string decoding
  */
-TEST(JsonTests, StringPositionTracking) {
+TEST(StringHandling, PositionTracking) {
     char output[256];
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -269,7 +269,7 @@ TEST(JsonTests, StringPositionTracking) {
 /**
  * Test buffer overflow protection
  */
-TEST(JsonTests, StringBufferOverflowProtection) {
+TEST(StringHandling, BufferOverflowProtection) {
     char output[5];  // Small buffer
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -293,7 +293,7 @@ TEST(JsonTests, StringBufferOverflowProtection) {
 /**
  * Test buffer overflow protection with Unicode escape
  */
-TEST(JsonTests, StringBufferOverflowUnicode) {
+TEST(StringHandling, BufferOverflowUnicode) {
     char output[2];  // Very small buffer
     size_t output_len;
     json_position pos = {0, 1, 1};
@@ -317,7 +317,7 @@ TEST(JsonTests, StringBufferOverflowUnicode) {
 /**
  * Test valid number formats
  */
-TEST(JsonTests, NumberValidFormats) {
+TEST(NumberParsing, ValidFormats) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -374,7 +374,7 @@ TEST(JsonTests, NumberValidFormats) {
 /**
  * Test invalid number formats are rejected
  */
-TEST(JsonTests, NumberInvalidFormats) {
+TEST(NumberParsing, InvalidFormats) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -416,7 +416,7 @@ TEST(JsonTests, NumberInvalidFormats) {
 /**
  * Test int64 boundary values and overflow detection
  */
-TEST(JsonTests, NumberInt64Boundaries) {
+TEST(NumberParsing, Int64Boundaries) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -468,7 +468,7 @@ TEST(JsonTests, NumberInt64Boundaries) {
 /**
  * Test uint64 boundary values and overflow detection
  */
-TEST(JsonTests, NumberUint64Boundaries) {
+TEST(NumberParsing, Uint64Boundaries) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -513,7 +513,7 @@ TEST(JsonTests, NumberUint64Boundaries) {
 /**
  * Test double parsing
  */
-TEST(JsonTests, NumberDoubleParsing) {
+TEST(NumberParsing, DoubleParsing) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -558,7 +558,7 @@ TEST(JsonTests, NumberDoubleParsing) {
 /**
  * Test nonfinite number parsing (when enabled)
  */
-TEST(JsonTests, NumberNonfiniteNumbers) {
+TEST(NumberParsing, NonfiniteNumbers) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -609,7 +609,7 @@ TEST(JsonTests, NumberNonfiniteNumbers) {
 /**
  * Test that nonfinite numbers are rejected when disabled
  */
-TEST(JsonTests, NumberNonfiniteRejected) {
+TEST(NumberParsing, NonfiniteRejected) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -646,7 +646,7 @@ TEST(JsonTests, NumberNonfiniteRejected) {
 /**
  * Test lexeme preservation
  */
-TEST(JsonTests, NumberLexemePreservation) {
+TEST(NumberParsing, LexemePreservation) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -688,7 +688,7 @@ TEST(JsonTests, NumberLexemePreservation) {
 /**
  * Test position tracking during number parsing
  */
-TEST(JsonTests, NumberPositionTracking) {
+TEST(NumberParsing, PositionTracking) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
@@ -713,7 +713,7 @@ TEST(JsonTests, NumberPositionTracking) {
 /**
  * Test lexer correctly identifies all token types in valid JSON
  */
-TEST(JsonTests, LexerTokenTypes) {
+TEST(Lexer, TokenTypes) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -768,7 +768,7 @@ TEST(JsonTests, LexerTokenTypes) {
 /**
  * Test lexer keyword tokenization
  */
-TEST(JsonTests, LexerKeywords) {
+TEST(Lexer, Keywords) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -799,7 +799,7 @@ TEST(JsonTests, LexerKeywords) {
 /**
  * Test lexer string tokenization with escape sequences
  */
-TEST(JsonTests, LexerStringTokenization) {
+TEST(Lexer, StringTokenization) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -819,7 +819,7 @@ TEST(JsonTests, LexerStringTokenization) {
 /**
  * Test lexer number tokenization
  */
-TEST(JsonTests, LexerNumberTokenization) {
+TEST(Lexer, NumberTokenization) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -856,7 +856,7 @@ TEST(JsonTests, LexerNumberTokenization) {
 /**
  * Test comment lexing (single-line and multi-line)
  */
-TEST(JsonTests, LexerComments) {
+TEST(Lexer, Comments) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -884,7 +884,7 @@ TEST(JsonTests, LexerComments) {
 /**
  * Test that comments are rejected when disabled
  */
-TEST(JsonTests, LexerCommentsRejected) {
+TEST(Lexer, CommentsRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -904,7 +904,7 @@ TEST(JsonTests, LexerCommentsRejected) {
 /**
  * Test position tracking accuracy
  */
-TEST(JsonTests, LexerPositionTracking) {
+TEST(Lexer, PositionTracking) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -953,7 +953,7 @@ TEST(JsonTests, LexerPositionTracking) {
 /**
  * Test extension tokens (NaN, Infinity, -Infinity) when enabled
  */
-TEST(JsonTests, LexerExtensionTokens) {
+TEST(Lexer, ExtensionTokens) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -985,7 +985,7 @@ TEST(JsonTests, LexerExtensionTokens) {
 /**
  * Test that extension tokens are rejected when disabled
  */
-TEST(JsonTests, LexerExtensionTokensRejected) {
+TEST(Lexer, ExtensionTokensRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -1005,7 +1005,7 @@ TEST(JsonTests, LexerExtensionTokensRejected) {
 /**
  * Test whitespace handling
  */
-TEST(JsonTests, LexerWhitespaceHandling) {
+TEST(Lexer, WhitespaceHandling) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -1040,7 +1040,7 @@ TEST(JsonTests, LexerWhitespaceHandling) {
 /**
  * Test lexer error reporting with accurate positions
  */
-TEST(JsonTests, LexerErrorReporting) {
+TEST(Lexer, ErrorReporting) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -1068,7 +1068,7 @@ TEST(JsonTests, LexerErrorReporting) {
 /**
  * Test single-quote strings when enabled
  */
-TEST(JsonTests, LexerSingleQuoteStrings) {
+TEST(Lexer, SingleQuoteStrings) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -1089,7 +1089,7 @@ TEST(JsonTests, LexerSingleQuoteStrings) {
 /**
  * Test that single-quote strings are rejected when disabled
  */
-TEST(JsonTests, LexerSingleQuoteStringsRejected) {
+TEST(Lexer, SingleQuoteStringsRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
@@ -1108,7 +1108,7 @@ TEST(JsonTests, LexerSingleQuoteStringsRejected) {
 /**
  * Test value creation for null
  */
-TEST(JsonTests, ValueCreationNull) {
+TEST(DOMValueCreation, Null) {
     text_json_value* val = text_json_new_null();
     ASSERT_NE(val, nullptr);
 
@@ -1122,7 +1122,7 @@ TEST(JsonTests, ValueCreationNull) {
 /**
  * Test value creation for boolean
  */
-TEST(JsonTests, ValueCreationBool) {
+TEST(DOMValueCreation, Bool) {
     // Test true
     text_json_value* val_true = text_json_new_bool(1);
     ASSERT_NE(val_true, nullptr);
@@ -1147,7 +1147,7 @@ TEST(JsonTests, ValueCreationBool) {
 /**
  * Test value creation for string
  */
-TEST(JsonTests, ValueCreationString) {
+TEST(DOMValueCreation, String) {
     const char* test_str = "Hello, World!";
     size_t test_len = strlen(test_str);
 
@@ -1191,7 +1191,7 @@ TEST(JsonTests, ValueCreationString) {
 /**
  * Test value creation for number from lexeme
  */
-TEST(JsonTests, ValueCreationNumberFromLexeme) {
+TEST(DOMValueCreation, NumberFromLexeme) {
     const char* lexeme = "123.456";
     size_t lexeme_len = strlen(lexeme);
 
@@ -1210,7 +1210,7 @@ TEST(JsonTests, ValueCreationNumberFromLexeme) {
 /**
  * Test value creation for number from int64
  */
-TEST(JsonTests, ValueCreationNumberI64) {
+TEST(DOMValueCreation, NumberI64) {
     int64_t test_val = 12345;
     text_json_value* val = text_json_new_number_i64(test_val);
     ASSERT_NE(val, nullptr);
@@ -1246,7 +1246,7 @@ TEST(JsonTests, ValueCreationNumberI64) {
 /**
  * Test value creation for number from uint64
  */
-TEST(JsonTests, ValueCreationNumberU64) {
+TEST(DOMValueCreation, NumberU64) {
     uint64_t test_val = 12345;
     text_json_value* val = text_json_new_number_u64(test_val);
     ASSERT_NE(val, nullptr);
@@ -1272,7 +1272,7 @@ TEST(JsonTests, ValueCreationNumberU64) {
 /**
  * Test value creation for number from double
  */
-TEST(JsonTests, ValueCreationNumberDouble) {
+TEST(DOMValueCreation, NumberDouble) {
     double test_val = 123.456;
     text_json_value* val = text_json_new_number_double(test_val);
     ASSERT_NE(val, nullptr);
@@ -1308,7 +1308,7 @@ TEST(JsonTests, ValueCreationNumberDouble) {
 /**
  * Test value creation for array
  */
-TEST(JsonTests, ValueCreationArray) {
+TEST(DOMValueCreation, Array) {
     text_json_value* val = text_json_new_array();
     ASSERT_NE(val, nullptr);
     EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
@@ -1319,7 +1319,7 @@ TEST(JsonTests, ValueCreationArray) {
 /**
  * Test value creation for object
  */
-TEST(JsonTests, ValueCreationObject) {
+TEST(DOMValueCreation, Object) {
     text_json_value* val = text_json_new_object();
     ASSERT_NE(val, nullptr);
     EXPECT_EQ(text_json_typeof(val), TEXT_JSON_OBJECT);
@@ -1330,7 +1330,7 @@ TEST(JsonTests, ValueCreationObject) {
 /**
  * Test memory cleanup via text_json_free
  */
-TEST(JsonTests, ValueMemoryCleanup) {
+TEST(MemoryManagement, ValueCleanup) {
     // Create multiple values and verify they're cleaned up
     text_json_value* null_val = text_json_new_null();
     text_json_value* bool_val = text_json_new_bool(1);
@@ -1361,7 +1361,7 @@ TEST(JsonTests, ValueMemoryCleanup) {
 /**
  * Test accessor error cases - wrong type access
  */
-TEST(JsonTests, AccessorWrongType) {
+TEST(DOMAccessors, WrongType) {
     // Create a string value
     text_json_value* str_val = text_json_new_string("test", 4);
     ASSERT_NE(str_val, nullptr);
@@ -1387,7 +1387,7 @@ TEST(JsonTests, AccessorWrongType) {
 /**
  * Test accessor error cases - null pointer handling
  */
-TEST(JsonTests, AccessorNullPointer) {
+TEST(DOMAccessors, NullPointer) {
     // text_json_typeof should handle NULL
     EXPECT_EQ(text_json_typeof(nullptr), TEXT_JSON_NULL);
 
@@ -1417,7 +1417,7 @@ TEST(JsonTests, AccessorNullPointer) {
 /**
  * Test array access with bounds checking
  */
-TEST(JsonTests, ArrayAccessBounds) {
+TEST(DOMAccessors, ArrayAccessBounds) {
     text_json_value* arr = text_json_new_array();
     ASSERT_NE(arr, nullptr);
 
@@ -1435,7 +1435,7 @@ TEST(JsonTests, ArrayAccessBounds) {
 /**
  * Test object access - key lookup and iteration
  */
-TEST(JsonTests, ObjectAccess) {
+TEST(DOMAccessors, ObjectAccess) {
     text_json_value* obj = text_json_new_object();
     ASSERT_NE(obj, nullptr);
 
@@ -1454,7 +1454,7 @@ TEST(JsonTests, ObjectAccess) {
 /**
  * Test number accessor error cases - missing representations
  */
-TEST(JsonTests, NumberAccessorMissingRepresentations) {
+TEST(DOMAccessors, NumberAccessorMissingRepresentations) {
     // Create number from lexeme only (no numeric representations)
     text_json_value* num = text_json_new_number_from_lexeme("123.456", 7);
     ASSERT_NE(num, nullptr);
@@ -1490,7 +1490,7 @@ TEST(JsonTests, NumberAccessorMissingRepresentations) {
 /**
  * Test duplicate key handling - ERROR policy
  */
-TEST(JsonTests, DuplicateKeyError) {
+TEST(DuplicateKeyHandling, Error) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_ERROR;
 
@@ -1506,7 +1506,7 @@ TEST(JsonTests, DuplicateKeyError) {
 /**
  * Test duplicate key handling - FIRST_WINS policy
  */
-TEST(JsonTests, DuplicateKeyFirstWins) {
+TEST(DuplicateKeyHandling, FirstWins) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_FIRST_WINS;
 
@@ -1534,7 +1534,7 @@ TEST(JsonTests, DuplicateKeyFirstWins) {
 /**
  * Test duplicate key handling - LAST_WINS policy
  */
-TEST(JsonTests, DuplicateKeyLastWins) {
+TEST(DuplicateKeyHandling, LastWins) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_LAST_WINS;
 
@@ -1562,7 +1562,7 @@ TEST(JsonTests, DuplicateKeyLastWins) {
 /**
  * Test duplicate key handling - COLLECT policy (single value to array)
  */
-TEST(JsonTests, DuplicateKeyCollectSingle) {
+TEST(DuplicateKeyHandling, CollectSingle) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
 
@@ -1601,7 +1601,7 @@ TEST(JsonTests, DuplicateKeyCollectSingle) {
 /**
  * Test duplicate key handling - COLLECT policy (array to array)
  */
-TEST(JsonTests, DuplicateKeyCollectArray) {
+TEST(DuplicateKeyHandling, CollectArray) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
 
@@ -1610,7 +1610,7 @@ TEST(JsonTests, DuplicateKeyCollectArray) {
     text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
 
     if (!value) {
-        printf("DEBUG: Parse failed: code=%d, message=%s, offset=%zu, line=%d, col=%d\n", 
+        printf("DEBUG: Parse failed: code=%d, message=%s, offset=%zu, line=%d, col=%d\n",
                err.code, err.message ? err.message : "(null)", err.offset, err.line, err.col);
         printf("DEBUG: Input around offset: ");
         size_t start = err.offset > 10 ? err.offset - 10 : 0;
@@ -1657,7 +1657,7 @@ TEST(JsonTests, DuplicateKeyCollectArray) {
 /**
  * Test duplicate key handling - multiple duplicates with COLLECT
  */
-TEST(JsonTests, DuplicateKeyCollectMultiple) {
+TEST(DuplicateKeyHandling, CollectMultiple) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
 
@@ -1681,7 +1681,7 @@ TEST(JsonTests, DuplicateKeyCollectMultiple) {
 /**
  * Test duplicate key handling - nested objects
  */
-TEST(JsonTests, DuplicateKeyNested) {
+TEST(DuplicateKeyHandling, Nested) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_LAST_WINS;
 
@@ -1713,7 +1713,7 @@ TEST(JsonTests, DuplicateKeyNested) {
 /**
  * Test duplicate key handling - different value types with COLLECT
  */
-TEST(JsonTests, DuplicateKeyCollectDifferentTypes) {
+TEST(DuplicateKeyHandling, CollectDifferentTypes) {
     text_json_parse_options opts = text_json_parse_options_default();
     opts.dupkeys = TEXT_JSON_DUPKEY_COLLECT;
 
