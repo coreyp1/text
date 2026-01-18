@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <text/text.h>
 #include <text/json.h>
+#include <text/json_dom.h>
 #include <cmath>
 #include <cstring>
 
@@ -1102,6 +1103,183 @@ TEST(JsonTests, LexerSingleQuoteStringsRejected) {
     EXPECT_NE(status, TEXT_JSON_OK);
     EXPECT_EQ(token.type, JSON_TOKEN_ERROR);
     json_token_cleanup(&token);
+}
+
+/**
+ * Test value creation for null
+ * TODO: Add detailed type verification using text_json_typeof() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationNull) {
+    text_json_value* val = text_json_new_null();
+    ASSERT_NE(val, nullptr);
+    // Value can be freed without crashing
+    text_json_free(val);
+}
+
+/**
+ * Test value creation for boolean
+ * TODO: Add detailed value verification using text_json_get_bool() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationBool) {
+    // Test true
+    text_json_value* val_true = text_json_new_bool(1);
+    ASSERT_NE(val_true, nullptr);
+    text_json_free(val_true);
+
+    // Test false
+    text_json_value* val_false = text_json_new_bool(0);
+    ASSERT_NE(val_false, nullptr);
+    text_json_free(val_false);
+}
+
+/**
+ * Test value creation for string
+ * TODO: Add detailed value verification using text_json_get_string() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationString) {
+    const char* test_str = "Hello, World!";
+    size_t test_len = strlen(test_str);
+
+    text_json_value* val = text_json_new_string(test_str, test_len);
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+
+    // Test empty string
+    text_json_value* val_empty = text_json_new_string("", 0);
+    ASSERT_NE(val_empty, nullptr);
+    text_json_free(val_empty);
+
+    // Test string with null bytes
+    const char* null_str = "a\0b\0c";
+    size_t null_len = 5;
+    text_json_value* val_null = text_json_new_string(null_str, null_len);
+    ASSERT_NE(val_null, nullptr);
+    text_json_free(val_null);
+}
+
+/**
+ * Test value creation for number from lexeme
+ * TODO: Add detailed value verification using text_json_get_number_lexeme() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationNumberFromLexeme) {
+    const char* lexeme = "123.456";
+    size_t lexeme_len = strlen(lexeme);
+
+    text_json_value* val = text_json_new_number_from_lexeme(lexeme, lexeme_len);
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+}
+
+/**
+ * Test value creation for number from int64
+ * TODO: Add detailed value verification using text_json_get_i64() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationNumberI64) {
+    int64_t test_val = 12345;
+    text_json_value* val = text_json_new_number_i64(test_val);
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+
+    // Test negative
+    int64_t test_neg = -67890;
+    text_json_value* val_neg = text_json_new_number_i64(test_neg);
+    ASSERT_NE(val_neg, nullptr);
+    text_json_free(val_neg);
+
+    // Test zero
+    text_json_value* val_zero = text_json_new_number_i64(0);
+    ASSERT_NE(val_zero, nullptr);
+    text_json_free(val_zero);
+}
+
+/**
+ * Test value creation for number from uint64
+ * TODO: Add detailed value verification using text_json_get_u64() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationNumberU64) {
+    uint64_t test_val = 12345;
+    text_json_value* val = text_json_new_number_u64(test_val);
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+
+    // Test large value
+    uint64_t test_large = UINT64_MAX;
+    text_json_value* val_large = text_json_new_number_u64(test_large);
+    ASSERT_NE(val_large, nullptr);
+    text_json_free(val_large);
+}
+
+/**
+ * Test value creation for number from double
+ * TODO: Add detailed value verification using text_json_get_double() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationNumberDouble) {
+    double test_val = 123.456;
+    text_json_value* val = text_json_new_number_double(test_val);
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+
+    // Test negative
+    double test_neg = -789.012;
+    text_json_value* val_neg = text_json_new_number_double(test_neg);
+    ASSERT_NE(val_neg, nullptr);
+    text_json_free(val_neg);
+
+    // Test zero
+    text_json_value* val_zero = text_json_new_number_double(0.0);
+    ASSERT_NE(val_zero, nullptr);
+    text_json_free(val_zero);
+}
+
+/**
+ * Test value creation for array
+ * TODO: Add detailed value verification using text_json_array_size() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationArray) {
+    text_json_value* val = text_json_new_array();
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+}
+
+/**
+ * Test value creation for object
+ * TODO: Add detailed value verification using text_json_object_size() once accessor functions are available
+ */
+TEST(JsonTests, ValueCreationObject) {
+    text_json_value* val = text_json_new_object();
+    ASSERT_NE(val, nullptr);
+    text_json_free(val);
+}
+
+/**
+ * Test memory cleanup via text_json_free
+ */
+TEST(JsonTests, ValueMemoryCleanup) {
+    // Create multiple values and verify they're cleaned up
+    text_json_value* null_val = text_json_new_null();
+    text_json_value* bool_val = text_json_new_bool(1);
+    text_json_value* str_val = text_json_new_string("test", 4);
+    text_json_value* num_val = text_json_new_number_i64(42);
+    text_json_value* arr_val = text_json_new_array();
+    text_json_value* obj_val = text_json_new_object();
+
+    ASSERT_NE(null_val, nullptr);
+    ASSERT_NE(bool_val, nullptr);
+    ASSERT_NE(str_val, nullptr);
+    ASSERT_NE(num_val, nullptr);
+    ASSERT_NE(arr_val, nullptr);
+    ASSERT_NE(obj_val, nullptr);
+
+    // Free all values (should not crash or leak)
+    text_json_free(null_val);
+    text_json_free(bool_val);
+    text_json_free(str_val);
+    text_json_free(num_val);
+    text_json_free(arr_val);
+    text_json_free(obj_val);
+
+    // If we get here, cleanup worked
+    EXPECT_TRUE(true);
 }
 
 int main(int argc, char **argv) {

@@ -5,9 +5,12 @@
 
 #include "json_internal.h"
 #include <text/json.h>
+#include <text/json_dom.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <limits.h>
 
 // Arena allocator implementation
 // Uses a simple linked list of blocks for efficient bulk allocation
@@ -40,12 +43,9 @@ typedef struct {
 // Default block size (64KB)
 #define JSON_ARENA_DEFAULT_BLOCK_SIZE (64 * 1024)
 
-/**
- * @brief Create a new arena allocator
- *
- * @param initial_block_size Initial block size (0 = use default)
- * @return Pointer to arena, or NULL on failure
- */
+// Create a new arena allocator
+// initial_block_size: Initial block size (0 = use default)
+// Returns: Pointer to arena, or NULL on failure
 static json_arena* json_arena_new(size_t initial_block_size) {
     json_arena* arena = malloc(sizeof(json_arena));
     if (!arena) {
@@ -59,20 +59,23 @@ static json_arena* json_arena_new(size_t initial_block_size) {
     return arena;
 }
 
-/**
- * @brief Allocate memory from the arena
- *
- * @param arena Arena to allocate from
- * @param size Size in bytes to allocate
- * @param align Alignment requirement (must be power of 2)
- * @return Pointer to allocated memory, or NULL on failure
- */
+// Allocate memory from the arena
+// arena: Arena to allocate from
+// size: Size in bytes to allocate
+// align: Alignment requirement (must be power of 2, not 0)
+// Returns: Pointer to allocated memory, or NULL on failure
 static void* json_arena_alloc(json_arena* arena, size_t size, size_t align) {
     if (!arena || size == 0) {
         return NULL;
     }
 
-    // Calculate alignment
+    // Validate alignment: must be power of 2 and not 0
+    // Check if align is 0 or not a power of 2
+    if (align == 0 || (align & (align - 1)) != 0) {
+        return NULL;  // Invalid alignment
+    }
+
+    // Calculate alignment mask
     size_t align_mask = align - 1;
 
     // If we have a current block, try to allocate from it
@@ -127,11 +130,8 @@ static void* json_arena_alloc(json_arena* arena, size_t size, size_t align) {
     return block->data + aligned_offset;
 }
 
-/**
- * @brief Free all memory in the arena
- *
- * @param arena Arena to free
- */
+// Free all memory in the arena
+// arena: Arena to free (can be NULL)
 static void json_arena_free(json_arena* arena) {
     if (!arena) {
         return;
@@ -147,21 +147,15 @@ static void json_arena_free(json_arena* arena) {
     free(arena);
 }
 
-/**
- * @brief JSON context structure
- *
- * Holds the arena allocator and other context information
- * for a JSON DOM tree.
- */
+// JSON context structure
+// Holds the arena allocator and other context information
+// for a JSON DOM tree.
 typedef struct {
     json_arena* arena;                ///< Arena allocator for this DOM
 } json_context;
 
-/**
- * @brief JSON value structure
- *
- * The actual DOM node structure. Allocated from the arena.
- */
+// JSON value structure
+// The actual DOM node structure. Allocated from the arena.
 struct text_json_value {
     text_json_type type;              ///< Type of this value
     json_context* ctx;                ///< Context (arena) for this value tree
@@ -199,12 +193,322 @@ struct text_json_value {
     } as;
 };
 
+// Create a new context with an arena
+// Allocates a context and arena for a new DOM tree.
+// The context is allocated with malloc (not in the arena) so it can
+// be accessed to free the arena.
+// Returns: New context, or NULL on failure
+static json_context* json_context_new(void) {
+    json_context* ctx = malloc(sizeof(json_context));
+    if (!ctx) {
+        return NULL;
+    }
+
+    ctx->arena = json_arena_new(0);  // Use default block size
+    if (!ctx->arena) {
+        free(ctx);
+        return NULL;
+    }
+
+    return ctx;
+}
+
+// Free a context and its arena
+// ctx: Context to free (can be NULL)
+static void json_context_free(json_context* ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    json_arena_free(ctx->arena);
+    free(ctx);
+}
+
 void text_json_free(text_json_value* v) {
     if (!v || !v->ctx) {
         return;
     }
 
-    // Free the arena, which frees all memory
-    json_arena_free(v->ctx->arena);
-    // Note: the context itself is allocated in the arena, so it's already freed
+    // Free the context, which frees the arena and all memory
+    json_context* ctx = v->ctx;
+    json_context_free(ctx);
+}
+
+// Alignment for text_json_value (align to pointer size, typically 8 bytes)
+#define JSON_VALUE_ALIGN 8
+
+// Helper to create a value with a new context
+static text_json_value* json_value_new_with_context(text_json_type type, json_context* ctx) {
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = (text_json_value*)json_arena_alloc(ctx->arena, sizeof(text_json_value), JSON_VALUE_ALIGN);
+    if (!val) {
+        return NULL;
+    }
+
+    val->type = type;
+    val->ctx = ctx;
+    memset(&val->as, 0, sizeof(val->as));
+
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_null(void) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_NULL, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_bool(int b) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_BOOL, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    val->as.boolean = b ? 1 : 0;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_string(const char* s, size_t len) {
+    // Allow NULL pointer only if len is 0 (empty string)
+    if (!s && len > 0) {
+        return NULL;
+    }
+
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_STRING, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Allocate string data (len + 1 for null terminator)
+    if (len > SIZE_MAX - 1) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    char* str_data = (char*)json_arena_alloc(ctx->arena, len + 1, 1);
+    if (!str_data) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Copy string data (safe even if s is NULL and len is 0)
+    if (len > 0 && s != NULL) {
+        memcpy(str_data, s, len);
+    }
+    str_data[len] = '\0';  // Null terminator
+
+    val->as.string.data = str_data;
+    val->as.string.len = len;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_number_from_lexeme(const char* s, size_t len) {
+    if (!s || len == 0) {
+        return NULL;
+    }
+
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Allocate lexeme
+    char* lexeme = (char*)json_arena_alloc(ctx->arena, len + 1, 1);
+    if (!lexeme) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    memcpy(lexeme, s, len);
+    lexeme[len] = '\0';
+
+    val->as.number.lexeme = lexeme;
+    val->as.number.lexeme_len = len;
+    val->as.number.has_i64 = 0;
+    val->as.number.has_u64 = 0;
+    val->as.number.has_dbl = 0;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_number_i64(int64_t x) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Generate lexeme from int64
+    char lexeme_buf[32];  // Enough for any int64
+    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%lld", (long long)x);
+    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    size_t lexeme_len = (size_t)snprintf_result;
+
+    // Allocate lexeme in arena
+    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+    if (!lexeme) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+
+    val->as.number.lexeme = lexeme;
+    val->as.number.lexeme_len = lexeme_len;
+    val->as.number.i64 = x;
+    val->as.number.has_i64 = 1;
+    val->as.number.has_u64 = 0;
+    val->as.number.has_dbl = 0;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_number_u64(uint64_t x) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Generate lexeme from uint64
+    char lexeme_buf[32];  // Enough for any uint64
+    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%llu", (unsigned long long)x);
+    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    size_t lexeme_len = (size_t)snprintf_result;
+
+    // Allocate lexeme in arena
+    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+    if (!lexeme) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+
+    val->as.number.lexeme = lexeme;
+    val->as.number.lexeme_len = lexeme_len;
+    val->as.number.u64 = x;
+    val->as.number.has_i64 = 0;
+    val->as.number.has_u64 = 1;
+    val->as.number.has_dbl = 0;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_number_double(double x) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Generate lexeme from double
+    // Use %g for compact representation, but %f might be better for round-trip
+    // For now, use %g and let the user specify precision if needed
+    char lexeme_buf[64];  // Enough for any double
+    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
+    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    size_t lexeme_len = (size_t)snprintf_result;
+
+    // Allocate lexeme in arena
+    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+    if (!lexeme) {
+        json_context_free(ctx);
+        return NULL;
+    }
+    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+
+    val->as.number.lexeme = lexeme;
+    val->as.number.lexeme_len = lexeme_len;
+    val->as.number.dbl = x;
+    val->as.number.has_i64 = 0;
+    val->as.number.has_u64 = 0;
+    val->as.number.has_dbl = 1;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_array(void) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_ARRAY, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Initialize empty array
+    val->as.array.elems = NULL;
+    val->as.array.count = 0;
+    val->as.array.capacity = 0;
+    return val;
+}
+
+TEXT_API text_json_value* text_json_new_object(void) {
+    json_context* ctx = json_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    text_json_value* val = json_value_new_with_context(TEXT_JSON_OBJECT, ctx);
+    if (!val) {
+        json_context_free(ctx);
+        return NULL;
+    }
+
+    // Initialize empty object
+    val->as.object.pairs = NULL;
+    val->as.object.count = 0;
+    val->as.object.capacity = 0;
+    return val;
 }
