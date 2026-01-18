@@ -1107,34 +1107,45 @@ TEST(JsonTests, LexerSingleQuoteStringsRejected) {
 
 /**
  * Test value creation for null
- * TODO: Add detailed type verification using text_json_typeof() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationNull) {
     text_json_value* val = text_json_new_null();
     ASSERT_NE(val, nullptr);
+
+    // Verify type
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NULL);
+
     // Value can be freed without crashing
     text_json_free(val);
 }
 
 /**
  * Test value creation for boolean
- * TODO: Add detailed value verification using text_json_get_bool() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationBool) {
     // Test true
     text_json_value* val_true = text_json_new_bool(1);
     ASSERT_NE(val_true, nullptr);
+    EXPECT_EQ(text_json_typeof(val_true), TEXT_JSON_BOOL);
+    int bool_val = 0;
+    text_json_status status = text_json_get_bool(val_true, &bool_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_NE(bool_val, 0);
     text_json_free(val_true);
 
     // Test false
     text_json_value* val_false = text_json_new_bool(0);
     ASSERT_NE(val_false, nullptr);
+    EXPECT_EQ(text_json_typeof(val_false), TEXT_JSON_BOOL);
+    bool_val = 1;
+    status = text_json_get_bool(val_false, &bool_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(bool_val, 0);
     text_json_free(val_false);
 }
 
 /**
  * Test value creation for string
- * TODO: Add detailed value verification using text_json_get_string() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationString) {
     const char* test_str = "Hello, World!";
@@ -1142,11 +1153,24 @@ TEST(JsonTests, ValueCreationString) {
 
     text_json_value* val = text_json_new_string(test_str, test_len);
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_STRING);
+    const char* out_str = nullptr;
+    size_t out_len = 0;
+    text_json_status status = text_json_get_string(val, &out_str, &out_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_len, test_len);
+    EXPECT_EQ(memcmp(out_str, test_str, test_len), 0);
     text_json_free(val);
 
     // Test empty string
     text_json_value* val_empty = text_json_new_string("", 0);
     ASSERT_NE(val_empty, nullptr);
+    EXPECT_EQ(text_json_typeof(val_empty), TEXT_JSON_STRING);
+    out_str = nullptr;
+    out_len = 1;  // Set to non-zero to verify it gets set to 0
+    status = text_json_get_string(val_empty, &out_str, &out_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_len, 0u);
     text_json_free(val_empty);
 
     // Test string with null bytes
@@ -1154,12 +1178,18 @@ TEST(JsonTests, ValueCreationString) {
     size_t null_len = 5;
     text_json_value* val_null = text_json_new_string(null_str, null_len);
     ASSERT_NE(val_null, nullptr);
+    EXPECT_EQ(text_json_typeof(val_null), TEXT_JSON_STRING);
+    out_str = nullptr;
+    out_len = 0;
+    status = text_json_get_string(val_null, &out_str, &out_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_len, null_len);
+    EXPECT_EQ(memcmp(out_str, null_str, null_len), 0);
     text_json_free(val_null);
 }
 
 /**
  * Test value creation for number from lexeme
- * TODO: Add detailed value verification using text_json_get_number_lexeme() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationNumberFromLexeme) {
     const char* lexeme = "123.456";
@@ -1167,87 +1197,133 @@ TEST(JsonTests, ValueCreationNumberFromLexeme) {
 
     text_json_value* val = text_json_new_number_from_lexeme(lexeme, lexeme_len);
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+    const char* out_lexeme = nullptr;
+    size_t out_len = 0;
+    text_json_status status = text_json_get_number_lexeme(val, &out_lexeme, &out_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_len, lexeme_len);
+    EXPECT_STREQ(out_lexeme, lexeme);
     text_json_free(val);
 }
 
 /**
  * Test value creation for number from int64
- * TODO: Add detailed value verification using text_json_get_i64() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationNumberI64) {
     int64_t test_val = 12345;
     text_json_value* val = text_json_new_number_i64(test_val);
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+    int64_t out_val = 0;
+    text_json_status status = text_json_get_i64(val, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_val, test_val);
     text_json_free(val);
 
     // Test negative
     int64_t test_neg = -67890;
     text_json_value* val_neg = text_json_new_number_i64(test_neg);
     ASSERT_NE(val_neg, nullptr);
+    EXPECT_EQ(text_json_typeof(val_neg), TEXT_JSON_NUMBER);
+    out_val = 0;
+    status = text_json_get_i64(val_neg, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_val, test_neg);
     text_json_free(val_neg);
 
     // Test zero
     text_json_value* val_zero = text_json_new_number_i64(0);
     ASSERT_NE(val_zero, nullptr);
+    EXPECT_EQ(text_json_typeof(val_zero), TEXT_JSON_NUMBER);
+    out_val = 1;  // Set to non-zero to verify it gets set to 0
+    status = text_json_get_i64(val_zero, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_val, 0);
     text_json_free(val_zero);
 }
 
 /**
  * Test value creation for number from uint64
- * TODO: Add detailed value verification using text_json_get_u64() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationNumberU64) {
     uint64_t test_val = 12345;
     text_json_value* val = text_json_new_number_u64(test_val);
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+    uint64_t out_val = 0;
+    text_json_status status = text_json_get_u64(val, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_val, test_val);
     text_json_free(val);
 
     // Test large value
     uint64_t test_large = UINT64_MAX;
     text_json_value* val_large = text_json_new_number_u64(test_large);
     ASSERT_NE(val_large, nullptr);
+    EXPECT_EQ(text_json_typeof(val_large), TEXT_JSON_NUMBER);
+    out_val = 0;
+    status = text_json_get_u64(val_large, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(out_val, test_large);
     text_json_free(val_large);
 }
 
 /**
  * Test value creation for number from double
- * TODO: Add detailed value verification using text_json_get_double() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationNumberDouble) {
     double test_val = 123.456;
     text_json_value* val = text_json_new_number_double(test_val);
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+    double out_val = 0.0;
+    text_json_status status = text_json_get_double(val, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_NEAR(out_val, test_val, 0.001);
     text_json_free(val);
 
     // Test negative
     double test_neg = -789.012;
     text_json_value* val_neg = text_json_new_number_double(test_neg);
     ASSERT_NE(val_neg, nullptr);
+    EXPECT_EQ(text_json_typeof(val_neg), TEXT_JSON_NUMBER);
+    out_val = 0.0;
+    status = text_json_get_double(val_neg, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_NEAR(out_val, test_neg, 0.001);
     text_json_free(val_neg);
 
     // Test zero
     text_json_value* val_zero = text_json_new_number_double(0.0);
     ASSERT_NE(val_zero, nullptr);
+    EXPECT_EQ(text_json_typeof(val_zero), TEXT_JSON_NUMBER);
+    out_val = 1.0;  // Set to non-zero to verify it gets set to 0
+    status = text_json_get_double(val_zero, &out_val);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_DOUBLE_EQ(out_val, 0.0);
     text_json_free(val_zero);
 }
 
 /**
  * Test value creation for array
- * TODO: Add detailed value verification using text_json_array_size() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationArray) {
     text_json_value* val = text_json_new_array();
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_ARRAY);
+    EXPECT_EQ(text_json_array_size(val), 0u);
     text_json_free(val);
 }
 
 /**
  * Test value creation for object
- * TODO: Add detailed value verification using text_json_object_size() once accessor functions are available
  */
 TEST(JsonTests, ValueCreationObject) {
     text_json_value* val = text_json_new_object();
     ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(val), 0u);
     text_json_free(val);
 }
 
@@ -1280,6 +1356,135 @@ TEST(JsonTests, ValueMemoryCleanup) {
 
     // If we get here, cleanup worked
     EXPECT_TRUE(true);
+}
+
+/**
+ * Test accessor error cases - wrong type access
+ */
+TEST(JsonTests, AccessorWrongType) {
+    // Create a string value
+    text_json_value* str_val = text_json_new_string("test", 4);
+    ASSERT_NE(str_val, nullptr);
+
+    // Try to get bool from string - should fail
+    int bool_out = 0;
+    text_json_status status = text_json_get_bool(str_val, &bool_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Try to get number from string - should fail
+    int64_t i64_out = 0;
+    status = text_json_get_i64(str_val, &i64_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Try to get array size from string - should return 0
+    EXPECT_EQ(text_json_array_size(str_val), 0u);
+
+    text_json_free(str_val);
+}
+
+/**
+ * Test accessor error cases - null pointer handling
+ */
+TEST(JsonTests, AccessorNullPointer) {
+    // text_json_typeof should handle NULL
+    EXPECT_EQ(text_json_typeof(nullptr), TEXT_JSON_NULL);
+
+    // Other accessors should return error for NULL
+    int bool_out = 0;
+    text_json_status status = text_json_get_bool(nullptr, &bool_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    const char* str_out = nullptr;
+    size_t str_len = 0;
+    status = text_json_get_string(nullptr, &str_out, &str_len);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Array/object size should return 0 for NULL
+    EXPECT_EQ(text_json_array_size(nullptr), 0u);
+    EXPECT_EQ(text_json_object_size(nullptr), 0u);
+
+    // Array/object get should return NULL for NULL
+    EXPECT_EQ(text_json_array_get(nullptr, 0), nullptr);
+    EXPECT_EQ(text_json_object_value(nullptr, 0), nullptr);
+    EXPECT_EQ(text_json_object_key(nullptr, 0, nullptr), nullptr);
+    EXPECT_EQ(text_json_object_get(nullptr, "key", 3), nullptr);
+}
+
+/**
+ * Test array access with bounds checking
+ */
+TEST(JsonTests, ArrayAccessBounds) {
+    text_json_value* arr = text_json_new_array();
+    ASSERT_NE(arr, nullptr);
+
+    // Empty array - should return NULL for any index
+    EXPECT_EQ(text_json_array_get(arr, 0), nullptr);
+    EXPECT_EQ(text_json_array_get(arr, 1), nullptr);
+
+    // Note: We can't test with actual elements yet since array mutation
+    // functions (text_json_array_push) haven't been implemented (Task 12).
+    // This test verifies bounds checking works for empty arrays.
+
+    text_json_free(arr);
+}
+
+/**
+ * Test object access - key lookup and iteration
+ */
+TEST(JsonTests, ObjectAccess) {
+    text_json_value* obj = text_json_new_object();
+    ASSERT_NE(obj, nullptr);
+
+    // Empty object - should return NULL for any key/index
+    EXPECT_EQ(text_json_object_get(obj, "key", 3), nullptr);
+    EXPECT_EQ(text_json_object_value(obj, 0), nullptr);
+    EXPECT_EQ(text_json_object_key(obj, 0, nullptr), nullptr);
+
+    // Note: We can't test with actual key-value pairs yet since object mutation
+    // functions (text_json_object_put) haven't been implemented (Task 12).
+    // This test verifies bounds checking works for empty objects.
+
+    text_json_free(obj);
+}
+
+/**
+ * Test number accessor error cases - missing representations
+ */
+TEST(JsonTests, NumberAccessorMissingRepresentations) {
+    // Create number from lexeme only (no numeric representations)
+    text_json_value* num = text_json_new_number_from_lexeme("123.456", 7);
+    ASSERT_NE(num, nullptr);
+
+    // Lexeme should be available
+    const char* lexeme = nullptr;
+    size_t lexeme_len = 0;
+    text_json_status status = text_json_get_number_lexeme(num, &lexeme, &lexeme_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_STREQ(lexeme, "123.456");
+
+    // int64 should not be available (created from lexeme only)
+    int64_t i64_out = 0;
+    status = text_json_get_i64(num, &i64_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // uint64 should not be available
+    uint64_t u64_out = 0;
+    status = text_json_get_u64(num, &u64_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // double should not be available
+    double dbl_out = 0.0;
+    status = text_json_get_double(num, &dbl_out);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    text_json_free(num);
 }
 
 int main(int argc, char **argv) {

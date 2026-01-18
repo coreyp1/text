@@ -512,3 +512,162 @@ TEXT_API text_json_value* text_json_new_object(void) {
     val->as.object.capacity = 0;
     return val;
 }
+
+// Accessor functions
+
+TEXT_API text_json_type text_json_typeof(const text_json_value* v) {
+    if (!v) {
+        return TEXT_JSON_NULL;
+    }
+    return v->type;
+}
+
+TEXT_API text_json_status text_json_get_bool(const text_json_value* v, int* out) {
+    if (!v || !out) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_BOOL) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.boolean;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_get_string(const text_json_value* v, const char** out, size_t* out_len) {
+    if (!v || !out || !out_len) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_STRING) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.string.data;
+    *out_len = v->as.string.len;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_get_number_lexeme(const text_json_value* v, const char** out, size_t* out_len) {
+    if (!v || !out || !out_len) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_NUMBER) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!v->as.number.lexeme) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.number.lexeme;
+    *out_len = v->as.number.lexeme_len;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_get_i64(const text_json_value* v, int64_t* out) {
+    if (!v || !out) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_NUMBER) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!v->as.number.has_i64) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.number.i64;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_get_u64(const text_json_value* v, uint64_t* out) {
+    if (!v || !out) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_NUMBER) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!v->as.number.has_u64) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.number.u64;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API text_json_status text_json_get_double(const text_json_value* v, double* out) {
+    if (!v || !out) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (v->type != TEXT_JSON_NUMBER) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!v->as.number.has_dbl) {
+        return TEXT_JSON_E_INVALID;
+    }
+    *out = v->as.number.dbl;
+    return TEXT_JSON_OK;
+}
+
+TEXT_API size_t text_json_array_size(const text_json_value* v) {
+    if (!v || v->type != TEXT_JSON_ARRAY) {
+        return 0;
+    }
+    return v->as.array.count;
+}
+
+TEXT_API const text_json_value* text_json_array_get(const text_json_value* v, size_t idx) {
+    if (!v || v->type != TEXT_JSON_ARRAY) {
+        return NULL;
+    }
+    if (idx >= v->as.array.count) {
+        return NULL;
+    }
+    return v->as.array.elems[idx];
+}
+
+TEXT_API size_t text_json_object_size(const text_json_value* v) {
+    if (!v || v->type != TEXT_JSON_OBJECT) {
+        return 0;
+    }
+    return v->as.object.count;
+}
+
+TEXT_API const char* text_json_object_key(const text_json_value* v, size_t idx, size_t* key_len) {
+    if (!v || v->type != TEXT_JSON_OBJECT) {
+        if (key_len) {
+            *key_len = 0;
+        }
+        return NULL;
+    }
+    if (idx >= v->as.object.count) {
+        if (key_len) {
+            *key_len = 0;
+        }
+        return NULL;
+    }
+    if (key_len) {
+        *key_len = v->as.object.pairs[idx].key_len;
+    }
+    return v->as.object.pairs[idx].key;
+}
+
+TEXT_API const text_json_value* text_json_object_value(const text_json_value* v, size_t idx) {
+    if (!v || v->type != TEXT_JSON_OBJECT) {
+        return NULL;
+    }
+    if (idx >= v->as.object.count) {
+        return NULL;
+    }
+    return v->as.object.pairs[idx].value;
+}
+
+TEXT_API const text_json_value* text_json_object_get(const text_json_value* v, const char* key, size_t key_len) {
+    if (!v || !key || v->type != TEXT_JSON_OBJECT) {
+        return NULL;
+    }
+
+    // Linear search through object pairs
+    for (size_t i = 0; i < v->as.object.count; ++i) {
+        if (v->as.object.pairs[i].key_len == key_len) {
+            if (key_len == 0 || memcmp(v->as.object.pairs[i].key, key, v->as.object.pairs[i].key_len) == 0) {
+                return v->as.object.pairs[i].value;
+            }
+        }
+    }
+
+    return NULL;
+}
