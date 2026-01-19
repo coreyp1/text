@@ -398,6 +398,81 @@ TEXT_API text_json_value* text_json_parse(
     text_json_error* err
 );
 
+/**
+ * @brief Equality comparison mode for deep equality
+ */
+typedef enum {
+    TEXT_JSON_EQUAL_LEXEME,      ///< Compare numbers by lexeme (exact string match)
+    TEXT_JSON_EQUAL_NUMERIC      ///< Compare numbers by numeric equivalence (int64/uint64/double)
+} text_json_equal_mode;
+
+/**
+ * @brief Deep equality comparison for JSON values
+ *
+ * Performs a deep structural comparison of two JSON values. Returns 1 if
+ * the values are equal (same structure and content), 0 otherwise.
+ *
+ * For numbers, the comparison mode determines how equality is checked:
+ * - TEXT_JSON_EQUAL_LEXEME: Numbers must have identical lexemes (exact string match)
+ * - TEXT_JSON_EQUAL_NUMERIC: Numbers are compared using numeric equivalence
+ *   (int64, uint64, or double representations with epsilon for doubles)
+ *
+ * For objects, keys are compared regardless of insertion order.
+ *
+ * @param a First value to compare (can be NULL)
+ * @param b Second value to compare (can be NULL)
+ * @param mode Equality comparison mode for numbers
+ * @return 1 if values are equal, 0 otherwise
+ */
+TEXT_API int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
+
+/**
+ * @brief Deep clone a JSON value into a new arena
+ *
+ * Creates a deep copy of a JSON value, allocating all memory from a new
+ * arena. The cloned value is independent of the original and must be freed
+ * separately using text_json_free().
+ *
+ * @param src Source value to clone (must not be NULL)
+ * @return Cloned value, or NULL on allocation failure
+ */
+TEXT_API text_json_value* text_json_clone(const text_json_value* src);
+
+/**
+ * @brief Object merge conflict policy
+ */
+typedef enum {
+    TEXT_JSON_MERGE_FIRST_WINS,  ///< Keep value from first object on conflict
+    TEXT_JSON_MERGE_LAST_WINS,   ///< Keep value from second object on conflict
+    TEXT_JSON_MERGE_ERROR        ///< Return error on conflict
+} text_json_merge_policy;
+
+/**
+ * @brief Merge two JSON objects with configurable conflict policy
+ *
+ * Merges two JSON objects into the first object. If a key exists in both
+ * objects, the conflict policy determines which value is kept:
+ * - TEXT_JSON_MERGE_FIRST_WINS: Keep the value from the first object
+ * - TEXT_JSON_MERGE_LAST_WINS: Keep the value from the second object (replace)
+ * - TEXT_JSON_MERGE_ERROR: Return an error if a conflict is detected
+ *
+ * Nested objects are merged recursively. Arrays and other value types are
+ * replaced entirely (not merged).
+ *
+ * This function is distinct from JSON Merge Patch (RFC 7386) semantics.
+ * Use text_json_merge_patch() for RFC 7386-compliant merging.
+ *
+ * @param target Target object to merge into (must not be NULL, must be TEXT_JSON_OBJECT)
+ * @param source Source object to merge from (must not be NULL, must be TEXT_JSON_OBJECT)
+ * @param policy Conflict resolution policy
+ * @return TEXT_JSON_OK on success, error code on failure
+ */
+TEXT_API text_json_status text_json_object_merge(
+    text_json_value* target,
+    const text_json_value* source,
+    text_json_merge_policy policy
+);
+
 #ifdef __cplusplus
 }
 #endif

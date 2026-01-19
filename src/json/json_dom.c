@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <limits.h>
+#include <math.h>
 
 // Arena allocator implementation
 // Uses a simple linked list of blocks for efficient bulk allocation
@@ -1042,5 +1043,264 @@ TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const ch
 
     // Decrement count
     obj->as.object.count--;
+    return TEXT_JSON_OK;
+}
+
+// Helper function for deep equality comparison with configurable mode
+static int json_value_equal_internal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
+    if (a == b) {
+        return 1;  // Same pointer
+    }
+
+    if (!a || !b) {
+        return 0;  // One is NULL
+    }
+
+    if (a->type != b->type) {
+        return 0;  // Different types
+    }
+
+    switch (a->type) {
+        case TEXT_JSON_NULL:
+            return 1;  // Both are null
+
+        case TEXT_JSON_BOOL:
+            return a->as.boolean == b->as.boolean;
+
+        case TEXT_JSON_STRING:
+            if (a->as.string.len != b->as.string.len) {
+                return 0;
+            }
+            // Check for NULL pointers before memcmp
+            if (!a->as.string.data || !b->as.string.data) {
+                return (a->as.string.data == b->as.string.data);  // Both NULL or both non-NULL
+            }
+            return memcmp(a->as.string.data, b->as.string.data, a->as.string.len) == 0;
+
+        case TEXT_JSON_NUMBER: {
+            if (mode == TEXT_JSON_EQUAL_LEXEME) {
+                // Lexeme-based comparison: must have identical lexemes
+                if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
+                    return 0;
+                }
+                if (a->as.number.lexeme && b->as.number.lexeme) {
+                    return memcmp(a->as.number.lexeme, b->as.number.lexeme, a->as.number.lexeme_len) == 0;
+                }
+                // If either doesn't have a lexeme, they're not equal in lexeme mode
+                return 0;
+            } else {
+                // Numeric equivalence comparison
+                // First check if both have the same representation available
+                if (a->as.number.has_i64 && b->as.number.has_i64) {
+                    return a->as.number.i64 == b->as.number.i64;
+                }
+                if (a->as.number.has_u64 && b->as.number.has_u64) {
+                    return a->as.number.u64 == b->as.number.u64;
+                }
+                if (a->as.number.has_dbl && b->as.number.has_dbl) {
+                    // Use approximate equality for doubles (with epsilon)
+                    double diff = fabs(a->as.number.dbl - b->as.number.dbl);
+                    return diff < 1e-15 || (a->as.number.dbl == b->as.number.dbl);
+                }
+                // Fall back to lexeme comparison if no numeric representation available
+                if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
+                    return 0;
+                }
+                if (a->as.number.lexeme && b->as.number.lexeme) {
+                    return memcmp(a->as.number.lexeme, b->as.number.lexeme, a->as.number.lexeme_len) == 0;
+                }
+                return 0;
+            }
+        }
+
+        case TEXT_JSON_ARRAY: {
+            if (a->as.array.count != b->as.array.count) {
+                return 0;
+            }
+            // Check for NULL elems arrays
+            if (!a->as.array.elems || !b->as.array.elems) {
+                return (a->as.array.elems == b->as.array.elems);  // Both NULL or both non-NULL
+            }
+            for (size_t i = 0; i < a->as.array.count; i++) {
+                if (!json_value_equal_internal(a->as.array.elems[i], b->as.array.elems[i], mode)) {
+                    return 0;
+                }
+            }
+            return 1;
+        }
+
+        case TEXT_JSON_OBJECT: {
+            if (a->as.object.count != b->as.object.count) {
+                return 0;
+            }
+            // Check for NULL pairs arrays
+            if (!a->as.object.pairs || !b->as.object.pairs) {
+                return (a->as.object.pairs == b->as.object.pairs);  // Both NULL or both non-NULL
+            }
+            // For objects, we need to match keys regardless of order
+            // For each key in a, find it in b and compare values
+            for (size_t i = 0; i < a->as.object.count; i++) {
+                const char* key_a = a->as.object.pairs[i].key;
+                size_t key_len_a = a->as.object.pairs[i].key_len;
+                const text_json_value* val_a = a->as.object.pairs[i].value;
+
+                // Find matching key in b
+                int found = 0;
+                for (size_t j = 0; j < b->as.object.count; j++) {
+                    if (b->as.object.pairs[j].key_len == key_len_a) {
+                        // Check for NULL key pointers before memcmp
+                        if (key_len_a == 0) {
+                            // Empty key - both must have NULL or both must have non-NULL
+                            if ((key_a == NULL) == (b->as.object.pairs[j].key == NULL)) {
+                                // Found matching key - compare values
+                                if (!json_value_equal_internal(val_a, b->as.object.pairs[j].value, mode)) {
+                                    return 0;
+                                }
+                                found = 1;
+                                break;
+                            }
+                        } else if (key_a != NULL && b->as.object.pairs[j].key != NULL) {
+                            if (memcmp(b->as.object.pairs[j].key, key_a, key_len_a) == 0) {
+                                // Found matching key - compare values
+                                if (!json_value_equal_internal(val_a, b->as.object.pairs[j].value, mode)) {
+                                    return 0;
+                                }
+                                found = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!found) {
+                    return 0;  // Key not found in b
+                }
+            }
+            return 1;
+        }
+
+        default:
+            return 0;
+    }
+}
+
+TEXT_API int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
+    return json_value_equal_internal(a, b, mode);
+}
+
+// Helper function to deep clone a value into a new context
+static text_json_value* json_value_clone_into_new_context(const text_json_value* src) {
+    if (!src) {
+        return NULL;
+    }
+
+    // Create a new context for the clone
+    json_context* new_ctx = json_context_new();
+    if (!new_ctx) {
+        return NULL;
+    }
+
+    // Use the existing clone function but with the new context
+    text_json_value* dst = json_value_clone(src, new_ctx);
+    if (!dst) {
+        json_context_free(new_ctx);
+        return NULL;
+    }
+
+    return dst;
+}
+
+TEXT_API text_json_value* text_json_clone(const text_json_value* src) {
+    return json_value_clone_into_new_context(src);
+}
+
+TEXT_API text_json_status text_json_object_merge(
+    text_json_value* target,
+    const text_json_value* source,
+    text_json_merge_policy policy
+) {
+    if (!target || target->type != TEXT_JSON_OBJECT) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!source || source->type != TEXT_JSON_OBJECT) {
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Iterate through all pairs in source
+    for (size_t i = 0; i < source->as.object.count; i++) {
+        const char* key = source->as.object.pairs[i].key;
+        size_t key_len = source->as.object.pairs[i].key_len;
+        const text_json_value* source_val = source->as.object.pairs[i].value;
+
+        // Check if key exists in target
+        int key_exists = 0;
+        for (size_t j = 0; j < target->as.object.count; j++) {
+            if (target->as.object.pairs[j].key_len == key_len) {
+                if (key_len == 0 || memcmp(target->as.object.pairs[j].key, key, key_len) == 0) {
+                    key_exists = 1;
+
+                    // Handle conflict based on policy
+                    if (policy == TEXT_JSON_MERGE_ERROR) {
+                        return TEXT_JSON_E_DUPKEY;  // Conflict detected
+                    }
+
+                    // If both values are objects, merge recursively
+                    if (target->as.object.pairs[j].value != NULL &&
+                        target->as.object.pairs[j].value->type == TEXT_JSON_OBJECT &&
+                        source_val != NULL &&
+                        source_val->type == TEXT_JSON_OBJECT) {
+                        text_json_status status = text_json_object_merge(
+                            target->as.object.pairs[j].value,
+                            source_val,
+                            policy
+                        );
+                        if (status != TEXT_JSON_OK) {
+                            return status;
+                        }
+                    } else {
+                        // Not both objects - replace based on policy
+                        if (policy == TEXT_JSON_MERGE_LAST_WINS) {
+                            // Clone the source value into target's context
+                            text_json_value* cloned_val = json_value_clone(source_val, target->ctx);
+                            if (!cloned_val) {
+                                return TEXT_JSON_E_OOM;
+                            }
+                            // Free old value if it has different context
+                            text_json_value* old_val = target->as.object.pairs[j].value;
+                            if (old_val && old_val->ctx && old_val->ctx != target->ctx) {
+                                json_context* old_ctx = old_val->ctx;
+                                json_free_children_recursive(old_val);
+                                json_context_free(old_ctx);
+                            }
+                            target->as.object.pairs[j].value = cloned_val;
+                        }
+                        // For FIRST_WINS, do nothing (keep existing value)
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Key doesn't exist in target - add it
+        if (!key_exists) {
+            // Clone the source value into target's context
+            text_json_value* cloned_val = json_value_clone(source_val, target->ctx);
+            if (!cloned_val) {
+                return TEXT_JSON_E_OOM;
+            }
+            text_json_status status = json_object_add_pair(target, key, key_len, cloned_val);
+            if (status != TEXT_JSON_OK) {
+                // Note: If json_object_add_pair fails after cloning, the cloned value
+                // is orphaned in target->ctx. Since arena allocators don't support
+                // freeing individual items, the value will remain allocated until
+                // target->ctx is freed. This is acceptable because:
+                // 1. The failure cases are rare (OOM or integer overflow)
+                // 2. The memory will be freed when the target object is freed
+                // 3. The alternative (cloning only after successful allocation) would
+                //    require significant refactoring and is not worth the complexity
+                return status;
+            }
+        }
+    }
+
     return TEXT_JSON_OK;
 }

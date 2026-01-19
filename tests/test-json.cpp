@@ -5690,6 +5690,486 @@ TEST(InSituMode, DisabledByDefault) {
     text_json_free(val);
 }
 
+/**
+ * Test deep equality - null values
+ */
+TEST(DomUtilities, DeepEqualityNull) {
+    text_json_value* a = text_json_new_null();
+    text_json_value* b = text_json_new_null();
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+
+    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_NUMERIC), 1);
+    EXPECT_EQ(text_json_equal(a, nullptr, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(nullptr, b, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(a);
+    text_json_free(b);
+}
+
+/**
+ * Test deep equality - boolean values
+ */
+TEST(DomUtilities, DeepEqualityBool) {
+    text_json_value* a1 = text_json_new_bool(1);
+    text_json_value* a2 = text_json_new_bool(1);
+    text_json_value* b = text_json_new_bool(0);
+    ASSERT_NE(a1, nullptr);
+    ASSERT_NE(a2, nullptr);
+    ASSERT_NE(b, nullptr);
+
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(a1);
+    text_json_free(a2);
+    text_json_free(b);
+}
+
+/**
+ * Test deep equality - string values
+ */
+TEST(DomUtilities, DeepEqualityString) {
+    text_json_value* a1 = text_json_new_string("hello", 5);
+    text_json_value* a2 = text_json_new_string("hello", 5);
+    text_json_value* b = text_json_new_string("world", 5);
+    ASSERT_NE(a1, nullptr);
+    ASSERT_NE(a2, nullptr);
+    ASSERT_NE(b, nullptr);
+
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(a1);
+    text_json_free(a2);
+    text_json_free(b);
+}
+
+/**
+ * Test deep equality - number values (lexeme mode)
+ */
+TEST(DomUtilities, DeepEqualityNumberLexeme) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    // "123" and "123" should be equal
+    text_json_value* a1 = text_json_parse("\"123\"", 5, &opts, &err);
+    text_json_value* a2 = text_json_parse("\"123\"", 5, &opts, &err);
+    ASSERT_NE(a1, nullptr);
+    ASSERT_NE(a2, nullptr);
+
+    // Actually, let's test with numbers
+    text_json_value* n1 = text_json_new_number_from_lexeme("123", 3);
+    text_json_value* n2 = text_json_new_number_from_lexeme("123", 3);
+    text_json_value* n3 = text_json_new_number_from_lexeme("456", 3);
+    ASSERT_NE(n1, nullptr);
+    ASSERT_NE(n2, nullptr);
+    ASSERT_NE(n3, nullptr);
+
+    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(n1);
+    text_json_free(n2);
+    text_json_free(n3);
+    text_json_free(a1);
+    text_json_free(a2);
+}
+
+/**
+ * Test deep equality - number values (numeric mode)
+ */
+TEST(DomUtilities, DeepEqualityNumberNumeric) {
+    // Test with int64
+    text_json_value* n1 = text_json_new_number_i64(123);
+    text_json_value* n2 = text_json_new_number_i64(123);
+    text_json_value* n3 = text_json_new_number_i64(456);
+    ASSERT_NE(n1, nullptr);
+    ASSERT_NE(n2, nullptr);
+    ASSERT_NE(n3, nullptr);
+
+    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_NUMERIC), 1);
+    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_NUMERIC), 0);
+
+    // Test with double
+    text_json_value* d1 = text_json_new_number_double(3.14);
+    text_json_value* d2 = text_json_new_number_double(3.14);
+    text_json_value* d3 = text_json_new_number_double(2.71);
+    ASSERT_NE(d1, nullptr);
+    ASSERT_NE(d2, nullptr);
+    ASSERT_NE(d3, nullptr);
+
+    EXPECT_EQ(text_json_equal(d1, d2, TEXT_JSON_EQUAL_NUMERIC), 1);
+    EXPECT_EQ(text_json_equal(d1, d3, TEXT_JSON_EQUAL_NUMERIC), 0);
+
+    text_json_free(n1);
+    text_json_free(n2);
+    text_json_free(n3);
+    text_json_free(d1);
+    text_json_free(d2);
+    text_json_free(d3);
+}
+
+/**
+ * Test deep equality - arrays
+ */
+TEST(DomUtilities, DeepEqualityArray) {
+    text_json_value* a1 = text_json_new_array();
+    text_json_value* a2 = text_json_new_array();
+    text_json_value* a3 = text_json_new_array();
+    ASSERT_NE(a1, nullptr);
+    ASSERT_NE(a2, nullptr);
+    ASSERT_NE(a3, nullptr);
+
+    text_json_value* v1 = text_json_new_string("hello", 5);
+    text_json_value* v2 = text_json_new_string("world", 5);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+
+    text_json_array_push(a1, v1);
+    text_json_array_push(a1, v2);
+    text_json_array_push(a2, text_json_new_string("hello", 5));
+    text_json_array_push(a2, text_json_new_string("world", 5));
+    text_json_array_push(a3, text_json_new_string("foo", 3));
+
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(a1, a3, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(a1);
+    text_json_free(a2);
+    text_json_free(a3);
+}
+
+/**
+ * Test deep equality - objects (order-independent)
+ */
+TEST(DomUtilities, DeepEqualityObject) {
+    text_json_value* o1 = text_json_new_object();
+    text_json_value* o2 = text_json_new_object();
+    text_json_value* o3 = text_json_new_object();
+    ASSERT_NE(o1, nullptr);
+    ASSERT_NE(o2, nullptr);
+    ASSERT_NE(o3, nullptr);
+
+    text_json_object_put(o1, "a", 1, text_json_new_string("hello", 5));
+    text_json_object_put(o1, "b", 1, text_json_new_string("world", 5));
+
+    // Same keys/values, different order
+    text_json_object_put(o2, "b", 1, text_json_new_string("world", 5));
+    text_json_object_put(o2, "a", 1, text_json_new_string("hello", 5));
+
+    text_json_object_put(o3, "a", 1, text_json_new_string("foo", 3));
+
+    EXPECT_EQ(text_json_equal(o1, o2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(o1, o3, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(o1);
+    text_json_free(o2);
+    text_json_free(o3);
+}
+
+/**
+ * Test deep equality - nested structures
+ */
+TEST(DomUtilities, DeepEqualityNested) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    const char* json1 = "{\"a\":[1,2,{\"b\":\"hello\"}]}";
+    const char* json2 = "{\"a\":[1,2,{\"b\":\"hello\"}]}";
+    const char* json3 = "{\"a\":[1,2,{\"b\":\"world\"}]}";
+
+    text_json_value* v1 = text_json_parse(json1, strlen(json1), &opts, &err);
+    text_json_value* v2 = text_json_parse(json2, strlen(json2), &opts, &err);
+    text_json_value* v3 = text_json_parse(json3, strlen(json3), &opts, &err);
+    ASSERT_NE(v1, nullptr);
+    ASSERT_NE(v2, nullptr);
+    ASSERT_NE(v3, nullptr);
+
+    EXPECT_EQ(text_json_equal(v1, v2, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(v1, v3, TEXT_JSON_EQUAL_LEXEME), 0);
+
+    text_json_free(v1);
+    text_json_free(v2);
+    text_json_free(v3);
+}
+
+/**
+ * Test deep clone - null value
+ */
+TEST(DomUtilities, DeepCloneNull) {
+    text_json_value* src = text_json_new_null();
+    ASSERT_NE(src, nullptr);
+
+    text_json_value* clone = text_json_clone(src);
+    ASSERT_NE(clone, nullptr);
+
+    EXPECT_EQ(text_json_typeof(clone), TEXT_JSON_NULL);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+
+    // Verify they're independent (different contexts)
+    EXPECT_NE(src, clone);
+
+    text_json_free(src);
+    text_json_free(clone);
+}
+
+/**
+ * Test deep clone - scalar values
+ */
+TEST(DomUtilities, DeepCloneScalars) {
+    text_json_value* bool_src = text_json_new_bool(1);
+    text_json_value* str_src = text_json_new_string("hello", 5);
+    text_json_value* num_src = text_json_new_number_i64(123);
+    ASSERT_NE(bool_src, nullptr);
+    ASSERT_NE(str_src, nullptr);
+    ASSERT_NE(num_src, nullptr);
+
+    text_json_value* bool_clone = text_json_clone(bool_src);
+    text_json_value* str_clone = text_json_clone(str_src);
+    text_json_value* num_clone = text_json_clone(num_src);
+    ASSERT_NE(bool_clone, nullptr);
+    ASSERT_NE(str_clone, nullptr);
+    ASSERT_NE(num_clone, nullptr);
+
+    EXPECT_EQ(text_json_equal(bool_src, bool_clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(str_src, str_clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(num_src, num_clone, TEXT_JSON_EQUAL_LEXEME), 1);
+
+    text_json_free(bool_src);
+    text_json_free(str_src);
+    text_json_free(num_src);
+    text_json_free(bool_clone);
+    text_json_free(str_clone);
+    text_json_free(num_clone);
+}
+
+/**
+ * Test deep clone - arrays
+ */
+TEST(DomUtilities, DeepCloneArray) {
+    text_json_value* src = text_json_new_array();
+    ASSERT_NE(src, nullptr);
+
+    text_json_array_push(src, text_json_new_string("hello", 5));
+    text_json_array_push(src, text_json_new_number_i64(123));
+    text_json_array_push(src, text_json_new_bool(1));
+
+    text_json_value* clone = text_json_clone(src);
+    ASSERT_NE(clone, nullptr);
+
+    EXPECT_EQ(text_json_array_size(clone), 3u);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+
+    // Verify independence - modify clone doesn't affect src
+    text_json_array_push(clone, text_json_new_string("new", 3));
+    EXPECT_EQ(text_json_array_size(src), 3u);
+    EXPECT_EQ(text_json_array_size(clone), 4u);
+
+    text_json_free(src);
+    text_json_free(clone);
+}
+
+/**
+ * Test deep clone - objects
+ */
+TEST(DomUtilities, DeepCloneObject) {
+    text_json_value* src = text_json_new_object();
+    ASSERT_NE(src, nullptr);
+
+    text_json_object_put(src, "a", 1, text_json_new_string("hello", 5));
+    text_json_object_put(src, "b", 1, text_json_new_number_i64(123));
+
+    text_json_value* clone = text_json_clone(src);
+    ASSERT_NE(clone, nullptr);
+
+    EXPECT_EQ(text_json_object_size(clone), 2u);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+
+    // Verify independence
+    text_json_object_put(clone, "c", 1, text_json_new_string("new", 3));
+    EXPECT_EQ(text_json_object_size(src), 2u);
+    EXPECT_EQ(text_json_object_size(clone), 3u);
+
+    text_json_free(src);
+    text_json_free(clone);
+}
+
+/**
+ * Test deep clone - nested structures
+ */
+TEST(DomUtilities, DeepCloneNested) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    const char* json = "{\"a\":[1,2,{\"b\":\"hello\"}]}";
+    text_json_value* src = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(src, nullptr);
+
+    text_json_value* clone = text_json_clone(src);
+    ASSERT_NE(clone, nullptr);
+
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+
+    text_json_free(src);
+    text_json_free(clone);
+}
+
+/**
+ * Test object merge - first wins policy
+ */
+TEST(DomUtilities, ObjectMergeFirstWins) {
+    text_json_value* target = text_json_new_object();
+    text_json_value* source = text_json_new_object();
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(source, nullptr);
+
+    text_json_object_put(target, "a", 1, text_json_new_string("target", 6));
+    text_json_object_put(target, "b", 1, text_json_new_string("target", 6));
+
+    text_json_object_put(source, "a", 1, text_json_new_string("source", 6));
+    text_json_object_put(source, "c", 1, text_json_new_string("source", 6));
+
+    text_json_status status = text_json_object_merge(target, source, TEXT_JSON_MERGE_FIRST_WINS);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    EXPECT_EQ(text_json_object_size(target), 3u);
+
+    // "a" should keep target value
+    const text_json_value* a = text_json_object_get(target, "a", 1);
+    ASSERT_NE(a, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(a, &str, &len);
+    EXPECT_EQ(len, 6u);
+    EXPECT_EQ(memcmp(str, "target", 6), 0);
+
+    // "c" should be added
+    const text_json_value* c = text_json_object_get(target, "c", 1);
+    ASSERT_NE(c, nullptr);
+    text_json_get_string(c, &str, &len);
+    EXPECT_EQ(len, 6u);
+    EXPECT_EQ(memcmp(str, "source", 6), 0);
+
+    text_json_free(target);
+    text_json_free(source);
+}
+
+/**
+ * Test object merge - last wins policy
+ */
+TEST(DomUtilities, ObjectMergeLastWins) {
+    text_json_value* target = text_json_new_object();
+    text_json_value* source = text_json_new_object();
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(source, nullptr);
+
+    text_json_object_put(target, "a", 1, text_json_new_string("target", 6));
+    text_json_object_put(target, "b", 1, text_json_new_string("target", 6));
+
+    text_json_object_put(source, "a", 1, text_json_new_string("source", 6));
+    text_json_object_put(source, "c", 1, text_json_new_string("source", 6));
+
+    text_json_status status = text_json_object_merge(target, source, TEXT_JSON_MERGE_LAST_WINS);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    EXPECT_EQ(text_json_object_size(target), 3u);
+
+    // "a" should be replaced with source value
+    const text_json_value* a = text_json_object_get(target, "a", 1);
+    ASSERT_NE(a, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(a, &str, &len);
+    EXPECT_EQ(len, 6u);
+    EXPECT_EQ(memcmp(str, "source", 6), 0);
+
+    text_json_free(target);
+    text_json_free(source);
+}
+
+/**
+ * Test object merge - error policy
+ */
+TEST(DomUtilities, ObjectMergeError) {
+    text_json_value* target = text_json_new_object();
+    text_json_value* source = text_json_new_object();
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(source, nullptr);
+
+    text_json_object_put(target, "a", 1, text_json_new_string("target", 6));
+    text_json_object_put(source, "a", 1, text_json_new_string("source", 6));
+
+    text_json_status status = text_json_object_merge(target, source, TEXT_JSON_MERGE_ERROR);
+    EXPECT_EQ(status, TEXT_JSON_E_DUPKEY);
+
+    text_json_free(target);
+    text_json_free(source);
+}
+
+/**
+ * Test object merge - nested objects
+ */
+TEST(DomUtilities, ObjectMergeNested) {
+    text_json_value* target = text_json_new_object();
+    text_json_value* source = text_json_new_object();
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(source, nullptr);
+
+    text_json_value* target_nested = text_json_new_object();
+    text_json_object_put(target_nested, "x", 1, text_json_new_string("target", 6));
+    text_json_object_put(target, "nested", 6, target_nested);
+
+    text_json_value* source_nested = text_json_new_object();
+    text_json_object_put(source_nested, "y", 1, text_json_new_string("source", 6));
+    text_json_object_put(source, "nested", 6, source_nested);
+
+    text_json_status status = text_json_object_merge(target, source, TEXT_JSON_MERGE_LAST_WINS);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Nested object should be merged
+    const text_json_value* nested = text_json_object_get(target, "nested", 6);
+    ASSERT_NE(nested, nullptr);
+    EXPECT_EQ(text_json_object_size(nested), 2u);
+
+    const text_json_value* x = text_json_object_get(nested, "x", 1);
+    const text_json_value* y = text_json_object_get(nested, "y", 1);
+    ASSERT_NE(x, nullptr);
+    ASSERT_NE(y, nullptr);
+
+    text_json_free(target);
+    text_json_free(source);
+}
+
+/**
+ * Test object merge - non-object values are replaced
+ */
+TEST(DomUtilities, ObjectMergeNonObjectReplace) {
+    text_json_value* target = text_json_new_object();
+    text_json_value* source = text_json_new_object();
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(source, nullptr);
+
+    text_json_object_put(target, "a", 1, text_json_new_string("target", 6));
+    text_json_object_put(source, "a", 1, text_json_new_number_i64(123));
+
+    text_json_status status = text_json_object_merge(target, source, TEXT_JSON_MERGE_LAST_WINS);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // "a" should be replaced with number
+    const text_json_value* a = text_json_object_get(target, "a", 1);
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(text_json_typeof(a), TEXT_JSON_NUMBER);
+
+    int64_t val;
+    text_json_get_i64(a, &val);
+    EXPECT_EQ(val, 123);
+
+    text_json_free(target);
+    text_json_free(source);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
