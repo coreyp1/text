@@ -393,6 +393,36 @@ text_json_status json_object_add_pair(
     text_json_value* value
 );
 
+/**
+ * @brief Deep clone a JSON value into a context
+ *
+ * Creates a deep copy of a JSON value, allocating all memory from the
+ * specified context's arena. Used by patch operations and schema validation
+ * for cloning values.
+ *
+ * @param src Source value to clone (must not be NULL)
+ * @param ctx Context with arena for allocation (must not be NULL)
+ * @return Cloned value, or NULL on allocation failure
+ */
+text_json_value* json_value_clone(const text_json_value* src, json_context* ctx);
+
+/**
+ * @brief Deep equality comparison for JSON values
+ *
+ * Performs a deep structural comparison of two JSON values. Returns 1 if
+ * the values are equal (same structure and content), 0 otherwise. Used by
+ * patch test operations and schema validation for enum/const matching.
+ *
+ * For numbers, compares using the best available representation (int64, uint64,
+ * double with epsilon, or lexeme). For objects, compares regardless
+ * of key order.
+ *
+ * @param a First value to compare (can be NULL)
+ * @param b Second value to compare (can be NULL)
+ * @return 1 if values are equal, 0 otherwise
+ */
+int json_value_equal(const text_json_value* a, const text_json_value* b);
+
 #ifdef __cplusplus
 }
 #endif

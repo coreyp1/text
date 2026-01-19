@@ -15,8 +15,9 @@
 #include <ctype.h>
 
 // Helper function to deep clone a JSON value into the same context
-// This is needed for the copy operation
-static text_json_value* json_value_clone(const text_json_value* src, json_context* ctx) {
+// This is needed for the copy operation and schema validation
+// Made non-static so it can be shared with json_schema.c
+text_json_value* json_value_clone(const text_json_value* src, json_context* ctx) {
     if (!src || !ctx) {
         return NULL;
     }
@@ -167,8 +168,9 @@ static text_json_value* json_value_clone(const text_json_value* src, json_contex
 }
 
 // Helper function to check deep equality of two JSON values
-// This is needed for the test operation
-static int json_value_equal(const text_json_value* a, const text_json_value* b) {
+// This is needed for the test operation and schema validation
+// Made non-static so it can be shared with json_schema.c
+int json_value_equal(const text_json_value* a, const text_json_value* b) {
     if (a == b) {
         return 1;  // Same pointer
     }

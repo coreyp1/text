@@ -21,5 +21,6 @@
 #include <ghoti.io/text/json/json_stream.h>
 #include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_patch.h>
+#include <ghoti.io/text/json/json_schema.h>
 
 #endif /* GHOTI_IO_TEXT_JSON_H */

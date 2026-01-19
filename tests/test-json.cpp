@@ -1576,7 +1576,7 @@ TEST(DOMAccessors, ArrayAccessBounds) {
     EXPECT_EQ(text_json_array_get(arr, 1), nullptr);
 
     // Note: We can't test with actual elements yet since array mutation
-    // functions (text_json_array_push) haven't been implemented (Task 12).
+    // functions (text_json_array_push) haven't been implemented.
     // This test verifies bounds checking works for empty arrays.
 
     text_json_free(arr);
@@ -1595,7 +1595,7 @@ TEST(DOMAccessors, ObjectAccess) {
     EXPECT_EQ(text_json_object_key(obj, 0, nullptr), nullptr);
 
     // Note: We can't test with actual key-value pairs yet since object mutation
-    // functions (text_json_object_put) haven't been implemented (Task 12).
+    // functions (text_json_object_put) haven't been implemented.
     // This test verifies bounds checking works for empty objects.
 
     text_json_free(obj);
@@ -2798,8 +2798,7 @@ TEST(StreamingParser, CreationAndDestruction) {
 /**
  * Test streaming parser - callback invocation (basic)
  *
- * For Task 15, we just test that the stream can be created and that
- * callbacks can be set up. Actual parsing will be tested in Task 16.
+ * Test that the stream can be created and that callbacks can be set up.
  */
 TEST(StreamingParser, CallbackSetup) {
     text_json_parse_options opts = text_json_parse_options_default();
@@ -2822,8 +2821,7 @@ TEST(StreamingParser, CallbackSetup) {
     text_json_stream* st = text_json_stream_new(&opts, callback, &context);
     ASSERT_NE(st, nullptr);
 
-    // For Task 15, we just verify the stream is set up correctly
-    // Actual event emission will be tested in Task 16
+    // Verify the stream is set up correctly
     EXPECT_EQ(context.events.size(), 0u);
 
     text_json_stream_free(st);
@@ -2833,7 +2831,6 @@ TEST(StreamingParser, CallbackSetup) {
  * Test streaming parser - stream state persistence
  *
  * Test that the stream maintains state across feed calls.
- * For Task 15, we just verify the infrastructure is in place.
  */
 TEST(StreamingParser, StatePersistence) {
     text_json_parse_options opts = text_json_parse_options_default();
@@ -4970,6 +4967,506 @@ TEST(JsonMergePatch, ErrorNullArguments) {
 
     text_json_free(patch);
     text_json_free(target);
+}
+
+// ============================================================================
+// JSON Schema Validation Tests
+// ============================================================================
+
+/**
+ * Test schema compilation - basic type validation
+ */
+TEST(JsonSchema, TypeValidation) {
+    const char* schema_json = "{\"type\":\"string\"}";
+    const char* valid_json = "\"hello\"";
+    const char* invalid_json = "123";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instance
+    text_json_value* valid = text_json_parse(valid_json, strlen(valid_json), &opts, &err);
+    ASSERT_NE(valid, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid);
+
+    // Test invalid instance (wrong type)
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    status = text_json_schema_validate(schema, invalid, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema compilation - multiple types
+ */
+TEST(JsonSchema, MultipleTypes) {
+    const char* schema_json = "{\"type\":[\"string\",\"number\"]}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test string instance
+    const char* str_json = "\"hello\"";
+    text_json_value* str_val = text_json_parse(str_json, strlen(str_json), &opts, &err);
+    ASSERT_NE(str_val, nullptr);
+    text_json_status status = text_json_schema_validate(schema, str_val, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(str_val);
+
+    // Test number instance
+    const char* num_json = "123";
+    text_json_value* num_val = text_json_parse(num_json, strlen(num_json), &opts, &err);
+    ASSERT_NE(num_val, nullptr);
+    status = text_json_schema_validate(schema, num_val, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(num_val);
+
+    // Test invalid instance (boolean)
+    const char* bool_json = "true";
+    text_json_value* bool_val = text_json_parse(bool_json, strlen(bool_json), &opts, &err);
+    ASSERT_NE(bool_val, nullptr);
+    status = text_json_schema_validate(schema, bool_val, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(bool_val);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - properties and required
+ */
+TEST(JsonSchema, PropertiesAndRequired) {
+    const char* schema_json = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"number\"}},\"required\":[\"name\"]}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instance (has required property)
+    const char* valid_json = "{\"name\":\"John\",\"age\":30}";
+    text_json_value* valid = text_json_parse(valid_json, strlen(valid_json), &opts, &err);
+    ASSERT_NE(valid, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid);
+
+    // Test invalid instance (missing required property)
+    const char* invalid_json = "{\"age\":30}";
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    status = text_json_schema_validate(schema, invalid, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid);
+
+    // Test invalid instance (wrong property type)
+    const char* wrong_type_json = "{\"name\":123}";
+    text_json_value* wrong_type = text_json_parse(wrong_type_json, strlen(wrong_type_json), &opts, &err);
+    ASSERT_NE(wrong_type, nullptr);
+    status = text_json_schema_validate(schema, wrong_type, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(wrong_type);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - items validation
+ */
+TEST(JsonSchema, ItemsValidation) {
+    const char* schema_json = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instance (all items are strings)
+    const char* valid_json = "[\"a\",\"b\",\"c\"]";
+    text_json_value* valid = text_json_parse(valid_json, strlen(valid_json), &opts, &err);
+    ASSERT_NE(valid, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid);
+
+    // Test invalid instance (one item is not a string)
+    const char* invalid_json = "[\"a\",123,\"c\"]";
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    status = text_json_schema_validate(schema, invalid, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - enum validation
+ */
+TEST(JsonSchema, EnumValidation) {
+    const char* schema_json = "{\"enum\":[\"red\",\"green\",\"blue\"]}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instances
+    const char* valid1_json = "\"red\"";
+    text_json_value* valid1 = text_json_parse(valid1_json, strlen(valid1_json), &opts, &err);
+    ASSERT_NE(valid1, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid1);
+
+    const char* valid2_json = "\"green\"";
+    text_json_value* valid2 = text_json_parse(valid2_json, strlen(valid2_json), &opts, &err);
+    ASSERT_NE(valid2, nullptr);
+    status = text_json_schema_validate(schema, valid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid2);
+
+    // Test invalid instance (not in enum)
+    const char* invalid_json = "\"yellow\"";
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    status = text_json_schema_validate(schema, invalid, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - const validation
+ */
+TEST(JsonSchema, ConstValidation) {
+    const char* schema_json = "{\"const\":42}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instance (exact match)
+    const char* valid_json = "42";
+    text_json_value* valid = text_json_parse(valid_json, strlen(valid_json), &opts, &err);
+    ASSERT_NE(valid, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid);
+
+    // Test invalid instance (different value)
+    const char* invalid_json = "43";
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    status = text_json_schema_validate(schema, invalid, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - numeric constraints (minimum/maximum)
+ */
+TEST(JsonSchema, NumericConstraints) {
+    const char* schema_json = "{\"type\":\"number\",\"minimum\":10,\"maximum\":100}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instances
+    const char* valid1_json = "50";
+    text_json_value* valid1 = text_json_parse(valid1_json, strlen(valid1_json), &opts, &err);
+    ASSERT_NE(valid1, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid1);
+
+    const char* valid2_json = "10";
+    text_json_value* valid2 = text_json_parse(valid2_json, strlen(valid2_json), &opts, &err);
+    ASSERT_NE(valid2, nullptr);
+    status = text_json_schema_validate(schema, valid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid2);
+
+    // Test invalid instance (below minimum)
+    const char* invalid1_json = "5";
+    text_json_value* invalid1 = text_json_parse(invalid1_json, strlen(invalid1_json), &opts, &err);
+    ASSERT_NE(invalid1, nullptr);
+    status = text_json_schema_validate(schema, invalid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid1);
+
+    // Test invalid instance (above maximum)
+    const char* invalid2_json = "150";
+    text_json_value* invalid2 = text_json_parse(invalid2_json, strlen(invalid2_json), &opts, &err);
+    ASSERT_NE(invalid2, nullptr);
+    status = text_json_schema_validate(schema, invalid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid2);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - string length constraints
+ */
+TEST(JsonSchema, StringLengthConstraints) {
+    const char* schema_json = "{\"type\":\"string\",\"minLength\":3,\"maxLength\":10}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instances
+    const char* valid1_json = "\"abc\"";
+    text_json_value* valid1 = text_json_parse(valid1_json, strlen(valid1_json), &opts, &err);
+    ASSERT_NE(valid1, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid1);
+
+    const char* valid2_json = "\"abcdefghij\"";
+    text_json_value* valid2 = text_json_parse(valid2_json, strlen(valid2_json), &opts, &err);
+    ASSERT_NE(valid2, nullptr);
+    status = text_json_schema_validate(schema, valid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid2);
+
+    // Test invalid instance (too short)
+    const char* invalid1_json = "\"ab\"";
+    text_json_value* invalid1 = text_json_parse(invalid1_json, strlen(invalid1_json), &opts, &err);
+    ASSERT_NE(invalid1, nullptr);
+    status = text_json_schema_validate(schema, invalid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid1);
+
+    // Test invalid instance (too long)
+    const char* invalid2_json = "\"abcdefghijk\"";
+    text_json_value* invalid2 = text_json_parse(invalid2_json, strlen(invalid2_json), &opts, &err);
+    ASSERT_NE(invalid2, nullptr);
+    status = text_json_schema_validate(schema, invalid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid2);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - array size constraints
+ */
+TEST(JsonSchema, ArraySizeConstraints) {
+    const char* schema_json = "{\"type\":\"array\",\"minItems\":2,\"maxItems\":5}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid instances
+    const char* valid1_json = "[1,2]";
+    text_json_value* valid1 = text_json_parse(valid1_json, strlen(valid1_json), &opts, &err);
+    ASSERT_NE(valid1, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid1);
+
+    const char* valid2_json = "[1,2,3,4,5]";
+    text_json_value* valid2 = text_json_parse(valid2_json, strlen(valid2_json), &opts, &err);
+    ASSERT_NE(valid2, nullptr);
+    status = text_json_schema_validate(schema, valid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid2);
+
+    // Test invalid instance (too few items)
+    const char* invalid1_json = "[1]";
+    text_json_value* invalid1 = text_json_parse(invalid1_json, strlen(invalid1_json), &opts, &err);
+    ASSERT_NE(invalid1, nullptr);
+    status = text_json_schema_validate(schema, invalid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid1);
+
+    // Test invalid instance (too many items)
+    const char* invalid2_json = "[1,2,3,4,5,6]";
+    text_json_value* invalid2 = text_json_parse(invalid2_json, strlen(invalid2_json), &opts, &err);
+    ASSERT_NE(invalid2, nullptr);
+    status = text_json_schema_validate(schema, invalid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid2);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema - nested schema validation
+ */
+TEST(JsonSchema, NestedSchema) {
+    const char* schema_json = "{\"type\":\"object\",\"properties\":{\"user\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"number\",\"minimum\":0}},\"required\":[\"name\"]}}}";
+
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    // Test valid nested instance
+    const char* valid_json = "{\"user\":{\"name\":\"John\",\"age\":30}}";
+    text_json_value* valid = text_json_parse(valid_json, strlen(valid_json), &opts, &err);
+    ASSERT_NE(valid, nullptr);
+    text_json_status status = text_json_schema_validate(schema, valid, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    text_json_free(valid);
+
+    // Test invalid nested instance (missing required property)
+    const char* invalid1_json = "{\"user\":{\"age\":30}}";
+    text_json_value* invalid1 = text_json_parse(invalid1_json, strlen(invalid1_json), &opts, &err);
+    ASSERT_NE(invalid1, nullptr);
+    status = text_json_schema_validate(schema, invalid1, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid1);
+
+    // Test invalid nested instance (negative age)
+    const char* invalid2_json = "{\"user\":{\"name\":\"John\",\"age\":-5}}";
+    text_json_value* invalid2 = text_json_parse(invalid2_json, strlen(invalid2_json), &opts, &err);
+    ASSERT_NE(invalid2, nullptr);
+    status = text_json_schema_validate(schema, invalid2, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_SCHEMA);
+    text_json_free(invalid2);
+
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema compilation - invalid schema rejection
+ */
+TEST(JsonSchema, InvalidSchemaRejection) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    // Test NULL schema document
+    text_json_schema* schema = text_json_schema_compile(nullptr, &err);
+    EXPECT_EQ(schema, nullptr);
+    EXPECT_EQ(err.code, TEXT_JSON_E_INVALID);
+
+    // Test non-object schema
+    const char* invalid_json = "\"not an object\"";
+    text_json_value* invalid = text_json_parse(invalid_json, strlen(invalid_json), &opts, &err);
+    ASSERT_NE(invalid, nullptr);
+    schema = text_json_schema_compile(invalid, &err);
+    EXPECT_EQ(schema, nullptr);
+    EXPECT_EQ(err.code, TEXT_JSON_E_INVALID);
+    text_json_free(invalid);
+
+    // Test invalid type value
+    const char* invalid_type_json = "{\"type\":\"invalid\"}";
+    text_json_value* invalid_type = text_json_parse(invalid_type_json, strlen(invalid_type_json), &opts, &err);
+    ASSERT_NE(invalid_type, nullptr);
+    schema = text_json_schema_compile(invalid_type, &err);
+    EXPECT_EQ(schema, nullptr);
+    EXPECT_EQ(err.code, TEXT_JSON_E_INVALID);
+    text_json_free(invalid_type);
+}
+
+/**
+ * Test schema validation - NULL arguments
+ */
+TEST(JsonSchema, NullArguments) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    const char* schema_json = "{\"type\":\"string\"}";
+    text_json_value* schema_doc = text_json_parse(schema_json, strlen(schema_json), &opts, &err);
+    ASSERT_NE(schema_doc, nullptr);
+
+    text_json_schema* schema = text_json_schema_compile(schema_doc, &err);
+    ASSERT_NE(schema, nullptr);
+
+    const char* instance_json = "\"test\"";
+    text_json_value* instance = text_json_parse(instance_json, strlen(instance_json), &opts, &err);
+    ASSERT_NE(instance, nullptr);
+
+    // Test NULL schema
+    text_json_status status = text_json_schema_validate(nullptr, instance, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    // Test NULL instance
+    status = text_json_schema_validate(schema, nullptr, &err);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    text_json_free(instance);
+    text_json_schema_free(schema);
+    text_json_free(schema_doc);
+}
+
+/**
+ * Test schema free - NULL argument
+ */
+TEST(JsonSchema, FreeNull) {
+    // Should not crash
+    text_json_schema_free(nullptr);
 }
 
 int main(int argc, char **argv) {
