@@ -160,7 +160,7 @@ typedef struct json_context {
 // The context is allocated with malloc (not in the arena) so it can
 // be accessed to free the arena.
 // Returns: New context, or NULL on failure
-static json_context* json_context_new(void) {
+json_context* json_context_new(void) {
     json_context* ctx = malloc(sizeof(json_context));
     if (!ctx) {
         return NULL;
@@ -177,7 +177,7 @@ static json_context* json_context_new(void) {
 
 // Free a context and its arena
 // ctx: Context to free (can be NULL)
-static void json_context_free(json_context* ctx) {
+void json_context_free(json_context* ctx) {
     if (!ctx) {
         return;
     }

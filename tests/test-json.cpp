@@ -5,6 +5,7 @@
 #include <text/json_writer.h>
 #include <text/json_stream.h>
 #include <text/json_pointer.h>
+#include <text/json_patch.h>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -4016,6 +4017,480 @@ TEST(JsonPointer, TypeMismatches) {
     result = text_json_pointer_get(root, "/a/0", 4);
     EXPECT_EQ(result, nullptr);
 
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - add operation to object
+ */
+TEST(JsonPatch, AddToObject) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: add "baz": "qux" to root object
+    const char* patch_json = "[{\"op\":\"add\",\"path\":\"/baz\",\"value\":\"qux\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify the value was added
+    const text_json_value* baz = text_json_pointer_get(root, "/baz", 4);
+    ASSERT_NE(baz, nullptr);
+    EXPECT_EQ(text_json_typeof(baz), TEXT_JSON_STRING);
+    const char* baz_str;
+    size_t baz_len;
+    text_json_get_string(baz, &baz_str, &baz_len);
+    EXPECT_EQ(baz_len, 3u);
+    EXPECT_EQ(memcmp(baz_str, "qux", 3), 0);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - add operation to array
+ */
+TEST(JsonPatch, AddToArray) {
+    const char* json = "{\"foo\":[1,2]}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: add 3 to end of array
+    const char* patch_json = "[{\"op\":\"add\",\"path\":\"/foo/-\",\"value\":3}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify the value was added
+    const text_json_value* arr = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(text_json_array_size(arr), 3u);
+    const text_json_value* elem2 = text_json_array_get(arr, 2);
+    ASSERT_NE(elem2, nullptr);
+    int64_t val;
+    text_json_get_i64(elem2, &val);
+    EXPECT_EQ(val, 3);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - add operation at specific array index
+ */
+TEST(JsonPatch, AddToArrayAtIndex) {
+    const char* json = "{\"foo\":[1,3]}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: insert 2 at index 1
+    const char* patch_json = "[{\"op\":\"add\",\"path\":\"/foo/1\",\"value\":2}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify the value was inserted
+    const text_json_value* arr = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(text_json_array_size(arr), 3u);
+    int64_t val;
+    text_json_get_i64(text_json_array_get(arr, 0), &val);
+    EXPECT_EQ(val, 1);
+    text_json_get_i64(text_json_array_get(arr, 1), &val);
+    EXPECT_EQ(val, 2);
+    text_json_get_i64(text_json_array_get(arr, 2), &val);
+    EXPECT_EQ(val, 3);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - remove operation from object
+ */
+TEST(JsonPatch, RemoveFromObject) {
+    const char* json = "{\"foo\":\"bar\",\"baz\":\"qux\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: remove "foo"
+    const char* patch_json = "[{\"op\":\"remove\",\"path\":\"/foo\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify "foo" was removed
+    const text_json_value* foo = text_json_pointer_get(root, "/foo", 4);
+    EXPECT_EQ(foo, nullptr);
+
+    // Verify "baz" still exists
+    const text_json_value* baz = text_json_pointer_get(root, "/baz", 4);
+    ASSERT_NE(baz, nullptr);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - remove operation from array
+ */
+TEST(JsonPatch, RemoveFromArray) {
+    const char* json = "{\"foo\":[1,2,3]}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: remove element at index 1
+    const char* patch_json = "[{\"op\":\"remove\",\"path\":\"/foo/1\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify element was removed
+    const text_json_value* arr = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(text_json_array_size(arr), 2u);
+    int64_t val;
+    text_json_get_i64(text_json_array_get(arr, 0), &val);
+    EXPECT_EQ(val, 1);
+    text_json_get_i64(text_json_array_get(arr, 1), &val);
+    EXPECT_EQ(val, 3);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - replace operation
+ */
+TEST(JsonPatch, Replace) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: replace "foo" with "baz"
+    const char* patch_json = "[{\"op\":\"replace\",\"path\":\"/foo\",\"value\":\"baz\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify the value was replaced
+    const text_json_value* foo = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(foo, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(foo, &str, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(str, "baz", 3), 0);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - move operation
+ */
+TEST(JsonPatch, Move) {
+    const char* json = "{\"foo\":{\"bar\":\"baz\"},\"qux\":{}}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: move /foo/bar to /qux/thud
+    const char* patch_json = "[{\"op\":\"move\",\"from\":\"/foo/bar\",\"path\":\"/qux/thud\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify value was moved
+    const text_json_value* bar = text_json_pointer_get(root, "/foo/bar", 8);
+    EXPECT_EQ(bar, nullptr);  // Should be removed
+
+    const text_json_value* thud = text_json_pointer_get(root, "/qux/thud", 9);
+    ASSERT_NE(thud, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(thud, &str, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(str, "baz", 3), 0);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - copy operation
+ */
+TEST(JsonPatch, Copy) {
+    const char* json = "{\"foo\":{\"bar\":\"baz\"},\"qux\":{}}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: copy /foo/bar to /qux/thud
+    const char* patch_json = "[{\"op\":\"copy\",\"from\":\"/foo/bar\",\"path\":\"/qux/thud\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify value was copied (original should still exist)
+    const text_json_value* bar = text_json_pointer_get(root, "/foo/bar", 8);
+    ASSERT_NE(bar, nullptr);  // Should still exist
+
+    const text_json_value* thud = text_json_pointer_get(root, "/qux/thud", 9);
+    ASSERT_NE(thud, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(thud, &str, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(str, "baz", 3), 0);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - test operation (success)
+ */
+TEST(JsonPatch, TestSuccess) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: test that /foo equals "bar"
+    const char* patch_json = "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":\"bar\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - test operation (failure)
+ */
+TEST(JsonPatch, TestFailure) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: test that /foo equals "baz" (should fail)
+    const char* patch_json = "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":\"baz\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+    EXPECT_EQ(status, TEXT_JSON_E_INVALID);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - multiple operations
+ */
+TEST(JsonPatch, MultipleOperations) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch with multiple operations
+    const char* patch_json = "["
+        "{\"op\":\"add\",\"path\":\"/baz\",\"value\":\"qux\"},"
+        "{\"op\":\"replace\",\"path\":\"/foo\",\"value\":\"bar2\"},"
+        "{\"op\":\"test\",\"path\":\"/baz\",\"value\":\"qux\"}"
+    "]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify all operations were applied
+    const text_json_value* foo = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(foo, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(foo, &str, &len);
+    EXPECT_EQ(len, 4u);
+    EXPECT_EQ(memcmp(str, "bar2", 4), 0);
+
+    const text_json_value* baz = text_json_pointer_get(root, "/baz", 4);
+    ASSERT_NE(baz, nullptr);
+    text_json_get_string(baz, &str, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(str, "qux", 3), 0);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - error cases: invalid path
+ */
+TEST(JsonPatch, ErrorInvalidPath) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch with invalid path
+    const char* patch_json = "[{\"op\":\"remove\",\"path\":\"/nonexistent\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - error cases: missing required fields
+ */
+TEST(JsonPatch, ErrorMissingFields) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch with missing "value" field
+    const char* patch_json = "[{\"op\":\"add\",\"path\":\"/baz\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - error cases: move into descendant
+ */
+TEST(JsonPatch, ErrorMoveIntoDescendant) {
+    const char* json = "{\"foo\":{\"bar\":\"baz\"}}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: try to move /foo into /foo/bar (should fail)
+    const char* patch_json = "[{\"op\":\"move\",\"from\":\"/foo\",\"path\":\"/foo/bar\"}]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    text_json_free(patch);
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Patch - atomicity: true rollback on failure
+ *
+ * The implementation provides true atomicity with rollback:
+ * - All operations are applied to a deep clone of the root first
+ * - Only if all operations succeed is the clone's content copied back to the original
+ * - If any operation fails, the clone is discarded and the original remains completely unchanged
+ * - This ensures all-or-nothing semantics: either all operations succeed or none are applied
+ *
+ * This test verifies that when a later operation fails, earlier operations are not applied.
+ */
+TEST(JsonPatch, Atomicity) {
+    const char* json = "{\"foo\":\"bar\"}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Create patch: first operation succeeds, second fails
+    const char* patch_json = "["
+        "{\"op\":\"add\",\"path\":\"/baz\",\"value\":\"qux\"},"
+        "{\"op\":\"remove\",\"path\":\"/nonexistent\"}"
+    "]";
+    text_json_value* patch = text_json_parse(patch_json, strlen(patch_json), &opts, &err);
+    ASSERT_NE(patch, nullptr);
+
+    text_json_status status = text_json_patch_apply(root, patch, &err);
+    EXPECT_NE(status, TEXT_JSON_OK);
+
+    // With true atomicity: all operations are applied to a clone first.
+    // Only if all operations succeed is the clone's content copied back to the original.
+    // If any operation fails, the original remains unchanged.
+    const text_json_value* baz = text_json_pointer_get(root, "/baz", 4);
+    EXPECT_EQ(baz, nullptr);  // Nothing was applied because second operation failed
+
+    // Verify original value is unchanged
+    const text_json_value* foo = text_json_pointer_get(root, "/foo", 4);
+    ASSERT_NE(foo, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(foo, &str, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(str, "bar", 3), 0);
+
+    text_json_free(patch);
     text_json_free(root);
 }
 

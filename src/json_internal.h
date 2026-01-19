@@ -343,6 +343,26 @@ text_json_value* json_value_new_with_existing_context(text_json_type type, json_
 void* json_arena_alloc_for_context(json_context* ctx, size_t size, size_t align);
 
 /**
+ * @brief Create a new JSON context with arena
+ *
+ * Internal function for creating a new context with an arena allocator.
+ * Used by patch implementation for atomic operations.
+ *
+ * @return New context, or NULL on failure
+ */
+json_context* json_context_new(void);
+
+/**
+ * @brief Free a JSON context and its arena
+ *
+ * Internal function for freeing a context and its associated arena.
+ * Used by patch implementation for cleanup.
+ *
+ * @param ctx Context to free (can be NULL)
+ */
+void json_context_free(json_context* ctx);
+
+/**
  * @brief Add an element to a JSON array
  *
  * Internal function for parser use. Adds an element to an array,
