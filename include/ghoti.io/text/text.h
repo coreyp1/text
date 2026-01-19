@@ -9,7 +9,7 @@
 #ifndef GHOTI_IO_TEXT_H
 #define GHOTI_IO_TEXT_H
 
-#include <text/macros.h>
+#include <ghoti.io/text/macros.h>
 #include <stdint.h>
 
 /**

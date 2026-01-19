@@ -9,7 +9,7 @@
 #ifndef GHOTI_IO_TEXT_JSON_INTERNAL_H
 #define GHOTI_IO_TEXT_JSON_INTERNAL_H
 
-#include <text/json.h>
+#include <ghoti.io/text/json/json_core.h>
 #include <stddef.h>
 #include <stdint.h>
 

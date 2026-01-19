@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <text/text.h>
+#include <ghoti.io/text/text.h>
 
 // Placeholder tests for CSV functionality
 TEST(CsvTests, Placeholder) {

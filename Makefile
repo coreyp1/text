@@ -284,10 +284,13 @@ ifeq ($(OS_NAME), Windows)
 	@cp $(APP_DIR)/$(TARGET) $(BIN_INSTALL_PATH)
 endif
 	# Installing the headers.
-	@mkdir -p $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/$(PROJECT)
-	@cp include/text/*.h $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/$(PROJECT)
+	@mkdir -p $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)
+	@if [ -d include/ghoti.io ]; then \
+		cp -r include/ghoti.io $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/ ; \
+	fi
 	@if [ -d $(GEN_DIR) ] && [ -n "$$(ls -A $(GEN_DIR) 2>/dev/null)" ]; then \
-		cp $(GEN_DIR)/*.h $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/$(PROJECT); \
+		mkdir -p $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/ghoti.io/$(PROJECT); \
+		cp $(GEN_DIR)/*.h $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)/ghoti.io/$(PROJECT)/; \
 	fi
 	# Installing the pkg-config files.
 	@mkdir -p $(PKG_CONFIG_PATH)

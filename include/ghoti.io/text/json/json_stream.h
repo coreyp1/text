@@ -10,8 +10,8 @@
 #ifndef GHOTI_IO_TEXT_JSON_STREAM_H
 #define GHOTI_IO_TEXT_JSON_STREAM_H
 
-#include <text/macros.h>
-#include <text/json.h>
+#include <ghoti.io/text/macros.h>
+#include <ghoti.io/text/json/json_core.h>
 #include <stddef.h>
 
 #ifdef __cplusplus

@@ -48,7 +48,7 @@ The library provides cross-compiler macros in `include/text/macros.h`:
 
 Example:
 ```c
-#include <text/macros.h>
+#include <ghoti.io/text/macros.h>
 
 void my_function(int TEXT_MAYBE_UNUSED(param)) {
     // param is intentionally unused

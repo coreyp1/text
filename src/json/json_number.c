@@ -1,7 +1,7 @@
 // Number parsing and multi-representation support for JSON module
 
 #include "json_internal.h"
-#include <text/json.h>
+#include <ghoti.io/text/json/json_core.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>

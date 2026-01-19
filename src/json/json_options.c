@@ -3,7 +3,7 @@
  * @brief Default initialization for JSON parse and write options
  */
 
-#include <text/json.h>
+#include <ghoti.io/text/json/json_core.h>
 
 text_json_parse_options text_json_parse_options_default(void) {
     text_json_parse_options opts = {0};

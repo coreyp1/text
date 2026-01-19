@@ -1,11 +1,6 @@
 #include <gtest/gtest.h>
-#include <text/text.h>
-#include <text/json.h>
-#include <text/json_dom.h>
-#include <text/json_writer.h>
-#include <text/json_stream.h>
-#include <text/json_pointer.h>
-#include <text/json_patch.h>
+#include <ghoti.io/text/text.h>
+#include <ghoti.io/text/json.h>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -14,7 +9,7 @@
 
 // Include internal header for testing internal functions
 extern "C" {
-#include "../src/json_internal.h"
+#include "../src/json/json_internal.h"
 }
 
 /**

@@ -6,7 +6,7 @@
  * utilities used across the text library modules (JSON, CSV, etc.).
  */
 
-#include <text/text.h>
+#include <ghoti.io/text/text.h>
 #include <stdio.h>
 #include <stdlib.h>
 

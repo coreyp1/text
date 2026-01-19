@@ -7,8 +7,8 @@
  */
 
 #include "json_internal.h"
-#include <text/json.h>
-#include <text/json_dom.h>
+#include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/json/json_dom.h>
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>

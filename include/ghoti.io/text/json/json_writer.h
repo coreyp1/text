@@ -10,9 +10,9 @@
 #ifndef GHOTI_IO_TEXT_JSON_WRITER_H
 #define GHOTI_IO_TEXT_JSON_WRITER_H
 
-#include <text/macros.h>
-#include <text/json.h>
-#include <text/json_dom.h>
+#include <ghoti.io/text/macros.h>
+#include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/json/json_dom.h>
 #include <stddef.h>
 
 #ifdef __cplusplus

@@ -9,7 +9,7 @@
 #ifndef GHOTI_IO_TEXT_JSON_H
 #define GHOTI_IO_TEXT_JSON_H
 
-#include <text/macros.h>
+#include <ghoti.io/text/macros.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
