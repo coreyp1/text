@@ -4,6 +4,7 @@
 #include <text/json_dom.h>
 #include <text/json_writer.h>
 #include <text/json_stream.h>
+#include <text/json_pointer.h>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -3722,6 +3723,300 @@ TEST(StreamingWriter, ErrorState) {
 
     text_json_writer_free(w);
     text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test JSON Pointer - empty pointer refers to root
+ */
+TEST(JsonPointer, EmptyPointer) {
+    text_json_value* root = text_json_new_string("test", 4);
+    ASSERT_NE(root, nullptr);
+
+    const text_json_value* result = text_json_pointer_get(root, "", 0);
+    EXPECT_EQ(result, root);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - object key access
+ */
+TEST(JsonPointer, ObjectKeyAccess) {
+    const char* json = "{\"a\":1,\"b\":2,\"c\":{\"d\":3}}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Access existing keys
+    const text_json_value* a = text_json_pointer_get(root, "/a", 2);
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(text_json_typeof(a), TEXT_JSON_NUMBER);
+
+    const text_json_value* b = text_json_pointer_get(root, "/b", 2);
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(text_json_typeof(b), TEXT_JSON_NUMBER);
+
+    // Access nested object
+    const text_json_value* c = text_json_pointer_get(root, "/c", 2);
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(text_json_typeof(c), TEXT_JSON_OBJECT);
+
+    const text_json_value* d = text_json_pointer_get(root, "/c/d", 4);
+    ASSERT_NE(d, nullptr);
+    EXPECT_EQ(text_json_typeof(d), TEXT_JSON_NUMBER);
+
+    // Access non-existent key
+    const text_json_value* missing = text_json_pointer_get(root, "/x", 2);
+    EXPECT_EQ(missing, nullptr);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - array index access
+ */
+TEST(JsonPointer, ArrayIndexAccess) {
+    const char* json = "[10,20,30,[40,50]]";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Access valid indices
+    const text_json_value* elem0 = text_json_pointer_get(root, "/0", 2);
+    ASSERT_NE(elem0, nullptr);
+    EXPECT_EQ(text_json_typeof(elem0), TEXT_JSON_NUMBER);
+
+    const text_json_value* elem1 = text_json_pointer_get(root, "/1", 2);
+    ASSERT_NE(elem1, nullptr);
+    EXPECT_EQ(text_json_typeof(elem1), TEXT_JSON_NUMBER);
+
+    // Access nested array
+    const text_json_value* nested = text_json_pointer_get(root, "/3", 2);
+    ASSERT_NE(nested, nullptr);
+    EXPECT_EQ(text_json_typeof(nested), TEXT_JSON_ARRAY);
+
+    const text_json_value* nested0 = text_json_pointer_get(root, "/3/0", 4);
+    ASSERT_NE(nested0, nullptr);
+    EXPECT_EQ(text_json_typeof(nested0), TEXT_JSON_NUMBER);
+
+    // Access out-of-bounds index
+    const text_json_value* out_of_bounds = text_json_pointer_get(root, "/10", 3);
+    EXPECT_EQ(out_of_bounds, nullptr);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - complex nested structures
+ */
+TEST(JsonPointer, ComplexNestedStructures) {
+    const char* json = "{\"a\":[{\"b\":1,\"c\":2},{\"d\":3}],\"e\":{\"f\":[4,5,6]}}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Navigate complex path: /a/0/b
+    const text_json_value* result = text_json_pointer_get(root, "/a/0/b", 6);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_NUMBER);
+
+    // Navigate: /a/0/c
+    result = text_json_pointer_get(root, "/a/0/c", 6);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_NUMBER);
+
+    // Navigate: /a/1/d
+    result = text_json_pointer_get(root, "/a/1/d", 6);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_NUMBER);
+
+    // Navigate: /e/f/0
+    result = text_json_pointer_get(root, "/e/f/0", 6);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_NUMBER);
+
+    // Navigate: /e/f/2
+    result = text_json_pointer_get(root, "/e/f/2", 6);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_NUMBER);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - escape sequences (~0 → ~, ~1 → /)
+ */
+TEST(JsonPointer, EscapeSequences) {
+    // Create object with keys containing ~ and /
+    text_json_value* root = text_json_new_object();
+    ASSERT_NE(root, nullptr);
+
+    text_json_value* val1 = text_json_new_string("value1", 6);
+    text_json_value* val2 = text_json_new_string("value2", 6);
+    text_json_value* val3 = text_json_new_string("value3", 6);
+
+    // Key with tilde: "key~with~tilde" (14 bytes)
+    text_json_object_put(root, "key~with~tilde", 14, val1);
+
+    // Key with slash: "key/with/slash"
+    text_json_object_put(root, "key/with/slash", 14, val2);
+
+    // Key with both: "key~0/with~1both"
+    text_json_object_put(root, "key~0/with~1both", 16, val3);
+
+    // Access key with tilde using ~0 escape
+    const text_json_value* result = text_json_pointer_get(root, "/key~0with~0tilde", 17);  // "/key~0with~0tilde" = 17 chars
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_STRING);
+
+    // Access key with slash using ~1 escape
+    result = text_json_pointer_get(root, "/key~1with~1slash", 17);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_STRING);
+
+    // Access key with both escapes
+    // Key is "key~0/with~1both", so pointer is "/key~00~1with~01both"
+    // (~00 → ~0, ~1 → /, ~01 → ~1)
+    result = text_json_pointer_get(root, "/key~00~1with~01both", 20);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(text_json_typeof(result), TEXT_JSON_STRING);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - invalid pointer formats
+ */
+TEST(JsonPointer, InvalidFormats) {
+    text_json_value* root = text_json_new_string("test", 4);
+    ASSERT_NE(root, nullptr);
+
+    // Pointer not starting with /
+    const text_json_value* result = text_json_pointer_get(root, "a", 1);
+    EXPECT_EQ(result, nullptr);
+
+    // Invalid escape sequence
+    result = text_json_pointer_get(root, "/a~2", 4);
+    EXPECT_EQ(result, nullptr);
+
+    // Incomplete escape sequence
+    result = text_json_pointer_get(root, "/a~", 3);
+    EXPECT_EQ(result, nullptr);
+
+    // NULL pointer
+    result = text_json_pointer_get(root, nullptr, 0);
+    EXPECT_EQ(result, nullptr);
+
+    // NULL root
+    result = text_json_pointer_get(nullptr, "/a", 2);
+    EXPECT_EQ(result, nullptr);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - array index validation
+ */
+TEST(JsonPointer, ArrayIndexValidation) {
+    const char* json = "[1,2,3]";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Valid indices
+    EXPECT_NE(text_json_pointer_get(root, "/0", 2), nullptr);
+    EXPECT_NE(text_json_pointer_get(root, "/1", 2), nullptr);
+    EXPECT_NE(text_json_pointer_get(root, "/2", 2), nullptr);
+
+    // Out of bounds
+    EXPECT_EQ(text_json_pointer_get(root, "/3", 2), nullptr);
+
+    // Leading zeros not allowed (except "0")
+    EXPECT_EQ(text_json_pointer_get(root, "/01", 3), nullptr);
+    EXPECT_EQ(text_json_pointer_get(root, "/00", 3), nullptr);
+
+    // Non-numeric index
+    EXPECT_EQ(text_json_pointer_get(root, "/a", 2), nullptr);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - mutable access
+ */
+TEST(JsonPointer, MutableAccess) {
+    const char* json = "{\"a\":1,\"b\":[2,3]}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Get mutable pointer
+    text_json_value* a = text_json_pointer_get_mut(root, "/a", 2);
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(text_json_typeof(a), TEXT_JSON_NUMBER);
+
+    // Modify the value (replace with new number)
+    text_json_value* new_val = text_json_new_number_i64(42);
+    ASSERT_NE(new_val, nullptr);
+
+    // Get parent object and replace value
+    text_json_value* parent = text_json_pointer_get_mut(root, "", 0);
+    ASSERT_NE(parent, nullptr);
+    text_json_object_put(parent, "a", 1, new_val);
+
+    // Verify modification
+    const text_json_value* modified = text_json_pointer_get(root, "/a", 2);
+    ASSERT_NE(modified, nullptr);
+    int64_t val;
+    text_json_get_i64(modified, &val);
+    EXPECT_EQ(val, 42);
+
+    // Modify array element
+    text_json_value* arr_elem = text_json_pointer_get_mut(root, "/b/0", 4);
+    ASSERT_NE(arr_elem, nullptr);
+    text_json_value* new_arr_val = text_json_new_number_i64(99);
+    text_json_value* arr = text_json_pointer_get_mut(root, "/b", 2);
+    text_json_array_set(arr, 0, new_arr_val);
+
+    // Verify array modification
+    const text_json_value* modified_arr_elem = text_json_pointer_get(root, "/b/0", 4);
+    ASSERT_NE(modified_arr_elem, nullptr);
+    text_json_get_i64(modified_arr_elem, &val);
+    EXPECT_EQ(val, 99);
+
+    text_json_free(root);
+}
+
+/**
+ * Test JSON Pointer - type mismatches
+ */
+TEST(JsonPointer, TypeMismatches) {
+    const char* json = "{\"a\":1,\"b\":[2,3]}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    text_json_value* root = text_json_parse(json, strlen(json), &opts, &err);
+    ASSERT_NE(root, nullptr);
+
+    // Try to access object key on array
+    const text_json_value* result = text_json_pointer_get(root, "/b/a", 4);
+    EXPECT_EQ(result, nullptr);
+
+    // Try to access array index on object
+    result = text_json_pointer_get(root, "/a/0", 4);
+    EXPECT_EQ(result, nullptr);
+
+    text_json_free(root);
 }
 
 int main(int argc, char **argv) {

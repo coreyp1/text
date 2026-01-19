@@ -197,25 +197,35 @@ static void json_free_children_recursive(text_json_value* v) {
     if (v->type == TEXT_JSON_ARRAY && v->as.array.elems) {
         for (size_t i = 0; i < v->as.array.count; i++) {
             text_json_value* child = v->as.array.elems[i];
-            if (child && child->ctx && child->ctx != parent_ctx) {
-                // Save child context before freeing (child structure will be freed)
-                json_context* child_ctx = child->ctx;
-                // Recursively free child's children first
-                json_free_children_recursive(child);
-                // Now free the child's context (this frees the child value structure itself)
-                json_context_free(child_ctx);
+            if (child) {
+                if (child->ctx && child->ctx != parent_ctx) {
+                    // Child has different context - save context before freeing
+                    json_context* child_ctx = child->ctx;
+                    // Recursively free child's children first (to find nested values with different contexts)
+                    json_free_children_recursive(child);
+                    // Now free the child's context (this frees the child value structure itself)
+                    json_context_free(child_ctx);
+                } else {
+                    // Child has same context - still need to recurse to find nested values with different contexts
+                    json_free_children_recursive(child);
+                }
             }
         }
     } else if (v->type == TEXT_JSON_OBJECT && v->as.object.pairs) {
         for (size_t i = 0; i < v->as.object.count; i++) {
             text_json_value* child = v->as.object.pairs[i].value;
-            if (child && child->ctx && child->ctx != parent_ctx) {
-                // Save child context before freeing (child structure will be freed)
-                json_context* child_ctx = child->ctx;
-                // Recursively free child's children first
-                json_free_children_recursive(child);
-                // Now free the child's context (this frees the child value structure itself)
-                json_context_free(child_ctx);
+            if (child) {
+                if (child->ctx && child->ctx != parent_ctx) {
+                    // Child has different context - save context before freeing
+                    json_context* child_ctx = child->ctx;
+                    // Recursively free child's children first (to find nested values with different contexts)
+                    json_free_children_recursive(child);
+                    // Now free the child's context (this frees the child value structure itself)
+                    json_context_free(child_ctx);
+                } else {
+                    // Child has same context - still need to recurse to find nested values with different contexts
+                    json_free_children_recursive(child);
+                }
             }
         }
     }
@@ -837,6 +847,10 @@ TEXT_API text_json_status text_json_array_set(text_json_value* arr, size_t idx, 
 
     // Set element at index (replacing existing element)
     arr->as.array.elems[idx] = child;
+
+    // Note: If child has a different context, it will be freed when text_json_free()
+    // is called on the root, via json_free_children_recursive(). We don't free it here
+    // because the child value structure itself is in that context's arena.
     return TEXT_JSON_OK;
 }
 
