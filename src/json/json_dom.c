@@ -34,7 +34,7 @@ typedef struct json_arena_block {
  * Manages a collection of blocks for efficient bulk allocation.
  * All memory is freed when the arena is destroyed.
  */
-typedef struct {
+typedef struct json_arena {
     json_arena_block* first;         ///< First block in the arena
     json_arena_block* current;        ///< Current block being used
     size_t block_size;                ///< Size of each new block
@@ -147,12 +147,6 @@ static void json_arena_free(json_arena* arena) {
     free(arena);
 }
 
-// JSON context structure
-// Holds the arena allocator and other context information
-// for a JSON DOM tree.
-typedef struct json_context {
-    json_arena* arena;                ///< Arena allocator for this DOM
-} json_context;
 
 
 // Create a new context with an arena
@@ -172,11 +166,29 @@ json_context* json_context_new(void) {
         return NULL;
     }
 
+    ctx->input_buffer = NULL;
+    ctx->input_buffer_len = 0;
+
     return ctx;
+}
+
+// Set input buffer for in-situ mode
+// This stores a reference to the input buffer in the context.
+// The buffer is caller-owned and must remain valid for the lifetime of the DOM.
+// ctx: Context to set input buffer on (must not be NULL)
+// input_buffer: Original input buffer (caller-owned, must remain valid)
+// input_buffer_len: Length of input buffer
+void json_context_set_input_buffer(json_context* ctx, const char* input_buffer, size_t input_buffer_len) {
+    if (!ctx) {
+        return;
+    }
+    ctx->input_buffer = input_buffer;
+    ctx->input_buffer_len = input_buffer_len;
 }
 
 // Free a context and its arena
 // ctx: Context to free (can be NULL)
+// Note: The input buffer (if set) is caller-owned and is NOT freed here.
 void json_context_free(json_context* ctx) {
     if (!ctx) {
         return;

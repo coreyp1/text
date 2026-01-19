@@ -14,8 +14,6 @@
 #include <limits.h>
 #include <stdint.h>
 
-// Forward declaration (json_context is defined in json_dom.c)
-typedef struct json_context json_context;
 
 // Parser state structure
 typedef struct {
@@ -178,26 +176,53 @@ static text_json_status json_parse_array_element(
                 break;
             }
 
-            // Copy string data
-            size_t str_len = token->data.string.value_len;
-            if (str_len > SIZE_MAX - 1) {
-                result = TEXT_JSON_E_LIMIT;
-                text_json_free(element);
-                json_token_cleanup(token);
-                break;
+            // Check if we can use in-situ mode
+            // Conditions: in-situ mode enabled, context has input buffer, no escape sequences
+            int use_in_situ = 0;
+            size_t original_start = 0;
+            size_t original_len = 0;
+            if (parser->opts && parser->opts->in_situ_mode &&
+                ctx->input_buffer && ctx->input_buffer_len > 0 &&
+                token->data.string.value_len == token->data.string.original_len) {
+                // Verify the original string position is within bounds
+                // Check for integer overflow and bounds
+                original_start = token->data.string.original_start;
+                original_len = token->data.string.original_len;
+                if (original_start < ctx->input_buffer_len &&
+                    original_len <= ctx->input_buffer_len - original_start) {
+                    use_in_situ = 1;
+                }
             }
-            char* str_data = (char*)json_arena_alloc_for_context(ctx, str_len + 1, 1);
-            if (!str_data) {
-                result = TEXT_JSON_E_OOM;
-                text_json_free(element);
-                json_token_cleanup(token);
-                break;
-            }
-            memcpy(str_data, token->data.string.value, str_len);
-            str_data[str_len] = '\0';
 
-            element->as.string.data = str_data;
-            element->as.string.len = str_len;
+            if (use_in_situ) {
+                // Use in-situ mode: reference input buffer directly
+                // Safe: original_start and original_len were validated above
+                element->as.string.data = (char*)(ctx->input_buffer + original_start);
+                element->as.string.len = original_len;
+                element->as.string.is_in_situ = 1;
+            } else {
+                // Copy string data
+                size_t str_len = token->data.string.value_len;
+                if (str_len > SIZE_MAX - 1) {
+                    result = TEXT_JSON_E_LIMIT;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                char* str_data = (char*)json_arena_alloc_for_context(ctx, str_len + 1, 1);
+                if (!str_data) {
+                    result = TEXT_JSON_E_OOM;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                memcpy(str_data, token->data.string.value, str_len);
+                str_data[str_len] = '\0';
+
+                element->as.string.data = str_data;
+                element->as.string.len = str_len;
+                element->as.string.is_in_situ = 0;
+            }
 
             json_token_cleanup(token);
             break;
@@ -212,8 +237,32 @@ static text_json_status json_parse_array_element(
                 break;
             }
 
-            // Copy lexeme if available
-            if (num->lexeme) {
+            // Check if we can use in-situ mode for lexeme
+            // Conditions: in-situ mode enabled, context has input buffer, lexeme exists
+            int use_in_situ = 0;
+            size_t number_offset = 0;
+            size_t number_len = 0;
+            if (parser->opts && parser->opts->in_situ_mode &&
+                ctx->input_buffer && ctx->input_buffer_len > 0 &&
+                num->lexeme && num->lexeme_len > 0) {
+                // Verify the number position is within bounds
+                // Check for integer overflow and bounds
+                number_offset = token->pos.offset;
+                number_len = token->length;
+                if (number_offset < ctx->input_buffer_len &&
+                    number_len <= ctx->input_buffer_len - number_offset) {
+                    use_in_situ = 1;
+                }
+            }
+
+            if (use_in_situ && num->lexeme_len > 0) {
+                // Use in-situ mode: reference input buffer directly
+                // Safe: number_offset and number_len were validated above
+                element->as.number.lexeme = (char*)(ctx->input_buffer + number_offset);
+                element->as.number.lexeme_len = num->lexeme_len;
+                element->as.number.is_in_situ = 1;
+            } else if (num->lexeme && num->lexeme_len > 0) {
+                // Copy lexeme if available
                 size_t lexeme_len = num->lexeme_len;
                 if (lexeme_len > SIZE_MAX - 1) {
                     result = TEXT_JSON_E_LIMIT;
@@ -232,6 +281,11 @@ static text_json_status json_parse_array_element(
                 lexeme[lexeme_len] = '\0';
                 element->as.number.lexeme = lexeme;
                 element->as.number.lexeme_len = lexeme_len;
+                element->as.number.is_in_situ = 0;
+            } else {
+                element->as.number.lexeme = NULL;
+                element->as.number.lexeme_len = 0;
+                element->as.number.is_in_situ = 0;
             }
 
             // Copy numeric representations
@@ -954,10 +1008,17 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
 
             // Create string value
             if (is_root) {
+                // For root, create context first, then check in-situ mode
                 value = text_json_new_string(token.data.string.value, token.data.string.value_len);
                 if (!value) {
                     result = TEXT_JSON_E_OOM;
+                    json_token_cleanup(&token);
+                    break;
                 }
+                // After creating root value, input buffer will be set in text_json_parse()
+                // So we can't use in-situ mode for root strings at creation time
+                // They will be copied, which is fine for root values
+                value->as.string.is_in_situ = 0;
             } else {
                 value = json_value_new_with_existing_context(TEXT_JSON_STRING, ctx);
                 if (!value) {
@@ -966,25 +1027,52 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                     break;
                 }
 
-                // Allocate string data in arena
-                // Check for overflow in value_len + 1
-                if (token.data.string.value_len > SIZE_MAX - 1) {
-                    result = TEXT_JSON_E_LIMIT;
-                    json_token_cleanup(&token);
-                    break;
-                }
-                char* str_data = (char*)json_arena_alloc_for_context(ctx, token.data.string.value_len + 1, 1);
-                if (!str_data) {
-                    result = TEXT_JSON_E_OOM;
-                    json_token_cleanup(&token);
-                    break;
+                // Check if we can use in-situ mode
+                // Conditions: in-situ mode enabled, context has input buffer, no escape sequences
+                int use_in_situ = 0;
+                size_t original_start = 0;
+                size_t original_len = 0;
+                if (parser->opts && parser->opts->in_situ_mode &&
+                    ctx->input_buffer && ctx->input_buffer_len > 0 &&
+                    token.data.string.value_len == token.data.string.original_len) {
+                    // Verify the original string position is within bounds
+                    // Check for integer overflow and bounds
+                    original_start = token.data.string.original_start;
+                    original_len = token.data.string.original_len;
+                    if (original_start < ctx->input_buffer_len &&
+                        original_len <= ctx->input_buffer_len - original_start) {
+                        use_in_situ = 1;
+                    }
                 }
 
-                memcpy(str_data, token.data.string.value, token.data.string.value_len);
-                str_data[token.data.string.value_len] = '\0';
+                if (use_in_situ) {
+                    // Use in-situ mode: reference input buffer directly
+                    // Safe: original_start and original_len were validated above
+                    value->as.string.data = (char*)(ctx->input_buffer + original_start);
+                    value->as.string.len = original_len;
+                    value->as.string.is_in_situ = 1;
+                } else {
+                    // Allocate string data in arena
+                    // Check for overflow in value_len + 1
+                    if (token.data.string.value_len > SIZE_MAX - 1) {
+                        result = TEXT_JSON_E_LIMIT;
+                        json_token_cleanup(&token);
+                        break;
+                    }
+                    char* str_data = (char*)json_arena_alloc_for_context(ctx, token.data.string.value_len + 1, 1);
+                    if (!str_data) {
+                        result = TEXT_JSON_E_OOM;
+                        json_token_cleanup(&token);
+                        break;
+                    }
 
-                value->as.string.data = str_data;
-                value->as.string.len = token.data.string.value_len;
+                    memcpy(str_data, token.data.string.value, token.data.string.value_len);
+                    str_data[token.data.string.value_len] = '\0';
+
+                    value->as.string.data = str_data;
+                    value->as.string.len = token.data.string.value_len;
+                    value->as.string.is_in_situ = 0;
+                }
             }
 
             // Note: We've copied the string to the arena. The lexer-allocated string
@@ -1009,6 +1097,10 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                     json_token_cleanup(&token);
                     break;
                 }
+                // After creating root value, input buffer will be set in text_json_parse()
+                // So we can't use in-situ mode for root numbers at creation time
+                // They will be copied, which is fine for root values
+                value->as.number.is_in_situ = 0;
             } else {
                 value = json_value_new_with_existing_context(TEXT_JSON_NUMBER, ctx);
                 if (!value) {
@@ -1017,8 +1109,32 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                     break;
                 }
 
-                // Copy lexeme to arena
-                if (num->lexeme && num->lexeme_len > 0) {
+                // Check if we can use in-situ mode for lexeme
+                // Conditions: in-situ mode enabled, context has input buffer, lexeme exists
+                int use_in_situ = 0;
+                size_t number_offset = 0;
+                size_t number_len = 0;
+                if (parser->opts && parser->opts->in_situ_mode &&
+                    ctx->input_buffer && ctx->input_buffer_len > 0 &&
+                    num->lexeme && num->lexeme_len > 0) {
+                    // Verify the number position is within bounds
+                    // Check for integer overflow and bounds
+                    number_offset = token.pos.offset;
+                    number_len = token.length;
+                    if (number_offset < ctx->input_buffer_len &&
+                        number_len <= ctx->input_buffer_len - number_offset) {
+                        use_in_situ = 1;
+                    }
+                }
+
+                if (use_in_situ && num->lexeme_len > 0) {
+                    // Use in-situ mode: reference input buffer directly
+                    // Safe: number_offset and number_len were validated above
+                    value->as.number.lexeme = (char*)(ctx->input_buffer + number_offset);
+                    value->as.number.lexeme_len = num->lexeme_len;
+                    value->as.number.is_in_situ = 1;
+                } else if (num->lexeme && num->lexeme_len > 0) {
+                    // Copy lexeme to arena
                     // Check for overflow in lexeme_len + 1
                     if (num->lexeme_len > SIZE_MAX - 1) {
                         result = TEXT_JSON_E_LIMIT;
@@ -1035,9 +1151,11 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                     lexeme[num->lexeme_len] = '\0';
                     value->as.number.lexeme = lexeme;
                     value->as.number.lexeme_len = num->lexeme_len;
+                    value->as.number.is_in_situ = 0;
                 } else {
                     value->as.number.lexeme = NULL;
                     value->as.number.lexeme_len = 0;
+                    value->as.number.is_in_situ = 0;
                 }
             }
 
@@ -1169,14 +1287,39 @@ TEXT_API text_json_value* text_json_parse(
     }
 
     // Parse root value (ctx=NULL means it's the root and will create its own context)
+    // For in-situ mode, we need to create the context first and set the input buffer
+    json_context* root_ctx = NULL;
+    if (opt && opt->in_situ_mode) {
+        root_ctx = json_context_new();
+        if (!root_ctx) {
+            if (err) {
+                err->code = TEXT_JSON_E_OOM;
+                err->message = "Failed to allocate context";
+                err->offset = 0;
+                err->line = 1;
+                err->col = 1;
+            }
+            return NULL;
+        }
+        json_context_set_input_buffer(root_ctx, bytes, len);
+    }
+
     text_json_value* root = NULL;
-    status = json_parse_value(&parser, &root, NULL);
+    status = json_parse_value(&parser, &root, root_ctx);
 
     if (status != TEXT_JSON_OK) {
         if (root) {
             text_json_free(root);
+        } else if (root_ctx) {
+            json_context_free(root_ctx);
         }
         return NULL;
+    }
+
+    // If root_ctx was created, it's now owned by root->ctx
+    // If root was created with text_json_new_*, we need to set input buffer on its context
+    if (root && root->ctx && opt && opt->in_situ_mode && !root_ctx) {
+        json_context_set_input_buffer(root->ctx, bytes, len);
     }
 
     // Check for trailing garbage

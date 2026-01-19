@@ -110,6 +110,7 @@ typedef struct {
   int allow_leading_bom;        ///< Allow leading UTF-8 BOM (default: on)
   int validate_utf8;            ///< Validate UTF-8 sequences (default: on)
   int normalize_unicode;        ///< NFC normalization (v2 feature, default: off)
+  int in_situ_mode;             ///< Zero-copy mode: reference input buffer directly (default: off)
 
   // Duplicate keys
   text_json_dupkey_mode dupkeys; ///< Duplicate key handling policy

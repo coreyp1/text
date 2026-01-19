@@ -344,6 +344,8 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
     token->length = token_length;
     token->data.string.value = decoded;
     token->data.string.value_len = decoded_len;
+    token->data.string.original_start = string_start;
+    token->data.string.original_len = string_content_len;
 
     // Update lexer position
     lexer->current_offset = start + token_length;

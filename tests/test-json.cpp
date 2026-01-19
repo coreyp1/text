@@ -5469,6 +5469,227 @@ TEST(JsonSchema, FreeNull) {
     text_json_schema_free(nullptr);
 }
 
+/**
+ * Test in-situ parsing mode - strings without escape sequences
+ */
+TEST(InSituMode, StringNoEscapes) {
+    // String without escape sequences should use in-situ mode
+    const char* input = "\"hello world\"";
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.in_situ_mode = 1;
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_STRING);
+
+    const char* str;
+    size_t len;
+    text_json_status status = text_json_get_string(val, &str, &len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(len, 11u);
+    EXPECT_EQ(memcmp(str, "hello world", 11), 0);
+
+    // Verify string points into input buffer (in-situ mode)
+    // The string data should be at offset 1 (after opening quote)
+    EXPECT_EQ(str, input + 1);
+
+    text_json_free(val);
+}
+
+/**
+ * Test in-situ parsing mode - strings with escape sequences (should not use in-situ)
+ */
+TEST(InSituMode, StringWithEscapes) {
+    // String with escape sequences should NOT use in-situ mode
+    const char* input = "\"hello\\nworld\"";
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.in_situ_mode = 1;
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_STRING);
+
+    const char* str;
+    size_t len;
+    text_json_status status = text_json_get_string(val, &str, &len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(len, 11u);  // "hello\nworld" = 11 chars (newline is one char)
+    EXPECT_EQ(memcmp(str, "hello\nworld", 11), 0);
+
+    // Verify string does NOT point into input buffer (decoded, not in-situ)
+    EXPECT_NE(str, input + 1);
+
+    text_json_free(val);
+}
+
+/**
+ * Test in-situ parsing mode - numbers
+ */
+TEST(InSituMode, NumberLexeme) {
+    // Number lexeme should use in-situ mode
+    const char* input = "123.456";
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.in_situ_mode = 1;
+    opts.preserve_number_lexeme = 1;
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_NUMBER);
+
+    const char* lexeme;
+    size_t lexeme_len;
+    text_json_status status = text_json_get_number_lexeme(val, &lexeme, &lexeme_len);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+    EXPECT_EQ(lexeme_len, 7u);
+    EXPECT_EQ(memcmp(lexeme, "123.456", 7), 0);
+
+    // Verify lexeme points into input buffer (in-situ mode)
+    EXPECT_EQ(lexeme, input);
+
+    text_json_free(val);
+}
+
+/**
+ * Test in-situ parsing mode - nested structures
+ */
+TEST(InSituMode, NestedStructures) {
+    // Test in-situ mode with nested objects and arrays
+    const char* input = "{\"key\":\"value\",\"num\":42}";
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.in_situ_mode = 1;
+    opts.preserve_number_lexeme = 1;
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_OBJECT);
+
+    // Check string value (no escapes, should be in-situ)
+    const text_json_value* str_val = text_json_object_get(val, "key", 3);
+    ASSERT_NE(str_val, nullptr);
+    const char* str;
+    size_t len;
+    text_json_get_string(str_val, &str, &len);
+    EXPECT_EQ(len, 5u);
+    EXPECT_EQ(memcmp(str, "value", 5), 0);
+    // Verify in-situ: "value" starts at offset 8 in input ("{\"key\":\"" = 7 chars, then "value" starts)
+    // Input: {"key":"value","num":42}
+    //        0123456789...
+    EXPECT_EQ(str, input + 8);
+
+    // Check number value
+    const text_json_value* num_val = text_json_object_get(val, "num", 3);
+    ASSERT_NE(num_val, nullptr);
+    const char* lexeme;
+    size_t lexeme_len;
+    text_json_get_number_lexeme(num_val, &lexeme, &lexeme_len);
+    EXPECT_EQ(lexeme_len, 2u);
+    EXPECT_EQ(memcmp(lexeme, "42", 2), 0);
+    // Verify in-situ: "42" starts at offset 21 in input
+    // Input: {"key":"value","num":42}
+    //        0123456789012345678901...
+    EXPECT_EQ(lexeme, input + 21);
+
+    text_json_free(val);
+}
+
+/**
+ * Test in-situ parsing mode - lifetime requirements
+ * This test verifies that the input buffer must remain valid
+ */
+TEST(InSituMode, LifetimeRequirements) {
+    // Create input in a scope that will be destroyed
+    std::string input_str = "\"test string\"";
+    text_json_parse_options opts = text_json_parse_options_default();
+    opts.in_situ_mode = 1;
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input_str.c_str(), input_str.length(), &opts, &err);
+    ASSERT_NE(val, nullptr);
+
+    const char* str;
+    size_t len;
+    text_json_get_string(val, &str, &len);
+
+    // At this point, str points into input_str
+    // If input_str is destroyed, str becomes invalid
+    // This test documents the requirement - caller must keep input alive
+    EXPECT_EQ(len, 11u);
+    EXPECT_EQ(memcmp(str, "test string", 11), 0);
+
+    // Note: In a real scenario, the caller must ensure input_str remains valid
+    // until text_json_free(val) is called. This is a documentation test.
+
+    text_json_free(val);
+}
+
+/**
+ * Test in-situ parsing mode - round-trip
+ */
+TEST(InSituMode, RoundTrip) {
+    const char* input = "{\"name\":\"Alice\",\"age\":30}";
+    text_json_parse_options parse_opts = text_json_parse_options_default();
+    parse_opts.in_situ_mode = 1;
+    parse_opts.preserve_number_lexeme = 1;
+    text_json_error err;
+
+    // Parse with in-situ mode
+    text_json_value* val = text_json_parse(input, strlen(input), &parse_opts, &err);
+    ASSERT_NE(val, nullptr);
+
+    // Write it back
+    text_json_write_options write_opts = text_json_write_options_default();
+    text_json_sink sink;
+    text_json_sink_buffer(&sink);
+
+    text_json_status status = text_json_write_value(&sink, &write_opts, val, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Verify the output matches (structurally, not byte-for-byte due to spacing)
+    const char* output = text_json_sink_buffer_data(&sink);
+    size_t output_len = text_json_sink_buffer_size(&sink);
+
+    // Parse the output again to verify structural equality
+    text_json_value* val2 = text_json_parse(output, output_len, &parse_opts, &err);
+    ASSERT_NE(val2, nullptr);
+
+    // Verify structure
+    EXPECT_EQ(text_json_typeof(val), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_typeof(val2), TEXT_JSON_OBJECT);
+    EXPECT_EQ(text_json_object_size(val), text_json_object_size(val2));
+
+    text_json_free(val);
+    text_json_free(val2);
+    text_json_sink_buffer_free(&sink);
+}
+
+/**
+ * Test in-situ parsing mode - disabled by default
+ */
+TEST(InSituMode, DisabledByDefault) {
+    const char* input = "\"hello\"";
+    text_json_parse_options opts = text_json_parse_options_default();
+    // in_situ_mode is 0 by default
+    text_json_error err;
+
+    text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
+    ASSERT_NE(val, nullptr);
+
+    const char* str;
+    size_t len;
+    text_json_get_string(val, &str, &len);
+    EXPECT_EQ(len, 5u);
+    EXPECT_EQ(memcmp(str, "hello", 5), 0);
+
+    // Verify string does NOT point into input buffer (copy mode)
+    EXPECT_NE(str, input + 1);
+
+    text_json_free(val);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

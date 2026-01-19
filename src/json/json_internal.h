@@ -218,6 +218,8 @@ typedef struct {
         struct {
             char* value;         ///< Decoded string value (allocated, caller must free)
             size_t value_len;    ///< Length of decoded string
+            size_t original_start; ///< Original string start position in input (after opening quote, for in-situ mode)
+            size_t original_len;   ///< Original string content length in input (for in-situ mode)
         } string;
         json_number number;      ///< Parsed number (temporary, use json_number_destroy)
     } data;
@@ -275,8 +277,17 @@ text_json_status json_lexer_next(json_lexer* lexer, json_token* token);
  */
 void json_token_cleanup(json_token* token);
 
-// Forward declaration
-typedef struct json_context json_context;
+// Forward declaration of json_arena (defined in json_dom.c)
+typedef struct json_arena json_arena;
+
+// JSON context structure
+// Holds the arena allocator and other context information
+// for a JSON DOM tree.
+typedef struct json_context {
+    json_arena* arena;                ///< Arena allocator for this DOM
+    const char* input_buffer;         ///< Original input buffer (for in-situ mode, caller-owned)
+    size_t input_buffer_len;          ///< Length of input buffer (for in-situ mode)
+} json_context;
 
 // Internal structure definition for text_json_value
 // This is needed by the parser to manipulate arrays and objects
@@ -287,12 +298,14 @@ struct text_json_value {
     union {
         int boolean;                  ///< For TEXT_JSON_BOOL
         struct {
-            char* data;               ///< String data (null-terminated)
+            char* data;               ///< String data (null-terminated, may point into input buffer in in-situ mode)
             size_t len;               ///< String length in bytes
+            int is_in_situ;           ///< 1 if data points into input buffer (caller-owned), 0 if arena-allocated
         } string;                     ///< For TEXT_JSON_STRING
         struct {
-            char* lexeme;             ///< Original number lexeme
+            char* lexeme;             ///< Original number lexeme (may point into input buffer in in-situ mode)
             size_t lexeme_len;        ///< Length of lexeme
+            int is_in_situ;           ///< 1 if lexeme points into input buffer (caller-owned), 0 if arena-allocated
             int64_t i64;              ///< int64 representation (if valid)
             uint64_t u64;             ///< uint64 representation (if valid)
             double dbl;               ///< double representation (if valid)
@@ -353,10 +366,23 @@ void* json_arena_alloc_for_context(json_context* ctx, size_t size, size_t align)
 json_context* json_context_new(void);
 
 /**
+ * @brief Set input buffer for in-situ mode
+ *
+ * Internal function for storing a reference to the input buffer in the context.
+ * The buffer is caller-owned and must remain valid for the lifetime of the DOM.
+ *
+ * @param ctx Context to set input buffer on (must not be NULL)
+ * @param input_buffer Original input buffer (caller-owned, must remain valid)
+ * @param input_buffer_len Length of input buffer
+ */
+void json_context_set_input_buffer(json_context* ctx, const char* input_buffer, size_t input_buffer_len);
+
+/**
  * @brief Free a JSON context and its arena
  *
  * Internal function for freeing a context and its associated arena.
  * Used by patch implementation for cleanup.
+ * Note: The input buffer (if set) is caller-owned and is NOT freed here.
  *
  * @param ctx Context to free (can be NULL)
  */
