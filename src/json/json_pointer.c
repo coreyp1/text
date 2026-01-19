@@ -210,6 +210,9 @@ static text_json_value* json_pointer_evaluate(
             return NULL;
         }
 
+        // Ensure null termination (defensive, though text_json_object_get uses length)
+        decoded[decoded_len] = '\0';
+
         // Determine if this is an array index or object key
         size_t array_idx;
         int is_array_index = json_pointer_parse_index(decoded, decoded_len, &array_idx);

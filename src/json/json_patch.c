@@ -37,6 +37,10 @@ static text_json_value* json_value_clone(const text_json_value* src, json_contex
 
         case TEXT_JSON_STRING: {
             // Allocate and copy string data
+            // Check for integer overflow in len + 1
+            if (src->as.string.len > SIZE_MAX - 1) {
+                return NULL;  // Overflow
+            }
             char* str_data = (char*)json_arena_alloc_for_context(ctx, src->as.string.len + 1, 1);
             if (!str_data) {
                 return NULL;
@@ -50,6 +54,10 @@ static text_json_value* json_value_clone(const text_json_value* src, json_contex
 
         case TEXT_JSON_NUMBER: {
             // Allocate and copy lexeme
+            // Check for integer overflow in lexeme_len + 1
+            if (src->as.number.lexeme_len > SIZE_MAX - 1) {
+                return NULL;  // Overflow
+            }
             char* lexeme = (char*)json_arena_alloc_for_context(ctx, src->as.number.lexeme_len + 1, 1);
             if (!lexeme) {
                 return NULL;
@@ -1230,12 +1238,55 @@ static text_json_status json_patch_test(
 // Helper function to deep copy content from source to destination
 // This preserves the destination's context but replaces its content
 // Used for atomic patch application: apply to clone, then copy back to original
+// Note: This function allows type changes because merge patch can change the
+// target's type (e.g., object -> null, string -> object)
 static text_json_status json_value_copy_content(
     text_json_value* dst,
     const text_json_value* src
 ) {
-    if (!dst || !src || dst->type != src->type) {
+    if (!dst || !src) {
         return TEXT_JSON_E_INVALID;
+    }
+
+    // If types differ, we need to change the type first
+    // The old content will remain in memory but won't be accessible
+    // since we're changing the type. It will be freed when the context is freed.
+    if (dst->type != src->type) {
+        dst->type = src->type;
+        // Initialize the union to a safe state based on new type
+        // This prevents accessing old type's data
+        switch (src->type) {
+            case TEXT_JSON_NULL:
+                // Nothing to initialize
+                break;
+            case TEXT_JSON_BOOL:
+                dst->as.boolean = 0;
+                break;
+            case TEXT_JSON_STRING:
+                dst->as.string.data = NULL;
+                dst->as.string.len = 0;
+                break;
+            case TEXT_JSON_NUMBER:
+                dst->as.number.lexeme = NULL;
+                dst->as.number.lexeme_len = 0;
+                dst->as.number.i64 = 0;
+                dst->as.number.u64 = 0;
+                dst->as.number.dbl = 0.0;
+                dst->as.number.has_i64 = 0;
+                dst->as.number.has_u64 = 0;
+                dst->as.number.has_dbl = 0;
+                break;
+            case TEXT_JSON_ARRAY:
+                dst->as.array.elems = NULL;
+                dst->as.array.count = 0;
+                dst->as.array.capacity = 0;
+                break;
+            case TEXT_JSON_OBJECT:
+                dst->as.object.pairs = NULL;
+                dst->as.object.count = 0;
+                dst->as.object.capacity = 0;
+                break;
+        }
     }
 
     json_context* dst_ctx = dst->ctx;
@@ -1255,6 +1306,10 @@ static text_json_status json_value_copy_content(
         case TEXT_JSON_STRING: {
             // Free old string data (if any) - it's in the arena, will be freed with context
             // Allocate and copy new string data
+            // Check for integer overflow in len + 1
+            if (src->as.string.len > SIZE_MAX - 1) {
+                return TEXT_JSON_E_OOM;  // Overflow
+            }
             char* str_data = (char*)json_arena_alloc_for_context(dst_ctx, src->as.string.len + 1, 1);
             if (!str_data) {
                 return TEXT_JSON_E_OOM;
@@ -1268,6 +1323,10 @@ static text_json_status json_value_copy_content(
 
         case TEXT_JSON_NUMBER: {
             // Allocate and copy lexeme
+            // Check for integer overflow in lexeme_len + 1
+            if (src->as.number.lexeme_len > SIZE_MAX - 1) {
+                return TEXT_JSON_E_OOM;  // Overflow
+            }
             char* lexeme = (char*)json_arena_alloc_for_context(dst_ctx, src->as.number.lexeme_len + 1, 1);
             if (!lexeme) {
                 return TEXT_JSON_E_OOM;
@@ -1609,6 +1668,400 @@ TEXT_API text_json_status text_json_patch_apply(
         if (err) {
             err->code = status;
             err->message = "Failed to copy patch results back to original";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return status;
+    }
+
+    // Free the clone (all its content has been copied to original)
+    text_json_free(clone);
+
+    return TEXT_JSON_OK;
+}
+
+// Recursive helper function for JSON Merge Patch
+// Implements the MergePatch(Target, Patch) algorithm from RFC 7386
+static text_json_status json_merge_patch_recursive(
+    text_json_value* target,
+    const text_json_value* patch,
+    text_json_error* err
+) {
+    if (!target || !patch) {
+        if (err) {
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Invalid arguments: target and patch must not be NULL";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // If patch is not an object, replace target entirely
+    if (patch->type != TEXT_JSON_OBJECT) {
+        // Clone patch content directly into target
+        json_context* target_ctx = target->ctx;
+        if (!target_ctx) {
+            if (err) {
+                err->code = TEXT_JSON_E_INVALID;
+                err->message = "Target value has no context";
+                err->offset = 0;
+                err->line = 0;
+                err->col = 0;
+            }
+            return TEXT_JSON_E_INVALID;
+        }
+
+        // Change target's type first
+        target->type = patch->type;
+
+        // Clone content based on type (similar to json_value_clone but into existing target)
+        switch (patch->type) {
+            case TEXT_JSON_NULL:
+                // Nothing to copy
+                break;
+
+            case TEXT_JSON_BOOL:
+                target->as.boolean = patch->as.boolean;
+                break;
+
+            case TEXT_JSON_STRING: {
+                // Allocate and copy string data
+                // Check for integer overflow in len + 1
+                if (patch->as.string.len > SIZE_MAX - 1) {
+                    if (err) {
+                        err->code = TEXT_JSON_E_OOM;
+                        err->message = "String length overflow";
+                        err->offset = 0;
+                        err->line = 0;
+                        err->col = 0;
+                    }
+                    return TEXT_JSON_E_OOM;
+                }
+                char* str_data = (char*)json_arena_alloc_for_context(target_ctx, patch->as.string.len + 1, 1);
+                if (!str_data) {
+                    if (err) {
+                        err->code = TEXT_JSON_E_OOM;
+                        err->message = "Out of memory cloning string";
+                        err->offset = 0;
+                        err->line = 0;
+                        err->col = 0;
+                    }
+                    return TEXT_JSON_E_OOM;
+                }
+                memcpy(str_data, patch->as.string.data, patch->as.string.len);
+                str_data[patch->as.string.len] = '\0';
+                target->as.string.data = str_data;
+                target->as.string.len = patch->as.string.len;
+                break;
+            }
+
+            case TEXT_JSON_NUMBER: {
+                // Allocate and copy lexeme
+                // Check for integer overflow in lexeme_len + 1
+                if (patch->as.number.lexeme_len > SIZE_MAX - 1) {
+                    if (err) {
+                        err->code = TEXT_JSON_E_OOM;
+                        err->message = "Number lexeme length overflow";
+                        err->offset = 0;
+                        err->line = 0;
+                        err->col = 0;
+                    }
+                    return TEXT_JSON_E_OOM;
+                }
+                char* lexeme = (char*)json_arena_alloc_for_context(target_ctx, patch->as.number.lexeme_len + 1, 1);
+                if (!lexeme) {
+                    if (err) {
+                        err->code = TEXT_JSON_E_OOM;
+                        err->message = "Out of memory cloning number lexeme";
+                        err->offset = 0;
+                        err->line = 0;
+                        err->col = 0;
+                    }
+                    return TEXT_JSON_E_OOM;
+                }
+                memcpy(lexeme, patch->as.number.lexeme, patch->as.number.lexeme_len);
+                lexeme[patch->as.number.lexeme_len] = '\0';
+                target->as.number.lexeme = lexeme;
+                target->as.number.lexeme_len = patch->as.number.lexeme_len;
+                target->as.number.i64 = patch->as.number.i64;
+                target->as.number.u64 = patch->as.number.u64;
+                target->as.number.dbl = patch->as.number.dbl;
+                target->as.number.has_i64 = patch->as.number.has_i64;
+                target->as.number.has_u64 = patch->as.number.has_u64;
+                target->as.number.has_dbl = patch->as.number.has_dbl;
+                break;
+            }
+
+            case TEXT_JSON_ARRAY: {
+                // Initialize array
+                target->as.array.count = 0;
+                target->as.array.capacity = patch->as.array.count;
+                if (target->as.array.capacity > 0) {
+                    size_t elem_size = sizeof(text_json_value*);
+                    if (target->as.array.capacity > SIZE_MAX / elem_size) {
+                        if (err) {
+                            err->code = TEXT_JSON_E_OOM;
+                            err->message = "Array capacity overflow";
+                            err->offset = 0;
+                            err->line = 0;
+                            err->col = 0;
+                        }
+                        return TEXT_JSON_E_OOM;
+                    }
+                    target->as.array.elems = (text_json_value**)json_arena_alloc_for_context(
+                        target_ctx,
+                        target->as.array.capacity * elem_size,
+                        sizeof(text_json_value*)
+                    );
+                    if (!target->as.array.elems) {
+                        if (err) {
+                            err->code = TEXT_JSON_E_OOM;
+                            err->message = "Out of memory cloning array";
+                            err->offset = 0;
+                            err->line = 0;
+                            err->col = 0;
+                        }
+                        return TEXT_JSON_E_OOM;
+                    }
+                } else {
+                    target->as.array.elems = NULL;
+                }
+
+                // Clone each element
+                for (size_t i = 0; i < patch->as.array.count; i++) {
+                    text_json_value* cloned_elem = json_value_clone(patch->as.array.elems[i], target_ctx);
+                    if (!cloned_elem) {
+                        if (err) {
+                            err->code = TEXT_JSON_E_OOM;
+                            err->message = "Out of memory cloning array element";
+                            err->offset = 0;
+                            err->line = 0;
+                            err->col = 0;
+                        }
+                        return TEXT_JSON_E_OOM;
+                    }
+                    target->as.array.elems[i] = cloned_elem;
+                    target->as.array.count++;
+                }
+                break;
+            }
+
+            case TEXT_JSON_OBJECT: {
+                // This case shouldn't happen (we check patch->type != TEXT_JSON_OBJECT above)
+                // But handle it defensively
+                if (err) {
+                    err->code = TEXT_JSON_E_INVALID;
+                    err->message = "Internal error: object patch in non-object branch";
+                    err->offset = 0;
+                    err->line = 0;
+                    err->col = 0;
+                }
+                return TEXT_JSON_E_INVALID;
+            }
+        }
+
+        return TEXT_JSON_OK;
+    }
+
+    // Patch is an object - merge recursively
+    // If target is not an object, convert it to an empty object first
+    // According to RFC 7386: "if Target is not an Object, Target = {}"
+    if (target->type != TEXT_JSON_OBJECT) {
+        // Convert target to empty object
+        // The old content will remain in memory but won't be accessible
+        // since we're changing the type. It will be freed when the context is freed.
+        target->type = TEXT_JSON_OBJECT;
+        target->as.object.count = 0;
+        target->as.object.capacity = 0;
+        target->as.object.pairs = NULL;
+    }
+
+    // Now target is guaranteed to be an object
+    // Verify target is actually an object (defensive check)
+    if (target->type != TEXT_JSON_OBJECT) {
+        if (err) {
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Internal error: target type mismatch in merge";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // Process each member in the patch
+    // Defensive check: pairs should not be NULL when count > 0
+    if (patch->as.object.count > 0 && !patch->as.object.pairs) {
+        if (err) {
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Invalid patch object: count > 0 but pairs is NULL";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_INVALID;
+    }
+
+    for (size_t i = 0; i < patch->as.object.count; i++) {
+        const char* key = patch->as.object.pairs[i].key;
+        size_t key_len = patch->as.object.pairs[i].key_len;
+        const text_json_value* patch_value = patch->as.object.pairs[i].value;
+
+        if (!patch_value) {
+            // Skip null values (shouldn't happen, but be defensive)
+            continue;
+        }
+
+        // If patch value is null, remove the key from target
+        if (patch_value->type == TEXT_JSON_NULL) {
+            // Remove key from target (if it exists)
+            // Note: text_json_object_remove returns error if key doesn't exist,
+            // but according to RFC 7386, removal is idempotent, so we ignore the error
+            // We don't check the return value because removal is idempotent per RFC 7386
+            // Only attempt removal if target is actually an object (defensive check)
+            if (target->type == TEXT_JSON_OBJECT) {
+                (void)text_json_object_remove(target, key, key_len);
+            }
+            // Continue to next key (removal is idempotent)
+            continue;
+        }
+
+        // Patch value is non-null - recursively merge
+        // Find the key in target's pairs array to get mutable access
+        // We need to re-find the key after each operation because the pairs array
+        // might be reallocated during recursive operations
+        text_json_value* target_value_mut = NULL;
+
+        // Search for the key - we need to do this each time because the pairs array
+        // might have been reallocated in a previous iteration
+        // Defensive check: pairs should not be NULL when count > 0
+        if (target->as.object.count > 0 && target->as.object.pairs) {
+            for (size_t j = 0; j < target->as.object.count; j++) {
+                // Defensive check: key should not be NULL when key_len > 0
+                if (target->as.object.pairs[j].key_len == key_len) {
+                    if (key_len == 0 ||
+                        (target->as.object.pairs[j].key && key &&
+                         memcmp(target->as.object.pairs[j].key, key, key_len) == 0)) {
+                        target_value_mut = target->as.object.pairs[j].value;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (target_value_mut) {
+            // Key exists - recursively merge patch_value into target_value
+            // Important: target_value_mut points to pairs[j].value
+            // Even if the pairs array shifts during recursive operations, this pointer
+            // should remain valid as long as we don't free the value itself
+            text_json_status status = json_merge_patch_recursive(
+                target_value_mut,
+                patch_value,
+                err
+            );
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+        } else {
+            // Key doesn't exist - add it (clone patch_value into target's context)
+            json_context* target_ctx = target->ctx;
+            text_json_value* cloned_value = json_value_clone(patch_value, target_ctx);
+            if (!cloned_value) {
+                if (err) {
+                    err->code = TEXT_JSON_E_OOM;
+                    err->message = "Out of memory cloning patch value";
+                    err->offset = 0;
+                    err->line = 0;
+                    err->col = 0;
+                }
+                return TEXT_JSON_E_OOM;
+            }
+
+            // Add to target
+            text_json_status status = text_json_object_put(target, key, key_len, cloned_value);
+            if (status != TEXT_JSON_OK) {
+                text_json_free(cloned_value);
+                if (err) {
+                    err->code = status;
+                    err->message = "Failed to add key to target object";
+                    err->offset = 0;
+                    err->line = 0;
+                    err->col = 0;
+                }
+                return status;
+            }
+        }
+    }
+
+    return TEXT_JSON_OK;
+}
+
+// Main JSON Merge Patch function
+// Implements true atomicity: applies merge to a clone,
+// then replaces the original only if all operations succeed
+TEXT_API text_json_status text_json_merge_patch(
+    text_json_value* target,
+    const text_json_value* patch,
+    text_json_error* err
+) {
+    if (!target || !patch) {
+        if (err) {
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Invalid arguments: target and patch must not be NULL";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_INVALID;
+    }
+
+    // For atomicity: clone the target, apply merge to the clone,
+    // then copy the clone's content back to the original only if all succeed
+    json_context* clone_ctx = json_context_new();
+    if (!clone_ctx) {
+        if (err) {
+            err->code = TEXT_JSON_E_OOM;
+            err->message = "Out of memory creating clone for atomic merge patch";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_OOM;
+    }
+
+    text_json_value* clone = json_value_clone(target, clone_ctx);
+    if (!clone) {
+        json_context_free(clone_ctx);
+        if (err) {
+            err->code = TEXT_JSON_E_OOM;
+            err->message = "Out of memory cloning target for atomic merge patch";
+            err->offset = 0;
+            err->line = 0;
+            err->col = 0;
+        }
+        return TEXT_JSON_E_OOM;
+    }
+
+    // Apply merge to clone
+    text_json_status status = json_merge_patch_recursive(clone, patch, err);
+    if (status != TEXT_JSON_OK) {
+        // Merge failed - free clone and return error (atomicity)
+        text_json_free(clone);
+        return status;
+    }
+
+    // All operations succeeded - copy clone's content back to original
+    // This preserves the original's context but replaces its content
+    status = json_value_copy_content(target, clone);
+    if (status != TEXT_JSON_OK) {
+        // Copy failed - free clone and return error
+        text_json_free(clone);
+        if (err) {
+            err->code = status;
+            err->message = "Failed to copy merge patch results back to original";
             err->offset = 0;
             err->line = 0;
             err->col = 0;
