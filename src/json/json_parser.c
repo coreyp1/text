@@ -1249,11 +1249,14 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
     return TEXT_JSON_OK;
 }
 
-TEXT_API text_json_value* text_json_parse(
+// Internal helper function for parsing a single JSON value
+static text_json_value* json_parse_internal(
     const char* bytes,
     size_t len,
     const text_json_parse_options* opt,
-    text_json_error* err
+    text_json_error* err,
+    int allow_multiple,
+    size_t* bytes_consumed
 ) {
     if (!bytes) {
         if (err) {
@@ -1262,6 +1265,9 @@ TEXT_API text_json_value* text_json_parse(
             err->offset = 0;
             err->line = 1;
             err->col = 1;
+        }
+        if (bytes_consumed) {
+            *bytes_consumed = 0;
         }
         return NULL;
     }
@@ -1283,6 +1289,9 @@ TEXT_API text_json_value* text_json_parse(
             err->line = 1;
             err->col = 1;
         }
+        if (bytes_consumed) {
+            *bytes_consumed = 0;
+        }
         return NULL;
     }
 
@@ -1299,6 +1308,9 @@ TEXT_API text_json_value* text_json_parse(
                 err->line = 1;
                 err->col = 1;
             }
+            if (bytes_consumed) {
+                *bytes_consumed = 0;
+            }
             return NULL;
         }
         json_context_set_input_buffer(root_ctx, bytes, len);
@@ -1313,6 +1325,9 @@ TEXT_API text_json_value* text_json_parse(
         } else if (root_ctx) {
             json_context_free(root_ctx);
         }
+        if (bytes_consumed) {
+            *bytes_consumed = 0;
+        }
         return NULL;
     }
 
@@ -1322,22 +1337,110 @@ TEXT_API text_json_value* text_json_parse(
         json_context_set_input_buffer(root->ctx, bytes, len);
     }
 
-    // Check for trailing garbage
+    // Check for trailing content
     json_token token;
     status = json_lexer_next(&parser.lexer, &token);
-    if (status == TEXT_JSON_OK && token.type != JSON_TOKEN_EOF) {
-        text_json_free(root);
-        json_token_cleanup(&token);
-        if (err) {
-            err->code = TEXT_JSON_E_TRAILING_GARBAGE;
-            err->message = "Trailing garbage after valid JSON";
-            err->offset = token.pos.offset;
-            err->line = token.pos.line;
-            err->col = token.pos.col;
+
+    if (status != TEXT_JSON_OK) {
+        // Error from lexer when checking for trailing content
+        // This means there's invalid input after the successfully parsed value
+        // Note: When json_lexer_next returns an error, token.pos may not be set
+        // (it's initialized to 0), so we use parser.lexer.pos which is always valid
+        if (allow_multiple) {
+            // Multiple values allowed - return the value and bytes_consumed pointing to error
+            if (bytes_consumed) {
+                // Use lexer position (always valid) as the error occurred at current lexer position
+                // Check for bounds to prevent overflow
+                *bytes_consumed = (parser.lexer.pos.offset <= len) ? parser.lexer.pos.offset : len;
+            }
+            json_token_cleanup(&token);
+            return root;
+        } else {
+            // Single value mode - treat trailing invalid content as error
+            text_json_free(root);
+            json_token_cleanup(&token);
+            if (err) {
+                err->code = TEXT_JSON_E_TRAILING_GARBAGE;
+                err->message = "Trailing garbage after valid JSON";
+                // Use lexer position (always valid) - check bounds
+                err->offset = (parser.lexer.pos.offset <= len) ? parser.lexer.pos.offset : len;
+                err->line = parser.lexer.pos.line;
+                err->col = parser.lexer.pos.col;
+            }
+            if (bytes_consumed) {
+                *bytes_consumed = 0;
+            }
+            return NULL;
         }
-        return NULL;
+    }
+
+    if (token.type != JSON_TOKEN_EOF) {
+        // There's trailing content (valid token)
+        if (allow_multiple) {
+            // Multiple top-level values allowed - return bytes consumed (position of next token)
+            if (bytes_consumed) {
+                // token.pos.offset is the start of the next token, which is correct
+                // Check bounds to prevent overflow
+                *bytes_consumed = (token.pos.offset <= len) ? token.pos.offset : len;
+            }
+            json_token_cleanup(&token);
+            return root;
+        } else {
+            // Trailing garbage not allowed - error
+            text_json_free(root);
+            json_token_cleanup(&token);
+            if (err) {
+                err->code = TEXT_JSON_E_TRAILING_GARBAGE;
+                err->message = "Trailing garbage after valid JSON";
+                // Check bounds to prevent overflow
+                err->offset = (token.pos.offset <= len) ? token.pos.offset : len;
+                err->line = token.pos.line;
+                err->col = token.pos.col;
+            }
+            if (bytes_consumed) {
+                *bytes_consumed = 0;
+            }
+            return NULL;
+        }
+    }
+    
+    // EOF reached - bytes consumed is the lexer position (end of input)
+    if (bytes_consumed) {
+        // Check bounds to prevent overflow
+        *bytes_consumed = (parser.lexer.pos.offset <= len) ? parser.lexer.pos.offset : len;
     }
     json_token_cleanup(&token);
 
     return root;
+}
+
+TEXT_API text_json_value* text_json_parse(
+    const char* bytes,
+    size_t len,
+    const text_json_parse_options* opt,
+    text_json_error* err
+) {
+    // Always treat trailing content as error (single value only)
+    return json_parse_internal(bytes, len, opt, err, 0, NULL);
+}
+
+TEXT_API text_json_value* text_json_parse_multiple(
+    const char* bytes,
+    size_t len,
+    const text_json_parse_options* opt,
+    text_json_error* err,
+    size_t* bytes_consumed
+) {
+    if (!bytes_consumed) {
+        if (err) {
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "bytes_consumed must not be NULL";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        return NULL;
+    }
+    // Allow multiple values and return bytes consumed
+    return json_parse_internal(bytes, len, opt, err, 1, bytes_consumed);
 }

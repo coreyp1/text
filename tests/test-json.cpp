@@ -29,6 +29,7 @@ TEST(ParseOptions, Default) {
     EXPECT_EQ(opts.allow_leading_bom, 1);  // default on
     EXPECT_EQ(opts.validate_utf8, 1);      // default on
     EXPECT_EQ(opts.normalize_unicode, 0);   // v2 feature, off by default
+    EXPECT_EQ(opts.in_situ_mode, 0);        // off by default
 
     // Duplicate keys
     EXPECT_EQ(opts.dupkeys, TEXT_JSON_DUPKEY_ERROR);
@@ -6168,6 +6169,190 @@ TEST(DomUtilities, ObjectMergeNonObjectReplace) {
 
     text_json_free(target);
     text_json_free(source);
+}
+
+/**
+ * Test multiple top-level value parsing - single value (backward compatible)
+ */
+TEST(MultipleTopLevel, SingleValue) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    const char* input = "123";
+    text_json_value* value = text_json_parse_multiple(input, strlen(input), &opts, &err, &bytes_consumed);
+    ASSERT_NE(value, nullptr) << "Parse failed with code: " << err.code;
+    EXPECT_EQ(bytes_consumed, strlen(input));
+    EXPECT_EQ(text_json_typeof(value), TEXT_JSON_NUMBER);
+    text_json_free(value);
+}
+
+/**
+ * Test multiple top-level value parsing - multiple values
+ */
+TEST(MultipleTopLevel, MultipleValues) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    const char* input = "123 456 \"hello\"";
+    size_t input_len = strlen(input);
+
+    // Parse first value
+    text_json_value* value1 = text_json_parse_multiple(input, input_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value1, nullptr);
+    EXPECT_EQ(text_json_typeof(value1), TEXT_JSON_NUMBER);
+    EXPECT_EQ(bytes_consumed, 4u);  // "123" + space
+    text_json_free(value1);
+
+    // Continue parsing from offset
+    const char* remaining = input + bytes_consumed;
+    size_t remaining_len = input_len - bytes_consumed;
+    text_json_value* value2 = text_json_parse_multiple(remaining, remaining_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value2, nullptr);
+    EXPECT_EQ(text_json_typeof(value2), TEXT_JSON_NUMBER);
+    EXPECT_EQ(bytes_consumed, 4u);  // "456" + space
+    text_json_free(value2);
+
+    // Continue parsing third value
+    remaining = remaining + bytes_consumed;
+    remaining_len = remaining_len - bytes_consumed;
+    text_json_value* value3 = text_json_parse_multiple(remaining, remaining_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value3, nullptr);
+    EXPECT_EQ(text_json_typeof(value3), TEXT_JSON_STRING);
+    EXPECT_EQ(bytes_consumed, 7u);  // "\"hello\""
+    text_json_free(value3);
+}
+
+/**
+ * Test bytes consumed reporting
+ */
+TEST(MultipleTopLevel, BytesConsumed) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    const char* input = "{\"a\":1} [1,2,3]";
+    size_t input_len = strlen(input);
+
+    // Parse first value (object)
+    text_json_value* value1 = text_json_parse_multiple(input, input_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value1, nullptr);
+    EXPECT_EQ(text_json_typeof(value1), TEXT_JSON_OBJECT);
+    // bytes_consumed should point to the start of the next value (after "{\"a\":1} ")
+    EXPECT_GT(bytes_consumed, 7u);  // At least the object itself
+    EXPECT_LT(bytes_consumed, input_len);  // Less than total input
+    text_json_free(value1);
+
+    // Parse second value (array)
+    const char* remaining = input + bytes_consumed;
+    size_t remaining_len = input_len - bytes_consumed;
+    text_json_value* value2 = text_json_parse_multiple(remaining, remaining_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value2, nullptr);
+    EXPECT_EQ(text_json_typeof(value2), TEXT_JSON_ARRAY);
+    // bytes_consumed should be the length of "[1,2,3]"
+    EXPECT_EQ(bytes_consumed, 7u);  // "[1,2,3]"
+    text_json_free(value2);
+}
+
+/**
+ * Test continuation from offset
+ */
+TEST(MultipleTopLevel, ContinuationFromOffset) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    const char* input = "true false null";
+    size_t input_len = strlen(input);
+    size_t offset = 0;
+
+    // Parse values in a loop
+    std::vector<text_json_type> expected_types = {
+        TEXT_JSON_BOOL, TEXT_JSON_BOOL, TEXT_JSON_NULL
+    };
+
+    for (size_t i = 0; i < expected_types.size(); ++i) {
+        const char* current = input + offset;
+        size_t current_len = input_len - offset;
+        
+        text_json_value* value = text_json_parse_multiple(current, current_len, &opts, &err, &bytes_consumed);
+        ASSERT_NE(value, nullptr) << "Failed to parse value " << i;
+        EXPECT_EQ(text_json_typeof(value), expected_types[i]) << "Wrong type for value " << i;
+        
+        offset += bytes_consumed;
+        text_json_free(value);
+    }
+
+    EXPECT_EQ(offset, input_len);
+}
+
+/**
+ * Test error handling in multi-value mode
+ */
+TEST(MultipleTopLevel, ErrorHandling) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    // Valid value followed by invalid JSON
+    const char* input = "123 invalid!!!";
+    size_t input_len = strlen(input);
+
+    // First value should parse successfully
+    text_json_value* value1 = text_json_parse_multiple(input, input_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value1, nullptr);
+    // bytes_consumed should point to the start of "invalid" (after "123 ")
+    EXPECT_GT(bytes_consumed, 3u);  // At least "123"
+    text_json_free(value1);
+
+    // Second parse should fail (invalid JSON)
+    const char* remaining = input + bytes_consumed;
+    size_t remaining_len = input_len - bytes_consumed;
+    text_json_value* value2 = text_json_parse_multiple(remaining, remaining_len, &opts, &err, &bytes_consumed);
+    EXPECT_EQ(value2, nullptr);
+    // bytes_consumed should be 0 on error
+    EXPECT_EQ(bytes_consumed, 0u);
+}
+
+/**
+ * Test that text_json_parse() rejects trailing content
+ */
+TEST(MultipleTopLevel, SingleValueRejectsTrailing) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+
+    // Trailing content should cause error with text_json_parse()
+    const char* input = "123 456";
+    text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
+    EXPECT_EQ(value, nullptr);
+    EXPECT_EQ(err.code, TEXT_JSON_E_TRAILING_GARBAGE);
+}
+
+/**
+ * Test multiple top-level with complex nested structures
+ */
+TEST(MultipleTopLevel, ComplexStructures) {
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    size_t bytes_consumed = 0;
+
+    const char* input = "{\"a\":[1,2,3]} {\"b\":{\"c\":\"value\"}}";
+    size_t input_len = strlen(input);
+
+    // Parse first object
+    text_json_value* value1 = text_json_parse_multiple(input, input_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value1, nullptr);
+    EXPECT_EQ(text_json_typeof(value1), TEXT_JSON_OBJECT);
+    text_json_free(value1);
+
+    // Parse second object
+    const char* remaining = input + bytes_consumed;
+    size_t remaining_len = input_len - bytes_consumed;
+    text_json_value* value2 = text_json_parse_multiple(remaining, remaining_len, &opts, &err, &bytes_consumed);
+    ASSERT_NE(value2, nullptr);
+    EXPECT_EQ(text_json_typeof(value2), TEXT_JSON_OBJECT);
+    text_json_free(value2);
 }
 
 int main(int argc, char **argv) {

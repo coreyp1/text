@@ -385,6 +385,10 @@ TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const ch
  * The parser enforces strict JSON grammar by default, but can be configured
  * via parse options to allow extensions like comments, trailing commas, etc.
  *
+ * This function parses a single JSON value. Any trailing content after the
+ * value will result in an error. For parsing multiple top-level values from
+ * the same buffer, use text_json_parse_multiple() instead.
+ *
  * @param bytes Input JSON string (must not be NULL)
  * @param len Length of input string in bytes
  * @param opt Parse options (can be NULL for defaults)
@@ -396,6 +400,32 @@ TEXT_API text_json_value* text_json_parse(
     size_t len,
     const text_json_parse_options* opt,
     text_json_error* err
+);
+
+/**
+ * @brief Parse a single JSON value from input, returning bytes consumed
+ *
+ * Parses a single JSON value from the input buffer and returns the number
+ * of bytes consumed. This allows the caller to continue parsing subsequent
+ * values from the same buffer by advancing the pointer by the bytes consumed.
+ *
+ * Unlike text_json_parse(), this function allows trailing content after
+ * the parsed value. The bytes_consumed parameter indicates where the next
+ * value begins (or end of input if no more values).
+ *
+ * @param bytes Input JSON string (must not be NULL)
+ * @param len Length of input string in bytes
+ * @param opt Parse options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL if error details not needed)
+ * @param bytes_consumed Output parameter for number of bytes consumed (must not be NULL)
+ * @return Root JSON value on success, NULL on error (check err for details)
+ */
+TEXT_API text_json_value* text_json_parse_multiple(
+    const char* bytes,
+    size_t len,
+    const text_json_parse_options* opt,
+    text_json_error* err,
+    size_t* bytes_consumed
 );
 
 /**

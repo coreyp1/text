@@ -19,6 +19,7 @@ text_json_parse_options text_json_parse_options_default(void) {
     opts.allow_leading_bom = 1;  // default on
     opts.validate_utf8 = 1;      // default on
     opts.normalize_unicode = 0;  // v2 feature, off by default
+    opts.in_situ_mode = 0;       // off by default
 
     // Duplicate keys
     opts.dupkeys = TEXT_JSON_DUPKEY_ERROR;  // fail on duplicate keys
