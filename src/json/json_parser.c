@@ -14,6 +14,10 @@
 #include <limits.h>
 #include <stdint.h>
 
+// Context window sizes for error snippets
+#define JSON_ERROR_CONTEXT_BEFORE 20
+#define JSON_ERROR_CONTEXT_AFTER 20
+
 
 // Parser state structure
 typedef struct {
@@ -24,6 +28,16 @@ typedef struct {
     text_json_error* error_out;          ///< Error output structure
 } json_parser;
 
+// Forward declaration
+static text_json_status json_parser_set_error_with_tokens(
+    json_parser* parser,
+    text_json_status code,
+    const char* message,
+    json_position pos,
+    const char* expected_token,
+    const char* actual_token
+);
+
 // Helper to set error and return status
 static text_json_status json_parser_set_error(
     json_parser* parser,
@@ -31,12 +45,59 @@ static text_json_status json_parser_set_error(
     const char* message,
     json_position pos
 ) {
+    return json_parser_set_error_with_tokens(
+        parser, code, message, pos, NULL, NULL
+    );
+}
+
+// Helper to set error with expected/actual token information
+static text_json_status json_parser_set_error_with_tokens(
+    json_parser* parser,
+    text_json_status code,
+    const char* message,
+    json_position pos,
+    const char* expected_token,
+    const char* actual_token
+) {
     if (parser->error_out) {
+        // Free any existing context snippet
+        if (parser->error_out->context_snippet) {
+            free(parser->error_out->context_snippet);
+            parser->error_out->context_snippet = NULL;
+        }
+
         parser->error_out->code = code;
         parser->error_out->message = message;
         parser->error_out->offset = pos.offset;
         parser->error_out->line = pos.line;
         parser->error_out->col = pos.col;
+        parser->error_out->expected_token = expected_token;
+        parser->error_out->actual_token = actual_token;
+        parser->error_out->context_snippet = NULL;
+        parser->error_out->context_snippet_len = 0;
+        parser->error_out->caret_offset = 0;
+
+        // Generate context snippet if we have input buffer access
+        if (parser->lexer.input && parser->lexer.input_len > 0) {
+            char* snippet = NULL;
+            size_t snippet_len = 0;
+            size_t caret_offset = 0;
+            text_json_status snippet_status = json_error_generate_context_snippet(
+                parser->lexer.input,
+                parser->lexer.input_len,
+                pos.offset,
+                JSON_ERROR_CONTEXT_BEFORE,
+                JSON_ERROR_CONTEXT_AFTER,
+                &snippet,
+                &snippet_len,
+                &caret_offset
+            );
+            if (snippet_status == TEXT_JSON_OK && snippet) {
+                parser->error_out->context_snippet = snippet;
+                parser->error_out->context_snippet_len = snippet_len;
+                parser->error_out->caret_offset = caret_offset;
+            }
+        }
     }
     return code;
 }
@@ -479,11 +540,13 @@ static text_json_status json_parse_array(json_parser* parser, text_json_value** 
 
             // Should be comma between elements
             if (token.type != JSON_TOKEN_COMMA) {
-                result = json_parser_set_error(
+                result = json_parser_set_error_with_tokens(
                     parser,
                     TEXT_JSON_E_BAD_TOKEN,
                     "Expected comma between array elements",
-                    token.pos
+                    token.pos,
+                    json_token_type_description(JSON_TOKEN_COMMA),
+                    json_token_type_description(token.type)
                 );
                 json_token_cleanup(&token);
                 break;
@@ -716,11 +779,13 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
         }
 
         if (token.type != JSON_TOKEN_COLON) {
-            result = json_parser_set_error(
+            result = json_parser_set_error_with_tokens(
                 parser,
                 TEXT_JSON_E_BAD_TOKEN,
                 "Expected colon after object key",
-                token.pos
+                token.pos,
+                json_token_type_description(JSON_TOKEN_COLON),
+                json_token_type_description(token.type)
             );
             json_token_cleanup(&token);
             if (key_copy) {
@@ -1265,6 +1330,11 @@ static text_json_value* json_parse_internal(
             err->offset = 0;
             err->line = 1;
             err->col = 1;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+            err->expected_token = NULL;
+            err->actual_token = NULL;
         }
         if (bytes_consumed) {
             *bytes_consumed = 0;
@@ -1288,6 +1358,11 @@ static text_json_value* json_parse_internal(
             err->offset = 0;
             err->line = 1;
             err->col = 1;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+            err->expected_token = NULL;
+            err->actual_token = NULL;
         }
         if (bytes_consumed) {
             *bytes_consumed = 0;
@@ -1307,6 +1382,11 @@ static text_json_value* json_parse_internal(
                 err->offset = 0;
                 err->line = 1;
                 err->col = 1;
+                err->context_snippet = NULL;
+                err->context_snippet_len = 0;
+                err->caret_offset = 0;
+                err->expected_token = NULL;
+                err->actual_token = NULL;
             }
             if (bytes_consumed) {
                 *bytes_consumed = 0;
@@ -1360,12 +1440,17 @@ static text_json_value* json_parse_internal(
             text_json_free(root);
             json_token_cleanup(&token);
             if (err) {
-                err->code = TEXT_JSON_E_TRAILING_GARBAGE;
-                err->message = "Trailing garbage after valid JSON";
-                // Use lexer position (always valid) - check bounds
-                err->offset = (parser.lexer.pos.offset <= len) ? parser.lexer.pos.offset : len;
-                err->line = parser.lexer.pos.line;
-                err->col = parser.lexer.pos.col;
+                json_position pos = parser.lexer.pos;
+                // Clamp offset to input length
+                if (pos.offset > len) {
+                    pos.offset = len;
+                }
+                json_parser_set_error(
+                    &parser,
+                    TEXT_JSON_E_TRAILING_GARBAGE,
+                    "Trailing garbage after valid JSON",
+                    pos
+                );
             }
             if (bytes_consumed) {
                 *bytes_consumed = 0;
@@ -1390,12 +1475,17 @@ static text_json_value* json_parse_internal(
             text_json_free(root);
             json_token_cleanup(&token);
             if (err) {
-                err->code = TEXT_JSON_E_TRAILING_GARBAGE;
-                err->message = "Trailing garbage after valid JSON";
-                // Check bounds to prevent overflow
-                err->offset = (token.pos.offset <= len) ? token.pos.offset : len;
-                err->line = token.pos.line;
-                err->col = token.pos.col;
+                json_position pos = token.pos;
+                // Clamp offset to input length
+                if (pos.offset > len) {
+                    pos.offset = len;
+                }
+                json_parser_set_error(
+                    &parser,
+                    TEXT_JSON_E_TRAILING_GARBAGE,
+                    "Trailing garbage after valid JSON",
+                    pos
+                );
             }
             if (bytes_consumed) {
                 *bytes_consumed = 0;
@@ -1403,7 +1493,7 @@ static text_json_value* json_parse_internal(
             return NULL;
         }
     }
-    
+
     // EOF reached - bytes consumed is the lexer position (end of input)
     if (bytes_consumed) {
         // Check bounds to prevent overflow
@@ -1438,6 +1528,11 @@ TEXT_API text_json_value* text_json_parse_multiple(
             err->offset = 0;
             err->line = 1;
             err->col = 1;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+            err->expected_token = NULL;
+            err->actual_token = NULL;
         }
         return NULL;
     }

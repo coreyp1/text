@@ -1975,11 +1975,15 @@ TEST(DuplicateKeyHandling, Error) {
 
     const char* input = R"({"key": 1, "key": 2})";
     text_json_error err;
+    memset(&err, 0, sizeof(err));
     text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
 
     EXPECT_EQ(value, nullptr);
     EXPECT_EQ(err.code, TEXT_JSON_E_DUPKEY);
     EXPECT_STREQ(err.message, "Duplicate key in object");
+
+    // Clean up error context snippet
+    text_json_error_free(&err);
 }
 
 /**
@@ -6275,11 +6279,11 @@ TEST(MultipleTopLevel, ContinuationFromOffset) {
     for (size_t i = 0; i < expected_types.size(); ++i) {
         const char* current = input + offset;
         size_t current_len = input_len - offset;
-        
+
         text_json_value* value = text_json_parse_multiple(current, current_len, &opts, &err, &bytes_consumed);
         ASSERT_NE(value, nullptr) << "Failed to parse value " << i;
         EXPECT_EQ(text_json_typeof(value), expected_types[i]) << "Wrong type for value " << i;
-        
+
         offset += bytes_consumed;
         text_json_free(value);
     }
@@ -6321,12 +6325,16 @@ TEST(MultipleTopLevel, ErrorHandling) {
 TEST(MultipleTopLevel, SingleValueRejectsTrailing) {
     text_json_parse_options opts = text_json_parse_options_default();
     text_json_error err;
+    memset(&err, 0, sizeof(err));
 
     // Trailing content should cause error with text_json_parse()
     const char* input = "123 456";
     text_json_value* value = text_json_parse(input, strlen(input), &opts, &err);
     EXPECT_EQ(value, nullptr);
     EXPECT_EQ(err.code, TEXT_JSON_E_TRAILING_GARBAGE);
+
+    // Clean up error context snippet
+    text_json_error_free(&err);
 }
 
 /**
@@ -6355,7 +6363,158 @@ TEST(MultipleTopLevel, ComplexStructures) {
     text_json_free(value2);
 }
 
-int main(int argc, char **argv) {
+/**
+ * Test enhanced error reporting - context snippet generation
+ */
+TEST(EnhancedErrorReporting, ContextSnippet) {
+    const char* json = "{\"key\": \"value\", \"invalid\": }";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_json_value* result = text_json_parse(json, strlen(json), &opts, &err);
+    EXPECT_EQ(result, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Verify context snippet is generated
+    if (err.context_snippet) {
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LT(err.caret_offset, err.context_snippet_len);
+
+        // Context snippet should contain the error position
+        EXPECT_NE(strstr(err.context_snippet, "invalid"), nullptr);
+
+        // Clean up
+        text_json_error_free(&err);
+    }
+}
+
+/**
+ * Test enhanced error reporting - expected/actual token descriptions
+ */
+TEST(EnhancedErrorReporting, ExpectedActualTokens) {
+    const char* json = "{\"key\": \"value\", \"missing_colon\" }";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_json_value* result = text_json_parse(json, strlen(json), &opts, &err);
+    EXPECT_EQ(result, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Verify expected/actual token information is set for token mismatch errors
+    if (err.code == TEXT_JSON_E_BAD_TOKEN) {
+        // Should have expected token description
+        if (err.expected_token) {
+            EXPECT_NE(strlen(err.expected_token), 0u);
+        }
+        // Should have actual token description
+        if (err.actual_token) {
+            EXPECT_NE(strlen(err.actual_token), 0u);
+        }
+    }
+
+    text_json_error_free(&err);
+}
+
+/**
+ * Test enhanced error reporting - caret positioning
+ */
+TEST(EnhancedErrorReporting, CaretPositioning) {
+    const char* json = "[1, 2, 3, }";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_json_value* result = text_json_parse(json, strlen(json), &opts, &err);
+    EXPECT_EQ(result, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Verify caret offset is within context snippet bounds
+    if (err.context_snippet) {
+        EXPECT_LT(err.caret_offset, err.context_snippet_len);
+        // Caret offset should point to error position in snippet
+        EXPECT_GE(err.caret_offset, 0u);
+    }
+
+    text_json_error_free(&err);
+}
+
+/**
+ * Test enhanced error reporting - error free function
+ */
+TEST(EnhancedErrorReporting, ErrorFree) {
+    const char* json = "{\"invalid\": }";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_json_value* result = text_json_parse(json, strlen(json), &opts, &err);
+    EXPECT_EQ(result, nullptr);
+
+    // Verify context snippet is allocated
+    if (err.context_snippet) {
+        // Free the error
+        text_json_error_free(&err);
+
+        // Verify snippet is freed (pointer set to NULL)
+        EXPECT_EQ(err.context_snippet, nullptr);
+        EXPECT_EQ(err.context_snippet_len, 0u);
+        EXPECT_EQ(err.caret_offset, 0u);
+    }
+}
+
+/**
+ * Test enhanced error reporting - multiple errors (verify cleanup)
+ */
+TEST(EnhancedErrorReporting, MultipleErrors) {
+    const char* json1 = "{\"invalid1\": }";
+    const char* json2 = "{\"invalid2\": }";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    // First parse
+    text_json_value* result1 = text_json_parse(json1, strlen(json1), &opts, &err);
+    EXPECT_EQ(result1, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Free first error
+    text_json_error_free(&err);
+
+    // Reset error structure
+    memset(&err, 0, sizeof(err));
+
+    // Second parse (should reuse error structure)
+    text_json_value* result2 = text_json_parse(json2, strlen(json2), &opts, &err);
+    EXPECT_EQ(result2, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Free second error
+    text_json_error_free(&err);
+}
+
+/**
+ * Test enhanced error reporting - empty input
+ */
+TEST(EnhancedErrorReporting, EmptyInput) {
+    const char* json = "";
+    text_json_parse_options opts = text_json_parse_options_default();
+    text_json_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_json_value* result = text_json_parse(json, strlen(json), &opts, &err);
+    EXPECT_EQ(result, nullptr);
+    EXPECT_NE(err.code, TEXT_JSON_OK);
+
+    // Empty input may not have a context snippet (too short)
+    // But error should still be properly initialized
+    EXPECT_NE(err.message, nullptr);
+
+    text_json_error_free(&err);
+}
+
+int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

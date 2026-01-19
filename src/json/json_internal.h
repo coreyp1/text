@@ -449,6 +449,45 @@ text_json_value* json_value_clone(const text_json_value* src, json_context* ctx)
  */
 int json_value_equal(const text_json_value* a, const text_json_value* b);
 
+/**
+ * @brief Generate a context snippet around an error position
+ *
+ * Generates a context snippet from the input buffer around the error position,
+ * showing a window of text before and after the error. The snippet is useful
+ * for displaying error messages with visual context.
+ *
+ * @param input Input buffer (must not be NULL)
+ * @param input_len Length of input buffer
+ * @param error_offset Byte offset of error in input (0-based)
+ * @param context_before Number of bytes to include before error (default: 20)
+ * @param context_after Number of bytes to include after error (default: 20)
+ * @param snippet_out Output: pointer to allocated snippet (caller must free with free())
+ * @param snippet_len_out Output: length of snippet
+ * @param caret_offset_out Output: byte offset of caret within snippet (0-based)
+ * @return TEXT_JSON_OK on success, TEXT_JSON_E_OOM on allocation failure
+ */
+text_json_status json_error_generate_context_snippet(
+    const char* input,
+    size_t input_len,
+    size_t error_offset,
+    size_t context_before,
+    size_t context_after,
+    char** snippet_out,
+    size_t* snippet_len_out,
+    size_t* caret_offset_out
+);
+
+/**
+ * @brief Get token description for error reporting
+ *
+ * Returns a human-readable description of a token type for use in
+ * error messages (e.g., "string", "number", "comma", "colon").
+ *
+ * @param token_type Token type from json_token_type enum
+ * @return Static string describing the token, or "unknown token" if invalid
+ */
+const char* json_token_type_description(int token_type);
+
 #ifdef __cplusplus
 }
 #endif

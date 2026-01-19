@@ -52,7 +52,9 @@ typedef enum {
 /**
  * @brief JSON error information
  *
- * Contains detailed error information including code, message, and position.
+ * Contains detailed error information including code, message, position,
+ * and optional enhanced diagnostics (context snippet, caret positioning,
+ * expected/actual token descriptions).
  */
 typedef struct {
   text_json_status code;      ///< Error code
@@ -60,6 +62,13 @@ typedef struct {
   size_t offset;              ///< Byte offset from start of input (0-based)
   int line;                   ///< Line number (1-based)
   int col;                    ///< Column number (1-based, byte-based for v1)
+  
+  // Enhanced error reporting (optional, may be NULL)
+  char* context_snippet;       ///< Context snippet around error (dynamically allocated, caller must free)
+  size_t context_snippet_len; ///< Length of context snippet
+  size_t caret_offset;        ///< Byte offset of caret within context snippet (0-based)
+  const char* expected_token; ///< Description of expected token (static string, may be NULL)
+  const char* actual_token;   ///< Description of actual token encountered (static string, may be NULL)
 } text_json_error;
 
 /**
@@ -191,6 +200,18 @@ TEXT_API text_json_write_options text_json_write_options_default(void);
  * @param v Value to free (can be NULL, in which case this is a no-op)
  */
 TEXT_API void text_json_free(text_json_value* v);
+
+/**
+ * @brief Free the context snippet in an error structure
+ *
+ * Frees the dynamically allocated context snippet in a text_json_error
+ * structure. This should be called when the error structure is no longer
+ * needed to prevent memory leaks. Other fields (message, expected_token,
+ * actual_token) are static strings and should not be freed.
+ *
+ * @param err Error structure to clean up (can be NULL, in which case this is a no-op)
+ */
+TEXT_API void text_json_error_free(text_json_error* err);
 
 #ifdef __cplusplus
 }
