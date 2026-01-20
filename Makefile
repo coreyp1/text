@@ -121,11 +121,15 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags gtes
 
 TEXTLIBRARY := -L $(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)
 
-# Automatically collect all example .c files under examples/json directory.
-EXAMPLE_SOURCES := $(shell find examples/json -type f -name '*.c' 2>/dev/null)
+# Automatically collect all example .c files under examples/json and examples/csv directories.
+JSON_EXAMPLE_SOURCES := $(shell find examples/json -type f -name '*.c' 2>/dev/null)
+CSV_EXAMPLE_SOURCES := $(shell find examples/csv -type f -name '*.c' 2>/dev/null)
+EXAMPLE_SOURCES := $(JSON_EXAMPLE_SOURCES) $(CSV_EXAMPLE_SOURCES)
 
 # Convert each example source file path to an executable path.
-EXAMPLES := $(patsubst examples/json/%.c,$(APP_DIR)/examples/json/%$(EXE_EXTENSION),$(EXAMPLE_SOURCES))
+JSON_EXAMPLES := $(patsubst examples/json/%.c,$(APP_DIR)/examples/json/%$(EXE_EXTENSION),$(JSON_EXAMPLE_SOURCES))
+CSV_EXAMPLES := $(patsubst examples/csv/%.c,$(APP_DIR)/examples/csv/%$(EXE_EXTENSION),$(CSV_EXAMPLE_SOURCES))
+EXAMPLES := $(JSON_EXAMPLES) $(CSV_EXAMPLES)
 
 
 all: $(APP_DIR)/$(TARGET) ## Build the shared library
@@ -196,8 +200,14 @@ $(APP_DIR)/testText$(EXE_EXTENSION): \
 # Examples
 ####################################################################
 
-# Pattern rule for example executables
+# Pattern rule for JSON example executables
 $(APP_DIR)/examples/json/%$(EXE_EXTENSION): examples/json/%.c $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling Example: $* ###\n"
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+
+# Pattern rule for CSV example executables
+$(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
@@ -237,14 +247,15 @@ test-watch: ## Watch the file directory for changes and run the unit tests
 		inotifywait -qr -e modify -e create -e delete -e move src include tests Makefile --exclude '/\.'; \
 		done
 
-examples: ## Build all JSON examples
+examples: ## Build all JSON and CSV examples
 examples: $(APP_DIR)/$(TARGET) $(EXAMPLES)
 	@printf "\033[0;32m\n"
 	@printf "############################\n"
 	@printf "### Examples built       ###\n"
 	@printf "############################\n"
 	@printf "\033[0m\n"
-	@printf "Examples are available in: $(APP_DIR)/examples/json/\n"
+	@printf "JSON examples are available in: $(APP_DIR)/examples/json/\n"
+	@printf "CSV examples are available in: $(APP_DIR)/examples/csv/\n"
 
 test: ## Make and run the Unit tests
 test: \
