@@ -15,9 +15,9 @@
 // Include core types and definitions
 #include <ghoti.io/text/csv/csv_core.h>
 
-// Future CSV module headers will be included here:
-// #include <ghoti.io/text/csv/csv_table.h>
-// #include <ghoti.io/text/csv/csv_stream.h>
+// CSV module headers
+#include <ghoti.io/text/csv/csv_table.h>
+#include <ghoti.io/text/csv/csv_stream.h>
 // #include <ghoti.io/text/csv/csv_writer.h>
 
 #endif /* GHOTI_IO_TEXT_CSV_H */

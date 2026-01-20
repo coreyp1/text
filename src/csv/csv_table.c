@@ -5,6 +5,8 @@
 
 #include "csv_internal.h"
 #include <ghoti.io/text/csv/csv_core.h>
+#include <ghoti.io/text/csv/csv_table.h>
+#include <ghoti.io/text/csv/csv_stream.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -13,17 +15,12 @@
 // Arena allocator implementation
 // Uses a simple linked list of blocks for efficient bulk allocation
 
-/**
- * @brief Arena block structure
- *
- * Each block contains a chunk of memory that can be allocated from.
- * Blocks are linked together to form the arena.
- */
+// Arena block structure (internal)
 typedef struct csv_arena_block {
     struct csv_arena_block* next;  ///< Next block in the arena
-    size_t used;                     ///< Bytes used in this block
-    size_t size;                     ///< Total size of this block
-    char data[];                      ///< Flexible array member for block data
+    size_t used;                   ///< Bytes used in this block
+    size_t size;                   ///< Total size of this block
+    char data[];                   ///< Flexible array member for block data
 } csv_arena_block;
 
 /**
@@ -41,12 +38,7 @@ struct csv_arena {
 // Default block size (64KB)
 #define CSV_ARENA_DEFAULT_BLOCK_SIZE (64 * 1024)
 
-/**
- * @brief Create a new arena allocator
- *
- * @param initial_block_size Initial block size (0 = use default)
- * @return Pointer to arena, or NULL on failure
- */
+// Create a new arena allocator
 static csv_arena* csv_arena_new(size_t initial_block_size) {
     csv_arena* arena = malloc(sizeof(csv_arena));
     if (!arena) {
@@ -60,14 +52,7 @@ static csv_arena* csv_arena_new(size_t initial_block_size) {
     return arena;
 }
 
-/**
- * @brief Allocate memory from the arena
- *
- * @param arena Arena to allocate from
- * @param size Size in bytes to allocate
- * @param align Alignment requirement (must be power of 2, not 0)
- * @return Pointer to allocated memory, or NULL on failure
- */
+// Allocate memory from the arena
 static void* csv_arena_alloc(csv_arena* arena, size_t size, size_t align) {
     if (!arena || size == 0) {
         return NULL;
@@ -139,11 +124,7 @@ static void* csv_arena_alloc(csv_arena* arena, size_t size, size_t align) {
     return block->data + aligned_offset;
 }
 
-/**
- * @brief Free all memory in the arena
- *
- * @param arena Arena to free (can be NULL)
- */
+// Free all memory in the arena
 static void csv_arena_free(csv_arena* arena) {
     if (!arena) {
         return;
@@ -159,11 +140,7 @@ static void csv_arena_free(csv_arena* arena) {
     free(arena);
 }
 
-/**
- * @brief Create a new CSV context with arena
- *
- * @return New context, or NULL on failure
- */
+// Create a new CSV context with arena
 csv_context* csv_context_new(void) {
     csv_context* ctx = malloc(sizeof(csv_context));
     if (!ctx) {
@@ -182,13 +159,7 @@ csv_context* csv_context_new(void) {
     return ctx;
 }
 
-/**
- * @brief Set input buffer for in-situ mode
- *
- * @param ctx Context to set input buffer on (must not be NULL)
- * @param input_buffer Original input buffer (caller-owned, must remain valid)
- * @param input_buffer_len Length of input buffer
- */
+// Set input buffer for in-situ mode
 void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len) {
     if (!ctx) {
         return;
@@ -197,11 +168,7 @@ void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, si
     ctx->input_buffer_len = input_buffer_len;
 }
 
-/**
- * @brief Free a CSV context and its arena
- *
- * @param ctx Context to free (can be NULL)
- */
+// Free a CSV context and its arena
 void csv_context_free(csv_context* ctx) {
     if (!ctx) {
         return;
@@ -211,17 +178,600 @@ void csv_context_free(csv_context* ctx) {
     free(ctx);
 }
 
-/**
- * @brief Allocate memory from a context's arena
- *
- * @param ctx Context containing the arena
- * @param size Size in bytes to allocate
- * @param align Alignment requirement (must be power of 2)
- * @return Pointer to allocated memory, or NULL on failure
- */
+// Allocate memory from a context's arena
 void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align) {
     if (!ctx || !ctx->arena) {
         return NULL;
     }
     return csv_arena_alloc(ctx->arena, size, align);
+}
+
+// Table structure implementation
+
+// Field structure (stored in arena)
+typedef struct {
+    const char* data;       ///< Field data (pointer into input or arena)
+    size_t length;          ///< Field length
+    bool is_in_situ;         ///< Whether field references input buffer directly
+} csv_table_field;
+
+/**
+ * @brief Row structure (stored in arena)
+ */
+typedef struct {
+    csv_table_field* fields; ///< Array of fields
+    size_t field_count;      ///< Number of fields
+} csv_table_row;
+
+// Header map entry (for column name lookup)
+typedef struct csv_header_entry {
+    const char* name;        ///< Column name (in arena or input buffer)
+    size_t name_len;         ///< Column name length
+    size_t index;            ///< Column index
+    struct csv_header_entry* next;  ///< Next entry (for hash table chaining)
+} csv_header_entry;
+
+// Table structure (internal)
+struct text_csv_table {
+    csv_context* ctx;           ///< Context with arena
+    csv_table_row* rows;         ///< Array of rows
+    size_t row_count;            ///< Number of rows
+    size_t row_capacity;         ///< Allocated row capacity
+
+    // Header map (optional, only if header processing enabled)
+    csv_header_entry** header_map;  ///< Hash table for header lookup
+    size_t header_map_size;         ///< Size of hash table
+    bool has_header;                ///< Whether header was processed
+};
+
+// Simple hash function for header names
+static size_t csv_header_hash(const char* name, size_t name_len, size_t map_size) {
+    size_t hash = 5381;
+    for (size_t i = 0; i < name_len; i++) {
+        hash = ((hash << 5) + hash) + (unsigned char)name[i];
+    }
+    return hash % map_size;
+}
+
+// Parse context for table building
+typedef struct {
+    text_csv_table* table;
+    csv_table_row* current_row;
+    size_t current_field_index;
+    size_t current_field_capacity;
+    const text_csv_parse_options* opts;
+    text_csv_error* err;
+    text_csv_status status;
+} csv_table_parse_context;
+
+// Event callback for building table from stream
+static text_csv_status csv_table_event_callback(
+    const text_csv_event* event,
+    void* user_data
+) {
+    csv_table_parse_context* ctx = (csv_table_parse_context*)user_data;
+    text_csv_table* table = ctx->table;
+
+    switch (event->type) {
+        case TEXT_CSV_EVENT_RECORD_BEGIN: {
+            // Allocate new row
+            if (table->row_count >= table->row_capacity) {
+                size_t new_capacity = table->row_capacity * 2;
+                if (new_capacity < table->row_capacity) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
+                csv_table_row* new_rows = (csv_table_row*)csv_arena_alloc_for_context(
+                    table->ctx, sizeof(csv_table_row) * new_capacity, 8
+                );
+                if (!new_rows) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
+                memcpy(new_rows, table->rows, sizeof(csv_table_row) * table->row_count);
+                table->rows = new_rows;
+                table->row_capacity = new_capacity;
+            }
+
+            ctx->current_row = &table->rows[table->row_count];
+            ctx->current_row->fields = NULL;
+            ctx->current_row->field_count = 0;
+            ctx->current_field_index = 0;
+            ctx->current_field_capacity = 0;
+            return TEXT_CSV_OK;
+        }
+
+        case TEXT_CSV_EVENT_FIELD: {
+            if (!ctx->current_row) {
+                ctx->status = TEXT_CSV_E_INVALID;
+                return TEXT_CSV_E_INVALID;
+            }
+
+            // Grow field array if needed
+            if (ctx->current_field_index >= ctx->current_field_capacity) {
+                size_t new_capacity = ctx->current_field_capacity == 0 ? 16 : ctx->current_field_capacity * 2;
+                // Check for overflow in multiplication
+                if (new_capacity < ctx->current_field_capacity && ctx->current_field_capacity > 0) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
+                csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+                    table->ctx, sizeof(csv_table_field) * new_capacity, 8
+                );
+                if (!new_fields) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
+                if (ctx->current_row->fields) {
+                    memcpy(new_fields, ctx->current_row->fields, sizeof(csv_table_field) * ctx->current_field_index);
+                }
+                ctx->current_row->fields = new_fields;
+                ctx->current_field_capacity = new_capacity;
+            }
+
+            csv_table_field* field = &ctx->current_row->fields[ctx->current_field_index];
+
+            // Handle field data
+            if (ctx->opts->in_situ_mode && !ctx->opts->validate_utf8) {
+                // Can use in-situ mode: reference input directly
+                field->data = event->data;
+                field->length = event->data_len;
+                field->is_in_situ = true;
+            } else {
+                // Need to copy (for escaping/unescaping or UTF-8 validation)
+                char* field_data = (char*)csv_arena_alloc_for_context(
+                    table->ctx, event->data_len + 1, 1
+                );
+                if (!field_data) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
+                memcpy(field_data, event->data, event->data_len);
+                field_data[event->data_len] = '\0';
+                field->data = field_data;
+                field->length = event->data_len;
+                field->is_in_situ = false;
+            }
+
+            ctx->current_field_index++;
+            ctx->current_row->field_count = ctx->current_field_index;
+            return TEXT_CSV_OK;
+        }
+
+        case TEXT_CSV_EVENT_RECORD_END: {
+            if (ctx->current_row) {
+                // Only count records that have at least one field
+                // This prevents counting empty records (e.g., from trailing newlines)
+                if (ctx->current_row->field_count > 0) {
+                    table->row_count++;
+                }
+            }
+            ctx->current_row = NULL;
+            ctx->current_field_index = 0;
+            ctx->current_field_capacity = 0;
+            return TEXT_CSV_OK;
+        }
+
+        case TEXT_CSV_EVENT_END:
+            return TEXT_CSV_OK;
+    }
+
+    return TEXT_CSV_OK;
+}
+
+// Parse CSV using streaming parser and build table
+static text_csv_status csv_table_parse_internal(
+    text_csv_table* table,
+    const char* input,
+    size_t input_len,
+    const text_csv_parse_options* opts,
+    text_csv_error* err
+) {
+    // Parse context
+    csv_table_parse_context parse_ctx = {
+        .table = table,
+        .current_row = NULL,
+        .current_field_index = 0,
+        .current_field_capacity = 0,
+        .opts = opts,
+        .err = err,
+        .status = TEXT_CSV_OK
+    };
+
+    // Create streaming parser
+    text_csv_stream* stream = text_csv_stream_new(opts, csv_table_event_callback, &parse_ctx);
+    if (!stream) {
+        if (err) {
+            err->code = TEXT_CSV_E_OOM;
+            err->message = "Failed to create stream parser";
+            err->byte_offset = 0;
+            err->line = 1;
+            err->column = 1;
+            err->row_index = 0;
+            err->col_index = 0;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+        }
+        return TEXT_CSV_E_OOM;
+    }
+
+    // Feed input
+    text_csv_status status = text_csv_stream_feed(stream, input, input_len, err);
+    if (status == TEXT_CSV_OK) {
+        status = text_csv_stream_finish(stream, err);
+    }
+
+    if (status == TEXT_CSV_OK && parse_ctx.status != TEXT_CSV_OK) {
+        status = parse_ctx.status;
+    }
+
+    text_csv_stream_free(stream);
+    return status;
+}
+
+TEXT_API text_csv_table* text_csv_parse_table(
+    const void* data,
+    size_t len,
+    const text_csv_parse_options* opts,
+    text_csv_error* err
+) {
+    if (!data) {
+        if (err) {
+            err->code = TEXT_CSV_E_INVALID;
+            err->message = "Input data must not be NULL";
+            err->byte_offset = 0;
+            err->line = 1;
+            err->column = 1;
+            err->row_index = 0;
+            err->col_index = 0;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+        }
+        return NULL;
+    }
+
+    // Empty input is valid - return empty table
+    if (len == 0) {
+        // Create empty table
+        text_csv_parse_options default_opts;
+        if (!opts) {
+            default_opts = text_csv_parse_options_default();
+            opts = &default_opts;
+        }
+
+        csv_context* ctx = csv_context_new();
+        if (!ctx) {
+            if (err) {
+                err->code = TEXT_CSV_E_OOM;
+                err->message = "Failed to create context";
+                err->byte_offset = 0;
+                err->line = 1;
+                err->column = 1;
+                err->row_index = 0;
+                err->col_index = 0;
+                err->context_snippet = NULL;
+                err->context_snippet_len = 0;
+                err->caret_offset = 0;
+            }
+            return NULL;
+        }
+
+        text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
+        if (!table) {
+            csv_context_free(ctx);
+            if (err) {
+                err->code = TEXT_CSV_E_OOM;
+                err->message = "Failed to allocate table";
+                err->byte_offset = 0;
+                err->line = 1;
+                err->column = 1;
+                err->row_index = 0;
+                err->col_index = 0;
+                err->context_snippet = NULL;
+                err->context_snippet_len = 0;
+                err->caret_offset = 0;
+            }
+            return NULL;
+        }
+
+        memset(table, 0, sizeof(text_csv_table));
+        table->ctx = ctx;
+        table->row_capacity = 16;
+        table->rows = (csv_table_row*)csv_arena_alloc_for_context(
+            ctx, sizeof(csv_table_row) * table->row_capacity, 8
+        );
+        if (!table->rows) {
+            free(table);
+            csv_context_free(ctx);
+            if (err) {
+                err->code = TEXT_CSV_E_OOM;
+                err->message = "Failed to allocate rows";
+                err->byte_offset = 0;
+                err->line = 1;
+                err->column = 1;
+                err->row_index = 0;
+                err->col_index = 0;
+                err->context_snippet = NULL;
+                err->context_snippet_len = 0;
+                err->caret_offset = 0;
+            }
+            return NULL;
+        }
+
+        return table;
+    }
+
+    text_csv_parse_options default_opts;
+    if (!opts) {
+        default_opts = text_csv_parse_options_default();
+        opts = &default_opts;
+    }
+
+    // Create context
+    csv_context* ctx = csv_context_new();
+    if (!ctx) {
+        if (err) {
+            err->code = TEXT_CSV_E_OOM;
+            err->message = "Failed to create context";
+            err->byte_offset = 0;
+            err->line = 1;
+            err->column = 1;
+            err->row_index = 0;
+            err->col_index = 0;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+        }
+        return NULL;
+    }
+
+    // Set input buffer for in-situ mode
+    if (opts->in_situ_mode) {
+        csv_context_set_input_buffer(ctx, (const char*)data, len);
+    }
+
+    // Allocate table structure
+    text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
+    if (!table) {
+        csv_context_free(ctx);
+        if (err) {
+            err->code = TEXT_CSV_E_OOM;
+            err->message = "Failed to allocate table";
+            err->byte_offset = 0;
+            err->line = 1;
+            err->column = 1;
+            err->row_index = 0;
+            err->col_index = 0;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+        }
+        return NULL;
+    }
+
+    memset(table, 0, sizeof(text_csv_table));
+    table->ctx = ctx;
+    table->row_capacity = 16;
+    table->rows = (csv_table_row*)csv_arena_alloc_for_context(
+        ctx, sizeof(csv_table_row) * table->row_capacity, 8
+    );
+    if (!table->rows) {
+        free(table);
+        csv_context_free(ctx);
+        if (err) {
+            err->code = TEXT_CSV_E_OOM;
+            err->message = "Failed to allocate rows";
+            err->byte_offset = 0;
+            err->line = 1;
+            err->column = 1;
+            err->row_index = 0;
+            err->col_index = 0;
+            err->context_snippet = NULL;
+            err->context_snippet_len = 0;
+            err->caret_offset = 0;
+        }
+        return NULL;
+    }
+
+    // Handle BOM
+    const char* input = (const char*)data;
+    size_t input_len = len;
+    csv_position pos = {0, 1, 1};
+    if (!opts->keep_bom) {
+        csv_strip_bom(&input, &input_len, &pos, true);
+    }
+
+    // Parse
+    text_csv_status status = csv_table_parse_internal(table, input, input_len, opts, err);
+    if (status != TEXT_CSV_OK) {
+        text_csv_free_table(table);
+        return NULL;
+    }
+
+    // Process header if enabled
+    if (opts->dialect.treat_first_row_as_header && table->row_count > 0) {
+        // Build header map from first row
+        table->header_map_size = 16;
+        table->header_map = (csv_header_entry**)calloc(table->header_map_size, sizeof(csv_header_entry*));
+        if (table->header_map) {
+            csv_table_row* header_row = &table->rows[0];
+            for (size_t i = 0; i < header_row->field_count; i++) {
+                csv_table_field* field = &header_row->fields[i];
+                size_t hash = csv_header_hash(field->data, field->length, table->header_map_size);
+
+                // Check for duplicates
+                csv_header_entry* entry = table->header_map[hash];
+                bool found_duplicate = false;
+                while (entry) {
+                    if (entry->name_len == field->length &&
+                        memcmp(entry->name, field->data, field->length) == 0) {
+                        found_duplicate = true;
+                        break;
+                    }
+                    entry = entry->next;
+                }
+
+                if (found_duplicate) {
+                    switch (opts->dialect.header_dup_mode) {
+                        case TEXT_CSV_DUPCOL_ERROR:
+                            free(table->header_map);
+                            table->header_map = NULL;
+                            text_csv_free_table(table);
+                            if (err) {
+                                err->code = TEXT_CSV_E_INVALID;
+                                err->message = "Duplicate column name in header";
+                                err->byte_offset = 0;
+                                err->line = 1;
+                                err->column = 1;
+                                err->row_index = 0;
+                                err->col_index = i;
+                                err->context_snippet = NULL;
+                                err->context_snippet_len = 0;
+                                err->caret_offset = 0;
+                            }
+                            return NULL;
+                        case TEXT_CSV_DUPCOL_FIRST_WINS:
+                            // Skip this duplicate
+                            continue;
+                        case TEXT_CSV_DUPCOL_LAST_WINS:
+                            // Remove old entry, add new one
+                            // Simplified: just add new entry
+                            break;
+                        case TEXT_CSV_DUPCOL_COLLECT:
+                            // Store multiple indices (simplified: just add)
+                            break;
+                    }
+                }
+
+                // Create header entry
+                csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+                    ctx, sizeof(csv_header_entry), 8
+                );
+                if (new_entry) {
+                    new_entry->name = field->data;
+                    new_entry->name_len = field->length;
+                    new_entry->index = i;
+                    new_entry->next = table->header_map[hash];
+                    table->header_map[hash] = new_entry;
+                }
+            }
+            table->has_header = true;
+        }
+    }
+
+    return table;
+}
+
+TEXT_API void text_csv_free_table(text_csv_table* table) {
+    if (!table) {
+        return;
+    }
+
+    if (table->header_map) {
+        free(table->header_map);
+    }
+
+    csv_context_free(table->ctx);
+    free(table);
+}
+
+TEXT_API size_t text_csv_row_count(const text_csv_table* table) {
+    if (!table) {
+        return 0;
+    }
+
+    // Exclude header row if present
+    if (table->has_header && table->row_count > 0) {
+        return table->row_count - 1;
+    }
+    return table->row_count;
+}
+
+TEXT_API size_t text_csv_col_count(const text_csv_table* table, size_t row) {
+    if (!table) {
+        return 0;
+    }
+
+    // Adjust for header row
+    size_t adjusted_row = row;
+    if (table->has_header) {
+        adjusted_row = row + 1;  // Skip header row
+    }
+
+    if (adjusted_row >= table->row_count) {
+        return 0;
+    }
+
+    return table->rows[adjusted_row].field_count;
+}
+
+TEXT_API const char* text_csv_field(
+    const text_csv_table* table,
+    size_t row,
+    size_t col,
+    size_t* len
+) {
+    if (!table) {
+        if (len) {
+            *len = 0;
+        }
+        return NULL;
+    }
+
+    // Adjust for header row
+    size_t adjusted_row = row;
+    if (table->has_header) {
+        adjusted_row = row + 1;  // Skip header row
+    }
+
+    if (adjusted_row >= table->row_count) {
+        if (len) {
+            *len = 0;
+        }
+        return NULL;
+    }
+
+    csv_table_row* table_row = &table->rows[adjusted_row];
+    if (col >= table_row->field_count) {
+        if (len) {
+            *len = 0;
+        }
+        return NULL;
+    }
+
+    csv_table_field* field = &table_row->fields[col];
+    if (len) {
+        *len = field->length;
+    }
+    return field->data;
+}
+
+TEXT_API text_csv_status text_csv_header_index(
+    const text_csv_table* table,
+    const char* name,
+    size_t* out_idx
+) {
+    if (!table || !name || !out_idx) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    if (!table->has_header || !table->header_map) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    size_t name_len = strlen(name);
+    size_t hash = csv_header_hash(name, name_len, table->header_map_size);
+
+    csv_header_entry* entry = table->header_map[hash];
+    while (entry) {
+        if (entry->name_len == name_len && memcmp(entry->name, name, name_len) == 0) {
+            *out_idx = entry->index;
+            return TEXT_CSV_OK;
+        }
+        entry = entry->next;
+    }
+
+    return TEXT_CSV_E_INVALID;
 }

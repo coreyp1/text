@@ -9,9 +9,7 @@
 #include <stdint.h>
 #include <limits.h>
 
-/**
- * @brief Detect and consume newline from input
- */
+// Detect and consume newline from input
 csv_newline_type csv_detect_newline(
     const char* input,
     size_t input_len,
@@ -77,12 +75,7 @@ csv_newline_type csv_detect_newline(
     return CSV_NEWLINE_NONE;
 }
 
-/**
- * @brief Validate UTF-8 sequence
- *
- * Validates UTF-8 encoding in a byte sequence. This is a simplified validator
- * that checks for well-formed UTF-8 sequences.
- */
+// Validate UTF-8 sequence
 csv_utf8_result csv_validate_utf8(
     const char* input,
     size_t input_len,
@@ -117,7 +110,8 @@ csv_utf8_result csv_validate_utf8(
     if (offset > input_len) {
         return CSV_UTF8_INVALID;  // Invalid offset
     }
-    size_t remaining = input_len;
+    // Calculate remaining bytes to process (from offset to end)
+    size_t remaining = input_len - offset;
 
     while (remaining > 0) {
         if (offset >= input_len) {
@@ -226,11 +220,7 @@ csv_utf8_result csv_validate_utf8(
     return CSV_UTF8_VALID;
 }
 
-/**
- * @brief Strip UTF-8 BOM from input
- *
- * UTF-8 BOM is the byte sequence: 0xEF 0xBB 0xBF
- */
+// Strip UTF-8 BOM from input (BOM is 0xEF 0xBB 0xBF)
 bool csv_strip_bom(
     const char** input,
     size_t* input_len,

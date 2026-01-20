@@ -59,7 +59,7 @@ typedef struct {
   int column;                ///< Column number (1-based, byte-based)
   size_t row_index;          ///< Row index (0-based, first data row is 0)
   size_t col_index;          ///< Column index (0-based)
-  
+
   // Enhanced error reporting (optional, may be NULL)
   char* context_snippet;      ///< Context snippet around error (dynamically allocated, caller must free)
   size_t context_snippet_len; ///< Length of context snippet
@@ -118,14 +118,14 @@ typedef struct {
   bool validate_utf8;                ///< Validate UTF-8 sequences (default true)
   bool in_situ_mode;                 ///< Zero-copy mode: reference input buffer directly (default false)
   bool keep_bom;                     ///< Keep UTF-8 BOM (default false, strips BOM if false)
-  
+
   // Limits (0 => library default)
   size_t max_rows;                   ///< Maximum number of rows (0 = default, e.g. 10M)
   size_t max_cols;                   ///< Maximum number of columns per row (0 = default, e.g. 100k)
   size_t max_field_bytes;             ///< Maximum field size in bytes (0 = default, e.g. 16MB)
   size_t max_record_bytes;            ///< Maximum record size in bytes (0 = default, e.g. 64MB)
   size_t max_total_bytes;             ///< Maximum total input size (0 = default, e.g. 1GB)
-  
+
   // Error context
   bool enable_context_snippet;        ///< Generate context snippet for errors (default true)
   size_t context_radius_bytes;       ///< Bytes before/after error in snippet (default 40)
