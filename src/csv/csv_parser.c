@@ -145,6 +145,12 @@ static text_csv_status csv_parser_set_error(
     const char* message
 ) {
     if (parser->error_out) {
+        // Free any existing context snippet
+        if (parser->error_out->context_snippet) {
+            free(parser->error_out->context_snippet);
+            parser->error_out->context_snippet = NULL;
+        }
+
         parser->error_out->code = code;
         parser->error_out->message = message;
         parser->error_out->byte_offset = parser->pos.offset;
@@ -155,6 +161,34 @@ static text_csv_status csv_parser_set_error(
         parser->error_out->context_snippet = NULL;
         parser->error_out->context_snippet_len = 0;
         parser->error_out->caret_offset = 0;
+
+        // Generate context snippet if we have input buffer access
+        if (parser->input && parser->input_len > 0) {
+            char* snippet = NULL;
+            size_t snippet_len = 0;
+            size_t caret_offset = 0;
+
+            // Use error offset relative to the current input buffer
+            // For table parsing, this should be the full input, so offset should be accurate
+            size_t error_offset = parser->error_out->byte_offset;
+
+            text_csv_status snippet_status = csv_error_generate_context_snippet(
+                parser->input,
+                parser->input_len,
+                error_offset,
+                CSV_DEFAULT_CONTEXT_RADIUS_BYTES,
+                CSV_DEFAULT_CONTEXT_RADIUS_BYTES,
+                &snippet,
+                &snippet_len,
+                &caret_offset
+            );
+
+            if (snippet_status == TEXT_CSV_OK && snippet) {
+                parser->error_out->context_snippet = snippet;
+                parser->error_out->context_snippet_len = snippet_len;
+                parser->error_out->caret_offset = caret_offset;
+            }
+        }
     }
     parser->state = CSV_STATE_END;
     return code;

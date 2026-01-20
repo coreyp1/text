@@ -221,6 +221,47 @@ void csv_stream_set_original_input_buffer(
     size_t input_buffer_len
 );
 
+/**
+ * @brief Generate a context snippet around an error position
+ *
+ * Extracts a snippet of text around the error position for better error reporting.
+ * The snippet includes context before and after the error position, with a caret
+ * offset indicating the exact error location.
+ *
+ * @param input Input buffer containing the CSV data
+ * @param input_len Length of input buffer
+ * @param error_offset Byte offset of the error (0-based)
+ * @param context_before Number of bytes of context before the error
+ * @param context_after Number of bytes of context after the error
+ * @param snippet_out Output parameter for the allocated snippet (caller must free)
+ * @param snippet_len_out Output parameter for snippet length
+ * @param caret_offset_out Output parameter for caret offset within snippet
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+text_csv_status csv_error_generate_context_snippet(
+    const char* input,
+    size_t input_len,
+    size_t error_offset,
+    size_t context_before,
+    size_t context_after,
+    char** snippet_out,
+    size_t* snippet_len_out,
+    size_t* caret_offset_out
+);
+
+/**
+ * @brief Copy an error structure, deep-copying the context snippet
+ *
+ * Copies an error structure from source to destination, including a deep copy
+ * of the context snippet if present. The destination's existing context snippet
+ * (if any) is freed before copying.
+ *
+ * @param dst Destination error structure (must not be NULL)
+ * @param src Source error structure (must not be NULL)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src);
+
 // ============================================================================
 // Table Structure Definitions (for internal use)
 // ============================================================================

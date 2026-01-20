@@ -171,6 +171,13 @@ static text_csv_status csv_stream_set_error(
     text_csv_status code,
     const char* message
 ) {
+    // Free any existing context snippet
+    if (stream->error.context_snippet) {
+        free(stream->error.context_snippet);
+        stream->error.context_snippet = NULL;
+    }
+
+    // Set error fields first
     stream->error.code = code;
     stream->error.message = message;
     stream->error.byte_offset = stream->pos.offset;
@@ -181,6 +188,53 @@ static text_csv_status csv_stream_set_error(
     stream->error.context_snippet = NULL;
     stream->error.context_snippet_len = 0;
     stream->error.caret_offset = 0;
+
+    // Generate context snippet if we have input buffer access
+    const char* input_for_snippet = NULL;
+    size_t input_len_for_snippet = 0;
+    size_t error_offset = stream->error.byte_offset;
+
+    // Prefer original_input_buffer (full input for table parsing)
+    if (stream->original_input_buffer && stream->original_input_buffer_len > 0) {
+        input_for_snippet = stream->original_input_buffer;
+        input_len_for_snippet = stream->original_input_buffer_len;
+        // Error offset is already relative to the original input buffer
+    }
+    // Fall back to buffered input if available
+    else if (stream->input_buffer && stream->input_buffer_used > 0) {
+        input_for_snippet = stream->input_buffer;
+        input_len_for_snippet = stream->input_buffer_used;
+        // For buffered input, we need to adjust the error offset
+        // The error offset is relative to the total bytes consumed, but the buffer
+        // only contains recent data. For now, clamp to buffer bounds.
+        if (error_offset > input_len_for_snippet) {
+            error_offset = input_len_for_snippet;
+        }
+    }
+
+    if (input_for_snippet && input_len_for_snippet > 0 && error_offset <= input_len_for_snippet) {
+        char* snippet = NULL;
+        size_t snippet_len = 0;
+        size_t caret_offset = 0;
+
+        text_csv_status snippet_status = csv_error_generate_context_snippet(
+            input_for_snippet,
+            input_len_for_snippet,
+            error_offset,
+            CSV_DEFAULT_CONTEXT_RADIUS_BYTES,
+            CSV_DEFAULT_CONTEXT_RADIUS_BYTES,
+            &snippet,
+            &snippet_len,
+            &caret_offset
+        );
+
+        if (snippet_status == TEXT_CSV_OK && snippet) {
+            stream->error.context_snippet = snippet;
+            stream->error.context_snippet_len = snippet_len;
+            stream->error.caret_offset = caret_offset;
+        }
+    }
+
     stream->state = CSV_STREAM_STATE_END;
     return code;
 }
@@ -1409,7 +1463,7 @@ TEXT_API text_csv_status text_csv_stream_feed(
 
     if (stream->state == CSV_STREAM_STATE_END) {
         if (err) {
-            *err = stream->error;
+            csv_error_copy(err, &stream->error);
         }
         return stream->error.code != TEXT_CSV_OK ? stream->error.code : TEXT_CSV_E_INVALID;
     }
@@ -1459,7 +1513,7 @@ TEXT_API text_csv_status text_csv_stream_feed(
         }
 
         if (status != TEXT_CSV_OK && err) {
-            *err = stream->error;
+            csv_error_copy(err, &stream->error);
         }
         return status;
     }
@@ -1467,7 +1521,7 @@ TEXT_API text_csv_status text_csv_stream_feed(
     text_csv_status status = csv_stream_process_chunk(stream, (const char*)data, len);
 
     if (status != TEXT_CSV_OK && err) {
-        *err = stream->error;
+        csv_error_copy(err, &stream->error);
     }
 
     return status;
@@ -1499,7 +1553,7 @@ TEXT_API text_csv_status text_csv_stream_finish(
         stream->state == CSV_STREAM_STATE_ESCAPE_IN_QUOTED) {
         text_csv_status status = csv_stream_set_error(stream, TEXT_CSV_E_UNTERMINATED_QUOTE, "Unterminated quoted field");
         if (err) {
-            *err = stream->error;
+            csv_error_copy(err, &stream->error);
         }
         return status;
     }
@@ -1514,14 +1568,14 @@ TEXT_API text_csv_status text_csv_stream_finish(
             text_csv_status status = csv_stream_unescape_field(stream, field_data, stream->field_length, &unescaped_data, &unescaped_len);
             if (status != TEXT_CSV_OK) {
                 if (err) {
-                    *err = stream->error;
+                    csv_error_copy(err, &stream->error);
                 }
                 return status;
             }
             status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
             if (status != TEXT_CSV_OK) {
                 if (err) {
-                    *err = stream->error;
+                    csv_error_copy(err, &stream->error);
                 }
                 return status;
             }
@@ -1531,7 +1585,7 @@ TEXT_API text_csv_status text_csv_stream_finish(
         text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
         if (status != TEXT_CSV_OK) {
             if (err) {
-                *err = stream->error;
+                csv_error_copy(err, &stream->error);
             }
             return status;
         }
@@ -1540,7 +1594,7 @@ TEXT_API text_csv_status text_csv_stream_finish(
     // Emit END event
     text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_END, NULL, 0);
     if (status != TEXT_CSV_OK && err) {
-        *err = stream->error;
+        csv_error_copy(err, &stream->error);
     }
 
     stream->state = CSV_STREAM_STATE_END;

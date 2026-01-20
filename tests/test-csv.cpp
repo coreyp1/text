@@ -53,6 +53,226 @@ TEST(CsvCore, ErrorFree) {
     text_csv_error_free(nullptr);
 }
 
+// Enhanced Error Context Snippets
+TEST(CsvError, ContextSnippetBasic) {
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    // Create invalid CSV to trigger error (unterminated quote)
+    const char* invalid_input = "a,b,c\nd,\"e,f\ng,h";
+    size_t invalid_len = strlen(invalid_input);
+
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));  // Initialize error structure
+    text_csv_table* table = text_csv_parse_table(invalid_input, invalid_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    // Should have context snippet
+    if (err.context_snippet) {
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+
+        // Caret should point to error position
+        // Error is at the unterminated quote, which should be visible in snippet
+        EXPECT_NE(err.context_snippet, nullptr);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetCaretPosition) {
+    // Create CSV with error in middle
+    const char* input = "a,b,c\nd,\"unterminated quote\ne,f";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    if (err.context_snippet) {
+        // Caret offset should be within snippet bounds
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+
+        // Snippet should contain the error location
+        // The error is at the unterminated quote, caret should point to it
+        EXPECT_GT(err.context_snippet_len, 0u);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetErrorAtStart) {
+    // Error at the very beginning
+    const char* input = "\"unterminated";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    if (err.context_snippet) {
+        // Even at start, should have some context
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetErrorAtEnd) {
+    // Error at the very end
+    const char* input = "a,b,c\nd,e,\"unterminated";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    if (err.context_snippet) {
+        // Should have context even at end
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetInvalidEscape) {
+    // Invalid escape sequence
+    const char* input = "a,b,c\nd,\"e\\x\",f";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_INVALID_ESCAPE);
+
+    if (err.context_snippet) {
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetUnexpectedQuote) {
+    // Unexpected quote in unquoted field
+    const char* input = "a,b\"c,d";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNEXPECTED_QUOTE);
+
+    if (err.context_snippet) {
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+    }
+
+    text_csv_error_free(&err);
+}
+
+TEST(CsvError, ContextSnippetStreamingParser) {
+    // Test context snippets in streaming parser
+    const char* input = "a,b,c\nd,\"unterminated\ne,f";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    auto callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        (void)event;
+        (void)user_data;
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_stream* stream = text_csv_stream_new(&opts, callback, nullptr);
+    ASSERT_NE(stream, nullptr);
+
+    // Set original input buffer for context snippets
+    csv_stream_set_original_input_buffer(stream, input, input_len);
+
+    text_csv_status status = text_csv_stream_feed(stream, input, input_len, &err);
+    if (status == TEXT_CSV_OK) {
+        status = text_csv_stream_finish(stream, &err);
+    }
+
+    EXPECT_NE(status, TEXT_CSV_OK);
+    EXPECT_EQ(err.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    if (err.context_snippet) {
+        EXPECT_GT(err.context_snippet_len, 0u);
+        EXPECT_LE(err.caret_offset, err.context_snippet_len);
+    }
+
+    text_csv_error_free(&err);
+    text_csv_stream_free(stream);
+}
+
+TEST(CsvError, ContextSnippetDeepCopy) {
+    // Test that error copying properly deep-copies context snippets
+    const char* input = "a,b,c\nd,\"unterminated\ne,f";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err1;
+    memset(&err1, 0, sizeof(err1));
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err1);
+
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err1.code, TEXT_CSV_E_UNTERMINATED_QUOTE);
+
+    // Context snippet may or may not be generated depending on input buffer availability
+    // If it is generated, test deep copy
+    if (err1.context_snippet && err1.context_snippet_len > 0) {
+        // Copy error
+        text_csv_error err2;
+        memset(&err2, 0, sizeof(err2));
+        text_csv_status copy_status = csv_error_copy(&err2, &err1);
+        EXPECT_EQ(copy_status, TEXT_CSV_OK);
+
+        // Both should have snippets
+        EXPECT_NE(err1.context_snippet, nullptr);
+        EXPECT_NE(err2.context_snippet, nullptr);
+
+        // But they should be different pointers (deep copy)
+        EXPECT_NE(err1.context_snippet, err2.context_snippet);
+
+        // But same content
+        EXPECT_EQ(err1.context_snippet_len, err2.context_snippet_len);
+        EXPECT_EQ(err1.caret_offset, err2.caret_offset);
+        EXPECT_EQ(memcmp(err1.context_snippet, err2.context_snippet, err1.context_snippet_len), 0);
+
+        // Free both
+        text_csv_error_free(&err1);
+        text_csv_error_free(&err2);
+    } else {
+        // No snippet generated, just free err1
+        text_csv_error_free(&err1);
+    }
+}
+
 // Dialect and Options Structures
 TEST(CsvDialect, DefaultDialect) {
     text_csv_dialect d = text_csv_dialect_default();

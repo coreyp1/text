@@ -393,10 +393,10 @@ static text_csv_status csv_table_parse_internal(
         return TEXT_CSV_E_OOM;
     }
 
-    // Set original input buffer for in-situ mode
-    if (opts->in_situ_mode && table->ctx->input_buffer) {
-        csv_stream_set_original_input_buffer(stream, table->ctx->input_buffer, table->ctx->input_buffer_len);
-    }
+    // Set original input buffer for in-situ mode and error context snippets
+    // Always set it for table parsing so we can generate context snippets on errors
+    // Use the input parameter directly (which may have been adjusted for BOM)
+    csv_stream_set_original_input_buffer(stream, input, input_len);
 
     // Feed input
     text_csv_status status = text_csv_stream_feed(stream, input, input_len, err);
