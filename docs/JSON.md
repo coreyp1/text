@@ -74,15 +74,17 @@ Add under `text` library:
 
 ```
 text/
-  include/text/
+  include/ghoti.io/text/
     json.h
+  include/ghoti.io/text/json/
+    json_core.h
     json_dom.h
     json_stream.h
     json_writer.h
     json_pointer.h
     json_patch.h
     json_schema.h
-  src/
+  src/json/
     json_lexer.c
     json_parser.c
     json_dom.c
@@ -91,15 +93,21 @@ text/
     json_pointer.c
     json_patch.c
     json_schema.c
+    json_error.c
+    json_number.c
+    json_options.c
+    json_string.c
     json_internal.h
+    json_internal.c
   tests/
-    test_json_parse.cpp
-    test_json_write.cpp
-    test_json_stream.cpp
-    test_json_pointer.cpp
-    test_json_patch.cpp
-    test_json_schema.cpp
-    data/
+    test-json.cpp
+    data/json/
+      rfc8259/
+      valid/
+      invalid/
+      jsonc/
+      unicode/
+      numbers/
       ...
 ```
 
@@ -268,20 +276,27 @@ text_json_value* text_json_parse(
   text_json_error* err
 );
 
+text_json_value* text_json_parse_multiple(
+  const char* bytes, size_t len,
+  const text_json_parse_options* opt,
+  text_json_error* err,
+  size_t* bytes_consumed
+);
+
 void text_json_free(text_json_value* v);
 
 text_json_type text_json_typeof(const text_json_value* v);
 
 // Scalars
-int text_json_get_bool(const text_json_value* v, int* out);
+text_json_status text_json_get_bool(const text_json_value* v, int* out);
 
-int text_json_get_string(const text_json_value* v, const char** out, size_t* out_len);
+text_json_status text_json_get_string(const text_json_value* v, const char** out, size_t* out_len);
 
 // Numbers (choose representations)
-int text_json_get_number_lexeme(const text_json_value* v, const char** out, size_t* out_len);
-int text_json_get_i64(const text_json_value* v, long long* out);
-int text_json_get_u64(const text_json_value* v, unsigned long long* out);
-int text_json_get_double(const text_json_value* v, double* out);
+text_json_status text_json_get_number_lexeme(const text_json_value* v, const char** out, size_t* out_len);
+text_json_status text_json_get_i64(const text_json_value* v, int64_t* out);
+text_json_status text_json_get_u64(const text_json_value* v, uint64_t* out);
+text_json_status text_json_get_double(const text_json_value* v, double* out);
 
 // Arrays
 size_t text_json_array_size(const text_json_value* v);
@@ -302,21 +317,41 @@ For full-featured use cases (patching, programmatic output), provide a mutable A
 text_json_value* text_json_new_null(void);
 text_json_value* text_json_new_bool(int b);
 text_json_value* text_json_new_number_from_lexeme(const char* s, size_t len);
-text_json_value* text_json_new_number_i64(long long x);
-text_json_value* text_json_new_number_u64(unsigned long long x);
+text_json_value* text_json_new_number_i64(int64_t x);
+text_json_value* text_json_new_number_u64(uint64_t x);
 text_json_value* text_json_new_number_double(double x);
 
 text_json_value* text_json_new_string(const char* s, size_t len);
 
 text_json_value* text_json_new_array(void);
-int text_json_array_push(text_json_value* arr, text_json_value* child);
-int text_json_array_set(text_json_value* arr, size_t idx, text_json_value* child);
-int text_json_array_insert(text_json_value* arr, size_t idx, text_json_value* child);
-int text_json_array_remove(text_json_value* arr, size_t idx);
+text_json_status text_json_array_push(text_json_value* arr, text_json_value* child);
+text_json_status text_json_array_set(text_json_value* arr, size_t idx, text_json_value* child);
+text_json_status text_json_array_insert(text_json_value* arr, size_t idx, text_json_value* child);
+text_json_status text_json_array_remove(text_json_value* arr, size_t idx);
 
 text_json_value* text_json_new_object(void);
-int text_json_object_put(text_json_value* obj, const char* key, size_t key_len, text_json_value* val);
-int text_json_object_remove(text_json_value* obj, const char* key, size_t key_len);
+text_json_status text_json_object_put(text_json_value* obj, const char* key, size_t key_len, text_json_value* val);
+text_json_status text_json_object_remove(text_json_value* obj, const char* key, size_t key_len);
+
+// Utility functions
+typedef enum {
+  TEXT_JSON_EQUAL_LEXEME,      // Compare numbers by lexeme (exact string match)
+  TEXT_JSON_EQUAL_NUMERIC       // Compare numbers by numeric equivalence
+} text_json_equal_mode;
+
+typedef enum {
+  TEXT_JSON_MERGE_FIRST_WINS,  // Keep value from first object on conflict
+  TEXT_JSON_MERGE_LAST_WINS,    // Keep value from second object on conflict
+  TEXT_JSON_MERGE_ERROR         // Return error on conflict
+} text_json_merge_policy;
+
+int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
+text_json_value* text_json_clone(const text_json_value* src);
+text_json_status text_json_object_merge(
+  text_json_value* target,
+  const text_json_value* source,
+  text_json_merge_policy policy
+);
 ```
 
 Mutation can either:
@@ -367,7 +402,7 @@ typedef struct {
 ### 7.3 Streaming Parser API
 
 ```c
-typedef int (*text_json_event_cb)(void* user, const text_json_event* evt, text_json_error* err);
+typedef text_json_status (*text_json_event_cb)(void* user, const text_json_event* evt, text_json_error* err);
 
 typedef struct text_json_stream text_json_stream;
 
@@ -377,8 +412,8 @@ text_json_stream* text_json_stream_new(
   void* user
 );
 
-int text_json_stream_feed(text_json_stream* st, const char* bytes, size_t len, text_json_error* err);
-int text_json_stream_finish(text_json_stream* st, text_json_error* err);
+text_json_status text_json_stream_feed(text_json_stream* st, const char* bytes, size_t len, text_json_error* err);
+text_json_status text_json_stream_finish(text_json_stream* st, text_json_error* err);
 void text_json_stream_free(text_json_stream* st);
 ```
 
@@ -410,38 +445,56 @@ typedef struct {
 ```
 
 Provide helpers:
-- `text_json_sink_buffer(...)`
-- `text_json_sink_fixed_buffer(...)`
+- `text_json_sink_buffer(sink)` - creates growable buffer sink
+- `text_json_sink_fixed_buffer(sink, buffer, size)` - creates fixed buffer sink
+- `text_json_sink_buffer_data(sink)` - get buffer data
+- `text_json_sink_buffer_size(sink)` - get buffer size
+- `text_json_sink_buffer_free(sink)` - free buffer sink
 
 ### 8.2 Writer Options
 
 ```c
+typedef enum {
+  TEXT_JSON_FLOAT_SHORTEST,     // Shortest representation (%.17g, default)
+  TEXT_JSON_FLOAT_FIXED,         // Fixed-point notation (%.Nf, use float_precision)
+  TEXT_JSON_FLOAT_SCIENTIFIC     // Scientific notation (%.Ne, use float_precision)
+} text_json_float_format;
+
 typedef struct {
   // Formatting
-  int pretty;               // 0 compact, 1 pretty
-  int indent_spaces;        // e.g. 2, 4
-  const char* newline;      // "\n" default; allow "\r\n"
+  int pretty;                   // 0 compact, 1 pretty
+  int indent_spaces;            // e.g. 2, 4
+  const char* newline;          // "\n" default; allow "\r\n"
+  int trailing_newline;         // Add trailing newline at end (default: 0)
+  int space_after_colon;        // Add space after ':' in objects (default: 0)
+  int space_after_comma;         // Add space after ',' in arrays/objects (default: 0)
+  int inline_array_threshold;    // Max elements for inline array (default: -1)
+  int inline_object_threshold;   // Max pairs for inline object (default: -1)
 
   // Escaping
-  int escape_solidus;       // optional
-  int escape_unicode;       // output \uXXXX for non-ASCII (canonical mode)
-  int escape_all_non_ascii; // stricter
+  int escape_solidus;           // optional
+  int escape_unicode;           // output \uXXXX for non-ASCII (canonical mode)
+  int escape_all_non_ascii;     // stricter
 
   // Canonical / deterministic
-  int sort_object_keys;     // stable output
-  int canonical_numbers;    // normalize numeric lexemes (careful)
-  int canonical_strings;    // normalize escapes
+  int sort_object_keys;         // stable output
+  int canonical_numbers;        // normalize numeric lexemes (careful)
+  int canonical_strings;         // normalize escapes
 
   // Extensions
-  int allow_nonfinite_numbers; // emit NaN/Infinity if node contains it
+  int allow_nonfinite_numbers;   // emit NaN/Infinity if node contains it
+
+  // Floating-point formatting
+  text_json_float_format float_format;  // Floating-point formatting strategy
+  int float_precision;          // Precision for fixed/scientific format
 } text_json_write_options;
 ```
 
 ### 8.3 DOM Write
 
 ```c
-int text_json_write_value(
-  text_json_sink sink,
+text_json_status text_json_write_value(
+  text_json_sink* sink,
   const text_json_write_options* opt,
   const text_json_value* v,
   text_json_error* err
@@ -455,22 +508,22 @@ typedef struct text_json_writer text_json_writer;
 
 text_json_writer* text_json_writer_new(text_json_sink sink, const text_json_write_options* opt);
 
-int text_json_writer_object_begin(text_json_writer* w);
-int text_json_writer_object_end(text_json_writer* w);
-int text_json_writer_array_begin(text_json_writer* w);
-int text_json_writer_array_end(text_json_writer* w);
+text_json_status text_json_writer_object_begin(text_json_writer* w);
+text_json_status text_json_writer_object_end(text_json_writer* w);
+text_json_status text_json_writer_array_begin(text_json_writer* w);
+text_json_status text_json_writer_array_end(text_json_writer* w);
 
-int text_json_writer_key(text_json_writer* w, const char* key, size_t len);
+text_json_status text_json_writer_key(text_json_writer* w, const char* key, size_t len);
 
-int text_json_writer_null(text_json_writer* w);
-int text_json_writer_bool(text_json_writer* w, int b);
-int text_json_writer_number_lexeme(text_json_writer* w, const char* s, size_t len);
-int text_json_writer_number_i64(text_json_writer* w, long long x);
-int text_json_writer_number_u64(text_json_writer* w, unsigned long long x);
-int text_json_writer_number_double(text_json_writer* w, double x);
-int text_json_writer_string(text_json_writer* w, const char* s, size_t len);
+text_json_status text_json_writer_null(text_json_writer* w);
+text_json_status text_json_writer_bool(text_json_writer* w, int b);
+text_json_status text_json_writer_number_lexeme(text_json_writer* w, const char* s, size_t len);
+text_json_status text_json_writer_number_i64(text_json_writer* w, int64_t x);
+text_json_status text_json_writer_number_u64(text_json_writer* w, uint64_t x);
+text_json_status text_json_writer_number_double(text_json_writer* w, double x);
+text_json_status text_json_writer_string(text_json_writer* w, const char* s, size_t len);
 
-int text_json_writer_finish(text_json_writer* w, text_json_error* err);
+text_json_status text_json_writer_finish(text_json_writer* w, text_json_error* err);
 void text_json_writer_free(text_json_writer* w);
 ```
 
@@ -701,16 +754,18 @@ These are chosen now to align with “correctness, not simplicity”:
 
 ## 15. Deliverables
 
-- `include/text/json*.h` public headers
-- `src/json_*.c` implementation
-- `tests/` with corpus + unit tests
-- `JSON.md` (this doc) kept at repo root or `text/docs/`
+- `include/ghoti.io/text/json.h` umbrella header
+- `include/ghoti.io/text/json/*.h` other JSON module headers
+- `src/json/*.c` implementation
+- `tests/test-json.cpp` and `tests/data/json/` with corpus + unit tests
+- `JSON.md` (this doc) kept at `text/docs/`
 
 ---
 
 ## 16. Appendix: Suggested Header Breakdown
 
-- `json.h` — umbrella include + common types (`status`, `error`, options)
+- `json_core.h` — core types (`status`, `error`, options, enums) — separate from umbrella for dependency reduction
+- `json.h` — umbrella include that includes all JSON module headers
 - `json_dom.h` — DOM parse + DOM API
 - `json_stream.h` — streaming parser
 - `json_writer.h` — writer + sink
