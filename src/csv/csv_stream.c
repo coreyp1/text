@@ -73,6 +73,10 @@ struct text_csv_stream {
     bool in_comment;
     size_t comment_prefix_len;
 
+    // In-situ mode tracking (for table parsing)
+    const char* original_input_buffer;  ///< Original input buffer (caller-owned, for in-situ mode)
+    size_t original_input_buffer_len;   ///< Length of original input buffer
+
     // Error state
     text_csv_error error;
 };
@@ -215,10 +219,36 @@ static text_csv_status csv_stream_unescape_field(
             return TEXT_CSV_OK;
         }
 
-        // Input is not in field_buffer - copy it to ensure stability
+        // Check if input_data points to the original input buffer (for in-situ mode)
+        if (stream->opts.in_situ_mode && stream->original_input_buffer && input_data) {
+            const char* input_start = stream->original_input_buffer;
+            size_t input_buffer_len = stream->original_input_buffer_len;
+            const char* field_start = input_data;
+            size_t field_len = input_len;
+
+            // Check for pointer arithmetic overflow safety
+            // Use subtraction to check bounds instead of addition to avoid overflow
+            if (field_start >= input_start) {
+                size_t offset_from_start = (size_t)(field_start - input_start);
+                // Check that field fits within buffer and doesn't overflow
+                if (offset_from_start <= input_buffer_len &&
+                    field_len <= input_buffer_len - offset_from_start) {
+                    // Can use in-situ mode: return original pointer
+                    *output_data = input_data;
+                    *output_len = input_len;
+                    return TEXT_CSV_OK;
+                }
+            }
+        }
+
+        // Input is not in field_buffer and not in original input - copy it to ensure stability
         // Safety check: ensure input_data is valid (not NULL)
         if (!input_data) {
             return TEXT_CSV_E_INVALID;
+        }
+        // Safety check: check for integer overflow in allocation size
+        if (input_len > SIZE_MAX - 1) {
+            return TEXT_CSV_E_OOM;
         }
         // Safety check: ensure input_len is reasonable
         if (input_len > stream->field_buffer_size && stream->field_buffer_size > 0) {
@@ -713,34 +743,57 @@ static text_csv_status csv_stream_process_chunk(
                         stream->field_start = stream->field_buffer;
                         stream->field_length = stream->field_buffer_used;
                     } else {
-                        // For non-buffered fields, always copy to buffer to ensure stability
-                        // This prevents issues if process_input is cleared or modified
-                        size_t copy_len = stream->field_length;
-                        // Validate field_start is within bounds before copying
-                        if (stream->field_start >= process_input &&
-                            stream->field_start < process_input + process_len) {
-                            // field_start is valid - copy what we can
-                            size_t available = (process_input + process_len) - stream->field_start;
-                            if (copy_len > available) {
-                                copy_len = available;
-                            }
-                            if (copy_len > 0) {
-                                stream->field_buffer_used = 0;
-                                text_csv_status status = csv_stream_grow_field_buffer(stream, copy_len + 1);
-                                if (status != TEXT_CSV_OK) {
-                                    return status;
+                        // For non-buffered fields, check if we can use in-situ mode
+                        bool can_use_in_situ = false;
+                        if (stream->opts.in_situ_mode && stream->original_input_buffer && stream->field_start) {
+                            const char* input_start = stream->original_input_buffer;
+                            size_t input_buffer_len = stream->original_input_buffer_len;
+                            const char* field_start = stream->field_start;
+                            size_t field_len = stream->field_length;
+
+                            // Check for pointer arithmetic overflow safety
+                            // Use subtraction to check bounds instead of addition to avoid overflow
+                            if (field_start >= input_start) {
+                                size_t offset_from_start = (size_t)(field_start - input_start);
+                                // Check that field fits within buffer and doesn't overflow
+                                if (offset_from_start <= input_buffer_len &&
+                                    field_len <= input_buffer_len - offset_from_start) {
+                                    can_use_in_situ = true;
                                 }
-                                memcpy(stream->field_buffer, stream->field_start, copy_len);
-                                stream->field_buffer_used = copy_len;
-                                stream->field_is_buffered = true;
-                                stream->field_start = stream->field_buffer;
-                                stream->field_length = copy_len;
                             }
-                        } else {
-                            // field_start is out of bounds - this shouldn't happen for valid input
-                            // but handle gracefully by using empty field
-                            stream->field_length = 0;
                         }
+
+                        if (!can_use_in_situ) {
+                            // Copy to buffer to ensure stability
+                            // This prevents issues if process_input is cleared or modified
+                            size_t copy_len = stream->field_length;
+                            // Validate field_start is within bounds before copying
+                            if (stream->field_start >= process_input &&
+                                stream->field_start < process_input + process_len) {
+                                // field_start is valid - copy what we can
+                                size_t available = (process_input + process_len) - stream->field_start;
+                                if (copy_len > available) {
+                                    copy_len = available;
+                                }
+                                if (copy_len > 0) {
+                                    stream->field_buffer_used = 0;
+                                    text_csv_status status = csv_stream_grow_field_buffer(stream, copy_len + 1);
+                                    if (status != TEXT_CSV_OK) {
+                                        return status;
+                                    }
+                                    memcpy(stream->field_buffer, stream->field_start, copy_len);
+                                    stream->field_buffer_used = copy_len;
+                                    stream->field_is_buffered = true;
+                                    stream->field_start = stream->field_buffer;
+                                    stream->field_length = copy_len;
+                                }
+                            } else {
+                                // field_start is out of bounds - this shouldn't happen for valid input
+                                // but handle gracefully by using empty field
+                                stream->field_length = 0;
+                            }
+                        }
+                        // If can_use_in_situ is true, field_start already points to original input, so we're done
                     }
                     const char* field_data = stream->field_is_buffered ? stream->field_buffer : stream->field_start;
                     const char* unescaped_data;
@@ -1309,6 +1362,8 @@ TEXT_API text_csv_stream* text_csv_stream_new(
     stream->pos.line = 1;
     stream->pos.column = 1;
     stream->total_bytes_consumed = 0;
+    stream->original_input_buffer = NULL;
+    stream->original_input_buffer_len = 0;
 
     // Set limits
     stream->max_rows = csv_get_limit(stream->opts.max_rows, CSV_DEFAULT_MAX_ROWS);
@@ -1501,4 +1556,16 @@ TEXT_API void text_csv_stream_free(text_csv_stream* stream) {
     free(stream->field_buffer);
     text_csv_error_free(&stream->error);
     free(stream);
+}
+
+void csv_stream_set_original_input_buffer(
+    text_csv_stream* stream,
+    const char* input_buffer,
+    size_t input_buffer_len
+) {
+    if (!stream) {
+        return;
+    }
+    stream->original_input_buffer = input_buffer;
+    stream->original_input_buffer_len = input_buffer_len;
 }

@@ -28,7 +28,15 @@ typedef struct text_csv_table text_csv_table;
  * Parses the provided CSV data and builds an in-memory table representation.
  * The table uses arena allocation for efficient memory management.
  *
- * @param data Input CSV data
+ * When `in_situ_mode` is enabled in parse options:
+ * - Fields that don't require transformation (no unescaping, no UTF-8 validation)
+ *   may reference the input buffer directly for zero-copy efficiency.
+ * - The input buffer (`data`) must remain valid for the lifetime of the table.
+ * - Fields that require transformation (e.g., unescaping doubled quotes) are
+ *   copied to the arena and do not reference the input buffer.
+ * - When `validate_utf8` is enabled, all fields are copied (in-situ mode is disabled).
+ *
+ * @param data Input CSV data (must remain valid for table lifetime if in_situ_mode is enabled)
  * @param len Length of input data
  * @param opts Parse options (can be NULL for defaults)
  * @param err Error output structure (can be NULL)
@@ -70,6 +78,11 @@ TEXT_API size_t text_csv_col_count(const text_csv_table* table, size_t row);
 
 /**
  * @brief Get a field value from the table
+ *
+ * Returns a pointer to the field data. The pointer is valid for the lifetime
+ * of the table. If in-situ mode was used, the pointer may reference the original
+ * input buffer (which must remain valid). Otherwise, the pointer references
+ * arena-allocated memory.
  *
  * @param table Table (must not be NULL)
  * @param row Row index (0-based)

@@ -1983,6 +1983,112 @@ TEST(CsvTableWrite, CustomDialect) {
     text_csv_sink_buffer_free(&sink);
 }
 
+// In-Situ Mode Tests
+TEST(CsvTableInSitu, BasicInSitu) {
+    // Simple CSV with unquoted fields - should use in-situ mode when possible
+    const char* input = "a,b,c";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;
+    opts.validate_utf8 = false;  // UTF-8 validation disables in-situ mode
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &opts, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify content is correct (in-situ mode may or may not be used depending on implementation)
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_NE(field0, nullptr);
+    EXPECT_EQ(len, 1u);
+    EXPECT_EQ(std::string(field0, len), "a");
+
+    const char* field1 = text_csv_field(table, 0, 1, &len);
+    EXPECT_NE(field1, nullptr);
+    EXPECT_EQ(len, 1u);
+    EXPECT_EQ(std::string(field1, len), "b");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTableInSitu, QuotedFieldsFallback) {
+    // Quoted fields with doubled quotes need unescaping - should fall back to copy
+    const char* input = "a,\"b\"\"c\",d";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;
+    opts.validate_utf8 = false;
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &opts, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify content is correct
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(std::string(field0, len), "a");
+
+    // Middle field (quoted with doubled quotes) needs unescaping - should be copied
+    const char* field1 = text_csv_field(table, 0, 1, &len);
+    EXPECT_NE(field1, nullptr);
+    EXPECT_EQ(len, 3u);  // "b"c" -> b"c (unescaped)
+    EXPECT_EQ(std::string(field1, len), "b\"c");
+
+    const char* field2 = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(std::string(field2, len), "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTableInSitu, Utf8ValidationDisablesInSitu) {
+    // When UTF-8 validation is enabled, in-situ mode is disabled
+    const char* input = "a,b,c";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;
+    opts.validate_utf8 = true;  // This disables in-situ mode
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &opts, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Fields should be copied (not in-situ) when UTF-8 validation is enabled
+    // We verify by checking content is correct
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_NE(field0, nullptr);
+    EXPECT_EQ(len, 1u);
+    EXPECT_EQ(std::string(field0, len), "a");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTableInSitu, MixedMode) {
+    // Mix of fields: some in-situ, some copied (due to unescaping)
+    const char* input = "plain,\"quoted\"\"field\",another";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;
+    opts.validate_utf8 = false;
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &opts, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify content is correct (regardless of in-situ or copied)
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(std::string(field0, len), "plain");
+
+    const char* field1 = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(std::string(field1, len), "quoted\"field");  // Unescaped
+
+    const char* field2 = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(std::string(field2, len), "another");
+
+    text_csv_free_table(table);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

@@ -83,6 +83,90 @@ DOM mode builds an in-memory representation:
 - Arena allocation for stable ownership and O(1) teardown via `text_csv_free()`.
 - Optional **in-situ** mode to reference the input buffer directly (caller must keep it alive).
 
+#### 3.1.1 In-Situ Mode (Zero-Copy Parsing)
+
+In-situ mode is a **best-effort optimization** that allows fields to reference the original input buffer directly, avoiding memory copies for improved performance. This mode is particularly effective for single-chunk parsing of simple CSV data.
+
+**When In-Situ Mode Works:**
+
+In-situ mode is used for a field when **all** of the following conditions are met:
+
+1. **`in_situ_mode` is enabled** in parse options
+2. **`validate_utf8` is disabled** (`false`) — UTF-8 validation requires copying
+3. **Single-chunk parsing** — the entire CSV data is provided in one `text_csv_parse_table()` call
+4. **No transformation needed** — the field doesn't require unescaping:
+   - No doubled quotes (`""`) that need to be converted to single quotes
+   - No backslash escape sequences (`\"`, `\\`, etc.)
+5. **Field not buffered** — the field didn't span chunks or get buffered for other reasons:
+   - Quoted fields with newlines are buffered (even if in a single chunk)
+   - Fields that span multiple `feed()` calls in streaming mode are buffered
+6. **Field is within original input buffer** — the field data pointer is within the bounds of the original input buffer
+
+**When In-Situ Mode Falls Back to Copying:**
+
+Fields are automatically copied to arena-allocated memory when:
+
+- **UTF-8 validation is enabled** — all fields are copied when `validate_utf8 = true`
+- **Field requires unescaping** — doubled quotes (`""`) or backslash escapes need transformation
+- **Field was buffered** — fields spanning chunks or containing newlines in quotes are buffered
+- **Multi-chunk parsing** — streaming parser with multiple `feed()` calls buffers fields
+- **Quoted fields with newlines** — newlines inside quoted fields trigger buffering
+
+**Lifetime Requirements:**
+
+⚠️ **Critical**: When in-situ mode is enabled, the input buffer (`data` parameter to `text_csv_parse_table()`) **must remain valid for the entire lifetime of the table**. The table may contain pointers directly into this buffer.
+
+- Fields using in-situ mode reference the original input buffer
+- Modifying or freeing the input buffer while the table exists results in undefined behavior
+- Use in-situ mode only when you can guarantee the input buffer's lifetime exceeds the table's lifetime
+
+**Side Effects and Considerations:**
+
+1. **Mixed mode**: A single table may contain both in-situ fields (pointing to input) and copied fields (in arena). This is transparent to the API user.
+
+2. **Best for single-chunk parsing**: In-situ mode works best when all data is provided at once. Multi-chunk streaming parsing causes fields to be buffered, preventing in-situ mode.
+
+3. **Quoted fields can use in-situ**: Simple quoted fields like `"Smith, John"` (quoted only because they contain a delimiter) can use in-situ mode if they don't require unescaping and aren't buffered.
+
+4. **Unquoted fields cannot use in-situ**: Unquoted fields are immediately buffered for stability, so they cannot use in-situ mode even when enabled.
+
+5. **Performance trade-off**: In-situ mode reduces memory allocations and copies, but requires careful lifetime management. Use when:
+   - You have long-lived input buffers (e.g., memory-mapped files)
+   - You need maximum performance for large datasets
+   - You can guarantee buffer lifetime
+
+**Example Usage:**
+
+```c
+// Input buffer that will remain valid
+const char* csv_data = "Name,Age\nJohn,30\nJane,25";
+size_t csv_len = strlen(csv_data);
+
+// Enable in-situ mode
+text_csv_parse_options opts = text_csv_parse_options_default();
+opts.in_situ_mode = true;
+opts.validate_utf8 = false;  // Required for in-situ mode
+
+text_csv_table* table = text_csv_parse_table(csv_data, csv_len, &opts, NULL);
+
+// Fields may point directly into csv_data
+const char* name = text_csv_field(table, 0, 0, NULL);
+// name may point into csv_data (if in-situ mode was used)
+
+// CRITICAL: csv_data must remain valid until table is freed
+text_csv_free_table(table);
+// Now csv_data can be safely modified/freed
+```
+
+**Best Practices:**
+
+- ✅ Use in-situ mode for read-only, long-lived input buffers
+- ✅ Use in-situ mode for single-chunk parsing (all data at once)
+- ✅ Disable UTF-8 validation when using in-situ mode (if validation isn't needed)
+- ❌ Don't use in-situ mode if you need to free/modify the input buffer before freeing the table
+- ❌ Don't rely on in-situ mode for multi-chunk streaming parsing
+- ❌ Don't enable in-situ mode if you need UTF-8 validation
+
 ### 3.2 Streaming Parsing
 
 Streaming parsing processes CSV incrementally, emitting events:
@@ -150,7 +234,7 @@ Suggested fields:
 
 - `dialect` (embedded struct or pointer)
 - `validate_utf8` (default `true`)
-- `in_situ_mode` (default `false`)
+- `in_situ_mode` (default `false`) — enables zero-copy field references (see §3.1.1 for details)
 - `keep_bom` (default `false`) — if false, strip UTF‑8 BOM on first field of first record
 - **Limits** (0 means library defaults):
   - `max_rows` (default e.g. 10M)

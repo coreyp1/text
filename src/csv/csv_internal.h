@@ -19,6 +19,9 @@
 extern "C" {
 #endif
 
+// Forward declaration
+typedef struct text_csv_stream text_csv_stream;
+
 /**
  * @brief Default limits for CSV parsing (used when opts->max_* is 0)
  */
@@ -200,6 +203,22 @@ text_csv_status csv_write_field(
     const char* field_data,
     size_t field_len,
     const text_csv_write_options* opts
+);
+
+/**
+ * @brief Set original input buffer for in-situ mode
+ *
+ * Internal function for setting the original input buffer in a stream.
+ * This is used by table parsing to enable in-situ mode field references.
+ *
+ * @param stream Stream parser (must not be NULL)
+ * @param input_buffer Original input buffer (caller-owned, must remain valid)
+ * @param input_buffer_len Length of input buffer
+ */
+void csv_stream_set_original_input_buffer(
+    text_csv_stream* stream,
+    const char* input_buffer,
+    size_t input_buffer_len
 );
 
 // ============================================================================

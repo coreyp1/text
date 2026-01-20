@@ -276,14 +276,43 @@ static text_csv_status csv_table_event_callback(
 
             csv_table_field* field = &ctx->current_row->fields[ctx->current_field_index];
 
-            // Handle field data
+            // Handle field data - check if we can use in-situ mode
+            bool can_use_in_situ = false;
             if (ctx->opts->in_situ_mode && !ctx->opts->validate_utf8) {
+                // Check if field data points to the original input buffer
+                // This means the field wasn't transformed (no unescaping needed) and wasn't buffered
+                if (table->ctx->input_buffer && event->data) {
+                    const char* input_start = table->ctx->input_buffer;
+                    size_t input_buffer_len = table->ctx->input_buffer_len;
+                    const char* field_start = event->data;
+                    size_t field_len = event->data_len;
+
+                    // Check for pointer arithmetic overflow safety
+                    // Use subtraction to check bounds instead of addition to avoid overflow
+                    if (field_start >= input_start) {
+                        size_t offset_from_start = (size_t)(field_start - input_start);
+                        // Check that field fits within buffer and doesn't overflow
+                        if (offset_from_start <= input_buffer_len &&
+                            field_len <= input_buffer_len - offset_from_start) {
+                            can_use_in_situ = true;
+                        }
+                    }
+                }
+            }
+
+            if (can_use_in_situ) {
                 // Can use in-situ mode: reference input directly
+                // The input buffer is caller-owned and must remain valid for the lifetime of the table
                 field->data = event->data;
                 field->length = event->data_len;
                 field->is_in_situ = true;
             } else {
-                // Need to copy (for escaping/unescaping or UTF-8 validation)
+                // Need to copy (for escaping/unescaping, UTF-8 validation, or when field was transformed)
+                // Check for integer overflow in allocation size
+                if (event->data_len > SIZE_MAX - 1) {
+                    ctx->status = TEXT_CSV_E_OOM;
+                    return TEXT_CSV_E_OOM;
+                }
                 char* field_data = (char*)csv_arena_alloc_for_context(
                     table->ctx, event->data_len + 1, 1
                 );
@@ -291,7 +320,10 @@ static text_csv_status csv_table_event_callback(
                     ctx->status = TEXT_CSV_E_OOM;
                     return TEXT_CSV_E_OOM;
                 }
-                memcpy(field_data, event->data, event->data_len);
+                // event->data is checked to be non-NULL above, and event->data_len is checked for overflow
+                if (event->data_len > 0 && event->data) {
+                    memcpy(field_data, event->data, event->data_len);
+                }
                 field_data[event->data_len] = '\0';
                 field->data = field_data;
                 field->length = event->data_len;
@@ -359,6 +391,11 @@ static text_csv_status csv_table_parse_internal(
             err->caret_offset = 0;
         }
         return TEXT_CSV_E_OOM;
+    }
+
+    // Set original input buffer for in-situ mode
+    if (opts->in_situ_mode && table->ctx->input_buffer) {
+        csv_stream_set_original_input_buffer(stream, table->ctx->input_buffer, table->ctx->input_buffer_len);
     }
 
     // Feed input
@@ -492,11 +529,6 @@ TEXT_API text_csv_table* text_csv_parse_table(
         return NULL;
     }
 
-    // Set input buffer for in-situ mode
-    if (opts->in_situ_mode) {
-        csv_context_set_input_buffer(ctx, (const char*)data, len);
-    }
-
     // Allocate table structure
     text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
     if (!table) {
@@ -540,12 +572,17 @@ TEXT_API text_csv_table* text_csv_parse_table(
         return NULL;
     }
 
-    // Handle BOM
+    // Handle BOM (must be done before setting input buffer for in-situ mode)
     const char* input = (const char*)data;
     size_t input_len = len;
     csv_position pos = {0, 1, 1};
     if (!opts->keep_bom) {
         csv_strip_bom(&input, &input_len, &pos, true);
+    }
+
+    // Set input buffer for in-situ mode (use adjusted input after BOM stripping)
+    if (opts->in_situ_mode) {
+        csv_context_set_input_buffer(ctx, input, input_len);
     }
 
     // Parse
