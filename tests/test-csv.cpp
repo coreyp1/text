@@ -1388,6 +1388,359 @@ TEST(CsvWriter, FieldRoundTripWithQuotes) {
     text_csv_sink_buffer_free(&sink);
 }
 
+// Streaming Writer Tests
+TEST(CsvStreamingWriter, CreateAndFree) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, CreateInvalidParams) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+
+    // Test NULL sink
+    text_csv_writer* writer = text_csv_writer_new(nullptr, &opts);
+    EXPECT_EQ(writer, nullptr);
+
+    // Test NULL options
+    writer = text_csv_writer_new(&sink, nullptr);
+    EXPECT_EQ(writer, nullptr);
+
+    // Test invalid sink (no write function)
+    text_csv_sink invalid_sink;
+    invalid_sink.write = nullptr;
+    invalid_sink.user = nullptr;
+    writer = text_csv_writer_new(&invalid_sink, &opts);
+    EXPECT_EQ(writer, nullptr);
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, SimpleRecord) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    // Write a simple record: "hello,world"
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "hello", 5);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "world", 5);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(std::string(output, output_len), "hello,world\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, MultipleRecords) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    // Write two records
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_field(writer, "a", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_field(writer, "b", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_field(writer, "c", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_field(writer, "d", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(std::string(output, output_len), "a,b\nc,d\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, QuotedFields) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_if_needed = true;
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    // Write a record with a field containing a delimiter
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "hello,world", 11);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "test", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Field with delimiter should be quoted
+    EXPECT_EQ(std::string(output, output_len), "\"hello,world\",test\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, EmptyField) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_empty_fields = true;
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "nonempty", 8);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Empty field should be quoted
+    EXPECT_EQ(std::string(output, output_len), "\"\",nonempty\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, StructuralEnforcementFieldWithoutRecord) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    // Try to write field without starting a record - should fail
+    status = text_csv_writer_field(writer, "test", 4);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, StructuralEnforcementRecordEndWithoutRecord) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    // Try to end record without starting one - should fail
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, StructuralEnforcementDoubleRecordBegin) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to start another record without ending the first - should fail
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, StructuralEnforcementFieldAfterFinish) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "test", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to write after finish - should fail
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, FinishClosesOpenRecord) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "test", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Finish without explicitly ending record - should close it
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(std::string(output, output_len), "test\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, CustomNewline) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.newline = "\r\n";
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "test", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(std::string(output, output_len), "test\r\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvStreamingWriter, CustomDelimiter) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.delimiter = ';';
+    text_csv_writer* writer = text_csv_writer_new(&sink, &opts);
+    EXPECT_NE(writer, nullptr);
+
+    status = text_csv_writer_record_begin(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "a", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_field(writer, "b", 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_record_end(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_writer_finish(writer);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(std::string(output, output_len), "a;b\n");
+
+    text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

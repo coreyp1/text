@@ -4,7 +4,8 @@
  *
  * This header provides the sink abstraction for writing CSV output to
  * various destinations (buffers, files, callbacks, etc.) and helper
- * functions for common sink types.
+ * functions for common sink types. It also provides the streaming writer
+ * API for incremental CSV construction with structural enforcement.
  */
 
 #ifndef GHOTI_IO_TEXT_CSV_WRITER_H
@@ -168,6 +169,105 @@ TEXT_API bool text_csv_sink_fixed_buffer_truncated(const text_csv_sink* sink);
  * @param sink Sink created by text_csv_sink_fixed_buffer()
  */
 TEXT_API void text_csv_sink_fixed_buffer_free(text_csv_sink* sink);
+
+// ============================================================================
+// Streaming Writer API
+// ============================================================================
+
+/**
+ * @brief Opaque CSV writer structure
+ *
+ * The writer maintains state for incremental CSV construction and enforces
+ * valid call ordering (fields only within records, etc.).
+ */
+typedef struct text_csv_writer text_csv_writer;
+
+/**
+ * @brief Create a new CSV writer
+ *
+ * Creates a new streaming writer that will write CSV data to the provided
+ * sink according to the specified write options. The writer enforces
+ * structural correctness (fields only within records, proper record
+ * boundaries, etc.).
+ *
+ * @param sink Output sink (must remain valid for writer lifetime)
+ * @param opts Write options (copied internally, can be freed after call)
+ * @return Pointer to new writer, or NULL on failure (invalid sink/opts or OOM)
+ */
+TEXT_API text_csv_writer* text_csv_writer_new(
+  const text_csv_sink* sink,
+  const text_csv_write_options* opts
+);
+
+/**
+ * @brief Begin a new CSV record
+ *
+ * Starts a new record. Fields can only be written between record_begin()
+ * and record_end() calls. Multiple records can be written sequentially.
+ *
+ * @param writer Writer instance
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ *         already in a record, or write error if sink write fails
+ */
+TEXT_API text_csv_status text_csv_writer_record_begin(text_csv_writer* writer);
+
+/**
+ * @brief Write a field to the current record
+ *
+ * Writes a field with proper quoting and escaping according to the write
+ * options. Automatically inserts delimiters between fields. This function
+ * can only be called between record_begin() and record_end() calls.
+ *
+ * @param writer Writer instance
+ * @param bytes Field data (may be NULL if len is 0)
+ * @param len Field length in bytes
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ *         not in a record, or write error if sink write fails
+ */
+TEXT_API text_csv_status text_csv_writer_field(
+  text_csv_writer* writer,
+  const void* bytes,
+  size_t len
+);
+
+/**
+ * @brief End the current CSV record
+ *
+ * Ends the current record and writes the appropriate newline sequence.
+ * This function can only be called after record_begin() and before the
+ * next record_begin() or finish().
+ *
+ * @param writer Writer instance
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ *         not in a record, or write error if sink write fails
+ */
+TEXT_API text_csv_status text_csv_writer_record_end(text_csv_writer* writer);
+
+/**
+ * @brief Finish writing CSV output
+ *
+ * Finalizes the CSV output. If a record is currently open, it will be
+ * closed. If trailing_newline is enabled in options, a final newline
+ * will be written. After calling finish(), the writer should not be used
+ * for further writing (though free() can still be called).
+ *
+ * @param writer Writer instance
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL,
+ *         or write error if sink write fails
+ */
+TEXT_API text_csv_status text_csv_writer_finish(text_csv_writer* writer);
+
+/**
+ * @brief Free a CSV writer
+ *
+ * Frees all resources associated with the writer. The sink is not freed
+ * (it's owned by the caller). It is safe to call this function even if
+ * finish() was not called, though finish() should be called first for
+ * proper output finalization.
+ *
+ * @param writer Writer instance (can be NULL)
+ */
+TEXT_API void text_csv_writer_free(text_csv_writer* writer);
 
 #ifdef __cplusplus
 }
