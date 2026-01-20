@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 
-// Task 1: Core Types and Error Handling
+// Core Types and Error Handling
 TEST(CsvCore, StatusEnum) {
     EXPECT_EQ(TEXT_CSV_OK, 0);
     EXPECT_NE(TEXT_CSV_E_INVALID, TEXT_CSV_OK);
@@ -53,7 +53,7 @@ TEST(CsvCore, ErrorFree) {
     text_csv_error_free(nullptr);
 }
 
-// Task 2: Dialect and Options Structures
+// Dialect and Options Structures
 TEST(CsvDialect, DefaultDialect) {
     text_csv_dialect d = text_csv_dialect_default();
 
@@ -114,15 +114,15 @@ TEST(CsvOptions, WriteOptionsDefault) {
     EXPECT_FALSE(opts.trailing_newline);
 }
 
-// Task 3: Internal Infrastructure - Arena
+// Internal Infrastructure - Arena
 TEST(CsvArena, ContextCreation) {
     // Note: csv_context_new is internal, but we can test through public API
     // For now, we test that the structure exists and can be used
-    // Full arena tests will be in Task 8 when table API is available
+    // Full arena tests will be with table API
     EXPECT_TRUE(true);  // Placeholder - arena will be tested with table API
 }
 
-// Task 4: Newline, BOM, and UTF-8 Utilities
+// Newline, BOM, and UTF-8 Utilities
 TEST(CsvUtils, NewlineDetectionLF) {
     csv_position pos = {4, 1, 5};  // Position at the '\n' character
     text_csv_dialect dialect = text_csv_dialect_default();
@@ -328,7 +328,7 @@ TEST(CsvUtils, UTF8ValidationTooLarge) {
     EXPECT_EQ(result, CSV_UTF8_INVALID);
 }
 
-// Task 5-7: Streaming Parser Tests
+// Streaming Parser Tests
 TEST(CsvStream, BasicParsing) {
     const char* input = "a,b,c\n1,2,3\n";
     size_t input_len = strlen(input);
@@ -526,7 +526,7 @@ TEST(CsvStream, FieldSpanningChunksWithNewlines) {
 TEST(CsvStream, FieldSpanningManySmallChunks) {
     const char* full_field = "\"This is a field that will be split into many tiny chunks\"";
     size_t full_len = strlen(full_field);
-    
+
     std::vector<std::string> fields;
 
     text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
@@ -679,7 +679,7 @@ TEST(CsvStream, FieldCompletingAtChunkBoundary) {
     EXPECT_EQ(fields[1], "field2");
 }
 
-// Task 8-9: Table Parsing Tests
+// Table Parsing Tests
 TEST(CsvTable, BasicParsing) {
     const char* input = "a,b,c\n1,2,3\n4,5,6\n";
     size_t input_len = strlen(input);
@@ -800,6 +800,187 @@ TEST(CsvTable, QuotedFieldsInTable) {
     EXPECT_EQ(std::string(field4, len), "3\"4");
 
     text_csv_free_table(table);
+}
+
+// Writer Infrastructure - Sink Abstraction
+TEST(CsvSink, CallbackSink) {
+    std::string output;
+
+    // Custom write callback that appends to string
+    auto write_callback = [](void* user, const char* bytes, size_t len) -> text_csv_status {
+        std::string* str = (std::string*)user;
+        str->append(bytes, len);
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_sink sink;
+    sink.write = write_callback;
+    sink.user = &output;
+
+    // Write some data
+    const char* test_data = "Hello, World!";
+    text_csv_status result = sink.write(sink.user, test_data, strlen(test_data));
+    EXPECT_EQ(result, TEXT_CSV_OK);
+    EXPECT_EQ(output, "Hello, World!");
+
+    // Write more data
+    const char* more_data = " Test";
+    result = sink.write(sink.user, more_data, strlen(more_data));
+    EXPECT_EQ(result, TEXT_CSV_OK);
+    EXPECT_EQ(output, "Hello, World! Test");
+}
+
+TEST(CsvSink, GrowableBuffer) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Write some data
+    const char* test_data = "Hello, CSV!";
+    status = sink.write(sink.user, test_data, strlen(test_data));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Check buffer contents
+    const char* data = text_csv_sink_buffer_data(&sink);
+    size_t size = text_csv_sink_buffer_size(&sink);
+    EXPECT_NE(data, nullptr);
+    EXPECT_EQ(size, strlen(test_data));
+    EXPECT_EQ(std::string(data, size), "Hello, CSV!");
+
+    // Write more data
+    const char* more_data = " More data";
+    status = sink.write(sink.user, more_data, strlen(more_data));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(size, strlen(test_data) + strlen(more_data));
+    EXPECT_EQ(std::string(data, size), "Hello, CSV! More data");
+
+    // Cleanup
+    text_csv_sink_buffer_free(&sink);
+    EXPECT_EQ(sink.write, nullptr);
+    EXPECT_EQ(sink.user, nullptr);
+}
+
+TEST(CsvSink, GrowableBufferLargeOutput) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Write a large amount of data to test buffer growth
+    std::string large_data;
+    for (int i = 0; i < 1000; i++) {
+        large_data += "This is a test string. ";
+    }
+
+    status = sink.write(sink.user, large_data.c_str(), large_data.size());
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* data = text_csv_sink_buffer_data(&sink);
+    size_t size = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(size, large_data.size());
+    EXPECT_EQ(std::string(data, size), large_data);
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvSink, FixedBuffer) {
+    char buffer[100];
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_fixed_buffer(&sink, buffer, sizeof(buffer));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Write some data
+    const char* test_data = "Hello, CSV!";
+    status = sink.write(sink.user, test_data, strlen(test_data));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Check buffer contents
+    size_t used = text_csv_sink_fixed_buffer_used(&sink);
+    bool truncated = text_csv_sink_fixed_buffer_truncated(&sink);
+    EXPECT_EQ(used, strlen(test_data));
+    EXPECT_FALSE(truncated);
+    EXPECT_EQ(std::string(buffer, used), "Hello, CSV!");
+
+    // Write more data
+    const char* more_data = " More data";
+    status = sink.write(sink.user, more_data, strlen(more_data));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    used = text_csv_sink_fixed_buffer_used(&sink);
+    EXPECT_EQ(used, strlen(test_data) + strlen(more_data));
+    EXPECT_FALSE(truncated);
+
+    // Cleanup
+    text_csv_sink_fixed_buffer_free(&sink);
+    EXPECT_EQ(sink.write, nullptr);
+    EXPECT_EQ(sink.user, nullptr);
+}
+
+TEST(CsvSink, FixedBufferTruncation) {
+    char buffer[20];  // Small buffer
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_fixed_buffer(&sink, buffer, sizeof(buffer));
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Write data that exceeds buffer size
+    const char* large_data = "This is a very long string that will exceed the buffer size";
+    status = sink.write(sink.user, large_data, strlen(large_data));
+    EXPECT_EQ(status, TEXT_CSV_E_WRITE);  // Should return error due to truncation
+
+    // Check truncation flag
+    bool truncated = text_csv_sink_fixed_buffer_truncated(&sink);
+    EXPECT_TRUE(truncated);
+
+    // Check that we wrote as much as possible
+    size_t used = text_csv_sink_fixed_buffer_used(&sink);
+    EXPECT_LT(used, strlen(large_data));
+    EXPECT_LE(used, sizeof(buffer) - 1);  // -1 for null terminator
+
+    text_csv_sink_fixed_buffer_free(&sink);
+}
+
+TEST(CsvSink, FixedBufferInvalidParams) {
+    text_csv_sink sink;
+
+    // Test NULL sink
+    text_csv_status status = text_csv_sink_fixed_buffer(nullptr, (char*)"test", 4);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Test NULL buffer
+    status = text_csv_sink_fixed_buffer(&sink, nullptr, 10);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Test zero size
+    char buffer[10];
+    status = text_csv_sink_fixed_buffer(&sink, buffer, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvSink, GrowableBufferInvalidParams) {
+    // Test NULL sink
+    text_csv_status status = text_csv_sink_buffer(nullptr);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvSink, BufferAccessorsInvalidSink) {
+    text_csv_sink sink;
+    sink.write = nullptr;
+    sink.user = nullptr;
+
+    // Test invalid sink for growable buffer accessors
+    const char* data = text_csv_sink_buffer_data(&sink);
+    EXPECT_EQ(data, nullptr);
+
+    size_t size = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(size, 0u);
+
+    // Test invalid sink for fixed buffer accessors
+    size_t used = text_csv_sink_fixed_buffer_used(&sink);
+    EXPECT_EQ(used, 0u);
+
+    bool truncated = text_csv_sink_fixed_buffer_truncated(&sink);
+    EXPECT_FALSE(truncated);
 }
 
 int main(int argc, char **argv) {

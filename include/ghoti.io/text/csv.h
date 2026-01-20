@@ -18,6 +18,6 @@
 // CSV module headers
 #include <ghoti.io/text/csv/csv_table.h>
 #include <ghoti.io/text/csv/csv_stream.h>
-// #include <ghoti.io/text/csv/csv_writer.h>
+#include <ghoti.io/text/csv/csv_writer.h>
 
 #endif /* GHOTI_IO_TEXT_CSV_H */
