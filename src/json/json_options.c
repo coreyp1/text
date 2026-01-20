@@ -47,6 +47,11 @@ text_json_write_options text_json_write_options_default(void) {
     opts.pretty = 0;              // compact output
     opts.indent_spaces = 2;       // default indent (used if pretty = 1)
     opts.newline = "\n";          // default newline
+    opts.trailing_newline = 0;    // no trailing newline by default
+    opts.space_after_colon = 0;   // no space after colon by default
+    opts.space_after_comma = 0;   // no space after comma by default
+    opts.inline_array_threshold = -1;   // always inline arrays by default (when not pretty)
+    opts.inline_object_threshold = -1;  // always inline objects by default (when not pretty)
 
     // Escaping
     opts.escape_solidus = 0;       // don't escape forward slash by default
@@ -60,6 +65,10 @@ text_json_write_options text_json_write_options_default(void) {
 
     // Extensions
     opts.allow_nonfinite_numbers = 0;  // don't emit nonfinite by default
+
+    // Floating-point formatting
+    opts.float_format = TEXT_JSON_FLOAT_SHORTEST;  // shortest representation by default
+    opts.float_precision = 6;     // default precision (used for FIXED/SCIENTIFIC)
 
     return opts;
 }

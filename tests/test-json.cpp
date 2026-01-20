@@ -3280,9 +3280,9 @@ TEST(StreamingWriter, Arrays) {
     status = text_json_writer_finish(w, &err);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
-    // Verify output
+    // Verify output (compact mode: no spaces after commas)
     const char* output = text_json_sink_buffer_data(&sink);
-    EXPECT_STREQ(output, "[1, 2, 3]");
+    EXPECT_STREQ(output, "[1,2,3]");
 
     text_json_writer_free(w);
     text_json_sink_buffer_free(&sink);

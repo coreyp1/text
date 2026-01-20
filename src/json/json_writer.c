@@ -13,10 +13,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <limits.h>
 #include <stdio.h>
 #include <math.h>
 #include <ctype.h>
+
+// Locale support for locale-independent formatting
+#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
+  #include <locale.h>
+  #define HAVE_USELOCALE 1
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  #include <xlocale.h>
+  #define HAVE_USELOCALE 1
+#else
+  #include <locale.h>
+  #define HAVE_USELOCALE 0
+#endif
 
 // Internal write callback for growable buffer sink
 static int buffer_write_fn(void* user, const char* bytes, size_t len) {
@@ -395,6 +408,123 @@ static int write_indent(text_json_sink* sink, int depth, const text_json_write_o
   return 0;
 }
 
+// Locale-independent number formatting helpers
+#if HAVE_USELOCALE
+// Use uselocale for thread-safe locale switching (POSIX)
+static int format_number_locale_independent(
+  char* buf,
+  size_t buf_size,
+  const char* format,
+  ...
+) {
+  // Null pointer and size checks
+  if (!buf || !format || buf_size == 0) {
+    return -1;
+  }
+  
+  locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", NULL);
+  if (!c_locale) {
+    return -1;
+  }
+  locale_t old_locale = uselocale(c_locale);
+  
+  va_list args;
+  va_start(args, format);
+  int result = vsnprintf(buf, buf_size, format, args);
+  va_end(args);
+  
+  uselocale(old_locale);
+  freelocale(c_locale);
+  
+  return result;
+}
+#else
+// Fallback: use setlocale (not thread-safe, but more portable)
+static int format_number_locale_independent(
+  char* buf,
+  size_t buf_size,
+  const char* format,
+  ...
+) {
+  // Null pointer and size checks
+  if (!buf || !format || buf_size == 0) {
+    return -1;
+  }
+  
+  char* old_locale = setlocale(LC_NUMERIC, NULL);
+  char* saved_locale = NULL;
+  if (old_locale) {
+    size_t len = strlen(old_locale);
+    // Check for integer overflow: len + 1
+    if (len == SIZE_MAX) {
+      return -1; // Cannot allocate (string too long)
+    }
+    saved_locale = (char*)malloc(len + 1);
+    if (!saved_locale) {
+      return -1;
+    }
+    memcpy(saved_locale, old_locale, len + 1);
+  }
+  
+  setlocale(LC_NUMERIC, "C");
+  
+  va_list args;
+  va_start(args, format);
+  int result = vsnprintf(buf, buf_size, format, args);
+  va_end(args);
+  
+  if (saved_locale) {
+    setlocale(LC_NUMERIC, saved_locale);
+    free(saved_locale);
+  } else {
+    setlocale(LC_NUMERIC, "C"); // Keep C locale if we couldn't save
+  }
+  
+  return result;
+}
+#endif
+
+// Format a double according to the specified strategy
+static int format_double(
+  char* buf,
+  size_t buf_size,
+  double d,
+  text_json_float_format format,
+  int precision
+) {
+  // Null pointer and size checks
+  if (!buf || buf_size == 0) {
+    return -1;
+  }
+  
+  const char* fmt_str;
+  
+  switch (format) {
+    case TEXT_JSON_FLOAT_SHORTEST:
+      fmt_str = "%.17g";
+      return format_number_locale_independent(buf, buf_size, fmt_str, d);
+      
+    case TEXT_JSON_FLOAT_FIXED:
+      // Clamp precision to reasonable range
+      if (precision < 0) precision = 0;
+      if (precision > 20) precision = 20;
+      fmt_str = "%.*f";
+      return format_number_locale_independent(buf, buf_size, fmt_str, precision, d);
+      
+    case TEXT_JSON_FLOAT_SCIENTIFIC:
+      // Clamp precision to reasonable range
+      if (precision < 0) precision = 0;
+      if (precision > 20) precision = 20;
+      fmt_str = "%.*e";
+      return format_number_locale_independent(buf, buf_size, fmt_str, precision, d);
+      
+    default:
+      // Fallback to shortest
+      fmt_str = "%.17g";
+      return format_number_locale_independent(buf, buf_size, fmt_str, d);
+  }
+}
+
 // Write a number value
 static int write_number(
   text_json_sink* sink,
@@ -438,7 +568,7 @@ static int write_number(
   // Try int64 first (if available and fits)
   if (v->as.number.has_i64) {
     int64_t i64 = v->as.number.i64;
-    len = snprintf(num_buf, sizeof(num_buf), "%lld", (long long)i64);
+    len = format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", (long long)i64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -447,7 +577,7 @@ static int write_number(
   // Try uint64 next
   if (v->as.number.has_u64) {
     uint64_t u64 = v->as.number.u64;
-    len = snprintf(num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
+    len = format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -456,7 +586,9 @@ static int write_number(
   // Use double (or format from lexeme if available)
   if (v->as.number.has_dbl) {
     double d = v->as.number.dbl;
-    len = snprintf(num_buf, sizeof(num_buf), "%.17g", d);
+    text_json_float_format float_fmt = opts->float_format;
+    int float_prec = opts->float_precision > 0 ? opts->float_precision : 6;
+    len = format_double(num_buf, sizeof(num_buf), d, float_fmt, float_prec);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -511,13 +643,32 @@ static int write_value_recursive(
         return 1; // Invalid array state
       }
 
+      // Determine if we should format inline (based on threshold)
+      int should_inline = 0;
+      if (opts->pretty) {
+        int threshold = opts->inline_array_threshold;
+        if (threshold < 0) {
+          should_inline = 0; // -1 means always pretty (never inline)
+        } else if (threshold == 0) {
+          should_inline = 0; // 0 means always pretty
+        } else {
+          should_inline = (size <= (size_t)threshold);
+        }
+      }
+
       for (size_t i = 0; i < size; i++) {
         if (i > 0) {
           if (write_char(sink, ',') != 0) return 1;
+          if (opts->space_after_comma) {
+            if (write_char(sink, ' ') != 0) return 1;
+          }
         }
 
-        if (opts->pretty) {
+        if (opts->pretty && !should_inline) {
           if (write_indent(sink, depth + 1, opts) != 0) return 1;
+        } else if (should_inline && i > 0) {
+          // Inline formatting: add space after comma
+          if (write_char(sink, ' ') != 0) return 1;
         }
 
         // Bounds check: i < size already checked, but verify elems[i] is valid
@@ -530,7 +681,7 @@ static int write_value_recursive(
         }
       }
 
-      if (opts->pretty && size > 0) {
+      if (opts->pretty && size > 0 && !should_inline) {
         if (write_indent(sink, depth, opts) != 0) return 1;
       }
 
@@ -599,6 +750,19 @@ static int write_value_recursive(
         }
       }
 
+      // Determine if we should format inline (based on threshold)
+      int should_inline = 0;
+      if (opts->pretty) {
+        int threshold = opts->inline_object_threshold;
+        if (threshold < 0) {
+          should_inline = 0; // -1 means always pretty (never inline)
+        } else if (threshold == 0) {
+          should_inline = 0; // 0 means always pretty
+        } else {
+          should_inline = (size <= (size_t)threshold);
+        }
+      }
+
       for (size_t i = 0; i < size; i++) {
         size_t idx = indices ? indices[i] : i;
 
@@ -613,10 +777,22 @@ static int write_value_recursive(
             if (indices) free(indices);
             return 1;
           }
+          if (opts->space_after_comma) {
+            if (write_char(sink, ' ') != 0) {
+              if (indices) free(indices);
+              return 1;
+            }
+          }
         }
 
-        if (opts->pretty) {
+        if (opts->pretty && !should_inline) {
           if (write_indent(sink, depth + 1, opts) != 0) {
+            if (indices) free(indices);
+            return 1;
+          }
+        } else if (should_inline && i > 0) {
+          // Inline formatting: add space after comma
+          if (write_char(sink, ' ') != 0) {
             if (indices) free(indices);
             return 1;
           }
@@ -634,7 +810,8 @@ static int write_value_recursive(
           return 1;
         }
 
-        if (opts->pretty) {
+        // Write colon with optional spacing
+        if (opts->pretty && !should_inline) {
           if (write_string(sink, ": ") != 0) {
             if (indices) free(indices);
             return 1;
@@ -643,6 +820,12 @@ static int write_value_recursive(
           if (write_char(sink, ':') != 0) {
             if (indices) free(indices);
             return 1;
+          }
+          if (opts->space_after_colon) {
+            if (write_char(sink, ' ') != 0) {
+              if (indices) free(indices);
+              return 1;
+            }
           }
         }
 
@@ -657,7 +840,7 @@ static int write_value_recursive(
         free(indices);
       }
 
-      if (opts->pretty && size > 0) {
+      if (opts->pretty && size > 0 && !should_inline) {
         if (write_indent(sink, depth, opts) != 0) return 1;
       }
 
@@ -707,6 +890,22 @@ text_json_status text_json_write_value(
       err->col = 0;
     }
     return TEXT_JSON_E_WRITE;
+  }
+
+  // Add trailing newline if requested
+  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+  if (opts->trailing_newline) {
+    const char* newline = opts->newline ? opts->newline : "\n";
+    if (write_string(sink, newline) != 0) {
+      if (err) {
+        err->code = TEXT_JSON_E_WRITE;
+        err->message = "Failed to write trailing newline";
+        err->offset = 0;
+        err->line = 0;
+        err->col = 0;
+      }
+      return TEXT_JSON_E_WRITE;
+    }
   }
 
   return TEXT_JSON_OK;
@@ -885,8 +1084,8 @@ static int writer_write_comma_if_needed(text_json_writer* w) {
       if (writer_write_indent(w, (int)w->stack_size) != 0) {
         return 1;
       }
-    } else {
-      // In compact mode, just add space after comma
+    } else if (w->opts.space_after_comma) {
+      // In compact mode, add space after comma only if explicitly requested
       if (writer_write_char(w, ' ') != 0) {
         return 1;
       }
@@ -1161,7 +1360,7 @@ text_json_status text_json_writer_key(
     return TEXT_JSON_E_WRITE;
   }
 
-  // Write colon
+  // Write colon with optional spacing
   if (w->opts.pretty) {
     if (writer_write_string(w, ": ") != 0) {
       w->error = 1;
@@ -1171,6 +1370,12 @@ text_json_status text_json_writer_key(
     if (writer_write_char(w, ':') != 0) {
       w->error = 1;
       return TEXT_JSON_E_WRITE;
+    }
+    if (w->opts.space_after_colon) {
+      if (writer_write_char(w, ' ') != 0) {
+        w->error = 1;
+        return TEXT_JSON_E_WRITE;
+      }
     }
   }
 
@@ -1344,9 +1549,9 @@ text_json_status text_json_writer_number_i64(
     return TEXT_JSON_E_WRITE;
   }
 
-  // Format number
+  // Format number (locale-independent)
   char num_buf[64];
-  int len = snprintf(num_buf, sizeof(num_buf), "%lld", x);
+  int len = format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return TEXT_JSON_E_WRITE;
@@ -1398,9 +1603,9 @@ text_json_status text_json_writer_number_u64(
     return TEXT_JSON_E_WRITE;
   }
 
-  // Format number
+  // Format number (locale-independent)
   char num_buf[64];
-  int len = snprintf(num_buf, sizeof(num_buf), "%llu", x);
+  int len = format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return TEXT_JSON_E_WRITE;
@@ -1477,9 +1682,11 @@ text_json_status text_json_writer_number_double(
       }
     }
   } else {
-    // Format finite number
+    // Format finite number (locale-independent, with configurable format)
     char num_buf[64];
-    int len = snprintf(num_buf, sizeof(num_buf), "%.17g", x);
+    text_json_float_format float_fmt = w->opts.float_format;
+    int float_prec = w->opts.float_precision > 0 ? w->opts.float_precision : 6;
+    int len = format_double(num_buf, sizeof(num_buf), x, float_fmt, float_prec);
     if (len < 0 || (size_t)len >= sizeof(num_buf)) {
       w->error = 1;
       return TEXT_JSON_E_WRITE;
@@ -1588,6 +1795,22 @@ text_json_status text_json_writer_finish(
       err->col = 0;
     }
     return TEXT_JSON_E_INCOMPLETE;
+  }
+
+  // Add trailing newline if requested
+  if (w->opts.trailing_newline) {
+    const char* newline = w->opts.newline ? w->opts.newline : "\n";
+    if (writer_write_string(w, newline) != 0) {
+      w->error = 1;
+      if (err) {
+        err->code = TEXT_JSON_E_WRITE;
+        err->message = "Failed to write trailing newline";
+        err->offset = 0;
+        err->line = 0;
+        err->col = 0;
+      }
+      return TEXT_JSON_E_WRITE;
+    }
   }
 
   return TEXT_JSON_OK;

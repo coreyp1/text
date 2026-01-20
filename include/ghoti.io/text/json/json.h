@@ -126,6 +126,15 @@ typedef struct {
 } text_json_parse_options;
 
 /**
+ * @brief Floating-point formatting strategy
+ */
+typedef enum {
+  TEXT_JSON_FLOAT_SHORTEST,     ///< Shortest representation (%.17g, default)
+  TEXT_JSON_FLOAT_FIXED,        ///< Fixed-point notation (%.Nf, use float_precision)
+  TEXT_JSON_FLOAT_SCIENTIFIC    ///< Scientific notation (%.Ne, use float_precision)
+} text_json_float_format;
+
+/**
  * @brief Write options structure
  *
  * Controls serialization behavior including formatting, escaping, and
@@ -136,6 +145,11 @@ typedef struct {
   int pretty;                   ///< Pretty-print output (0 = compact, 1 = pretty)
   int indent_spaces;            ///< Number of spaces per indent level (e.g. 2, 4)
   const char* newline;          ///< Newline string ("\n" default, allow "\r\n")
+  int trailing_newline;         ///< Add trailing newline at end of output (default: 0)
+  int space_after_colon;        ///< Add space after ':' in objects (default: 0)
+  int space_after_comma;        ///< Add space after ',' in arrays/objects (default: 0)
+  int inline_array_threshold;   ///< Max elements for inline array (0=always pretty, -1=always inline, default: -1)
+  int inline_object_threshold;  ///< Max pairs for inline object (0=always pretty, -1=always inline, default: -1)
 
   // Escaping
   int escape_solidus;           ///< Escape forward slash (optional)
@@ -149,6 +163,10 @@ typedef struct {
 
   // Extensions
   int allow_nonfinite_numbers;  ///< Emit NaN/Infinity if node contains it
+
+  // Floating-point formatting
+  text_json_float_format float_format;  ///< Floating-point formatting strategy (default: SHORTEST)
+  int float_precision;          ///< Precision for fixed/scientific format (default: 6, ignored for SHORTEST)
 } text_json_write_options;
 
 /**
