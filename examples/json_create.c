@@ -27,7 +27,7 @@ int main(void) {
     text_json_value* age = text_json_new_number_i64(25);
     text_json_object_put(obj, "age", 3, age);
 
-    text_json_value* active = text_json_new_bool(1);
+    text_json_value* active = text_json_new_bool(true);
     text_json_object_put(obj, "active", 6, active);
 
     // Create an array
@@ -53,7 +53,7 @@ int main(void) {
     }
 
     text_json_write_options write_opt = text_json_write_options_default();
-    write_opt.pretty = 1;
+    write_opt.pretty = true;
     write_opt.indent_spaces = 2;
 
     text_json_error err = {0};

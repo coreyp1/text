@@ -13,6 +13,7 @@
 #define GHOTI_IO_TEXT_JSON_CORE_H
 
 #include <ghoti.io/text/macros.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -109,17 +110,17 @@ typedef enum {
  */
 typedef struct {
   // Strictness / extensions
-  int allow_comments;           ///< Allow JSONC comments (// and /* */)
-  int allow_trailing_commas;    ///< Allow trailing commas in arrays/objects
-  int allow_nonfinite_numbers;  ///< Allow NaN, Infinity, -Infinity
-  int allow_single_quotes;      ///< Allow single-quoted strings (relaxed mode)
-  int allow_unescaped_controls; ///< Allow unescaped control characters (relaxed mode)
+  bool allow_comments;           ///< Allow JSONC comments (// and /* */)
+  bool allow_trailing_commas;    ///< Allow trailing commas in arrays/objects
+  bool allow_nonfinite_numbers;  ///< Allow NaN, Infinity, -Infinity
+  bool allow_single_quotes;      ///< Allow single-quoted strings (relaxed mode)
+  bool allow_unescaped_controls; ///< Allow unescaped control characters (relaxed mode)
 
   // Unicode / input handling
-  int allow_leading_bom;        ///< Allow leading UTF-8 BOM (default: on)
-  int validate_utf8;            ///< Validate UTF-8 sequences (default: on)
-  int normalize_unicode;        ///< NFC normalization (v2 feature, default: off)
-  int in_situ_mode;             ///< Zero-copy mode: reference input buffer directly (default: off)
+  bool allow_leading_bom;        ///< Allow leading UTF-8 BOM (default: on)
+  bool validate_utf8;            ///< Validate UTF-8 sequences (default: on)
+  bool normalize_unicode;        ///< NFC normalization (v2 feature, default: off)
+  bool in_situ_mode;             ///< Zero-copy mode: reference input buffer directly (default: off)
 
   // Duplicate keys
   text_json_dupkey_mode dupkeys; ///< Duplicate key handling policy
@@ -131,11 +132,11 @@ typedef struct {
   size_t max_total_bytes;       ///< Maximum total input size (0 = default, e.g. 64MB)
 
   // Number fidelity / representations
-  int preserve_number_lexeme;   ///< Preserve original number token for round-trip
-  int parse_int64;              ///< Detect and parse exact int64 representation
-  int parse_uint64;             ///< Detect and parse exact uint64 representation
-  int parse_double;             ///< Derive double representation when representable
-  int allow_big_decimal;        ///< Store decimal as string-backed big-decimal
+  bool preserve_number_lexeme;   ///< Preserve original number token for round-trip
+  bool parse_int64;              ///< Detect and parse exact int64 representation
+  bool parse_uint64;             ///< Detect and parse exact uint64 representation
+  bool parse_double;             ///< Derive double representation when representable
+  bool allow_big_decimal;        ///< Store decimal as string-backed big-decimal
 } text_json_parse_options;
 
 /**
@@ -155,27 +156,27 @@ typedef enum {
  */
 typedef struct {
   // Formatting
-  int pretty;                   ///< Pretty-print output (0 = compact, 1 = pretty)
+  bool pretty;                  ///< Pretty-print output (false = compact, true = pretty)
   int indent_spaces;            ///< Number of spaces per indent level (e.g. 2, 4)
   const char* newline;          ///< Newline string ("\n" default, allow "\r\n")
-  int trailing_newline;         ///< Add trailing newline at end of output (default: 0)
-  int space_after_colon;        ///< Add space after ':' in objects (default: 0)
-  int space_after_comma;        ///< Add space after ',' in arrays/objects (default: 0)
+  bool trailing_newline;        ///< Add trailing newline at end of output (default: false)
+  bool space_after_colon;       ///< Add space after ':' in objects (default: false)
+  bool space_after_comma;       ///< Add space after ',' in arrays/objects (default: false)
   int inline_array_threshold;   ///< Max elements for inline array (0=always pretty, -1=always inline, default: -1)
   int inline_object_threshold;  ///< Max pairs for inline object (0=always pretty, -1=always inline, default: -1)
 
   // Escaping
-  int escape_solidus;           ///< Escape forward slash (optional)
-  int escape_unicode;           ///< Output \\uXXXX for non-ASCII (canonical mode)
-  int escape_all_non_ascii;     ///< Escape all non-ASCII characters (stricter)
+  bool escape_solidus;          ///< Escape forward slash (optional)
+  bool escape_unicode;          ///< Output \\uXXXX for non-ASCII (canonical mode)
+  bool escape_all_non_ascii;    ///< Escape all non-ASCII characters (stricter)
 
   // Canonical / deterministic
-  int sort_object_keys;         ///< Sort object keys for stable output
-  int canonical_numbers;        ///< Normalize numeric lexemes (use with care)
-  int canonical_strings;        ///< Normalize string escapes
+  bool sort_object_keys;        ///< Sort object keys for stable output
+  bool canonical_numbers;       ///< Normalize numeric lexemes (use with care)
+  bool canonical_strings;       ///< Normalize string escapes
 
   // Extensions
-  int allow_nonfinite_numbers;  ///< Emit NaN/Infinity if node contains it
+  bool allow_nonfinite_numbers; ///< Emit NaN/Infinity if node contains it
 
   // Floating-point formatting
   text_json_float_format float_format;  ///< Floating-point formatting strategy (default: SHORTEST)

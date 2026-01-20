@@ -307,7 +307,7 @@ TEXT_API text_json_value* text_json_new_null(void) {
     return val;
 }
 
-TEXT_API text_json_value* text_json_new_bool(int b) {
+TEXT_API text_json_value* text_json_new_bool(bool b) {
     json_context* ctx = json_context_new();
     if (!ctx) {
         return NULL;
@@ -559,14 +559,14 @@ TEXT_API text_json_type text_json_typeof(const text_json_value* v) {
     return v->type;
 }
 
-TEXT_API text_json_status text_json_get_bool(const text_json_value* v, int* out) {
+TEXT_API text_json_status text_json_get_bool(const text_json_value* v, bool* out) {
     if (!v || !out) {
         return TEXT_JSON_E_INVALID;
     }
     if (v->type != TEXT_JSON_BOOL) {
         return TEXT_JSON_E_INVALID;
     }
-    *out = v->as.boolean;
+    *out = v->as.boolean ? true : false;
     return TEXT_JSON_OK;
 }
 
@@ -1047,7 +1047,7 @@ TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const ch
 }
 
 // Helper function for deep equality comparison with configurable mode
-static int json_value_equal_internal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
+static bool json_value_equal_internal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
     if (a == b) {
         return 1;  // Same pointer
     }
@@ -1183,7 +1183,7 @@ static int json_value_equal_internal(const text_json_value* a, const text_json_v
     }
 }
 
-TEXT_API int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
+TEXT_API bool text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
     return json_value_equal_internal(a, b, mode);
 }
 

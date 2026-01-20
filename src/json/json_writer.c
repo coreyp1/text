@@ -237,14 +237,14 @@ size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink) {
   return buf->used;
 }
 
-int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
+bool text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
   if (!sink || sink->write != fixed_buffer_write_fn) {
-    return 0;
+    return false;
   }
 
   text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)sink->user;
   if (!buf) {
-    return 0;
+    return false;
   }
 
   return buf->truncated;
@@ -1429,7 +1429,7 @@ text_json_status text_json_writer_null(text_json_writer* w) {
   return TEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_bool(text_json_writer* w, int b) {
+text_json_status text_json_writer_bool(text_json_writer* w, bool b) {
   if (!w) {
     return TEXT_JSON_E_INVALID;
   }

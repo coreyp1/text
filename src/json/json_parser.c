@@ -1036,7 +1036,7 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
 
         case JSON_TOKEN_TRUE:
             if (is_root) {
-                value = text_json_new_bool(1);
+                value = text_json_new_bool(true);
             } else {
                 value = json_value_new_with_existing_context(TEXT_JSON_BOOL, ctx);
                 if (value) {
@@ -1050,7 +1050,7 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
 
         case JSON_TOKEN_FALSE:
             if (is_root) {
-                value = text_json_new_bool(0);
+                value = text_json_new_bool(false);
             } else {
                 value = json_value_new_with_existing_context(TEXT_JSON_BOOL, ctx);
                 if (value) {

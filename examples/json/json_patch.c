@@ -52,7 +52,7 @@ int main(void) {
     text_json_sink sink;
     text_json_sink_buffer(&sink);
     text_json_write_options write_opt = text_json_write_options_default();
-    write_opt.pretty = 1;
+    write_opt.pretty = true;
     text_json_write_value(&sink, &write_opt, doc, NULL);
     printf("%s\n\n", text_json_sink_buffer_data(&sink));
     text_json_sink_buffer_free(&sink);

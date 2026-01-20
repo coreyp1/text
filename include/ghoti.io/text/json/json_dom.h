@@ -35,10 +35,10 @@ TEXT_API text_json_value* text_json_new_null(void);
  * Allocates a new boolean value from an arena. The value and all its
  * descendants are freed via text_json_free().
  *
- * @param b Boolean value (0 = false, non-zero = true)
+ * @param b Boolean value
  * @return New boolean value, or NULL on allocation failure
  */
-TEXT_API text_json_value* text_json_new_bool(int b);
+TEXT_API text_json_value* text_json_new_bool(bool b);
 
 /**
  * @brief Create a string JSON value
@@ -143,10 +143,10 @@ TEXT_API text_json_type text_json_typeof(const text_json_value* v);
  * the value is not a boolean.
  *
  * @param v JSON value (must not be NULL)
- * @param out Pointer to store the boolean value (0 = false, non-zero = true)
+ * @param out Pointer to store the boolean value
  * @return TEXT_JSON_OK on success, TEXT_JSON_E_INVALID if v is NULL or not a boolean
  */
-TEXT_API text_json_status text_json_get_bool(const text_json_value* v, int* out);
+TEXT_API text_json_status text_json_get_bool(const text_json_value* v, bool* out);
 
 /**
  * @brief Get the string value from a JSON value
@@ -439,8 +439,8 @@ typedef enum {
 /**
  * @brief Deep equality comparison for JSON values
  *
- * Performs a deep structural comparison of two JSON values. Returns 1 if
- * the values are equal (same structure and content), 0 otherwise.
+ * Performs a deep structural comparison of two JSON values. Returns true if
+ * the values are equal (same structure and content), false otherwise.
  *
  * For numbers, the comparison mode determines how equality is checked:
  * - TEXT_JSON_EQUAL_LEXEME: Numbers must have identical lexemes (exact string match)
@@ -452,9 +452,9 @@ typedef enum {
  * @param a First value to compare (can be NULL)
  * @param b Second value to compare (can be NULL)
  * @param mode Equality comparison mode for numbers
- * @return 1 if values are equal, 0 otherwise
+ * @return true if values are equal, false otherwise
  */
-TEXT_API int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
+TEXT_API bool text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
 
 /**
  * @brief Deep clone a JSON value into a new arena

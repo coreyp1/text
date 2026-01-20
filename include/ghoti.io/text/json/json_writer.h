@@ -67,7 +67,7 @@ typedef struct {
   char* data;      ///< Buffer data (provided by user, not owned)
   size_t size;     ///< Maximum buffer size
   size_t used;     ///< Bytes written to buffer
-  int truncated;   ///< Non-zero if truncation occurred
+  bool truncated;  ///< true if truncation occurred
 } text_json_fixed_buffer_sink;
 
 /**
@@ -150,13 +150,13 @@ TEXT_API size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink);
 /**
  * @brief Check if truncation occurred in a fixed buffer sink
  *
- * Returns non-zero if the output was truncated due to insufficient buffer
- * space, zero otherwise.
+ * Returns true if the output was truncated due to insufficient buffer
+ * space, false otherwise.
  *
  * @param sink Sink created by text_json_sink_fixed_buffer()
- * @return Non-zero if truncated, zero otherwise
+ * @return true if truncated, false otherwise
  */
-TEXT_API int text_json_sink_fixed_buffer_truncated(const text_json_sink* sink);
+TEXT_API bool text_json_sink_fixed_buffer_truncated(const text_json_sink* sink);
 
 /**
  * @brief Free a fixed buffer sink
@@ -301,10 +301,10 @@ TEXT_API text_json_status text_json_writer_null(text_json_writer* w);
  * Writes a JSON boolean value (true or false).
  *
  * @param w Writer instance (must not be NULL)
- * @param b Boolean value (0 = false, non-zero = true)
+ * @param b Boolean value
  * @return TEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_bool(text_json_writer* w, int b);
+TEXT_API text_json_status text_json_writer_bool(text_json_writer* w, bool b);
 
 /**
  * @brief Write a number value from lexeme

@@ -54,7 +54,7 @@ int main(void) {
 
     const text_json_value* active_val = text_json_object_get(root, "active", 6);
     if (active_val) {
-        int active;
+        bool active;
         if (text_json_get_bool(active_val, &active) == TEXT_JSON_OK) {
             printf("Active: %s\n", active ? "true" : "false");
         }
@@ -69,7 +69,7 @@ int main(void) {
     }
 
     text_json_write_options write_opt = text_json_write_options_default();
-    write_opt.pretty = 1;  // Pretty-print
+    write_opt.pretty = true;  // Pretty-print
     write_opt.indent_spaces = 2;
 
     if (text_json_write_value(&sink, &write_opt, root, &err) != TEXT_JSON_OK) {

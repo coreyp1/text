@@ -288,7 +288,7 @@ void text_json_free(text_json_value* v);
 text_json_type text_json_typeof(const text_json_value* v);
 
 // Scalars
-text_json_status text_json_get_bool(const text_json_value* v, int* out);
+text_json_status text_json_get_bool(const text_json_value* v, bool* out);
 
 text_json_status text_json_get_string(const text_json_value* v, const char** out, size_t* out_len);
 
@@ -315,7 +315,7 @@ For full-featured use cases (patching, programmatic output), provide a mutable A
 
 ```c
 text_json_value* text_json_new_null(void);
-text_json_value* text_json_new_bool(int b);
+text_json_value* text_json_new_bool(bool b);
 text_json_value* text_json_new_number_from_lexeme(const char* s, size_t len);
 text_json_value* text_json_new_number_i64(int64_t x);
 text_json_value* text_json_new_number_u64(uint64_t x);
@@ -345,7 +345,7 @@ typedef enum {
   TEXT_JSON_MERGE_ERROR         // Return error on conflict
 } text_json_merge_policy;
 
-int text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
+bool text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode);
 text_json_value* text_json_clone(const text_json_value* src);
 text_json_status text_json_object_merge(
   text_json_value* target,
@@ -392,7 +392,7 @@ typedef enum {
 typedef struct {
   text_json_event_type type;
   union {
-    int boolean;
+    bool boolean;
     struct { const char* s; size_t len; } str;      // decoded utf-8 string
     struct { const char* s; size_t len; } number;   // exact lexeme slice (buffered)
   } as;
@@ -516,7 +516,7 @@ text_json_status text_json_writer_array_end(text_json_writer* w);
 text_json_status text_json_writer_key(text_json_writer* w, const char* key, size_t len);
 
 text_json_status text_json_writer_null(text_json_writer* w);
-text_json_status text_json_writer_bool(text_json_writer* w, int b);
+text_json_status text_json_writer_bool(text_json_writer* w, bool b);
 text_json_status text_json_writer_number_lexeme(text_json_writer* w, const char* s, size_t len);
 text_json_status text_json_writer_number_i64(text_json_writer* w, int64_t x);
 text_json_status text_json_writer_number_u64(text_json_writer* w, uint64_t x);

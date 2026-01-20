@@ -42,7 +42,7 @@ typedef enum {
 typedef struct {
   text_json_event_type type;   ///< Event type
   union {
-    int boolean;                ///< For TEXT_JSON_EVT_BOOL
+    bool boolean;               ///< For TEXT_JSON_EVT_BOOL
     struct {
       const char* s;            ///< String data (decoded UTF-8, null-terminated)
       size_t len;               ///< String length in bytes

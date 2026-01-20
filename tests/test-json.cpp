@@ -574,7 +574,7 @@ TEST(NumberParsing, NonfiniteNumbers) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 1;
+    opts.allow_nonfinite_numbers = true;
 
     struct {
         const char* input;
@@ -625,7 +625,7 @@ TEST(NumberParsing, NonfiniteRejected) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 0;
+    opts.allow_nonfinite_numbers = false;
 
     const char* nonfinite[] = {
         "NaN",
@@ -662,7 +662,7 @@ TEST(NumberParsing, LexemePreservation) {
     json_number num;
     json_position pos = {0, 1, 1};
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.preserve_number_lexeme = 1;
+    opts.preserve_number_lexeme = true;
 
     const char* numbers[] = {
         "0",
@@ -872,7 +872,7 @@ TEST(Lexer, Comments) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_comments = 1;
+    opts.allow_comments = true;
 
     const char* input = "// comment\n123 /* multi\nline */ 456";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -900,7 +900,7 @@ TEST(Lexer, CommentsRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_comments = 0;
+    opts.allow_comments = false;
 
     const char* input = "// comment\n123";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -969,7 +969,7 @@ TEST(Lexer, ExtensionTokens) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 1;
+    opts.allow_nonfinite_numbers = true;
 
     const char* input = "NaN Infinity -Infinity";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -1001,7 +1001,7 @@ TEST(Lexer, ExtensionTokensRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 0;
+    opts.allow_nonfinite_numbers = false;
 
     const char* input = "NaN";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -1084,7 +1084,7 @@ TEST(Lexer, SingleQuoteStrings) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_single_quotes = 1;
+    opts.allow_single_quotes = true;
 
     const char* input = "'hello world'";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -1105,7 +1105,7 @@ TEST(Lexer, SingleQuoteStringsRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_single_quotes = 0;
+    opts.allow_single_quotes = false;
 
     const char* input = "'hello'";
     text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
@@ -1124,7 +1124,7 @@ TEST(Lexer, UnescapedControlsRejected) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_unescaped_controls = 0;
+    opts.allow_unescaped_controls = false;
 
     // Test with tab character (0x09) - should be rejected
     const char* input = "\"hello\tworld\"";
@@ -1164,7 +1164,7 @@ TEST(Lexer, UnescapedControlsAllowed) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_unescaped_controls = 1;
+    opts.allow_unescaped_controls = true;
 
     // Test with tab character (0x09) - should be allowed
     const char* input = "\"hello\tworld\"";
@@ -1198,10 +1198,10 @@ TEST(Lexer, AllExtensionsCombined) {
     json_lexer lexer;
     json_token token;
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_comments = 1;
-    opts.allow_nonfinite_numbers = 1;
-    opts.allow_single_quotes = 1;
-    opts.allow_unescaped_controls = 1;
+    opts.allow_comments = true;
+    opts.allow_nonfinite_numbers = true;
+    opts.allow_single_quotes = true;
+    opts.allow_unescaped_controls = true;
 
     // Input with comments, single quotes, nonfinite numbers, and unescaped controls
     const char* input = "// comment\n'hello\tworld' Infinity NaN";
@@ -1277,23 +1277,23 @@ TEST(DOMValueCreation, Null) {
  */
 TEST(DOMValueCreation, Bool) {
     // Test true
-    text_json_value* val_true = text_json_new_bool(1);
+    text_json_value* val_true = text_json_new_bool(true);
     ASSERT_NE(val_true, nullptr);
     EXPECT_EQ(text_json_typeof(val_true), TEXT_JSON_BOOL);
-    int bool_val = 0;
+    bool bool_val = false;
     text_json_status status = text_json_get_bool(val_true, &bool_val);
     EXPECT_EQ(status, TEXT_JSON_OK);
-    EXPECT_NE(bool_val, 0);
+    EXPECT_EQ(bool_val, true);
     text_json_free(val_true);
 
     // Test false
-    text_json_value* val_false = text_json_new_bool(0);
+    text_json_value* val_false = text_json_new_bool(false);
     ASSERT_NE(val_false, nullptr);
     EXPECT_EQ(text_json_typeof(val_false), TEXT_JSON_BOOL);
-    bool_val = 1;
+    bool_val = true;
     status = text_json_get_bool(val_false, &bool_val);
     EXPECT_EQ(status, TEXT_JSON_OK);
-    EXPECT_EQ(bool_val, 0);
+    EXPECT_EQ(bool_val, false);
     text_json_free(val_false);
 }
 
@@ -1486,7 +1486,7 @@ TEST(DOMValueCreation, Object) {
 TEST(MemoryManagement, ValueCleanup) {
     // Create multiple values and verify they're cleaned up
     text_json_value* null_val = text_json_new_null();
-    text_json_value* bool_val = text_json_new_bool(1);
+    text_json_value* bool_val = text_json_new_bool(true);
     text_json_value* str_val = text_json_new_string("test", 4);
     text_json_value* num_val = text_json_new_number_i64(42);
     text_json_value* arr_val = text_json_new_array();
@@ -1520,7 +1520,7 @@ TEST(DOMAccessors, WrongType) {
     ASSERT_NE(str_val, nullptr);
 
     // Try to get bool from string - should fail
-    int bool_out = 0;
+    bool bool_out = false;
     text_json_status status = text_json_get_bool(str_val, &bool_out);
     EXPECT_NE(status, TEXT_JSON_OK);
     EXPECT_EQ(status, TEXT_JSON_E_INVALID);
@@ -1545,7 +1545,7 @@ TEST(DOMAccessors, NullPointer) {
     EXPECT_EQ(text_json_typeof(nullptr), TEXT_JSON_NULL);
 
     // Other accessors should return error for NULL
-    int bool_out = 0;
+    bool bool_out = false;
     text_json_status status = text_json_get_bool(nullptr, &bool_out);
     EXPECT_NE(status, TEXT_JSON_OK);
     EXPECT_EQ(status, TEXT_JSON_E_INVALID);
@@ -1650,7 +1650,7 @@ TEST(DOMMutation, ArrayPush) {
     // Push some elements
     text_json_value* val1 = text_json_new_number_i64(42);
     text_json_value* val2 = text_json_new_string("hello", 5);
-    text_json_value* val3 = text_json_new_bool(1);
+    text_json_value* val3 = text_json_new_bool(true);
 
     EXPECT_EQ(text_json_array_push(arr, val1), TEXT_JSON_OK);
     EXPECT_EQ(text_json_array_push(arr, val2), TEXT_JSON_OK);
@@ -1673,9 +1673,9 @@ TEST(DOMMutation, ArrayPush) {
     EXPECT_EQ(str_len, 5u);
     EXPECT_STREQ(str_out, "hello");
 
-    int bool_out = 0;
+    bool bool_out = false;
     EXPECT_EQ(text_json_get_bool(text_json_array_get(arr, 2), &bool_out), TEXT_JSON_OK);
-    EXPECT_NE(bool_out, 0);
+    EXPECT_EQ(bool_out, true);
 
     text_json_free(arr);
 }
@@ -1805,7 +1805,7 @@ TEST(DOMMutation, ObjectPut) {
     // Add key-value pairs
     text_json_value* val1 = text_json_new_number_i64(42);
     text_json_value* val2 = text_json_new_string("hello", 5);
-    text_json_value* val3 = text_json_new_bool(1);
+    text_json_value* val3 = text_json_new_bool(true);
 
     EXPECT_EQ(text_json_object_put(obj, "key1", 4, val1), TEXT_JSON_OK);
     EXPECT_EQ(text_json_object_put(obj, "key2", 4, val2), TEXT_JSON_OK);
@@ -2240,10 +2240,10 @@ TEST(DuplicateKeyHandling, CollectDifferentTypes) {
     const text_json_value* elem2 = text_json_array_get(val, 2);
     ASSERT_NE(elem2, nullptr);
     EXPECT_EQ(text_json_typeof(elem2), TEXT_JSON_BOOL);
-    int bool_out = 0;
+    bool bool_out = false;
     status = text_json_get_bool(elem2, &bool_out);
     EXPECT_EQ(status, TEXT_JSON_OK);
-    EXPECT_NE(bool_out, 0);
+    EXPECT_EQ(bool_out, true);
 
     text_json_free(value);
 }
@@ -2335,7 +2335,7 @@ TEST(SinkAbstraction, FixedBuffer) {
 
     // Initially empty
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 0u);
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), false);
     EXPECT_STREQ(buffer, "");
 
     // Write some data
@@ -2343,7 +2343,7 @@ TEST(SinkAbstraction, FixedBuffer) {
     int result = sink.write(sink.user, test1, strlen(test1));
     EXPECT_EQ(result, 0);
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 5u);
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), false);
     EXPECT_STREQ(buffer, "Hello");
 
     // Write more data
@@ -2351,7 +2351,7 @@ TEST(SinkAbstraction, FixedBuffer) {
     result = sink.write(sink.user, test2, strlen(test2));
     EXPECT_EQ(result, 0);
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 13u);
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), false);
     EXPECT_STREQ(buffer, "Hello, World!");
 
     // Write data that fits exactly
@@ -2359,7 +2359,7 @@ TEST(SinkAbstraction, FixedBuffer) {
     result = sink.write(sink.user, test3, strlen(test3));
     EXPECT_EQ(result, 0);
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 23u);
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 0);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), false);
 
     // Write data that exceeds buffer (should truncate)
     // After 23 bytes, we have 64 - 23 - 1 = 40 bytes available
@@ -2367,7 +2367,7 @@ TEST(SinkAbstraction, FixedBuffer) {
     const char* test4 = " This is way too long and will definitely be truncated";
     result = sink.write(sink.user, test4, strlen(test4));
     EXPECT_NE(result, 0); // Should return error on truncation
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 1);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), true);
     // Should have written up to buffer limit (63 bytes, leaving 1 for null terminator)
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), sizeof(buffer) - 1);
 
@@ -2390,7 +2390,7 @@ TEST(SinkAbstraction, FixedBufferEdgeCases) {
     const char* test = "X";
     int result = sink.write(sink.user, test, 1);
     EXPECT_NE(result, 0); // Should return error
-    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), 1);
+    EXPECT_EQ(text_json_sink_fixed_buffer_truncated(&sink), true);
     EXPECT_EQ(text_json_sink_fixed_buffer_used(&sink), 0u);
     EXPECT_EQ(tiny_buffer[0], '\0');
 
@@ -2482,8 +2482,8 @@ TEST(DOMWrite, Null) {
  * Test DOM write - boolean values
  */
 TEST(DOMWrite, Boolean) {
-    text_json_value* v_true = text_json_new_bool(1);
-    text_json_value* v_false = text_json_new_bool(0);
+    text_json_value* v_true = text_json_new_bool(true);
+    text_json_value* v_false = text_json_new_bool(false);
     ASSERT_NE(v_true, nullptr);
     ASSERT_NE(v_false, nullptr);
 
@@ -2595,7 +2595,7 @@ TEST(DOMWrite, Array) {
 
     text_json_value* v1 = text_json_new_number_i64(1);
     text_json_value* v2 = text_json_new_string("two", 3);
-    text_json_value* v3 = text_json_new_bool(1);
+    text_json_value* v3 = text_json_new_bool(true);
     ASSERT_NE(v1, nullptr);
     ASSERT_NE(v2, nullptr);
     ASSERT_NE(v3, nullptr);
@@ -2668,7 +2668,7 @@ TEST(DOMWrite, PrettyPrint) {
     text_json_sink sink;
     text_json_sink_buffer(&sink);
     text_json_write_options opts = text_json_write_options_default();
-    opts.pretty = 1;
+    opts.pretty = true;
     opts.indent_spaces = 2;
     text_json_error err;
 
@@ -2706,7 +2706,7 @@ TEST(DOMWrite, KeySorting) {
     text_json_sink sink;
     text_json_sink_buffer(&sink);
     text_json_write_options opts = text_json_write_options_default();
-    opts.sort_object_keys = 1;
+    opts.sort_object_keys = true;
     text_json_error err;
 
     text_json_write_value(&sink, &opts, obj, &err);
@@ -3200,7 +3200,7 @@ TEST(StreamingWriter, BasicValues) {
     w = text_json_writer_new(sink, nullptr);
     ASSERT_NE(w, nullptr);
 
-    status = text_json_writer_bool(w, 1);
+    status = text_json_writer_bool(w, true);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = text_json_writer_finish(w, &err);
@@ -3434,7 +3434,7 @@ TEST(StreamingWriter, PrettyPrint) {
     ASSERT_EQ(status, TEXT_JSON_OK);
 
     text_json_write_options opts = text_json_write_options_default();
-    opts.pretty = 1;
+    opts.pretty = true;
     opts.indent_spaces = 2;
 
     text_json_writer* w = text_json_writer_new(sink, &opts);
@@ -3589,7 +3589,7 @@ TEST(StreamingWriter, NonfiniteNumbers) {
     ASSERT_EQ(status, TEXT_JSON_OK);
 
     text_json_write_options opts = text_json_write_options_default();
-    opts.allow_nonfinite_numbers = 1;
+    opts.allow_nonfinite_numbers = true;
 
     text_json_writer* w = text_json_writer_new(sink, &opts);
     ASSERT_NE(w, nullptr);
@@ -3630,7 +3630,7 @@ TEST(StreamingWriter, NonfiniteNumbers) {
     text_json_sink_buffer_free(&sink);
 
     // Test that nonfinite numbers are rejected when option is off
-    opts.allow_nonfinite_numbers = 0;
+    opts.allow_nonfinite_numbers = false;
     status = text_json_sink_buffer(&sink);
     ASSERT_EQ(status, TEXT_JSON_OK);
     w = text_json_writer_new(sink, &opts);
@@ -5483,7 +5483,7 @@ TEST(InSituMode, StringNoEscapes) {
     // String without escape sequences should use in-situ mode
     const char* input = "\"hello world\"";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.in_situ_mode = 1;
+    opts.in_situ_mode = true;
     text_json_error err;
 
     text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
@@ -5511,7 +5511,7 @@ TEST(InSituMode, StringWithEscapes) {
     // String with escape sequences should NOT use in-situ mode
     const char* input = "\"hello\\nworld\"";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.in_situ_mode = 1;
+    opts.in_situ_mode = true;
     text_json_error err;
 
     text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
@@ -5538,8 +5538,8 @@ TEST(InSituMode, NumberLexeme) {
     // Number lexeme should use in-situ mode
     const char* input = "123.456";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.in_situ_mode = 1;
-    opts.preserve_number_lexeme = 1;
+    opts.in_situ_mode = true;
+    opts.preserve_number_lexeme = true;
     text_json_error err;
 
     text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
@@ -5566,8 +5566,8 @@ TEST(InSituMode, NestedStructures) {
     // Test in-situ mode with nested objects and arrays
     const char* input = "{\"key\":\"value\",\"num\":42}";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.in_situ_mode = 1;
-    opts.preserve_number_lexeme = 1;
+    opts.in_situ_mode = true;
+    opts.preserve_number_lexeme = true;
     text_json_error err;
 
     text_json_value* val = text_json_parse(input, strlen(input), &opts, &err);
@@ -5611,7 +5611,7 @@ TEST(InSituMode, LifetimeRequirements) {
     // Create input in a scope that will be destroyed
     std::string input_str = "\"test string\"";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.in_situ_mode = 1;
+    opts.in_situ_mode = true;
     text_json_error err;
 
     text_json_value* val = text_json_parse(input_str.c_str(), input_str.length(), &opts, &err);
@@ -5639,8 +5639,8 @@ TEST(InSituMode, LifetimeRequirements) {
 TEST(InSituMode, RoundTrip) {
     const char* input = "{\"name\":\"Alice\",\"age\":30}";
     text_json_parse_options parse_opts = text_json_parse_options_default();
-    parse_opts.in_situ_mode = 1;
-    parse_opts.preserve_number_lexeme = 1;
+    parse_opts.in_situ_mode = true;
+    parse_opts.preserve_number_lexeme = true;
     text_json_error err;
 
     // Parse with in-situ mode
@@ -5706,10 +5706,10 @@ TEST(DomUtilities, DeepEqualityNull) {
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
 
-    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_NUMERIC), 1);
-    EXPECT_EQ(text_json_equal(a, nullptr, TEXT_JSON_EQUAL_LEXEME), 0);
-    EXPECT_EQ(text_json_equal(nullptr, b, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(a, b, TEXT_JSON_EQUAL_NUMERIC), true);
+    EXPECT_EQ(text_json_equal(a, nullptr, TEXT_JSON_EQUAL_LEXEME), false);
+    EXPECT_EQ(text_json_equal(nullptr, b, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(a);
     text_json_free(b);
@@ -5719,15 +5719,15 @@ TEST(DomUtilities, DeepEqualityNull) {
  * Test deep equality - boolean values
  */
 TEST(DomUtilities, DeepEqualityBool) {
-    text_json_value* a1 = text_json_new_bool(1);
-    text_json_value* a2 = text_json_new_bool(1);
-    text_json_value* b = text_json_new_bool(0);
+    text_json_value* a1 = text_json_new_bool(true);
+    text_json_value* a2 = text_json_new_bool(true);
+    text_json_value* b = text_json_new_bool(false);
     ASSERT_NE(a1, nullptr);
     ASSERT_NE(a2, nullptr);
     ASSERT_NE(b, nullptr);
 
-    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(a1);
     text_json_free(a2);
@@ -5745,8 +5745,8 @@ TEST(DomUtilities, DeepEqualityString) {
     ASSERT_NE(a2, nullptr);
     ASSERT_NE(b, nullptr);
 
-    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(a1, b, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(a1);
     text_json_free(a2);
@@ -5774,8 +5774,8 @@ TEST(DomUtilities, DeepEqualityNumberLexeme) {
     ASSERT_NE(n2, nullptr);
     ASSERT_NE(n3, nullptr);
 
-    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(n1);
     text_json_free(n2);
@@ -5796,8 +5796,8 @@ TEST(DomUtilities, DeepEqualityNumberNumeric) {
     ASSERT_NE(n2, nullptr);
     ASSERT_NE(n3, nullptr);
 
-    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_NUMERIC), 1);
-    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_NUMERIC), 0);
+    EXPECT_EQ(text_json_equal(n1, n2, TEXT_JSON_EQUAL_NUMERIC), true);
+    EXPECT_EQ(text_json_equal(n1, n3, TEXT_JSON_EQUAL_NUMERIC), false);
 
     // Test with double
     text_json_value* d1 = text_json_new_number_double(3.14);
@@ -5807,8 +5807,8 @@ TEST(DomUtilities, DeepEqualityNumberNumeric) {
     ASSERT_NE(d2, nullptr);
     ASSERT_NE(d3, nullptr);
 
-    EXPECT_EQ(text_json_equal(d1, d2, TEXT_JSON_EQUAL_NUMERIC), 1);
-    EXPECT_EQ(text_json_equal(d1, d3, TEXT_JSON_EQUAL_NUMERIC), 0);
+    EXPECT_EQ(text_json_equal(d1, d2, TEXT_JSON_EQUAL_NUMERIC), true);
+    EXPECT_EQ(text_json_equal(d1, d3, TEXT_JSON_EQUAL_NUMERIC), false);
 
     text_json_free(n1);
     text_json_free(n2);
@@ -5840,8 +5840,8 @@ TEST(DomUtilities, DeepEqualityArray) {
     text_json_array_push(a2, text_json_new_string("world", 5));
     text_json_array_push(a3, text_json_new_string("foo", 3));
 
-    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(a1, a3, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(a1, a2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(a1, a3, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(a1);
     text_json_free(a2);
@@ -5868,8 +5868,8 @@ TEST(DomUtilities, DeepEqualityObject) {
 
     text_json_object_put(o3, "a", 1, text_json_new_string("foo", 3));
 
-    EXPECT_EQ(text_json_equal(o1, o2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(o1, o3, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(o1, o2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(o1, o3, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(o1);
     text_json_free(o2);
@@ -5894,8 +5894,8 @@ TEST(DomUtilities, DeepEqualityNested) {
     ASSERT_NE(v2, nullptr);
     ASSERT_NE(v3, nullptr);
 
-    EXPECT_EQ(text_json_equal(v1, v2, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(v1, v3, TEXT_JSON_EQUAL_LEXEME), 0);
+    EXPECT_EQ(text_json_equal(v1, v2, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(v1, v3, TEXT_JSON_EQUAL_LEXEME), false);
 
     text_json_free(v1);
     text_json_free(v2);
@@ -5913,7 +5913,7 @@ TEST(DomUtilities, DeepCloneNull) {
     ASSERT_NE(clone, nullptr);
 
     EXPECT_EQ(text_json_typeof(clone), TEXT_JSON_NULL);
-    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), true);
 
     // Verify they're independent (different contexts)
     EXPECT_NE(src, clone);
@@ -5926,7 +5926,7 @@ TEST(DomUtilities, DeepCloneNull) {
  * Test deep clone - scalar values
  */
 TEST(DomUtilities, DeepCloneScalars) {
-    text_json_value* bool_src = text_json_new_bool(1);
+    text_json_value* bool_src = text_json_new_bool(true);
     text_json_value* str_src = text_json_new_string("hello", 5);
     text_json_value* num_src = text_json_new_number_i64(123);
     ASSERT_NE(bool_src, nullptr);
@@ -5940,9 +5940,9 @@ TEST(DomUtilities, DeepCloneScalars) {
     ASSERT_NE(str_clone, nullptr);
     ASSERT_NE(num_clone, nullptr);
 
-    EXPECT_EQ(text_json_equal(bool_src, bool_clone, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(str_src, str_clone, TEXT_JSON_EQUAL_LEXEME), 1);
-    EXPECT_EQ(text_json_equal(num_src, num_clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(bool_src, bool_clone, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(str_src, str_clone, TEXT_JSON_EQUAL_LEXEME), true);
+    EXPECT_EQ(text_json_equal(num_src, num_clone, TEXT_JSON_EQUAL_LEXEME), true);
 
     text_json_free(bool_src);
     text_json_free(str_src);
@@ -5961,13 +5961,13 @@ TEST(DomUtilities, DeepCloneArray) {
 
     text_json_array_push(src, text_json_new_string("hello", 5));
     text_json_array_push(src, text_json_new_number_i64(123));
-    text_json_array_push(src, text_json_new_bool(1));
+    text_json_array_push(src, text_json_new_bool(true));
 
     text_json_value* clone = text_json_clone(src);
     ASSERT_NE(clone, nullptr);
 
     EXPECT_EQ(text_json_array_size(clone), 3u);
-    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), true);
 
     // Verify independence - modify clone doesn't affect src
     text_json_array_push(clone, text_json_new_string("new", 3));
@@ -5992,7 +5992,7 @@ TEST(DomUtilities, DeepCloneObject) {
     ASSERT_NE(clone, nullptr);
 
     EXPECT_EQ(text_json_object_size(clone), 2u);
-    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), true);
 
     // Verify independence
     text_json_object_put(clone, "c", 1, text_json_new_string("new", 3));
@@ -6017,7 +6017,7 @@ TEST(DomUtilities, DeepCloneNested) {
     text_json_value* clone = text_json_clone(src);
     ASSERT_NE(clone, nullptr);
 
-    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), 1);
+    EXPECT_EQ(text_json_equal(src, clone, TEXT_JSON_EQUAL_LEXEME), true);
 
     text_json_free(src);
     text_json_free(clone);
@@ -6523,7 +6523,7 @@ TEST(WriterEnhancements, LocaleIndependence) {
     // Test that numeric formatting is locale-independent
     // This is primarily verified by the implementation using locale-independent
     // formatting functions, but we can test that numbers format consistently
-    
+
     text_json_value* v1 = text_json_new_number_i64(123456789);
     text_json_value* v2 = text_json_new_number_u64(987654321ULL);
     text_json_value* v3 = text_json_new_number_double(1234.56789);
@@ -6568,7 +6568,7 @@ TEST(WriterEnhancements, LocaleIndependence) {
 
 /**
  * Test writer enhancements - floating-point formatting options
- * 
+ *
  * Note: To test float formatting, we need to set canonical_numbers = 1
  * to force formatting from the double representation instead of using the lexeme.
  */
@@ -6578,7 +6578,7 @@ TEST(WriterEnhancements, FloatFormatting) {
     text_json_error err;
 
     // Enable canonical_numbers to force formatting from double (not lexeme)
-    opts.canonical_numbers = 1;
+    opts.canonical_numbers = true;
 
     // Test SHORTEST format (default)
     text_json_value* v1 = text_json_new_number_double(123.456789);
@@ -6671,7 +6671,7 @@ TEST(WriterEnhancements, TrailingNewline) {
 
     // Test without trailing newline (default)
     text_json_sink_buffer(&sink);
-    opts.trailing_newline = 0;
+    opts.trailing_newline = false;
     text_json_write_value(&sink, &opts, v, &err);
     const char* output = text_json_sink_buffer_data(&sink);
     size_t len = text_json_sink_buffer_size(&sink);
@@ -6682,7 +6682,7 @@ TEST(WriterEnhancements, TrailingNewline) {
 
     // Test with trailing newline
     text_json_sink_buffer(&sink);
-    opts.trailing_newline = 1;
+    opts.trailing_newline = true;
     text_json_write_value(&sink, &opts, v, &err);
     output = text_json_sink_buffer_data(&sink);
     len = text_json_sink_buffer_size(&sink);
@@ -6712,8 +6712,8 @@ TEST(WriterEnhancements, SpacingControls) {
 
     // Test without spacing (default)
     text_json_sink_buffer(&sink);
-    opts.space_after_colon = 0;
-    opts.space_after_comma = 0;
+    opts.space_after_colon = false;
+    opts.space_after_comma = false;
     text_json_write_value(&sink, &opts, obj, &err);
     const char* output = text_json_sink_buffer_data(&sink);
     // Should not have space after colon or comma
@@ -6723,8 +6723,8 @@ TEST(WriterEnhancements, SpacingControls) {
 
     // Test with space after colon
     text_json_sink_buffer(&sink);
-    opts.space_after_colon = 1;
-    opts.space_after_comma = 0;
+    opts.space_after_colon = true;
+    opts.space_after_comma = false;
     text_json_write_value(&sink, &opts, obj, &err);
     output = text_json_sink_buffer_data(&sink);
     // Should have space after colon
@@ -6733,8 +6733,8 @@ TEST(WriterEnhancements, SpacingControls) {
 
     // Test with space after comma
     text_json_sink_buffer(&sink);
-    opts.space_after_colon = 0;
-    opts.space_after_comma = 1;
+    opts.space_after_colon = false;
+    opts.space_after_comma = true;
     text_json_write_value(&sink, &opts, obj, &err);
     output = text_json_sink_buffer_data(&sink);
     // Should have space after comma
@@ -6743,8 +6743,8 @@ TEST(WriterEnhancements, SpacingControls) {
 
     // Test with both spacing options
     text_json_sink_buffer(&sink);
-    opts.space_after_colon = 1;
-    opts.space_after_comma = 1;
+    opts.space_after_colon = true;
+    opts.space_after_comma = true;
     text_json_write_value(&sink, &opts, obj, &err);
     output = text_json_sink_buffer_data(&sink);
     // Should have both spaces
@@ -6778,7 +6778,7 @@ TEST(WriterEnhancements, InlineFormattingThresholds) {
 
     // Test inline threshold = -1 (always inline when not pretty)
     text_json_sink_buffer(&sink);
-    opts.pretty = 0;
+    opts.pretty = false;
     opts.inline_array_threshold = -1;
     text_json_write_value(&sink, &opts, small_arr, &err);
     const char* output = text_json_sink_buffer_data(&sink);
@@ -6788,7 +6788,7 @@ TEST(WriterEnhancements, InlineFormattingThresholds) {
 
     // Test inline threshold = 0 (always pretty)
     text_json_sink_buffer(&sink);
-    opts.pretty = 1;
+    opts.pretty = true;
     opts.inline_array_threshold = 0;
     text_json_write_value(&sink, &opts, small_arr, &err);
     output = text_json_sink_buffer_data(&sink);
@@ -6798,7 +6798,7 @@ TEST(WriterEnhancements, InlineFormattingThresholds) {
 
     // Test inline threshold = 3 (small array should be inline, large should be pretty)
     text_json_sink_buffer(&sink);
-    opts.pretty = 1;
+    opts.pretty = true;
     opts.inline_array_threshold = 3;
     text_json_write_value(&sink, &opts, small_arr, &err);
     output = text_json_sink_buffer_data(&sink);
@@ -6851,7 +6851,7 @@ static std::string get_test_data_dir() {
     if (test_dir) {
         return std::string(test_dir);
     }
-    
+
     // Default relative path from build directory
     return "tests/data/json";
 }
@@ -6860,15 +6860,15 @@ static std::string get_test_data_dir() {
 static void test_valid_json_file(const std::string& filepath) {
     std::string content = read_file(filepath);
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
-    
+
     text_json_parse_options opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(value, nullptr) << "Failed to parse valid JSON from: " << filepath
                               << " Error: " << (err.message ? err.message : "unknown");
-    
+
     if (value) {
         text_json_free(value);
     }
@@ -6879,14 +6879,14 @@ static void test_valid_json_file(const std::string& filepath) {
 static void test_invalid_json_file(const std::string& filepath) {
     std::string content = read_file(filepath);
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
-    
+
     text_json_parse_options opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &opts, &err);
     EXPECT_EQ(value, nullptr) << "Should have failed to parse invalid JSON from: " << filepath;
-    
+
     if (value) {
         text_json_free(value);
     }
@@ -6897,17 +6897,17 @@ static void test_invalid_json_file(const std::string& filepath) {
 static void test_jsonc_file(const std::string& filepath) {
     std::string content = read_file(filepath);
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
-    
+
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_comments = 1;
-    opts.allow_trailing_commas = 1;
+    opts.allow_comments = true;
+    opts.allow_trailing_commas = true;
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(value, nullptr) << "Failed to parse JSONC from: " << filepath
                               << " Error: " << (err.message ? err.message : "unknown");
-    
+
     if (value) {
         text_json_free(value);
     }
@@ -6918,37 +6918,37 @@ static void test_jsonc_file(const std::string& filepath) {
 static void test_round_trip(const std::string& filepath) {
     std::string content = read_file(filepath);
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
-    
+
     text_json_parse_options parse_opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     // Parse original
     text_json_value* original = text_json_parse(content.c_str(), content.size(), &parse_opts, &err);
     ASSERT_NE(original, nullptr) << "Failed to parse: " << filepath;
-    
+
     // Write to buffer
     text_json_sink sink;
     text_json_status status = text_json_sink_buffer(&sink);
     ASSERT_EQ(status, TEXT_JSON_OK);
-    
+
     text_json_write_options write_opts = text_json_write_options_default();
     status = text_json_write_value(&sink, &write_opts, original, &err);
     ASSERT_EQ(status, TEXT_JSON_OK) << "Failed to write: " << filepath;
-    
+
     const char* output = text_json_sink_buffer_data(&sink);
     size_t output_len = text_json_sink_buffer_size(&sink);
-    
+
     // Parse again
     text_json_value* reparsed = text_json_parse(output, output_len, &parse_opts, &err);
     ASSERT_NE(reparsed, nullptr) << "Failed to reparse output from: " << filepath;
-    
+
     // Compare structurally (deep equality)
     if (original && reparsed) {
-        int equal = text_json_equal(original, reparsed, TEXT_JSON_EQUAL_NUMERIC);
-        EXPECT_EQ(equal, 1) << "Round-trip failed for: " << filepath;
+        bool equal = text_json_equal(original, reparsed, TEXT_JSON_EQUAL_NUMERIC);
+        EXPECT_EQ(equal, true) << "Round-trip failed for: " << filepath;
     }
-    
+
     text_json_sink_buffer_free(&sink);
     if (original) text_json_free(original);
     if (reparsed) text_json_free(reparsed);
@@ -6960,7 +6960,7 @@ static void test_round_trip(const std::string& filepath) {
  */
 TEST(TestCorpus, RFC8259Examples) {
     std::string base_dir = get_test_data_dir() + "/rfc8259";
-    
+
     // Test all RFC 8259 example files
     test_valid_json_file(base_dir + "/basic.json");
     test_valid_json_file(base_dir + "/array.json");
@@ -6974,7 +6974,7 @@ TEST(TestCorpus, RFC8259Examples) {
  */
 TEST(TestCorpus, ValidJSON) {
     std::string base_dir = get_test_data_dir() + "/valid";
-    
+
     test_valid_json_file(base_dir + "/empty.json");
     test_valid_json_file(base_dir + "/empty-array.json");
     test_valid_json_file(base_dir + "/empty-object.json");
@@ -6988,7 +6988,7 @@ TEST(TestCorpus, ValidJSON) {
  */
 TEST(TestCorpus, InvalidJSON) {
     std::string base_dir = get_test_data_dir() + "/invalid";
-    
+
     test_invalid_json_file(base_dir + "/trailing-comma-array.json");
     test_invalid_json_file(base_dir + "/trailing-comma-object.json");
     test_invalid_json_file(base_dir + "/missing-comma.json");
@@ -7006,7 +7006,7 @@ TEST(TestCorpus, InvalidJSON) {
  */
 TEST(TestCorpus, JSONC) {
     std::string base_dir = get_test_data_dir() + "/jsonc";
-    
+
     test_jsonc_file(base_dir + "/single-line-comment.json");
     test_jsonc_file(base_dir + "/multi-line-comment.json");
     test_jsonc_file(base_dir + "/trailing-comma-array.json");
@@ -7019,11 +7019,11 @@ TEST(TestCorpus, JSONC) {
  */
 TEST(TestCorpus, Unicode) {
     std::string base_dir = get_test_data_dir() + "/unicode";
-    
+
     // Valid Unicode cases
     test_valid_json_file(base_dir + "/surrogate-pair.json");
     test_valid_json_file(base_dir + "/various-unicode.json");
-    
+
     // Invalid surrogate sequences (should fail in strict mode)
     test_invalid_json_file(base_dir + "/invalid-surrogate-lone-high.json");
     test_invalid_json_file(base_dir + "/invalid-surrogate-lone-low.json");
@@ -7037,21 +7037,21 @@ TEST(TestCorpus, BOMHandling) {
     // UTF-8 BOM is: EF BB BF (U+FEFF)
     const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
     const char* json_after_bom = "{\"key\":\"value\"}";
-    
+
     // Create input with BOM
     std::vector<unsigned char> input_with_bom;
     input_with_bom.insert(input_with_bom.end(), bom, bom + 3);
-    input_with_bom.insert(input_with_bom.end(), 
+    input_with_bom.insert(input_with_bom.end(),
                          (const unsigned char*)json_after_bom,
                          (const unsigned char*)json_after_bom + strlen(json_after_bom));
-    
+
     // Test 1: BOM enabled (default) - should parse successfully
     {
         text_json_parse_options opts = text_json_parse_options_default();
-        opts.allow_leading_bom = 1;
+        opts.allow_leading_bom = true;
         text_json_error err;
         memset(&err, 0, sizeof(err));
-        
+
         text_json_value* value = text_json_parse(
             (const char*)input_with_bom.data(),
             input_with_bom.size(),
@@ -7059,7 +7059,7 @@ TEST(TestCorpus, BOMHandling) {
             &err
         );
         EXPECT_NE(value, nullptr) << "Should parse JSON with BOM when allow_leading_bom=1";
-        
+
         if (value) {
             // Verify we can access the data
             const text_json_value* key_val = text_json_object_get(value, "key", 3);
@@ -7076,17 +7076,17 @@ TEST(TestCorpus, BOMHandling) {
         }
         text_json_error_free(&err);
     }
-    
+
     // Test 2: BOM disabled - verify option is checked
     // Note: The BOM bytes (EF BB BF) might be treated as whitespace or ignored
     // by some parsers even when allow_leading_bom=0. The important thing is
     // that when allow_leading_bom=1, the BOM is properly skipped.
     {
         text_json_parse_options opts = text_json_parse_options_default();
-        opts.allow_leading_bom = 0;
+        opts.allow_leading_bom = false;
         text_json_error err;
         memset(&err, 0, sizeof(err));
-        
+
         text_json_value* value = text_json_parse(
             (const char*)input_with_bom.data(),
             input_with_bom.size(),
@@ -7110,14 +7110,14 @@ TEST(TestCorpus, BOMHandling) {
         // If it failed, that's also acceptable - BOM bytes are not valid JSON
         text_json_error_free(&err);
     }
-    
+
     // Test 3: JSON without BOM should work regardless of setting
     {
         text_json_parse_options opts = text_json_parse_options_default();
-        opts.allow_leading_bom = 1;  // Even with BOM enabled, no-BOM should work
+        opts.allow_leading_bom = true;  // Even with BOM enabled, no-BOM should work
         text_json_error err;
         memset(&err, 0, sizeof(err));
-        
+
         text_json_value* value = text_json_parse(
             json_after_bom,
             strlen(json_after_bom),
@@ -7125,13 +7125,13 @@ TEST(TestCorpus, BOMHandling) {
             &err
         );
         EXPECT_NE(value, nullptr) << "Should parse JSON without BOM";
-        
+
         if (value) {
             text_json_free(value);
         }
         text_json_error_free(&err);
     }
-    
+
     // Test 4: BOM in middle of input (not at start) should be treated as invalid
     // BOM bytes in the middle are not valid JSON syntax
     {
@@ -7143,12 +7143,12 @@ TEST(TestCorpus, BOMHandling) {
         input_with_middle_bom.insert(input_with_middle_bom.end(),
                                     (const unsigned char*)"\"value\"}",
                                     (const unsigned char*)"\"value\"}" + 8);
-        
+
         text_json_parse_options opts = text_json_parse_options_default();
-        opts.allow_leading_bom = 1;  // BOM only allowed at start, not in middle
+        opts.allow_leading_bom = true;  // BOM only allowed at start, not in middle
         text_json_error err;
         memset(&err, 0, sizeof(err));
-        
+
         text_json_value* value = text_json_parse(
             (const char*)input_with_middle_bom.data(),
             input_with_middle_bom.size(),
@@ -7173,7 +7173,7 @@ TEST(TestCorpus, BOMHandling) {
  */
 TEST(TestCorpus, NumberBoundaries) {
     std::string base_dir = get_test_data_dir() + "/numbers";
-    
+
     // Valid boundary cases
     test_valid_json_file(base_dir + "/int64-max.json");
     test_valid_json_file(base_dir + "/int64-min.json");
@@ -7181,28 +7181,28 @@ TEST(TestCorpus, NumberBoundaries) {
     test_valid_json_file(base_dir + "/exponent-large.json");
     test_valid_json_file(base_dir + "/exponent-small.json");
     test_valid_json_file(base_dir + "/precision.json");
-    
+
     // Overflow cases (should parse but may not fit in int64/uint64)
     test_valid_json_file(base_dir + "/int64-overflow.json");
     test_valid_json_file(base_dir + "/uint64-overflow.json");
-    
+
     // Nonfinite numbers (require option)
     // Note: The nonfinite.json file contains unquoted NaN/Infinity which requires
     // the allow_nonfinite_numbers option. However, if parsing fails, it might be
     // because the lexer doesn't recognize these tokens. Let's test with a simpler approach.
     const char* nonfinite_json = "{\"nan\":NaN,\"infinity\":Infinity,\"negative_infinity\":-Infinity}";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 1;
+    opts.allow_nonfinite_numbers = true;
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(nonfinite_json, strlen(nonfinite_json), &opts, &err);
     // This may or may not parse depending on implementation
     // If it fails, check that the error is appropriate
     if (!value) {
         EXPECT_NE(err.code, TEXT_JSON_OK);
     }
-    
+
     if (value) {
         text_json_free(value);
     }
@@ -7214,7 +7214,7 @@ TEST(TestCorpus, NumberBoundaries) {
  */
 TEST(TestCorpus, RoundTrip) {
     std::string base_dir = get_test_data_dir();
-    
+
     // Test round-trip on various valid JSON files
     test_round_trip(base_dir + "/rfc8259/basic.json");
     test_round_trip(base_dir + "/rfc8259/array.json");
@@ -7227,7 +7227,7 @@ TEST(TestCorpus, RoundTrip) {
 
 /**
  * Test corpus - Milestone A: Strict JSON DOM + Writer
- * 
+ *
  * Verify:
  * - strict parse (RFC/ECMA)
  * - DOM write (compact + pretty)
@@ -7236,48 +7236,48 @@ TEST(TestCorpus, RoundTrip) {
  */
 TEST(TestCorpus, MilestoneA) {
     std::string base_dir = get_test_data_dir();
-    
+
     // Strict parse - RFC 8259 examples should work
     test_valid_json_file(base_dir + "/rfc8259/basic.json");
     test_valid_json_file(base_dir + "/rfc8259/array.json");
-    
+
     // Invalid JSON should be rejected
     test_invalid_json_file(base_dir + "/invalid/trailing-comma-array.json");
-    
+
     // Unicode correctness
     test_valid_json_file(base_dir + "/unicode/surrogate-pair.json");
     test_valid_json_file(base_dir + "/unicode/various-unicode.json");
-    
+
     // DOM write - test compact and pretty
     std::string content = read_file(base_dir + "/rfc8259/basic.json");
     ASSERT_FALSE(content.empty());
-    
+
     text_json_parse_options parse_opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &parse_opts, &err);
     ASSERT_NE(value, nullptr);
-    
+
     // Test compact write
     text_json_sink sink;
     text_json_sink_buffer(&sink);
     text_json_write_options write_opts = text_json_write_options_default();
-    write_opts.pretty = 0;
+    write_opts.pretty = false;
     text_json_write_value(&sink, &write_opts, value, &err);
     EXPECT_NE(text_json_sink_buffer_data(&sink), nullptr);
     text_json_sink_buffer_free(&sink);
-    
+
     // Test pretty write
     text_json_sink_buffer(&sink);
-    write_opts.pretty = 1;
+    write_opts.pretty = true;
     write_opts.indent_spaces = 2;
     text_json_write_value(&sink, &write_opts, value, &err);
     const char* output = text_json_sink_buffer_data(&sink);
     EXPECT_NE(output, nullptr);
     EXPECT_NE(strchr(output, '\n'), nullptr);  // Should have newlines
     text_json_sink_buffer_free(&sink);
-    
+
     text_json_free(value);
     text_json_error_free(&err);
 }
@@ -7287,23 +7287,23 @@ TEST(TestCorpus, MilestoneA) {
  */
 TEST(TestCorpus, MilestoneB) {
     std::string base_dir = get_test_data_dir();
-    
+
     // JSONC support
     test_jsonc_file(base_dir + "/jsonc/single-line-comment.json");
     test_jsonc_file(base_dir + "/jsonc/multi-line-comment.json");
     test_jsonc_file(base_dir + "/jsonc/mixed.json");
-    
+
     // Trailing commas
     test_jsonc_file(base_dir + "/jsonc/trailing-comma-array.json");
     test_jsonc_file(base_dir + "/jsonc/trailing-comma-object.json");
-    
+
     // Nonfinite numbers
     const char* nonfinite_json = "{\"nan\":NaN,\"infinity\":Infinity,\"negative_infinity\":-Infinity}";
     text_json_parse_options opts = text_json_parse_options_default();
-    opts.allow_nonfinite_numbers = 1;
+    opts.allow_nonfinite_numbers = true;
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(nonfinite_json, strlen(nonfinite_json), &opts, &err);
     // Nonfinite numbers may not parse if lexer doesn't support them
     // This is acceptable - the test verifies the option exists
@@ -7312,15 +7312,15 @@ TEST(TestCorpus, MilestoneB) {
         text_json_sink sink;
         text_json_sink_buffer(&sink);
         text_json_write_options write_opts = text_json_write_options_default();
-        write_opts.allow_nonfinite_numbers = 1;
+        write_opts.allow_nonfinite_numbers = true;
         text_json_write_value(&sink, &write_opts, value, &err);
-        
+
         const char* output = text_json_sink_buffer_data(&sink);
         if (output) {
             EXPECT_NE(strstr(output, "NaN"), nullptr);
             EXPECT_NE(strstr(output, "Infinity"), nullptr);
         }
-        
+
         text_json_sink_buffer_free(&sink);
         text_json_free(value);
     }
@@ -7336,7 +7336,7 @@ TEST(TestCorpus, MilestoneC) {
     // This test verifies that streaming works with corpus data
     std::string content = read_file(get_test_data_dir() + "/rfc8259/basic.json");
     ASSERT_FALSE(content.empty());
-    
+
     // Create a simple event counter callback
     int event_count = 0;
     text_json_event_cb event_cb = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
@@ -7346,31 +7346,31 @@ TEST(TestCorpus, MilestoneC) {
         (*count)++;
         return TEXT_JSON_OK;  // Continue parsing
     };
-    
+
     text_json_parse_options parse_opts = text_json_parse_options_default();
     text_json_stream* stream = text_json_stream_new(&parse_opts, event_cb, &event_count);
     ASSERT_NE(stream, nullptr);
-    
+
     // Feed in chunks
     size_t chunk_size = 10;
     size_t pos = 0;
     text_json_status status = TEXT_JSON_OK;
-    
+
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     while (pos < content.size() && status == TEXT_JSON_OK) {
         size_t len = (pos + chunk_size < content.size()) ? chunk_size : (content.size() - pos);
         status = text_json_stream_feed(stream, content.c_str() + pos, len, &err);
         pos += len;
     }
-    
+
     // Streaming may encounter errors during incremental parsing
     // The important thing is that the stream was created and can process data
     // (Streaming parser tests are more thoroughly covered in StreamingParser suite)
-    
+
     text_json_stream_finish(stream, &err);
-    
+
     text_json_stream_free(stream);
     text_json_error_free(&err);
 }
@@ -7384,25 +7384,25 @@ TEST(TestCorpus, MilestoneD) {
     // This test verifies they work with corpus data
     std::string content = read_file(get_test_data_dir() + "/rfc8259/basic.json");
     ASSERT_FALSE(content.empty());
-    
+
     text_json_parse_options opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &opts, &err);
     ASSERT_NE(value, nullptr);
-    
+
     // Test JSON Pointer
     const text_json_value* result = text_json_pointer_get(value, "/Image/Width", strlen("/Image/Width"));
     EXPECT_NE(result, nullptr);
-    
+
     if (result) {
         int64_t width = 0;
         text_json_status status = text_json_get_i64(result, &width);
         EXPECT_EQ(status, TEXT_JSON_OK);
         EXPECT_EQ(width, 800);
     }
-    
+
     text_json_free(value);
 }
 
@@ -7415,24 +7415,24 @@ TEST(TestCorpus, MilestoneE) {
     // This test verifies canonical output
     std::string content = read_file(get_test_data_dir() + "/valid/large-object.json");
     ASSERT_FALSE(content.empty());
-    
+
     text_json_parse_options parse_opts = text_json_parse_options_default();
     text_json_error err;
     memset(&err, 0, sizeof(err));
-    
+
     text_json_value* value = text_json_parse(content.c_str(), content.size(), &parse_opts, &err);
     ASSERT_NE(value, nullptr);
-    
+
     // Test canonical output (key sorting)
     text_json_sink sink;
     text_json_sink_buffer(&sink);
     text_json_write_options write_opts = text_json_write_options_default();
-    write_opts.sort_object_keys = 1;
+    write_opts.sort_object_keys = true;
     text_json_write_value(&sink, &write_opts, value, &err);
-    
+
     const char* output = text_json_sink_buffer_data(&sink);
     EXPECT_NE(output, nullptr);
-    
+
     // Verify keys are sorted (should start with "a":1)
     // Output format: {"a":1,"b":2,...}
     const char* key_a = strstr(output, "\"a\"");
@@ -7442,7 +7442,7 @@ TEST(TestCorpus, MilestoneE) {
     if (key_a && key_b) {
         EXPECT_LT(key_a, key_b);  // "a" should come before "b"
     }
-    
+
     text_json_sink_buffer_free(&sink);
     text_json_free(value);
     text_json_error_free(&err);
