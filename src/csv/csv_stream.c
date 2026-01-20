@@ -317,17 +317,8 @@ static text_csv_status csv_stream_unescape_field(
         }
     }
 
-    // Ensure the buffer is large enough for the output
-    if (out_idx > stream->field_buffer_size) {
-        return TEXT_CSV_E_OOM;  // This should never happen, but safety check
-    }
-
     // Safety check: ensure output length doesn't exceed buffer size
-    if (out_idx > stream->field_buffer_size) {
-        out_idx = stream->field_buffer_size;
-    }
-
-    // Final safety check: ensure out_idx is valid
+    // This should never happen due to bounds checking in the loop above, but be defensive
     if (out_idx > stream->field_buffer_size) {
         out_idx = stream->field_buffer_size;
     }
@@ -1145,9 +1136,10 @@ static text_csv_status csv_stream_process_chunk(
                     stream->field_is_buffered = false;
                     stream->field_needs_copy = false;
                     // pos_before.offset is now the position in process_input after the newline
-                    // Convert it back to absolute position
+                    // csv_detect_newline has already advanced pos_before.offset by newline_bytes
+                    // So the absolute position after the newline is stream->pos.offset + (pos_before.offset - byte_pos)
                     size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                    stream->pos.offset += (pos_before.offset - byte_pos) + newline_bytes;
+                    stream->pos.offset += (pos_before.offset - byte_pos);
                     stream->pos.line = pos_before.line;
                     stream->pos.column = pos_before.column;
                     stream->total_bytes_consumed += newline_bytes;
