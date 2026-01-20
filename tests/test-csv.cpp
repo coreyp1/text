@@ -4,6 +4,9 @@
 #include <string.h>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <cstring>
+#include <algorithm>
 
 // Core Types and Error Handling
 TEST(CsvCore, StatusEnum) {
@@ -2307,6 +2310,723 @@ TEST(CsvTableInSitu, MixedMode) {
     EXPECT_EQ(std::string(field2, len), "another");
 
     text_csv_free_table(table);
+}
+
+// ============================================================================
+// Test Corpus - Helper Functions
+// ============================================================================
+
+// Helper function to read a file into a string
+static std::string read_file(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    return content;
+}
+
+// Helper function to get test data directory
+static std::string get_test_data_dir() {
+    // Try to find the test data directory relative to the test executable
+    // This works when running from the build directory
+    const char* test_dir = getenv("TEST_DATA_DIR");
+    if (test_dir) {
+        return std::string(test_dir);
+    }
+
+    // Default relative path from build directory
+    return "tests/data/csv";
+}
+
+// Helper to test a valid CSV file (table parsing)
+static void test_valid_csv_file(const std::string& filepath) {
+    std::string content = read_file(filepath);
+    ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    EXPECT_NE(table, nullptr) << "Failed to parse valid CSV from: " << filepath
+                                << " Error: " << (err.message ? err.message : "unknown");
+
+    if (table) {
+        text_csv_free_table(table);
+    }
+    text_csv_error_free(&err);
+}
+
+// Helper to test a valid CSV file (streaming parsing)
+static void test_valid_csv_stream(const std::string& filepath) {
+    std::string content = read_file(filepath);
+    ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
+
+    size_t record_count = 0;
+    size_t field_count = 0;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        auto* counts = (std::pair<size_t*, size_t*>*)user_data;
+        switch (event->type) {
+            case TEXT_CSV_EVENT_RECORD_BEGIN:
+                (*counts->first)++;
+                break;
+            case TEXT_CSV_EVENT_FIELD:
+                (*counts->second)++;
+                break;
+            default:
+                break;
+        }
+        return TEXT_CSV_OK;
+    };
+
+    std::pair<size_t*, size_t*> user_data(&record_count, &field_count);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_stream* stream = text_csv_stream_new(&opts, callback, &user_data);
+    ASSERT_NE(stream, nullptr);
+
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+    text_csv_status status = text_csv_stream_feed(stream, content.c_str(), content.size(), &err);
+    EXPECT_EQ(status, TEXT_CSV_OK) << "Failed to feed stream from: " << filepath;
+
+    if (status == TEXT_CSV_OK) {
+        status = text_csv_stream_finish(stream, &err);
+        EXPECT_EQ(status, TEXT_CSV_OK) << "Failed to finish stream from: " << filepath;
+    }
+
+    text_csv_stream_free(stream);
+    text_csv_error_free(&err);
+}
+
+// Helper to test an invalid CSV file (should fail to parse)
+static void test_invalid_csv_file(const std::string& filepath) {
+    std::string content = read_file(filepath);
+    ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    EXPECT_EQ(table, nullptr) << "Should have failed to parse invalid CSV from: " << filepath;
+
+    if (table) {
+        text_csv_free_table(table);
+    }
+    text_csv_error_free(&err);
+}
+
+// Helper to test round-trip: parse -> write -> parse -> compare
+static void test_round_trip(const std::string& filepath) {
+    std::string content = read_file(filepath);
+    ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
+
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    // Parse original
+    text_csv_table* original = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
+    ASSERT_NE(original, nullptr) << "Failed to parse: " << filepath;
+
+    // Write to buffer
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    ASSERT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options write_opts = text_csv_write_options_default();
+    status = text_csv_write_table(&sink, &write_opts, original);
+    ASSERT_EQ(status, TEXT_CSV_OK) << "Failed to write: " << filepath;
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse again
+    text_csv_table* reparsed = text_csv_parse_table(output, output_len, &parse_opts, &err);
+    ASSERT_NE(reparsed, nullptr) << "Failed to reparse output from: " << filepath;
+
+    // Compare structurally
+    if (original && reparsed) {
+        EXPECT_EQ(text_csv_row_count(original), text_csv_row_count(reparsed))
+            << "Round-trip row count mismatch for: " << filepath;
+
+        size_t min_rows = std::min(text_csv_row_count(original), text_csv_row_count(reparsed));
+        for (size_t row = 0; row < min_rows; row++) {
+            EXPECT_EQ(text_csv_col_count(original, row), text_csv_col_count(reparsed, row))
+                << "Round-trip col count mismatch at row " << row << " for: " << filepath;
+
+            size_t min_cols = std::min(text_csv_col_count(original, row), text_csv_col_count(reparsed, row));
+            for (size_t col = 0; col < min_cols; col++) {
+                size_t len1, len2;
+                const char* field1 = text_csv_field(original, row, col, &len1);
+                const char* field2 = text_csv_field(reparsed, row, col, &len2);
+                EXPECT_EQ(len1, len2) << "Round-trip field length mismatch at row " << row
+                                      << ", col " << col << " for: " << filepath;
+                if (len1 == len2) {
+                    EXPECT_EQ(memcmp(field1, field2, len1), 0)
+                        << "Round-trip field content mismatch at row " << row
+                        << ", col " << col << " for: " << filepath;
+                }
+            }
+        }
+    }
+
+    text_csv_sink_buffer_free(&sink);
+    if (original) text_csv_free_table(original);
+    if (reparsed) text_csv_free_table(reparsed);
+    text_csv_error_free(&err);
+}
+
+// ============================================================================
+// Test Corpus - Strict CSV Cases
+// ============================================================================
+
+TEST(TestCorpus, StrictBasic) {
+    std::string base_dir = get_test_data_dir() + "/strict";
+    test_valid_csv_file(base_dir + "/basic.csv");
+    test_valid_csv_file(base_dir + "/quoted-fields.csv");
+    test_valid_csv_file(base_dir + "/doubled-quotes.csv");
+    test_valid_csv_file(base_dir + "/newlines-in-quotes.csv");
+    test_valid_csv_file(base_dir + "/empty-fields.csv");
+    test_valid_csv_file(base_dir + "/delimiters-in-quotes.csv");
+}
+
+// ============================================================================
+// Test Corpus - Dialect Cases
+// ============================================================================
+
+TEST(TestCorpus, DialectTSV) {
+    std::string base_dir = get_test_data_dir() + "/dialects/tsv";
+    std::string content = read_file(base_dir + "/basic.tsv");
+    ASSERT_FALSE(content.empty());
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.delimiter = '\t';
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    EXPECT_NE(table, nullptr);
+    if (table) {
+        EXPECT_GE(text_csv_row_count(table), 2u);
+        text_csv_free_table(table);
+    }
+    text_csv_error_free(&err);
+}
+
+TEST(TestCorpus, DialectSemicolon) {
+    std::string base_dir = get_test_data_dir() + "/dialects/semicolon";
+    std::string content = read_file(base_dir + "/basic.csv");
+    ASSERT_FALSE(content.empty());
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.delimiter = ';';
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    EXPECT_NE(table, nullptr);
+    if (table) {
+        EXPECT_GE(text_csv_row_count(table), 2u);
+        text_csv_free_table(table);
+    }
+    text_csv_error_free(&err);
+}
+
+TEST(TestCorpus, DialectBackslashEscape) {
+    std::string base_dir = get_test_data_dir() + "/dialects/backslash-escape";
+    std::string content = read_file(base_dir + "/basic.csv");
+    ASSERT_FALSE(content.empty());
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    EXPECT_NE(table, nullptr);
+    if (table) {
+        EXPECT_GE(text_csv_row_count(table), 2u);
+        text_csv_free_table(table);
+    }
+    text_csv_error_free(&err);
+}
+
+// ============================================================================
+// Test Corpus - Edge Cases
+// ============================================================================
+
+TEST(TestCorpus, EdgeCases) {
+    std::string base_dir = get_test_data_dir() + "/edge-cases";
+
+    // Test BOM handling
+    std::string bom_content = read_file(base_dir + "/bom.csv");
+    if (!bom_content.empty()) {
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        opts.keep_bom = false;  // Should strip BOM
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(bom_content.c_str(), bom_content.size(), &opts, &err);
+        EXPECT_NE(table, nullptr);
+        if (table) {
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+    }
+
+    // Test empty last field
+    test_valid_csv_file(base_dir + "/empty-last-field.csv");
+
+    // Test empty table (empty file is valid - should parse to 0 rows)
+    {
+        std::string content = read_file(base_dir + "/empty-table.csv");
+        // Empty file is valid - it should parse to a table with 0 rows
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+        EXPECT_NE(table, nullptr);
+        if (table) {
+            EXPECT_EQ(text_csv_row_count(table), 0u);
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+    }
+
+    // Test single field
+    test_valid_csv_file(base_dir + "/single-field.csv");
+
+    // Test unequal column counts
+    test_valid_csv_file(base_dir + "/unequal-columns.csv");
+
+    // Test consecutive empty fields
+    test_valid_csv_file(base_dir + "/consecutive-empty-fields.csv");
+}
+
+TEST(TestCorpus, EdgeCasesNewlines) {
+    std::string base_dir = get_test_data_dir() + "/edge-cases";
+
+    // Test CRLF newlines
+    std::string crlf_content = read_file(base_dir + "/crlf-newlines.csv");
+    if (!crlf_content.empty()) {
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        opts.dialect.accept_crlf = true;
+        opts.dialect.accept_lf = false;
+        opts.dialect.accept_cr = false;
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(crlf_content.c_str(), crlf_content.size(), &opts, &err);
+        EXPECT_NE(table, nullptr);
+        if (table) {
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+
+        // Test with streaming parser
+        test_valid_csv_stream(base_dir + "/crlf-newlines.csv");
+    }
+
+    // Test CR newlines (if dialect allows)
+    std::string cr_content = read_file(base_dir + "/cr-newlines.csv");
+    if (!cr_content.empty()) {
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        opts.dialect.accept_cr = true;
+        opts.dialect.accept_lf = false;
+        opts.dialect.accept_crlf = false;
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(cr_content.c_str(), cr_content.size(), &opts, &err);
+        // May or may not succeed depending on implementation
+        if (table) {
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+    }
+
+    // Test mixed newlines (should handle gracefully)
+    std::string mixed_content = read_file(base_dir + "/mixed-newlines.csv");
+    if (!mixed_content.empty()) {
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        opts.dialect.accept_lf = true;
+        opts.dialect.accept_crlf = true;
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(mixed_content.c_str(), mixed_content.size(), &opts, &err);
+        EXPECT_NE(table, nullptr);
+        if (table) {
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+    }
+}
+
+// ============================================================================
+// Test Corpus - Invalid Cases
+// ============================================================================
+
+// ============================================================================
+// Test Corpus - Unequal Column Counts
+// ============================================================================
+
+TEST(TestCorpus, UnequalColumnCounts) {
+    std::string base_dir = get_test_data_dir() + "/edge-cases";
+    std::string content = read_file(base_dir + "/unequal-columns.csv");
+    ASSERT_FALSE(content.empty());
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    ASSERT_NE(table, nullptr) << "Failed to parse CSV with unequal columns";
+
+    // With default options, first row is NOT treated as header, so all 5 rows are data rows
+    // Row 0: "name,age,city" - 3 columns (header row, but treated as data)
+    // Row 1: "Alice,30" - 2 columns (missing city)
+    // Row 2: "Bob,25,LA,extra" - 4 columns (extra field)
+    // Row 3: "Charlie" - 1 column (missing age and city)
+    // Row 4: "Diana,28,NYC,extra1,extra2" - 5 columns (two extra fields)
+    EXPECT_EQ(text_csv_row_count(table), 5u);
+
+    // Verify each row has different column counts
+    // Row 0: "name,age,city" - 3 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Row 1: "Alice,30" - 2 columns (missing city)
+    EXPECT_EQ(text_csv_col_count(table, 1), 2u);
+
+    // Row 2: "Bob,25,LA,extra" - 4 columns (extra field)
+    EXPECT_EQ(text_csv_col_count(table, 2), 4u);
+
+    // Row 3: "Charlie" - 1 column (missing age and city)
+    EXPECT_EQ(text_csv_col_count(table, 3), 1u);
+
+    // Row 4: "Diana,28,NYC,extra1,extra2" - 5 columns (two extra fields)
+    EXPECT_EQ(text_csv_col_count(table, 4), 5u);
+
+    // Verify field contents
+    size_t len;
+    const char* field;
+
+    // Row 1: Alice,30
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_EQ(std::string(field, len), "Alice");
+    field = text_csv_field(table, 1, 1, &len);
+    EXPECT_EQ(std::string(field, len), "30");
+
+    // Row 2: Bob,25,LA,extra
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_EQ(std::string(field, len), "Bob");
+    field = text_csv_field(table, 2, 1, &len);
+    EXPECT_EQ(std::string(field, len), "25");
+    field = text_csv_field(table, 2, 2, &len);
+    EXPECT_EQ(std::string(field, len), "LA");
+    field = text_csv_field(table, 2, 3, &len);
+    EXPECT_EQ(std::string(field, len), "extra");
+
+    // Row 3: Charlie
+    field = text_csv_field(table, 3, 0, &len);
+    EXPECT_EQ(std::string(field, len), "Charlie");
+
+    // Row 4: Diana,28,NYC,extra1,extra2
+    field = text_csv_field(table, 4, 0, &len);
+    EXPECT_EQ(std::string(field, len), "Diana");
+    field = text_csv_field(table, 4, 1, &len);
+    EXPECT_EQ(std::string(field, len), "28");
+    field = text_csv_field(table, 4, 2, &len);
+    EXPECT_EQ(std::string(field, len), "NYC");
+    field = text_csv_field(table, 4, 3, &len);
+    EXPECT_EQ(std::string(field, len), "extra1");
+    field = text_csv_field(table, 4, 4, &len);
+    EXPECT_EQ(std::string(field, len), "extra2");
+
+    text_csv_free_table(table);
+    text_csv_error_free(&err);
+}
+
+// ============================================================================
+// Test Corpus - Consecutive Empty Fields (Skipped Fields)
+// ============================================================================
+
+TEST(TestCorpus, ConsecutiveEmptyFields) {
+    std::string base_dir = get_test_data_dir() + "/edge-cases";
+    std::string content = read_file(base_dir + "/consecutive-empty-fields.csv");
+    ASSERT_FALSE(content.empty());
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_error err;
+    memset(&err, 0, sizeof(err));
+
+    text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
+    ASSERT_NE(table, nullptr) << "Failed to parse CSV with consecutive empty fields";
+
+    // With default options, first row is NOT treated as header, so all rows are data rows
+    // Row 0: "a,b,c" - 3 columns
+    // Row 1: "foo",,,,,"bar" - 6 columns (4 empty fields in middle)
+    // Row 2: "start",,,"middle",,"end" - 6 columns (empty fields at positions 1, 2, 4)
+    // Row 3: ,,,"only_last" - 4 columns (empty fields at positions 0, 1, 2)
+    // Row 4: "only_first",,, - 4 columns (empty fields at positions 1, 2, 3)
+    EXPECT_EQ(text_csv_row_count(table), 5u);
+
+    // Verify column counts
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);  // "a,b,c"
+    EXPECT_EQ(text_csv_col_count(table, 1), 6u);  // "foo",,,,,"bar"
+    EXPECT_EQ(text_csv_col_count(table, 2), 6u);  // "start",,,"middle",,"end"
+    EXPECT_EQ(text_csv_col_count(table, 3), 4u);  // ,,,"only_last"
+    EXPECT_EQ(text_csv_col_count(table, 4), 4u);  // "only_first",,,
+
+    // Verify field contents for row 1: "foo",,,,,"bar"
+    size_t len;
+    const char* field;
+
+    // Row 1: "foo",,,,,"bar"
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(std::string(field, len), "foo");
+
+    // Fields 1-4 should be empty
+    field = text_csv_field(table, 1, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u) << "Field 1 should be empty";
+
+    field = text_csv_field(table, 1, 2, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u) << "Field 2 should be empty";
+
+    field = text_csv_field(table, 1, 3, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u) << "Field 3 should be empty";
+
+    field = text_csv_field(table, 1, 4, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u) << "Field 4 should be empty";
+
+    // Field 5 should be "bar"
+    field = text_csv_field(table, 1, 5, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(std::string(field, len), "bar");
+
+    // Verify row 2: "start",,,"middle",,"end"
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_EQ(std::string(field, len), "start");
+
+    field = text_csv_field(table, 2, 1, &len);
+    EXPECT_EQ(len, 0u) << "Row 2, field 1 should be empty";
+
+    field = text_csv_field(table, 2, 2, &len);
+    EXPECT_EQ(len, 0u) << "Row 2, field 2 should be empty";
+
+    field = text_csv_field(table, 2, 3, &len);
+    EXPECT_EQ(std::string(field, len), "middle");
+
+    field = text_csv_field(table, 2, 4, &len);
+    EXPECT_EQ(len, 0u) << "Row 2, field 4 should be empty";
+
+    field = text_csv_field(table, 2, 5, &len);
+    EXPECT_EQ(std::string(field, len), "end");
+
+    // Verify row 3: ,,,"only_last"
+    field = text_csv_field(table, 3, 0, &len);
+    EXPECT_EQ(len, 0u) << "Row 3, field 0 should be empty";
+
+    field = text_csv_field(table, 3, 1, &len);
+    EXPECT_EQ(len, 0u) << "Row 3, field 1 should be empty";
+
+    field = text_csv_field(table, 3, 2, &len);
+    EXPECT_EQ(len, 0u) << "Row 3, field 2 should be empty";
+
+    field = text_csv_field(table, 3, 3, &len);
+    EXPECT_EQ(std::string(field, len), "only_last");
+
+    // Verify row 4: "only_first",,,
+    field = text_csv_field(table, 4, 0, &len);
+    EXPECT_EQ(std::string(field, len), "only_first");
+
+    field = text_csv_field(table, 4, 1, &len);
+    EXPECT_EQ(len, 0u) << "Row 4, field 1 should be empty";
+
+    field = text_csv_field(table, 4, 2, &len);
+    EXPECT_EQ(len, 0u) << "Row 4, field 2 should be empty";
+
+    field = text_csv_field(table, 4, 3, &len);
+    EXPECT_EQ(len, 0u) << "Row 4, field 3 should be empty";
+
+    text_csv_free_table(table);
+    text_csv_error_free(&err);
+}
+
+// ============================================================================
+// Test Corpus - Invalid Cases
+// ============================================================================
+
+TEST(TestCorpus, InvalidCases) {
+    std::string base_dir = get_test_data_dir() + "/invalid";
+    test_invalid_csv_file(base_dir + "/unterminated-quote.csv");
+    test_invalid_csv_file(base_dir + "/unexpected-quote.csv");
+
+    // Test invalid escape (with backslash escape mode)
+    std::string invalid_escape_content = read_file(base_dir + "/invalid-escape.csv");
+    if (!invalid_escape_content.empty()) {
+        text_csv_parse_options opts = text_csv_parse_options_default();
+        opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+        text_csv_table* table = text_csv_parse_table(invalid_escape_content.c_str(), invalid_escape_content.size(), &opts, &err);
+        EXPECT_EQ(table, nullptr) << "Should have failed to parse invalid escape sequence";
+        if (table) {
+            text_csv_free_table(table);
+        }
+        text_csv_error_free(&err);
+    }
+}
+
+// ============================================================================
+// Test Corpus - Milestone Tests
+// ============================================================================
+
+/**
+ * Milestone: Strict Streaming Parse
+ * Verify strict CSV can be parsed via streaming parser
+ */
+TEST(TestCorpus, MilestoneStrictStreaming) {
+    std::string base_dir = get_test_data_dir() + "/strict";
+
+    // Test streaming parser on strict CSV files
+    test_valid_csv_stream(base_dir + "/basic.csv");
+    test_valid_csv_stream(base_dir + "/quoted-fields.csv");
+    test_valid_csv_stream(base_dir + "/doubled-quotes.csv");
+    test_valid_csv_stream(base_dir + "/newlines-in-quotes.csv");
+}
+
+/**
+ * Milestone: Strict Table Parse
+ * Verify strict CSV can be parsed via table parser
+ */
+TEST(TestCorpus, MilestoneStrictTable) {
+    std::string base_dir = get_test_data_dir() + "/strict";
+
+    // Test table parser on strict CSV files
+    test_valid_csv_file(base_dir + "/basic.csv");
+    test_valid_csv_file(base_dir + "/quoted-fields.csv");
+    test_valid_csv_file(base_dir + "/doubled-quotes.csv");
+    test_valid_csv_file(base_dir + "/newlines-in-quotes.csv");
+    test_valid_csv_file(base_dir + "/empty-fields.csv");
+    test_valid_csv_file(base_dir + "/delimiters-in-quotes.csv");
+}
+
+/**
+ * Milestone: Writer Stability
+ * Verify parse -> write -> parse produces identical results
+ */
+TEST(TestCorpus, MilestoneWriterStability) {
+    std::string base_dir = get_test_data_dir();
+
+    // Test round-trip on various valid CSV files
+    test_round_trip(base_dir + "/strict/basic.csv");
+    test_round_trip(base_dir + "/strict/quoted-fields.csv");
+    test_round_trip(base_dir + "/strict/doubled-quotes.csv");
+    test_round_trip(base_dir + "/strict/empty-fields.csv");
+    test_round_trip(base_dir + "/strict/delimiters-in-quotes.csv");
+    test_round_trip(base_dir + "/edge-cases/empty-last-field.csv");
+    test_round_trip(base_dir + "/edge-cases/single-field.csv");
+}
+
+/**
+ * Milestone: Dialect Matrix
+ * Verify different dialects can be parsed and written correctly
+ */
+TEST(TestCorpus, MilestoneDialectMatrix) {
+    std::string base_dir = get_test_data_dir();
+
+    // Test TSV dialect
+    {
+        std::string content = read_file(base_dir + "/dialects/tsv/basic.tsv");
+        ASSERT_FALSE(content.empty());
+
+        text_csv_parse_options parse_opts = text_csv_parse_options_default();
+        parse_opts.dialect.delimiter = '\t';
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+
+        text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
+        ASSERT_NE(table, nullptr);
+
+        // Write with same dialect
+        text_csv_sink sink;
+        text_csv_status status = text_csv_sink_buffer(&sink);
+        ASSERT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_write_options write_opts = text_csv_write_options_default();
+        write_opts.dialect.delimiter = '\t';
+        status = text_csv_write_table(&sink, &write_opts, table);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_sink_buffer_free(&sink);
+        text_csv_free_table(table);
+        text_csv_error_free(&err);
+    }
+
+    // Test semicolon dialect
+    {
+        std::string content = read_file(base_dir + "/dialects/semicolon/basic.csv");
+        ASSERT_FALSE(content.empty());
+
+        text_csv_parse_options parse_opts = text_csv_parse_options_default();
+        parse_opts.dialect.delimiter = ';';
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+
+        text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
+        ASSERT_NE(table, nullptr);
+
+        // Write with same dialect
+        text_csv_sink sink;
+        text_csv_status status = text_csv_sink_buffer(&sink);
+        ASSERT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_write_options write_opts = text_csv_write_options_default();
+        write_opts.dialect.delimiter = ';';
+        status = text_csv_write_table(&sink, &write_opts, table);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_sink_buffer_free(&sink);
+        text_csv_free_table(table);
+        text_csv_error_free(&err);
+    }
+
+    // Test backslash escape dialect
+    {
+        std::string content = read_file(base_dir + "/dialects/backslash-escape/basic.csv");
+        ASSERT_FALSE(content.empty());
+
+        text_csv_parse_options parse_opts = text_csv_parse_options_default();
+        parse_opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+        text_csv_error err;
+        memset(&err, 0, sizeof(err));
+
+        text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
+        ASSERT_NE(table, nullptr);
+
+        // Write with same dialect
+        text_csv_sink sink;
+        text_csv_status status = text_csv_sink_buffer(&sink);
+        ASSERT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_write_options write_opts = text_csv_write_options_default();
+        write_opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+        status = text_csv_write_table(&sink, &write_opts, table);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+
+        text_csv_sink_buffer_free(&sink);
+        text_csv_free_table(table);
+        text_csv_error_free(&err);
+    }
 }
 
 int main(int argc, char **argv) {
