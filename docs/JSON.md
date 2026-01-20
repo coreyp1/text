@@ -854,3 +854,47 @@ Test file conventions:
 
 ---
 
+## 19. Implementation Notes
+
+This section documents key implementation details and decisions made during development.
+
+### 19.1 Header Organization
+
+The implementation follows the header breakdown specified in Section 16:
+- `json_core.h` - Core types, enums, and option structures (separate from umbrella for dependency reduction)
+- `json.h` - Umbrella header that includes all JSON module headers
+- Individual module headers (`json_dom.h`, `json_stream.h`, etc.) for fine-grained includes
+
+All headers are designed to compile independently and include necessary dependencies.
+
+### 19.2 API Export
+
+All public API functions use the `TEXT_API` macro (defined in `macros.h`) to ensure proper symbol export on Windows (DLL) and Unix (visibility attributes). Internal functions do not use this macro.
+
+### 19.3 Documentation
+
+All public API functions and types are documented with comprehensive Doxygen comments in the header files. Documentation follows Doxygen standards with:
+- File-level documentation (`@file`, `@brief`)
+- Function documentation (`@brief`, `@param`, `@return`)
+- Type and enum documentation
+- Cross-references to relevant RFCs and specifications
+
+### 19.4 Memory Management
+
+- DOM values are allocated from an arena allocator
+- All DOM memory is freed via `text_json_free()` which frees the entire arena
+- Temporary parsing structures (e.g., `json_number`) use malloc and must be explicitly destroyed
+- Error context snippets are dynamically allocated and must be freed via `text_json_error_free()`
+
+### 19.5 Examples
+
+Comprehensive usage examples are provided in the `examples/` directory, demonstrating:
+- Basic parsing and writing
+- Programmatic value creation
+- Streaming parser usage
+- JSON Pointer (RFC 6901)
+- JSON Patch and Merge Patch (RFC 6902, RFC 7386)
+- JSON Schema validation
+
+---
+

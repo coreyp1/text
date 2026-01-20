@@ -121,6 +121,12 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags gtes
 
 TEXTLIBRARY := -L $(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)
 
+# Automatically collect all example .c files under examples/json directory.
+EXAMPLE_SOURCES := $(shell find examples/json -type f -name '*.c' 2>/dev/null)
+
+# Convert each example source file path to an executable path.
+EXAMPLES := $(patsubst examples/json/%.c,$(APP_DIR)/examples/json/%$(EXE_EXTENSION),$(EXAMPLE_SOURCES))
+
 
 all: $(APP_DIR)/$(TARGET) ## Build the shared library
 
@@ -190,11 +196,21 @@ $(APP_DIR)/testText$(EXE_EXTENSION): \
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 ####################################################################
+# Examples
+####################################################################
+
+# Pattern rule for example executables
+$(APP_DIR)/examples/json/%$(EXE_EXTENSION): examples/json/%.c $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling Example: $* ###\n"
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+
+####################################################################
 # Commands
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf
+.PHONY: clean cloc docs docs-pdf examples
 # Release build commands
 .PHONY: all install test test-watch uninstall watch
 # Debug build commands
@@ -223,6 +239,15 @@ test-watch: ## Watch the file directory for changes and run the unit tests
 		printf "\033[0m\n"; \
 		inotifywait -qr -e modify -e create -e delete -e move src include tests Makefile --exclude '/\.'; \
 		done
+
+examples: ## Build all JSON examples
+examples: $(APP_DIR)/$(TARGET) $(EXAMPLES)
+	@printf "\033[0;32m\n"
+	@printf "############################\n"
+	@printf "### Examples built       ###\n"
+	@printf "############################\n"
+	@printf "\033[0m\n"
+	@printf "Examples are available in: $(APP_DIR)/examples/json/\n"
 
 test: ## Make and run the Unit tests
 test: \
