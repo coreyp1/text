@@ -1,0 +1,15 @@
+{
+  // Comment before key
+  "key1": "value1", // Inline comment
+  "key2": [
+    // Comment in array
+    1,
+    2,
+    3, // Trailing comma
+  ],
+  /* Multi-line
+     comment */
+  "key3": {
+    "nested": true
+  }
+}

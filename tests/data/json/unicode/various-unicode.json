@@ -1,0 +1,9 @@
+{
+  "latin": "Hello",
+  "cyrillic": "Привет",
+  "chinese": "你好",
+  "japanese": "こんにちは",
+  "arabic": "مرحبا",
+  "emoji": "🎉🎊🎈",
+  "mixed": "Hello 世界 🌍"
+}

@@ -1,0 +1,10 @@
+{
+  "empty": "",
+  "simple": "Hello World",
+  "escaped": "Hello \"World\"",
+  "newline": "Hello\nWorld",
+  "tab": "Hello\tWorld",
+  "backslash": "Hello\\World",
+  "unicode": "Hello \u0041 World",
+  "unicode_surrogate": "\uD83D\uDE00"
+}
