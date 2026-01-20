@@ -177,6 +177,29 @@ void csv_context_free(csv_context* ctx);
  */
 void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
 
+/**
+ * @brief Write a field with proper quoting and escaping
+ *
+ * Internal function for writing a field to a sink with appropriate
+ * quoting and escaping according to write options and dialect.
+ * This function handles:
+ * - Quote-if-needed logic (delimiter, quote char, newline present)
+ * - Quote-all and quote-empty options
+ * - Escape mode: doubled quote vs backslash vs none
+ *
+ * @param sink Output sink
+ * @param field_data Field data (may be NULL if field_len is 0)
+ * @param field_len Field length in bytes
+ * @param opts Write options
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+text_csv_status csv_write_field(
+    text_csv_sink* sink,
+    const char* field_data,
+    size_t field_len,
+    const text_csv_write_options* opts
+);
+
 #ifdef __cplusplus
 }
 #endif

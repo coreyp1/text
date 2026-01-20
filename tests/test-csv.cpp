@@ -983,6 +983,411 @@ TEST(CsvSink, BufferAccessorsInvalidSink) {
     EXPECT_FALSE(truncated);
 }
 
+// Field Escaping and Quoting Rules
+TEST(CsvWriter, FieldQuotingNeededDelimiter) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_if_needed = true;
+    opts.quote_all_fields = false;
+    opts.quote_empty_fields = false;
+
+    // Field with delimiter should be quoted
+    const char* field = "hello,world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output_len, strlen(field) + 2); // +2 for quotes
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldQuotingNeededQuote) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_if_needed = true;
+    opts.quote_all_fields = false;
+    opts.quote_empty_fields = false;
+
+    // Field with quote should be quoted
+    const char* field = "hello\"world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldQuotingNeededNewline) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_if_needed = true;
+    opts.quote_all_fields = false;
+    opts.quote_empty_fields = false;
+
+    // Field with newline should be quoted
+    const char* field = "hello\nworld";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldQuotingNotNeeded) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_if_needed = true;
+    opts.quote_all_fields = false;
+    opts.quote_empty_fields = false;
+
+    // Simple field without special chars should not be quoted
+    const char* field = "hello";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output_len, strlen(field));
+    EXPECT_NE(output[0], '"');
+    EXPECT_STREQ(output, field);
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldQuotingAllFields) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_all_fields = true;
+    opts.quote_if_needed = false;
+    opts.quote_empty_fields = false;
+
+    // All fields should be quoted when quote_all_fields is true
+    const char* field = "hello";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output_len, strlen(field) + 2); // +2 for quotes
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldQuotingEmptyField) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.quote_empty_fields = true;
+    opts.quote_all_fields = false;
+    opts.quote_if_needed = false;
+
+    // Empty field should be quoted when quote_empty_fields is true
+    status = csv_write_field(&sink, nullptr, 0, &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output_len, 2u); // Just two quotes
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[1], '"');
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldEscapingDoubledQuote) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_DOUBLED_QUOTE;
+    opts.quote_all_fields = true;
+
+    // Field with quote should have quotes doubled
+    const char* field = "hello\"world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Original: hello"world (11 chars)
+    // Escaped: hello""world (12 chars)
+    // With quotes: "hello""world" (14 chars)
+    EXPECT_EQ(output_len, 14u);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+    
+    // Verify the escaped content: should be "hello""world"
+    std::string result(output, output_len);
+    // Find the doubled quote sequence
+    size_t pos = result.find("\"\"");
+    EXPECT_NE(pos, std::string::npos); // Should find doubled quote
+    EXPECT_GT(pos, 0u); // Should be after opening quote
+    EXPECT_LT(pos, output_len - 1); // Should be before closing quote
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldEscapingBackslash) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+    opts.quote_all_fields = true;
+
+    // Field with quote should have quote escaped with backslash
+    const char* field = "hello\"world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Original: hello"world (11 chars)
+    // Escaped: hello\"world (12 chars)
+    // With quotes: "hello\"world" (14 chars)
+    EXPECT_EQ(output_len, 14u);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+    
+    // Verify the escaped content: should contain \"
+    std::string result(output, output_len);
+    size_t pos = result.find("\\\"");
+    EXPECT_NE(pos, std::string::npos); // Should find backslash-quote sequence
+    EXPECT_GT(pos, 0u); // Should be after opening quote
+    EXPECT_LT(pos, output_len - 1); // Should be before closing quote
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldEscapingBackslashBackslash) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
+    opts.quote_all_fields = true;
+
+    // Field with backslash should have backslash escaped
+    const char* field = "hello\\world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Original: hello\world (11 chars)
+    // Escaped: hello\\world (12 chars)
+    // With quotes: "hello\\world" (14 chars)
+    EXPECT_EQ(output_len, 14u);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+    
+    // Verify the escaped content: should contain double backslash
+    std::string result(output, output_len);
+    size_t pos = result.find("\\\\");
+    EXPECT_NE(pos, std::string::npos); // Should find doubled backslash
+    EXPECT_GT(pos, 0u); // Should be after opening quote
+    EXPECT_LT(pos, output_len - 1); // Should be before closing quote
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldEscapingNone) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_NONE;
+    opts.quote_all_fields = true;
+
+    // Field with quote - no escaping (may cause issues, but tests the mode)
+    const char* field = "hello\"world";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // Original: hello"world (11 chars)
+    // With quotes: "hello"world" (13 chars) - no escaping
+    EXPECT_EQ(output_len, 13u);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+    
+    // Verify no escaping occurred - should have single quote in middle
+    std::string result(output, output_len);
+    // Should contain the original quote character (not escaped)
+    size_t pos = result.find("\"", 1); // Find quote after opening quote
+    EXPECT_NE(pos, std::string::npos);
+    EXPECT_LT(pos, output_len - 1); // Should be before closing quote
+    // Next character should not be another quote (not doubled)
+    if (pos + 1 < output_len - 1) {
+        EXPECT_NE(result[pos + 1], '"');
+    }
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldEscapingMultipleQuotes) {
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options opts = text_csv_write_options_default();
+    opts.dialect.escape = TEXT_CSV_ESCAPE_DOUBLED_QUOTE;
+    opts.quote_all_fields = true;
+
+    // Field with multiple quotes
+    const char* field = "say \"hello\" and \"goodbye\"";
+    status = csv_write_field(&sink, field, strlen(field), &opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    EXPECT_EQ(output[0], '"');
+    EXPECT_EQ(output[output_len - 1], '"');
+
+    // Count quotes in output (should be doubled)
+    int quote_count = 0;
+    for (size_t i = 0; i < output_len; i++) {
+        if (output[i] == '"') {
+            quote_count++;
+        }
+    }
+    // Original has 4 quotes, doubled = 8, plus 2 for outer quotes = 10
+    EXPECT_EQ(quote_count, 10);
+
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldRoundTripSimple) {
+    // Test round-trip: write a field, then parse it back
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options write_opts = text_csv_write_options_default();
+    write_opts.quote_if_needed = true;
+
+    const char* original = "hello";
+    status = csv_write_field(&sink, original, strlen(original), &write_opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* written = text_csv_sink_buffer_data(&sink);
+    size_t written_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse it back using streaming parser
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    std::string field_value;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        if (event->type == TEXT_CSV_EVENT_FIELD) {
+            std::string* field = (std::string*)user_data;
+            *field = std::string(event->data, event->data_len);
+        }
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_stream* stream = text_csv_stream_new(&parse_opts, callback, &field_value);
+    EXPECT_NE(stream, nullptr);
+
+    status = text_csv_stream_feed(stream, written, written_len, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_stream_finish(stream, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify round-trip
+    EXPECT_EQ(field_value, original);
+
+    text_csv_stream_free(stream);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvWriter, FieldRoundTripWithQuotes) {
+    // Test round-trip with quoted field containing quotes
+    // Note: For a complete round-trip, we need to write a full record
+    // This test verifies the escaping works correctly
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options write_opts = text_csv_write_options_default();
+    write_opts.quote_if_needed = true;
+
+    const char* original = "say \"hello\"";
+    status = csv_write_field(&sink, original, strlen(original), &write_opts);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Add newline to make it a complete record
+    const char* newline = "\n";
+    status = sink.write(sink.user, newline, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* written = text_csv_sink_buffer_data(&sink);
+    size_t written_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse it back
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    std::string field_value;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        if (event->type == TEXT_CSV_EVENT_FIELD) {
+            std::string* field = (std::string*)user_data;
+            *field = std::string(event->data, event->data_len);
+        }
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_stream* stream = text_csv_stream_new(&parse_opts, callback, &field_value);
+    EXPECT_NE(stream, nullptr);
+
+    status = text_csv_stream_feed(stream, written, written_len, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_stream_finish(stream, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify round-trip
+    EXPECT_EQ(field_value, original);
+
+    text_csv_stream_free(stream);
+    text_csv_sink_buffer_free(&sink);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
