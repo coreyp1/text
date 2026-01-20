@@ -175,22 +175,19 @@ endif
 ####################################################################
 
 $(APP_DIR)/testJson$(EXE_EXTENSION): \
-		tests/test-json.cpp \
-		$(APP_DIR)/$(TARGET)
+		tests/test-json.cpp
 	@printf "\n### Compiling JSON Test ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 $(APP_DIR)/testCsv$(EXE_EXTENSION): \
-		tests/test-csv.cpp \
-		$(APP_DIR)/$(TARGET)
+		tests/test-csv.cpp
 	@printf "\n### Compiling CSV Test ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 $(APP_DIR)/testText$(EXE_EXTENSION): \
-		tests/test.cpp \
-		$(APP_DIR)/$(TARGET)
+		tests/test.cpp
 	@printf "\n### Compiling Text Test ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
