@@ -1147,7 +1147,7 @@ TEST(CsvWriter, FieldEscapingDoubledQuote) {
     EXPECT_EQ(output_len, 14u);
     EXPECT_EQ(output[0], '"');
     EXPECT_EQ(output[output_len - 1], '"');
-    
+
     // Verify the escaped content: should be "hello""world"
     std::string result(output, output_len);
     // Find the doubled quote sequence
@@ -1181,7 +1181,7 @@ TEST(CsvWriter, FieldEscapingBackslash) {
     EXPECT_EQ(output_len, 14u);
     EXPECT_EQ(output[0], '"');
     EXPECT_EQ(output[output_len - 1], '"');
-    
+
     // Verify the escaped content: should contain \"
     std::string result(output, output_len);
     size_t pos = result.find("\\\"");
@@ -1214,7 +1214,7 @@ TEST(CsvWriter, FieldEscapingBackslashBackslash) {
     EXPECT_EQ(output_len, 14u);
     EXPECT_EQ(output[0], '"');
     EXPECT_EQ(output[output_len - 1], '"');
-    
+
     // Verify the escaped content: should contain double backslash
     std::string result(output, output_len);
     size_t pos = result.find("\\\\");
@@ -1246,7 +1246,7 @@ TEST(CsvWriter, FieldEscapingNone) {
     EXPECT_EQ(output_len, 13u);
     EXPECT_EQ(output[0], '"');
     EXPECT_EQ(output[output_len - 1], '"');
-    
+
     // Verify no escaping occurred - should have single quote in middle
     std::string result(output, output_len);
     // Should contain the original quote character (not escaped)
@@ -1738,6 +1738,248 @@ TEST(CsvStreamingWriter, CustomDelimiter) {
     EXPECT_EQ(std::string(output, output_len), "a;b\n");
 
     text_csv_writer_free(writer);
+    text_csv_sink_buffer_free(&sink);
+}
+
+// ============================================================================
+// Table Serialization Tests
+// ============================================================================
+
+TEST(CsvTableWrite, SimpleTable) {
+    // Parse a simple CSV table (3 rows: header-like row + 2 data rows)
+    const char* input = "a,b,c\n1,2,3\n4,5,6";
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), nullptr, nullptr);
+    EXPECT_NE(table, nullptr);
+    // Input has 3 lines, so 3 rows (no header processing, so all are data rows)
+    EXPECT_GE(text_csv_row_count(table), 2u);
+
+    // Write table to buffer
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Output should match input (with possible newline differences)
+    std::string output_str(output, output_len);
+    EXPECT_TRUE(output_str.find("a,b,c") != std::string::npos);
+    EXPECT_TRUE(output_str.find("1,2,3") != std::string::npos);
+    EXPECT_TRUE(output_str.find("4,5,6") != std::string::npos);
+
+    text_csv_free_table(table);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, RoundTripSimple) {
+    // Parse a simple CSV
+    const char* input = "a,b,c\n1,2,3\n4,5,6\n";
+    text_csv_table* table1 = text_csv_parse_table(input, strlen(input), nullptr, nullptr);
+    EXPECT_NE(table1, nullptr);
+
+    // Write it
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse the output
+    text_csv_table* table2 = text_csv_parse_table(output, output_len, nullptr, nullptr);
+    EXPECT_NE(table2, nullptr);
+
+    // Verify round-trip: same number of rows
+    EXPECT_EQ(text_csv_row_count(table1), text_csv_row_count(table2));
+
+    // Verify fields match
+    for (size_t row = 0; row < text_csv_row_count(table1); row++) {
+        EXPECT_EQ(text_csv_col_count(table1, row), text_csv_col_count(table2, row));
+        for (size_t col = 0; col < text_csv_col_count(table1, row); col++) {
+            size_t len1, len2;
+            const char* field1 = text_csv_field(table1, row, col, &len1);
+            const char* field2 = text_csv_field(table2, row, col, &len2);
+            EXPECT_EQ(len1, len2);
+            EXPECT_EQ(std::string(field1, len1), std::string(field2, len2));
+        }
+    }
+
+    text_csv_free_table(table1);
+    text_csv_free_table(table2);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, RoundTripWithQuotes) {
+    // Parse CSV with quoted fields
+    const char* input = "a,\"b,c\",d\n\"1,2\",3,\"4\"\n";
+    text_csv_table* table1 = text_csv_parse_table(input, strlen(input), nullptr, nullptr);
+    EXPECT_NE(table1, nullptr);
+
+    // Write it
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse the output
+    text_csv_table* table2 = text_csv_parse_table(output, output_len, nullptr, nullptr);
+    EXPECT_NE(table2, nullptr);
+
+    // Verify round-trip
+    EXPECT_EQ(text_csv_row_count(table1), text_csv_row_count(table2));
+    for (size_t row = 0; row < text_csv_row_count(table1); row++) {
+        EXPECT_EQ(text_csv_col_count(table1, row), text_csv_col_count(table2, row));
+        for (size_t col = 0; col < text_csv_col_count(table1, row); col++) {
+            size_t len1, len2;
+            const char* field1 = text_csv_field(table1, row, col, &len1);
+            const char* field2 = text_csv_field(table2, row, col, &len2);
+            EXPECT_EQ(len1, len2);
+            EXPECT_EQ(std::string(field1, len1), std::string(field2, len2));
+        }
+    }
+
+    text_csv_free_table(table1);
+    text_csv_free_table(table2);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, WithHeader) {
+    // Parse CSV with header
+    const char* input = "name,age,city\nAlice,30,NYC\nBob,25,LA";
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    parse_opts.dialect.treat_first_row_as_header = true;
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &parse_opts, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 2u); // Excludes header
+
+    // Write table
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Output should include header
+    std::string output_str(output, output_len);
+    EXPECT_TRUE(output_str.find("name,age,city") != std::string::npos);
+    EXPECT_TRUE(output_str.find("Alice,30,NYC") != std::string::npos);
+    EXPECT_TRUE(output_str.find("Bob,25,LA") != std::string::npos);
+
+    text_csv_free_table(table);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, RoundTripWithHeader) {
+    // Parse CSV with header
+    const char* input = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    parse_opts.dialect.treat_first_row_as_header = true;
+
+    text_csv_table* table1 = text_csv_parse_table(input, strlen(input), &parse_opts, nullptr);
+    EXPECT_NE(table1, nullptr);
+
+    // Write it
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Parse the output with header
+    text_csv_table* table2 = text_csv_parse_table(output, output_len, &parse_opts, nullptr);
+    EXPECT_NE(table2, nullptr);
+
+    // Verify round-trip
+    EXPECT_EQ(text_csv_row_count(table1), text_csv_row_count(table2));
+    for (size_t row = 0; row < text_csv_row_count(table1); row++) {
+        EXPECT_EQ(text_csv_col_count(table1, row), text_csv_col_count(table2, row));
+        for (size_t col = 0; col < text_csv_col_count(table1, row); col++) {
+            size_t len1, len2;
+            const char* field1 = text_csv_field(table1, row, col, &len1);
+            const char* field2 = text_csv_field(table2, row, col, &len2);
+            EXPECT_EQ(len1, len2);
+            EXPECT_EQ(std::string(field1, len1), std::string(field2, len2));
+        }
+    }
+
+    text_csv_free_table(table1);
+    text_csv_free_table(table2);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, EmptyTable) {
+    // Create empty table by parsing empty input
+    const char* input = "";
+    text_csv_table* table = text_csv_parse_table(input, 0, nullptr, nullptr);
+    EXPECT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Write empty table
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_write_table(&sink, nullptr, table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Empty table should produce empty output (or just newline if trailing_newline is set)
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+    // With default options (trailing_newline=false), empty table produces empty output
+    EXPECT_EQ(output_len, 0u);
+
+    text_csv_free_table(table);
+    text_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvTableWrite, CustomDialect) {
+    // Parse CSV with semicolon delimiter
+    const char* input = "a;b;c\n1;2;3";
+    text_csv_parse_options parse_opts = text_csv_parse_options_default();
+    parse_opts.dialect.delimiter = ';';
+
+    text_csv_table* table = text_csv_parse_table(input, strlen(input), &parse_opts, nullptr);
+    EXPECT_NE(table, nullptr);
+
+    // Write with same dialect
+    text_csv_sink sink;
+    text_csv_status status = text_csv_sink_buffer(&sink);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_write_options write_opts = text_csv_write_options_default();
+    write_opts.dialect.delimiter = ';';
+
+    status = text_csv_write_table(&sink, &write_opts, table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* output = text_csv_sink_buffer_data(&sink);
+    size_t output_len = text_csv_sink_buffer_size(&sink);
+
+    // Output should use semicolon delimiter
+    std::string output_str(output, output_len);
+    EXPECT_TRUE(output_str.find("a;b;c") != std::string::npos);
+    EXPECT_TRUE(output_str.find("1;2;3") != std::string::npos);
+
+    text_csv_free_table(table);
     text_csv_sink_buffer_free(&sink);
 }
 

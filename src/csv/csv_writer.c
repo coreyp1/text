@@ -503,7 +503,7 @@ static text_csv_status csv_field_escape(
  * @return TEXT_CSV_OK on success, error code on failure
  */
 text_csv_status csv_write_field(
-    text_csv_sink* sink,
+    const text_csv_sink* sink,
     const char* field_data,
     size_t field_len,
     const text_csv_write_options* opts
@@ -838,4 +838,173 @@ void text_csv_writer_free(text_csv_writer* writer) {
         // Sink is not owned by writer, so we don't free it
         free(writer);
     }
+}
+
+// ============================================================================
+// Table Serialization Implementation
+// ============================================================================
+
+TEXT_API text_csv_status text_csv_write_table(
+    const text_csv_sink* sink,
+    const text_csv_write_options* opts,
+    const text_csv_table* table
+) {
+    if (!sink || !sink->write || !table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Get default options if not provided
+    text_csv_write_options default_opts = text_csv_write_options_default();
+    if (!opts) {
+        opts = &default_opts;
+    }
+
+    // Cast to internal structure to access fields
+    // The structure definition is in csv_internal.h and matches csv_table.c
+    const struct text_csv_table* table_internal = (const struct text_csv_table*)table;
+
+    // Defensive check: verify rows array is allocated
+    if (!table_internal->rows) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Handle empty table
+    if (table_internal->row_count == 0) {
+        // Empty table - write nothing (or trailing newline if requested)
+        if (opts->trailing_newline) {
+            const char* newline = opts->newline ? opts->newline : "\n";
+            size_t newline_len = strlen(newline);
+            return sink->write(sink->user, newline, newline_len);
+        }
+        return TEXT_CSV_OK;
+    }
+
+    // Defensive check: verify row_count doesn't exceed capacity (sanity check)
+    if (table_internal->row_count > table_internal->row_capacity) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Determine start row (skip header if present)
+    size_t start_row = 0;
+
+    // Write header row if present
+    if (table_internal->has_header && table_internal->row_count > 0) {
+        // Bounds check: ensure row 0 is within allocated capacity
+        if (table_internal->row_capacity == 0) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        const csv_table_row* header_row = &table_internal->rows[0];
+
+        // Defensive check: verify fields array is allocated
+        if (!header_row->fields && header_row->field_count > 0) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Write all fields in header row
+        for (size_t col = 0; col < header_row->field_count; col++) {
+            const csv_table_field* field = &header_row->fields[col];
+
+            // Defensive check: if field has length > 0, data must not be NULL
+            if (field->length > 0 && !field->data) {
+                return TEXT_CSV_E_INVALID;
+            }
+
+            // Insert delimiter before field if not first field
+            if (col > 0) {
+                char delimiter = opts->dialect.delimiter;
+                text_csv_status status = sink->write(sink->user, &delimiter, 1);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+            }
+
+            // Write field with proper quoting and escaping
+            text_csv_status status = csv_write_field(
+                sink,
+                field->data,
+                field->length,
+                opts
+            );
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+        }
+
+        // Write newline after header row
+        const char* newline = opts->newline ? opts->newline : "\n";
+        size_t newline_len = strlen(newline);
+        text_csv_status status = sink->write(sink->user, newline, newline_len);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Data rows start at index 1
+        start_row = 1;
+    }
+
+    // Write all data rows
+    // Bounds check: ensure start_row is valid
+    if (start_row > table_internal->row_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    for (size_t row = start_row; row < table_internal->row_count; row++) {
+        // Bounds check: ensure row index is within allocated array
+        if (row >= table_internal->row_capacity) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        const csv_table_row* table_row = &table_internal->rows[row];
+
+        // Defensive check: verify fields array is allocated
+        if (!table_row->fields && table_row->field_count > 0) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Write all fields in row
+        for (size_t col = 0; col < table_row->field_count; col++) {
+            const csv_table_field* field = &table_row->fields[col];
+
+            // Defensive check: if field has length > 0, data must not be NULL
+            if (field->length > 0 && !field->data) {
+                return TEXT_CSV_E_INVALID;
+            }
+
+            // Insert delimiter before field if not first field
+            if (col > 0) {
+                char delimiter = opts->dialect.delimiter;
+                text_csv_status status = sink->write(sink->user, &delimiter, 1);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+            }
+
+            // Write field with proper quoting and escaping
+            text_csv_status status = csv_write_field(
+                sink,
+                field->data,
+                field->length,
+                opts
+            );
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+        }
+
+        // Write newline after row (except possibly last row if trailing_newline is false)
+        // For CSV, we typically write newline after each row
+        const char* newline = opts->newline ? opts->newline : "\n";
+        size_t newline_len = strlen(newline);
+        text_csv_status status = sink->write(sink->user, newline, newline_len);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+    }
+
+    // trailing_newline option is typically handled per-row above,
+    // but if the table is empty and trailing_newline is true, we already handled it.
+    // For non-empty tables, we've written newlines after each row, which is standard CSV.
+
+    return TEXT_CSV_OK;
 }

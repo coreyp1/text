@@ -188,41 +188,6 @@ void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align) {
 
 // Table structure implementation
 
-// Field structure (stored in arena)
-typedef struct {
-    const char* data;       ///< Field data (pointer into input or arena)
-    size_t length;          ///< Field length
-    bool is_in_situ;         ///< Whether field references input buffer directly
-} csv_table_field;
-
-/**
- * @brief Row structure (stored in arena)
- */
-typedef struct {
-    csv_table_field* fields; ///< Array of fields
-    size_t field_count;      ///< Number of fields
-} csv_table_row;
-
-// Header map entry (for column name lookup)
-typedef struct csv_header_entry {
-    const char* name;        ///< Column name (in arena or input buffer)
-    size_t name_len;         ///< Column name length
-    size_t index;            ///< Column index
-    struct csv_header_entry* next;  ///< Next entry (for hash table chaining)
-} csv_header_entry;
-
-// Table structure (internal)
-struct text_csv_table {
-    csv_context* ctx;           ///< Context with arena
-    csv_table_row* rows;         ///< Array of rows
-    size_t row_count;            ///< Number of rows
-    size_t row_capacity;         ///< Allocated row capacity
-
-    // Header map (optional, only if header processing enabled)
-    csv_header_entry** header_map;  ///< Hash table for header lookup
-    size_t header_map_size;         ///< Size of hash table
-    bool has_header;                ///< Whether header was processed
-};
 
 // Simple hash function for header names
 static size_t csv_header_hash(const char* name, size_t name_len, size_t map_size) {

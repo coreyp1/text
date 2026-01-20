@@ -10,8 +10,10 @@
 #define GHOTI_IO_TEXT_CSV_INTERNAL_H
 
 #include <ghoti.io/text/csv/csv_core.h>
+#include <ghoti.io/text/csv/csv_writer.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -194,11 +196,61 @@ void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
  * @return TEXT_CSV_OK on success, error code on failure
  */
 text_csv_status csv_write_field(
-    text_csv_sink* sink,
+    const text_csv_sink* sink,
     const char* field_data,
     size_t field_len,
     const text_csv_write_options* opts
 );
+
+// ============================================================================
+// Table Structure Definitions (for internal use)
+// ============================================================================
+
+/**
+ * @brief Field structure (stored in arena)
+ */
+typedef struct {
+    const char* data;       ///< Field data (pointer into input or arena)
+    size_t length;          ///< Field length
+    bool is_in_situ;        ///< Whether field references input buffer directly
+} csv_table_field;
+
+/**
+ * @brief Row structure (stored in arena)
+ */
+typedef struct {
+    csv_table_field* fields; ///< Array of fields
+    size_t field_count;      ///< Number of fields
+} csv_table_row;
+
+/**
+ * @brief Header map entry (for column name lookup)
+ */
+typedef struct csv_header_entry {
+    const char* name;        ///< Column name (in arena or input buffer)
+    size_t name_len;        ///< Column name length
+    size_t index;           ///< Column index
+    struct csv_header_entry* next;  ///< Next entry (for hash table chaining)
+} csv_header_entry;
+
+/**
+ * @brief Table structure (internal)
+ *
+ * This is the internal representation of text_csv_table.
+ * External code should use the opaque text_csv_table type.
+ * This structure definition must match the one in csv_table.c.
+ */
+struct text_csv_table {
+    csv_context* ctx;           ///< Context with arena
+    csv_table_row* rows;         ///< Array of rows
+    size_t row_count;            ///< Number of rows
+    size_t row_capacity;         ///< Allocated row capacity
+
+    // Header map (optional, only if header processing enabled)
+    csv_header_entry** header_map;  ///< Hash table for header lookup
+    size_t header_map_size;         ///< Size of hash table
+    bool has_header;                ///< Whether header was processed
+};
 
 #ifdef __cplusplus
 }

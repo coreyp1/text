@@ -13,6 +13,7 @@
 
 #include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/csv/csv_core.h>
+#include <ghoti.io/text/csv/csv_table.h>
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -268,6 +269,31 @@ TEXT_API text_csv_status text_csv_writer_finish(text_csv_writer* writer);
  * @param writer Writer instance (can be NULL)
  */
 TEXT_API void text_csv_writer_free(text_csv_writer* writer);
+
+// ============================================================================
+// Table Serialization API
+// ============================================================================
+
+/**
+ * @brief Write a CSV table to a sink
+ *
+ * Serializes a fully materialized CSV table to the provided sink using
+ * the specified write options. The output is guaranteed to re-parse to
+ * the same fields under the same dialect (round-trip stability).
+ *
+ * If the table has a header row (when parsed with treat_first_row_as_header),
+ * the header will be written first, followed by all data rows.
+ *
+ * @param sink Output sink (must remain valid for function lifetime)
+ * @param opts Write options (can be NULL for defaults)
+ * @param table Table to serialize (must not be NULL)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_write_table(
+    const text_csv_sink* sink,
+    const text_csv_write_options* opts,
+    const text_csv_table* table
+);
 
 #ifdef __cplusplus
 }
