@@ -902,6 +902,164 @@ TEST(CsvStream, FieldCompletingAtChunkBoundary) {
     EXPECT_EQ(fields[1], "field2");
 }
 
+// Test field spanning chunks with delimiter at chunk boundaries
+// This verifies that delimiters at chunk boundaries don't cause incorrect field splitting
+TEST(CsvStream, FieldSpanningChunksWithDelimiterAtBoundaries) {
+    // Chunks: "123," "45" "6" ".78" ",9"
+    // Should parse as: field1="123", field2="456.78", field3="9"
+    const char* chunk1 = "123,";
+    const char* chunk2 = "45";
+    const char* chunk3 = "6";
+    const char* chunk4 = ".78";
+    const char* chunk5 = ",9";
+
+    std::vector<std::string> fields;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        auto* fields_vec = (std::vector<std::string>*)user_data;
+        if (event->type == TEXT_CSV_EVENT_FIELD) {
+            fields_vec->push_back(std::string(event->data, event->data_len));
+        }
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_stream* stream = text_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+
+    text_csv_status status = text_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // After chunk1, field1="123" should be complete
+
+    status = text_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // Field2 starts, buffered as "45"
+
+    status = text_csv_stream_feed(stream, chunk3, strlen(chunk3), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // Field2 continues, buffered as "456"
+
+    status = text_csv_stream_feed(stream, chunk4, strlen(chunk4), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // Field2 continues, buffered as "456.78"
+
+    status = text_csv_stream_feed(stream, chunk5, strlen(chunk5), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // Field2 completes as "456.78", field3 starts as "9"
+
+    status = text_csv_stream_finish(stream, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_stream_free(stream);
+
+    EXPECT_EQ(fields.size(), 3u);
+    EXPECT_EQ(fields[0], "123");
+    EXPECT_EQ(fields[1], "456.78");
+    EXPECT_EQ(fields[2], "9");
+}
+
+// Test case where delimiter is split across chunks after a quoted field with doubled quote
+// Complete CSV: `1,"a b""c",d` where `""` is a doubled quote escape representing a literal quote
+// So field2 should be `a b"c` (the doubled quote `""` becomes a single literal quote `"`)
+// Chunk 1: `1,"a b""c"` - field1="1" complete, field2="a b""c" complete (doubled quote is within chunk)
+//         The quote at end puts us in QUOTE_IN_QUOTED state, waiting to see if it's closing or doubled
+//         But since the doubled quote is complete, we know it's a closing quote, but delimiter is missing
+// Chunk 2: `,d` - the delimiter at start completes field2, then field3="d" starts
+// Should parse as: field1="1", field2="a b"c" (where "" is literal quote), field3="d"
+TEST(CsvStream, DelimiterSplitAcrossChunksWithQuotedFields) {
+    const char* chunk1 = "1,\"a b\"\"c\"";
+    const char* chunk2 = ",d";
+
+    std::vector<std::string> fields;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        auto* fields_vec = (std::vector<std::string>*)user_data;
+        if (event->type == TEXT_CSV_EVENT_FIELD) {
+            fields_vec->push_back(std::string(event->data, event->data_len));
+        }
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_stream* stream = text_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+
+    text_csv_status status = text_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // After chunk1: field1="1" should be complete
+    // Field2="a b""c" - the doubled quote is complete within chunk1, but ends with quote
+    // Field2 is in QUOTE_IN_QUOTED state - cannot emit yet because we need to see delimiter/newline
+
+    status = text_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // When processing chunk2, we see the delimiter, which completes field2
+    // Then field3="d" starts and completes
+
+    status = text_csv_stream_finish(stream, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_stream_free(stream);
+
+    // Expected result: field1="1", field2="a b"c" (where "" is literal quote), field3="d"
+    EXPECT_EQ(fields.size(), 3u);
+    EXPECT_EQ(fields[0], "1");
+    EXPECT_EQ(fields[1], "a b\"c");  // The "" becomes a literal quote character
+    EXPECT_EQ(fields[2], "d");
+}
+
+// Test case where a doubled quote (escaped quote) is split across chunks
+// Full CSV: `1,"a b""c",d` where `""` represents a literal quote character
+// So field2 should be `a b"c` (the doubled quote `""` becomes a single literal quote `"`)
+// Chunk 1: `1,"a b"` - field1="1" complete, field2 starts, ends with quote (enters QUOTE_IN_QUOTED state)
+// Chunk 2: `"c",d` - the `"` at start should be recognized as second quote of doubled quote
+//                     (if we're in QUOTE_IN_QUOTED state), making field2 = `a b"c`
+TEST(CsvStream, DoubledQuoteSplitAcrossChunks) {
+    // This tests the critical case: when a quote at end of chunk1 and quote at start of chunk2
+    // should be recognized as a doubled quote (escaped quote) if we're in QUOTE_IN_QUOTED state
+    // Full CSV: `1,"a b""c",d` means: field1="1", field2="a b"c" (where "" is literal quote), field3="d"
+    const char* chunk1 = "1,\"a b\"";
+    const char* chunk2 = "\"c\",d";
+
+    std::vector<std::string> fields;
+
+    text_csv_event_cb callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
+        auto* fields_vec = (std::vector<std::string>*)user_data;
+        if (event->type == TEXT_CSV_EVENT_FIELD) {
+            fields_vec->push_back(std::string(event->data, event->data_len));
+        }
+        return TEXT_CSV_OK;
+    };
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    text_csv_stream* stream = text_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+
+    text_csv_status status = text_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // After chunk1: field1="1" should be complete
+    // Field2="a b" - the quote at end puts us in QUOTE_IN_QUOTED state
+    // The parser should remember this state across chunks
+
+    status = text_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // When processing chunk2, if we're in QUOTE_IN_QUOTED state and see a quote,
+    // it should be treated as a doubled quote (literal quote character)
+    // So field2 should be "a b"c" (where the "" becomes a literal ")
+    // Then the comma ends field2, and field3="d"
+
+    status = text_csv_stream_finish(stream, nullptr);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_stream_free(stream);
+
+    // Expected result: field1="1", field2="a b"c" (where "" is literal quote), field3="d"
+    // The doubled quote `""` should be recognized across chunks and become a single literal quote
+    EXPECT_EQ(fields.size(), 3u);
+    EXPECT_EQ(fields[0], "1");
+    EXPECT_EQ(fields[1], "a b\"c");  // The "" becomes a literal quote character
+    EXPECT_EQ(fields[2], "d");
+}
+
 // Table Parsing Tests
 TEST(CsvTable, BasicParsing) {
     const char* input = "a,b,c\n1,2,3\n4,5,6\n";
