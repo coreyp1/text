@@ -10,7 +10,7 @@
 #include <limits.h>
 
 // Detect and consume newline from input
-csv_newline_type csv_detect_newline(
+TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
     const char* input,
     size_t input_len,
     csv_position* pos,
@@ -221,7 +221,7 @@ csv_utf8_result csv_validate_utf8(
 }
 
 // Strip UTF-8 BOM from input (BOM is 0xEF 0xBB 0xBF)
-bool csv_strip_bom(
+TEXT_INTERNAL_API bool csv_strip_bom(
     const char** input,
     size_t* input_len,
     csv_position* pos,

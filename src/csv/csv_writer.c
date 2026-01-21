@@ -502,7 +502,7 @@ static text_csv_status csv_field_escape(
  * @param opts Write options
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_write_field(
+TEXT_INTERNAL_API text_csv_status csv_write_field(
     const text_csv_sink* sink,
     const char* field_data,
     size_t field_len,

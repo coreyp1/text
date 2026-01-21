@@ -190,7 +190,7 @@ static int json_validate_utf8(const unsigned char* bytes, size_t len) {
     return 1;
 }
 
-text_json_status json_decode_string(
+TEXT_INTERNAL_API text_json_status json_decode_string(
     const char* input,
     size_t input_len,
     char* output,

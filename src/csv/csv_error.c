@@ -35,7 +35,7 @@ TEXT_API void text_csv_error_free(text_csv_error* err) {
  * @param caret_offset_out Output parameter for caret offset within snippet
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_error_generate_context_snippet(
+TEXT_INTERNAL_API text_csv_status csv_error_generate_context_snippet(
     const char* input,
     size_t input_len,
     size_t error_offset,
@@ -134,7 +134,7 @@ text_csv_status csv_error_generate_context_snippet(
  * @param src Source error structure (must not be NULL)
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src) {
+TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src) {
     if (!dst || !src) {
         return TEXT_CSV_E_INVALID;
     }

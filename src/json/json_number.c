@@ -218,7 +218,7 @@ static int json_parse_int64(const char* input, size_t len, int64_t* out_i64) {
     return 1;
 }
 
-text_json_status json_parse_number(
+TEXT_INTERNAL_API text_json_status json_parse_number(
     const char* input,
     size_t input_len,
     json_number* num,
@@ -356,7 +356,7 @@ text_json_status json_parse_number(
     return TEXT_JSON_OK;
 }
 
-void json_number_destroy(json_number* num) {
+TEXT_INTERNAL_API void json_number_destroy(json_number* num) {
     if (!num) {
         return;
     }

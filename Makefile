@@ -82,7 +82,8 @@ CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -W
 CC := cc
 CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags ghoti.io-cutil-dev`
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
-LIB_CFLAGS := $(CFLAGS) -DTEXT_BUILD
+# TEXT_TEST_BUILD enables export of internal functions for testing
+LIB_CFLAGS := $(CFLAGS) -DTEXT_BUILD -DTEXT_TEST_BUILD
 # -DGHOTIIO_CUTIL_ENABLE_MEMORY_DEBUG
 LDFLAGS := -L /usr/lib -lstdc++ -lm `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags ghoti.io-cutil-dev`
 BUILD_DIR := ./build/$(BUILD)
@@ -140,6 +141,7 @@ all: $(APP_DIR)/$(TARGET) ## Build the shared library
 
 # Automatically include all generated dependency files.
 -include $(wildcard $(OBJ_DIR)/*.d)
+-include $(wildcard $(APP_DIR)/test*.d)
 
 
 ####################################################################
@@ -179,22 +181,25 @@ endif
 ####################################################################
 
 $(APP_DIR)/testJson$(EXE_EXTENSION): \
-		tests/test-json.cpp
+		tests/test-json.cpp \
+		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling JSON Test ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testJson.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 $(APP_DIR)/testCsv$(EXE_EXTENSION): \
-		tests/test-csv.cpp
+		tests/test-csv.cpp \
+		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling CSV Test ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testCsv.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 $(APP_DIR)/testText$(EXE_EXTENSION): \
-		tests/test.cpp
+		tests/test.cpp \
+		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Text Test ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testText.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
 ####################################################################
 # Examples
@@ -256,6 +261,34 @@ examples: $(APP_DIR)/$(TARGET) $(EXAMPLES)
 	@printf "\033[0m\n"
 	@printf "JSON examples are available in: $(APP_DIR)/examples/json/\n"
 	@printf "CSV examples are available in: $(APP_DIR)/examples/csv/\n"
+	@printf "\n"
+	@printf "\033[0;33mTo run examples:\033[0m\n"
+ifeq ($(OS_NAME), Linux)
+	@printf "  Linux: Set LD_LIBRARY_PATH to include the library directory:\n"
+	@printf "    export LD_LIBRARY_PATH=\"$(APP_DIR):$$LD_LIBRARY_PATH\"\n"
+	@printf "    $(APP_DIR)/examples/json/json_basic\n"
+	@printf "    $(APP_DIR)/examples/csv/csv_basic\n"
+else ifeq ($(OS_NAME), Mac)
+	@printf "  macOS: Set DYLD_LIBRARY_PATH to include the library directory:\n"
+	@printf "    export DYLD_LIBRARY_PATH=\"$(APP_DIR):$$DYLD_LIBRARY_PATH\"\n"
+	@printf "    $(APP_DIR)/examples/json/json_basic\n"
+	@printf "    $(APP_DIR)/examples/csv/csv_basic\n"
+else ifeq ($(OS_NAME), Windows)
+	@printf "  Windows (MSYS2): The DLL must be in the same directory or in PATH.\n"
+	@printf "  Option 1 - Run from the library directory:\n"
+	@printf "    cd $(APP_DIR)\n"
+	@printf "    ./examples/json/json_basic$(EXE_EXTENSION)\n"
+	@printf "    ./examples/csv/csv_basic$(EXE_EXTENSION)\n"
+	@printf "  Option 2 - Add library directory to PATH:\n"
+	@printf "    export PATH=\"$(APP_DIR):$$PATH\"\n"
+	@printf "    $(APP_DIR)/examples/json/json_basic$(EXE_EXTENSION)\n"
+	@printf "    $(APP_DIR)/examples/csv/csv_basic$(EXE_EXTENSION)\n"
+	@printf "  Option 3 - Copy DLL to example directories:\n"
+	@printf "    cp $(APP_DIR)/$(TARGET) $(APP_DIR)/examples/json/\n"
+	@printf "    cp $(APP_DIR)/$(TARGET) $(APP_DIR)/examples/csv/\n"
+	@printf "    Then run: $(APP_DIR)/examples/json/json_basic$(EXE_EXTENSION)\n"
+endif
+	@printf "\n"
 
 test: ## Make and run the Unit tests
 test: \

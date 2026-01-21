@@ -1612,7 +1612,7 @@ TEXT_API void text_csv_stream_free(text_csv_stream* stream) {
     free(stream);
 }
 
-void csv_stream_set_original_input_buffer(
+TEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
     text_csv_stream* stream,
     const char* input_buffer,
     size_t input_buffer_len

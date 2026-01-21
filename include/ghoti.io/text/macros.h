@@ -100,6 +100,24 @@ typedef struct text_json_value text_json_value;
 #endif
 
 /**
+ * @brief Internal API export macro for testing
+ *
+ * This macro is used to export internal functions that are needed for testing
+ * but should not be part of the public API. These functions are only exported
+ * when TEXT_TEST_BUILD is defined during library compilation.
+ *
+ * Example:
+ * @code
+ * TEXT_INTERNAL_API void internal_function(void);
+ * @endcode
+ */
+#ifdef TEXT_TEST_BUILD
+#define TEXT_INTERNAL_API TEXT_API
+#else
+#define TEXT_INTERNAL_API
+#endif
+
+/**
  * @brief Compile-time array size helper
  *
  * Calculates the number of elements in a statically-allocated array.

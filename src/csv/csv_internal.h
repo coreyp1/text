@@ -76,7 +76,7 @@ typedef enum {
  * @param dialect Dialect configuration
  * @return CSV_NEWLINE_* type if newline detected, CSV_NEWLINE_NONE otherwise
  */
-csv_newline_type csv_detect_newline(
+TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
     const char* input,
     size_t input_len,
     csv_position* pos,
@@ -95,7 +95,7 @@ csv_newline_type csv_detect_newline(
  * @param validate Whether to validate (if false, always returns VALID)
  * @return CSV_UTF8_VALID, CSV_UTF8_INVALID, or CSV_UTF8_INCOMPLETE
  */
-csv_utf8_result csv_validate_utf8(
+TEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(
     const char* input,
     size_t input_len,
     csv_position* pos,
@@ -114,7 +114,7 @@ csv_utf8_result csv_validate_utf8(
  * @param strip Whether to strip BOM (if false, does nothing)
  * @return true if BOM was stripped, false otherwise
  */
-bool csv_strip_bom(
+TEXT_INTERNAL_API bool csv_strip_bom(
     const char** input,
     size_t* input_len,
     csv_position* pos,
@@ -145,7 +145,7 @@ typedef struct csv_context {
  *
  * @return New context, or NULL on failure
  */
-csv_context* csv_context_new(void);
+TEXT_INTERNAL_API csv_context* csv_context_new(void);
 
 /**
  * @brief Set input buffer for in-situ mode
@@ -157,7 +157,7 @@ csv_context* csv_context_new(void);
  * @param input_buffer Original input buffer (caller-owned, must remain valid)
  * @param input_buffer_len Length of input buffer
  */
-void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len);
+TEXT_INTERNAL_API void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len);
 
 /**
  * @brief Free a CSV context and its arena
@@ -167,7 +167,7 @@ void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, si
  *
  * @param ctx Context to free (can be NULL)
  */
-void csv_context_free(csv_context* ctx);
+TEXT_INTERNAL_API void csv_context_free(csv_context* ctx);
 
 /**
  * @brief Allocate memory from a context's arena
@@ -180,7 +180,7 @@ void csv_context_free(csv_context* ctx);
  * @param align Alignment requirement (must be power of 2)
  * @return Pointer to allocated memory, or NULL on failure
  */
-void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
+TEXT_INTERNAL_API void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
 
 /**
  * @brief Write a field with proper quoting and escaping
@@ -198,7 +198,7 @@ void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
  * @param opts Write options
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_write_field(
+TEXT_INTERNAL_API text_csv_status csv_write_field(
     const text_csv_sink* sink,
     const char* field_data,
     size_t field_len,
@@ -215,7 +215,7 @@ text_csv_status csv_write_field(
  * @param input_buffer Original input buffer (caller-owned, must remain valid)
  * @param input_buffer_len Length of input buffer
  */
-void csv_stream_set_original_input_buffer(
+TEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
     text_csv_stream* stream,
     const char* input_buffer,
     size_t input_buffer_len
@@ -238,7 +238,7 @@ void csv_stream_set_original_input_buffer(
  * @param caret_offset_out Output parameter for caret offset within snippet
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_error_generate_context_snippet(
+TEXT_INTERNAL_API text_csv_status csv_error_generate_context_snippet(
     const char* input,
     size_t input_len,
     size_t error_offset,
@@ -260,7 +260,7 @@ text_csv_status csv_error_generate_context_snippet(
  * @param src Source error structure (must not be NULL)
  * @return TEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src);
+TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src);
 
 // ============================================================================
 // Table Structure Definitions (for internal use)

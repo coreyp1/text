@@ -427,7 +427,7 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
     return TEXT_JSON_OK;
 }
 
-text_json_status json_lexer_init(
+TEXT_INTERNAL_API text_json_status json_lexer_init(
     json_lexer* lexer,
     const char* input,
     size_t input_len,
@@ -458,7 +458,7 @@ text_json_status json_lexer_init(
     return TEXT_JSON_OK;
 }
 
-text_json_status json_lexer_next(json_lexer* lexer, json_token* token) {
+TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token* token) {
     if (!lexer || !token) {
         return TEXT_JSON_E_INVALID;
     }
@@ -573,7 +573,7 @@ text_json_status json_lexer_next(json_lexer* lexer, json_token* token) {
     return TEXT_JSON_E_BAD_TOKEN;
 }
 
-void json_token_cleanup(json_token* token) {
+TEXT_INTERNAL_API void json_token_cleanup(json_token* token) {
     if (!token) {
         return;
     }

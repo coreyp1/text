@@ -141,7 +141,7 @@ static void csv_arena_free(csv_arena* arena) {
 }
 
 // Create a new CSV context with arena
-csv_context* csv_context_new(void) {
+TEXT_INTERNAL_API csv_context* csv_context_new(void) {
     csv_context* ctx = malloc(sizeof(csv_context));
     if (!ctx) {
         return NULL;
@@ -160,7 +160,7 @@ csv_context* csv_context_new(void) {
 }
 
 // Set input buffer for in-situ mode
-void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len) {
+TEXT_INTERNAL_API void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len) {
     if (!ctx) {
         return;
     }
@@ -179,7 +179,7 @@ void csv_context_free(csv_context* ctx) {
 }
 
 // Allocate memory from a context's arena
-void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align) {
+TEXT_INTERNAL_API void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align) {
     if (!ctx || !ctx->arena) {
         return NULL;
     }

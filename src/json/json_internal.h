@@ -80,7 +80,7 @@ int json_matches(const char* input, size_t len, const char* keyword);
  * @param allow_unescaped_controls Whether to allow unescaped control characters (0x00-0x1F)
  * @return TEXT_JSON_OK on success, error code on failure
  */
-text_json_status json_decode_string(
+TEXT_INTERNAL_API text_json_status json_decode_string(
     const char* input,
     size_t input_len,
     char* output,
@@ -149,7 +149,7 @@ typedef struct {
  * @param opts Parse options (for nonfinite numbers, etc.)
  * @return TEXT_JSON_OK on success, error code on failure
  */
-text_json_status json_parse_number(
+TEXT_INTERNAL_API text_json_status json_parse_number(
     const char* input,
     size_t input_len,
     json_number* num,
@@ -178,7 +178,7 @@ text_json_status json_parse_number(
  *
  * @param num Number structure to clean up (can be NULL, safe to call multiple times)
  */
-void json_number_destroy(json_number* num);
+TEXT_INTERNAL_API void json_number_destroy(json_number* num);
 
 /**
  * @brief JSON token types
@@ -247,7 +247,7 @@ typedef struct {
  * @param opts Parse options (can be NULL for defaults)
  * @return TEXT_JSON_OK on success
  */
-text_json_status json_lexer_init(
+TEXT_INTERNAL_API text_json_status json_lexer_init(
     json_lexer* lexer,
     const char* input,
     size_t input_len,
@@ -275,7 +275,7 @@ text_json_status json_lexer_next(json_lexer* lexer, json_token* token);
  *
  * @param token Token to clean up
  */
-void json_token_cleanup(json_token* token);
+TEXT_INTERNAL_API void json_token_cleanup(json_token* token);
 
 // Forward declaration of json_arena (defined in json_dom.c)
 typedef struct json_arena json_arena;
