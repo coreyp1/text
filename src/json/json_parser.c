@@ -1350,7 +1350,7 @@ static text_json_value* json_parse_internal(
     parser.error_out = err;
 
     // Initialize lexer
-    text_json_status status = json_lexer_init(&parser.lexer, bytes, len, opt);
+    text_json_status status = json_lexer_init(&parser.lexer, bytes, len, opt, 0);  // not streaming mode
     if (status != TEXT_JSON_OK) {
         if (err) {
             err->code = status;

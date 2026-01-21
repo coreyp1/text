@@ -45,6 +45,19 @@ Streaming parsing processes JSON incrementally, emitting events as values are en
 
 The streaming parser accepts input in chunks and maintains state between calls, making it suitable for network or file I/O scenarios.
 
+**Multi-Chunk Value Handling:**
+The parser correctly handles values (strings, numbers) that span multiple chunks. When a value is incomplete at the end of a chunk, the parser preserves state and waits for more input. This ensures correct parsing regardless of how the input is split across chunks.
+
+- **No chunk count limit**: Values can span 2, 3, 100, or more chunks
+- **Total bytes limit**: Limited by `max_total_bytes` option (default: 64MB, configurable)
+- **State preservation**: Incomplete values are buffered until completion
+- **Examples**:
+  - String: `"hello` (chunk 1) + `world"` (chunk 2) → correctly parses as `"helloworld"`
+  - Number: `12345` (chunk 1) + `.678` (chunk 2) → correctly parses as `12345.678`
+  - Escape sequences and Unicode escapes also work correctly across chunks
+
+**Important:** Always call `text_json_stream_finish()` after feeding all input chunks. The last value may not be emitted until `finish()` is called, especially if it was incomplete at the end of the final chunk. This ensures all values are processed and the JSON structure is validated as complete.
+
 ---
 
 ## 3. Writing Modes

@@ -233,9 +233,10 @@ typedef struct {
 typedef struct {
     const char* input;           ///< Input buffer
     size_t input_len;            ///< Total input length
-    size_t current_offset;      ///< Current position in input
+    size_t current_offset;       ///< Current position in input
     json_position pos;           ///< Current position (offset, line, col)
     const text_json_parse_options* opts; ///< Parse options
+    int streaming_mode;          ///< Non-zero if in streaming mode (allows incomplete tokens at EOF)
 } json_lexer;
 
 /**
@@ -251,7 +252,8 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
     json_lexer* lexer,
     const char* input,
     size_t input_len,
-    const text_json_parse_options* opts
+    const text_json_parse_options* opts,
+    int streaming_mode
 );
 
 /**

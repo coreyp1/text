@@ -105,6 +105,22 @@ TEXT_API text_json_stream* text_json_stream_new(
  * The parser maintains state between calls, allowing incremental parsing
  * of large inputs.
  *
+ * **Multi-Chunk Value Handling:**
+ * The parser correctly handles values (strings, numbers) that span multiple
+ * chunks. When a value is incomplete at the end of a chunk, the parser
+ * preserves state and waits for more input. Values can span an unlimited
+ * number of chunks, limited only by the `max_total_bytes` option (default: 64MB).
+ *
+ * **Examples:**
+ * - String spanning chunks: `"hello` (chunk 1) + `world"` (chunk 2) → `"helloworld"`
+ * - Number spanning chunks: `12345` (chunk 1) + `.678` (chunk 2) → `12345.678`
+ * - Values can span 2, 3, 100, or more chunks as long as total size is within limits
+ *
+ * **Important:** If the last value in the JSON is incomplete at the end of
+ * the final chunk, it will not be emitted until `text_json_stream_finish()`
+ * is called. Always call `finish()` after feeding all input to ensure all
+ * values are processed and emitted.
+ *
  * @param st Stream instance (must not be NULL)
  * @param bytes Input data (must not be NULL)
  * @param len Length of input data in bytes
@@ -121,9 +137,15 @@ TEXT_API text_json_status text_json_stream_feed(
 /**
  * @brief Finish parsing and validate structure
  *
- * Signals that no more input will be provided. Validates that the JSON
- * structure is complete (no unmatched brackets, etc.) and emits any
- * final events.
+ * Signals that no more input will be provided. This function:
+ * - Processes any remaining buffered input (including incomplete values)
+ * - Emits any final events that were waiting for completion
+ * - Validates that the JSON structure is complete (no unmatched brackets, etc.)
+ *
+ * **Important:** Always call this function after feeding all input chunks.
+ * The last value may not be emitted until `finish()` is called, especially
+ * if it was incomplete at the end of the final chunk (e.g., a number ending
+ * with a digit, or a string without a closing quote).
  *
  * @param st Stream instance (must not be NULL)
  * @param err Error structure for error reporting (can be NULL)

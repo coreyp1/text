@@ -731,7 +731,7 @@ TEST(Lexer, TokenTypes) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "{}[]:,";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Test LBRACE
@@ -786,7 +786,7 @@ TEST(Lexer, Keywords) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "null true false";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Test null
@@ -817,7 +817,7 @@ TEST(Lexer, StringTokenization) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "\"hello\\nworld\"";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -837,7 +837,7 @@ TEST(Lexer, NumberTokenization) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "123 -456 789.012";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Test integer
@@ -875,7 +875,7 @@ TEST(Lexer, Comments) {
     opts.allow_comments = true;
 
     const char* input = "// comment\n123 /* multi\nline */ 456";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should skip comment and get first number
@@ -903,7 +903,7 @@ TEST(Lexer, CommentsRejected) {
     opts.allow_comments = false;
 
     const char* input = "// comment\n123";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should treat // as invalid token
@@ -922,7 +922,7 @@ TEST(Lexer, PositionTracking) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "{\n  \"key\": 123\n}";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // LBRACE at line 1, col 1
@@ -972,7 +972,7 @@ TEST(Lexer, ExtensionTokens) {
     opts.allow_nonfinite_numbers = true;
 
     const char* input = "NaN Infinity -Infinity";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Test NaN
@@ -1004,7 +1004,7 @@ TEST(Lexer, ExtensionTokensRejected) {
     opts.allow_nonfinite_numbers = false;
 
     const char* input = "NaN";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should treat NaN as invalid token (not a keyword)
@@ -1023,7 +1023,7 @@ TEST(Lexer, WhitespaceHandling) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "  {  }  [  ]  ";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should skip leading whitespace
@@ -1058,7 +1058,7 @@ TEST(Lexer, ErrorReporting) {
     text_json_parse_options opts = text_json_parse_options_default();
 
     const char* input = "123 @ invalid";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should successfully parse number
@@ -1087,7 +1087,7 @@ TEST(Lexer, SingleQuoteStrings) {
     opts.allow_single_quotes = true;
 
     const char* input = "'hello world'";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1108,7 +1108,7 @@ TEST(Lexer, SingleQuoteStringsRejected) {
     opts.allow_single_quotes = false;
 
     const char* input = "'hello'";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1128,7 +1128,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with tab character (0x09) - should be rejected
     const char* input = "\"hello\tworld\"";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1138,7 +1138,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with newline (0x0A) - should be rejected
     const char* input2 = "\"hello\nworld\"";
-    status = json_lexer_init(&lexer, input2, strlen(input2), &opts);
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1148,7 +1148,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with null byte (0x00) - should be rejected
     const char input3[] = "\"hello\0world\"";
-    status = json_lexer_init(&lexer, input3, sizeof(input3) - 1, &opts);
+    status = json_lexer_init(&lexer, input3, sizeof(input3) - 1, &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1168,7 +1168,7 @@ TEST(Lexer, UnescapedControlsAllowed) {
 
     // Test with tab character (0x09) - should be allowed
     const char* input = "\"hello\tworld\"";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1180,7 +1180,7 @@ TEST(Lexer, UnescapedControlsAllowed) {
 
     // Test with newline (0x0A) - should be allowed
     const char* input2 = "\"hello\nworld\"";
-    status = json_lexer_init(&lexer, input2, strlen(input2), &opts);
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1205,7 +1205,7 @@ TEST(Lexer, AllExtensionsCombined) {
 
     // Input with comments, single quotes, nonfinite numbers, and unescaped controls
     const char* input = "// comment\n'hello\tworld' Infinity NaN";
-    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts);
+    text_json_status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
     EXPECT_EQ(status, TEXT_JSON_OK);
 
     // Should skip comment and get single-quoted string with tab
@@ -3134,6 +3134,616 @@ TEST(StreamingParser, InvalidJSON) {
     EXPECT_NE(status, TEXT_JSON_OK);  // Should fail on incomplete structure
 
     text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - string spanning multiple chunks
+ */
+TEST(StreamingParser, StringSpanningChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<std::string> string_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        if (evt->type == TEXT_JSON_EVT_STRING) {
+            auto* strings = static_cast<std::vector<std::string>*>(user);
+            std::string str(evt->as.str.s, evt->as.str.len);
+            strings->push_back(str);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Test: string split across chunks
+    // Chunk 1: "hello
+    // Chunk 2: world"
+    const char* chunk1 = "\"hello";
+    const char* chunk2 = "world\"";
+
+    text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+    status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "helloworld"
+    EXPECT_EQ(string_values.size(), 1u);
+    EXPECT_EQ(string_values[0], "helloworld");
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - number spanning multiple chunks
+ */
+TEST(StreamingParser, NumberSpanningChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<std::string> number_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        if (evt->type == TEXT_JSON_EVT_NUMBER) {
+            auto* numbers = static_cast<std::vector<std::string>*>(user);
+            std::string num(evt->as.number.s, evt->as.number.len);
+            numbers->push_back(num);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &number_values);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Test: number split across chunks (integer followed by decimal)
+    // Chunk 1: 12345 (at EOF, should be treated as incomplete)
+    // Chunk 2: .678
+    const char* chunk1 = "12345";
+    const char* chunk2 = ".678";
+
+    text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+    status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "12345.678" (not "12345" and then error on ".678")
+    EXPECT_EQ(number_values.size(), 1u);
+    EXPECT_EQ(number_values[0], "12345.678");
+
+    // Test: number ending with '.' at EOF
+    text_json_stream_free(st);
+    number_values.clear();
+    st = text_json_stream_new(&opts, callback, &number_values);
+    ASSERT_NE(st, nullptr);
+
+    const char* chunk3 = "12345.";
+    const char* chunk4 = "678";
+
+    status = text_json_stream_feed(st, chunk3, strlen(chunk3), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+    status = text_json_stream_feed(st, chunk4, strlen(chunk4), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "12345.678"
+    EXPECT_EQ(number_values.size(), 1u);
+    EXPECT_EQ(number_values[0], "12345.678");
+
+    // Test: number ending with 'e' at EOF (scientific notation)
+    text_json_stream_free(st);
+    number_values.clear();
+    st = text_json_stream_new(&opts, callback, &number_values);
+    ASSERT_NE(st, nullptr);
+
+    const char* chunk5 = "12345e";
+    const char* chunk6 = "+2";
+
+    status = text_json_stream_feed(st, chunk5, strlen(chunk5), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+    status = text_json_stream_feed(st, chunk6, strlen(chunk6), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "12345e+2"
+    EXPECT_EQ(number_values.size(), 1u);
+    EXPECT_EQ(number_values[0], "12345e+2");
+
+    // Test: complete number at EOF (followed by space in next chunk)
+    text_json_stream_free(st);
+    number_values.clear();
+    st = text_json_stream_new(&opts, callback, &number_values);
+    ASSERT_NE(st, nullptr);
+
+    const char* chunk7 = "12345";
+    const char* chunk8 = " ";
+
+    status = text_json_stream_feed(st, chunk7, strlen(chunk7), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+    status = text_json_stream_feed(st, chunk8, strlen(chunk8), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    // Note: This will fail because "12345 " is not valid JSON (trailing space)
+    // But the number should have been emitted before the error
+    // Actually, wait - if we have just "12345 ", that's not valid JSON at root level
+    // Let's test with a valid context: [12345 ]
+    text_json_stream_free(st);
+    number_values.clear();
+    st = text_json_stream_new(&opts, callback, &number_values);
+    ASSERT_NE(st, nullptr);
+
+    const char* chunk9 = "[12345";
+    const char* chunk10 = "]";
+
+    status = text_json_stream_feed(st, chunk9, strlen(chunk9), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+    status = text_json_stream_feed(st, chunk10, strlen(chunk10), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "12345" (complete number, not incomplete)
+    EXPECT_EQ(number_values.size(), 1u);
+    EXPECT_EQ(number_values[0], "12345");
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - escape sequence spanning chunks
+ */
+TEST(StreamingParser, EscapeSequenceSpanningChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<std::string> string_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        if (evt->type == TEXT_JSON_EVT_STRING) {
+            auto* strings = static_cast<std::vector<std::string>*>(user);
+            std::string str(evt->as.str.s, evt->as.str.len);
+            strings->push_back(str);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Test: escape sequence split across chunks
+    // The escape sequence \n is split across two chunks.
+    // Chunk 1: "hello" followed by backslash
+    // Chunk 2: "nworld"
+    const char* chunk1 = "\"hello\\";
+    const char* chunk2 = "nworld\"";
+
+    text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+    status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "hello\nworld" (decoded)
+    EXPECT_EQ(string_values.size(), 1u);
+    EXPECT_EQ(string_values[0], "hello\nworld");
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - unicode escape spanning chunks
+ */
+TEST(StreamingParser, UnicodeEscapeSpanningChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<std::string> string_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        if (evt->type == TEXT_JSON_EVT_STRING) {
+            auto* strings = static_cast<std::vector<std::string>*>(user);
+            std::string str(evt->as.str.s, evt->as.str.len);
+            strings->push_back(str);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Test: unicode escape split across chunks
+    // Chunk 1: "hello\u
+    // Chunk 2: 0041"
+    const char* chunk1 = "\"hello\\u";
+    const char* chunk2 = "0041\"";
+
+    text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+    status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received "helloA" (U+0041 is 'A')
+    EXPECT_EQ(string_values.size(), 1u);
+    EXPECT_EQ(string_values[0], "helloA");
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - large value spanning many chunks
+ */
+TEST(StreamingParser, LargeValueSpanningManyChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    std::vector<std::string> string_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        if (evt->type == TEXT_JSON_EVT_STRING) {
+            auto* strings = static_cast<std::vector<std::string>*>(user);
+            std::string str(evt->as.str.s, evt->as.str.len);
+            strings->push_back(str);
+        }
+        return TEXT_JSON_OK;
+    };
+
+    text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+    ASSERT_NE(st, nullptr);
+
+    text_json_error err;
+
+    // Test: large string split byte-by-byte
+    std::string large_string = "\"";
+    for (int i = 0; i < 1000; ++i) {
+        large_string += "a";
+    }
+    large_string += "\"";
+
+    // Feed byte by byte
+    for (size_t i = 0; i < large_string.length(); ++i) {
+        text_json_status status = text_json_stream_feed(st, large_string.c_str() + i, 1, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK) << "Failed at byte " << i;
+    }
+
+    text_json_status status = text_json_stream_finish(st, &err);
+    EXPECT_EQ(status, TEXT_JSON_OK);
+
+    // Should have received the complete string
+    EXPECT_EQ(string_values.size(), 1u);
+    EXPECT_EQ(string_values[0].length(), 1000u);
+
+    text_json_stream_free(st);
+}
+
+/**
+ * Test streaming parser - value spanning 3 chunks
+ */
+TEST(StreamingParser, ValueSpanningThreeChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    // Test 1: String spanning 3 chunks
+    {
+        std::vector<std::string> string_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_STRING) {
+                auto* strings = static_cast<std::vector<std::string>*>(user);
+                std::string str(evt->as.str.s, evt->as.str.len);
+                strings->push_back(str);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // String split across 3 chunks
+        // Chunk 1: "hello
+        // Chunk 2: world
+        // Chunk 3: !"
+        const char* chunk1 = "\"hello";
+        const char* chunk2 = "world";
+        const char* chunk3 = "!\"";
+
+        text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+        status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should still wait for more input
+
+        status = text_json_stream_feed(st, chunk3, strlen(chunk3), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received "helloworld!"
+        EXPECT_EQ(string_values.size(), 1u);
+        EXPECT_EQ(string_values[0], "helloworld!");
+
+        text_json_stream_free(st);
+    }
+
+    // Test 2: Number spanning 3 chunks
+    {
+        std::vector<std::string> number_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_NUMBER) {
+                auto* numbers = static_cast<std::vector<std::string>*>(user);
+                std::string num(evt->as.number.s, evt->as.number.len);
+                numbers->push_back(num);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &number_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // Number split across 3 chunks
+        // Chunk 1: 123
+        // Chunk 2: 45
+        // Chunk 3: .678
+        const char* chunk1 = "123";
+        const char* chunk2 = "45";
+        const char* chunk3 = ".678";
+
+        text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+        status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should still wait for more input (incomplete)
+
+        status = text_json_stream_feed(st, chunk3, strlen(chunk3), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received "12345.678"
+        EXPECT_EQ(number_values.size(), 1u);
+        EXPECT_EQ(number_values[0], "12345.678");
+
+        text_json_stream_free(st);
+    }
+
+    // Test 3: Unicode escape spanning 3 chunks
+    {
+        std::vector<std::string> string_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_STRING) {
+                auto* strings = static_cast<std::vector<std::string>*>(user);
+                std::string str(evt->as.str.s, evt->as.str.len);
+                strings->push_back(str);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // Unicode escape split across 3 chunks
+        // Chunk 1: "hello\u
+        // Chunk 2: 00
+        // Chunk 3: 41"
+        const char* chunk1 = "\"hello\\u";
+        const char* chunk2 = "00";
+        const char* chunk3 = "41\"";
+
+        text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+        status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should still wait for more input
+
+        status = text_json_stream_feed(st, chunk3, strlen(chunk3), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received "helloA" (U+0041 is 'A')
+        EXPECT_EQ(string_values.size(), 1u);
+        EXPECT_EQ(string_values[0], "helloA");
+
+        text_json_stream_free(st);
+    }
+
+    // Test 4: Scientific notation number spanning 3 chunks
+    {
+        std::vector<std::string> number_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_NUMBER) {
+                auto* numbers = static_cast<std::vector<std::string>*>(user);
+                std::string num(evt->as.number.s, evt->as.number.len);
+                numbers->push_back(num);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &number_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // Scientific notation split across 3 chunks
+        // Chunk 1: 12345e
+        // Chunk 2: +
+        // Chunk 3: 2
+        const char* chunk1 = "12345e";
+        const char* chunk2 = "+";
+        const char* chunk3 = "2";
+
+        text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input (incomplete)
+
+        status = text_json_stream_feed(st, chunk2, strlen(chunk2), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should still wait for more input (incomplete)
+
+        status = text_json_stream_feed(st, chunk3, strlen(chunk3), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received "12345e+2"
+        EXPECT_EQ(number_values.size(), 1u);
+        EXPECT_EQ(number_values[0], "12345e+2");
+
+        text_json_stream_free(st);
+    }
+}
+
+/**
+ * Test streaming parser - value spanning many chunks (100+)
+ * Verifies that state preservation works correctly across many chunk boundaries
+ */
+TEST(StreamingParser, ValueSpanningManyChunks) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    // Test: String spanning 100 chunks
+    {
+        std::vector<std::string> string_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_STRING) {
+                auto* strings = static_cast<std::vector<std::string>*>(user);
+                std::string str(evt->as.str.s, evt->as.str.len);
+                strings->push_back(str);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &string_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // String split across 100 chunks, each chunk is 1 character
+        // Chunk 1: "a
+        // Chunks 2-99: b, c, d, ...
+        // Chunk 100: z"
+        const char* chunk1 = "\"a";
+        text_json_status status = text_json_stream_feed(st, chunk1, strlen(chunk1), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);  // Should wait for more input
+
+        // Feed 98 more single-character chunks
+        for (char c = 'b'; c <= 'y'; ++c) {
+            status = text_json_stream_feed(st, &c, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK) << "Failed at chunk for character " << c;
+        }
+
+        // Final chunk with closing quote
+        const char* final_chunk = "z\"";
+        status = text_json_stream_feed(st, final_chunk, strlen(final_chunk), &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received "abcdefghijklmnopqrstuvwxyz" (26 characters)
+        EXPECT_EQ(string_values.size(), 1u);
+        EXPECT_EQ(string_values[0].length(), 26u);
+        EXPECT_EQ(string_values[0], "abcdefghijklmnopqrstuvwxyz");
+
+        text_json_stream_free(st);
+    }
+
+    // Test: Number spanning 50 chunks
+    {
+        std::vector<std::string> number_values;
+
+        auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+            (void)err;
+            if (evt->type == TEXT_JSON_EVT_NUMBER) {
+                auto* numbers = static_cast<std::vector<std::string>*>(user);
+                std::string num(evt->as.number.s, evt->as.number.len);
+                numbers->push_back(num);
+            }
+            return TEXT_JSON_OK;
+        };
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &number_values);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+
+        // Number split across 50 chunks, each chunk is 1 digit
+        // Chunks 1-49: digits 1-9
+        // Chunk 50: final digit 0
+        for (int i = 1; i <= 9; ++i) {
+            char digit = '0' + i;
+            text_json_status status = text_json_stream_feed(st, &digit, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK) << "Failed at chunk " << i;
+        }
+
+        // Feed 40 more digits
+        for (int i = 0; i < 40; ++i) {
+            char digit = '0' + (i % 10);
+            text_json_status status = text_json_stream_feed(st, &digit, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK) << "Failed at chunk " << (10 + i);
+        }
+
+        // Final digit
+        const char final_digit = '0';
+        text_json_status status = text_json_stream_feed(st, &final_digit, 1, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received a 50-digit number
+        EXPECT_EQ(number_values.size(), 1u);
+        EXPECT_EQ(number_values[0].length(), 50u);
+
+        text_json_stream_free(st);
+    }
 }
 
 // ============================================================================

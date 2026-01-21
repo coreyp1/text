@@ -80,6 +80,7 @@ int main(void) {
     printf("Streaming parser events:\n");
 
     // Feed input (can be done in chunks)
+    // Note: If feeding multiple chunks, call feed() for each chunk
     text_json_error err = {0};
     if (text_json_stream_feed(stream, json_input, json_len, &err) != TEXT_JSON_OK) {
         fprintf(stderr, "Feed error: %s\n", err.message);
@@ -88,7 +89,9 @@ int main(void) {
         return 1;
     }
 
-    // Finish parsing
+    // Finish parsing - IMPORTANT: Always call finish() after all input is fed.
+    // The last value may not be emitted until finish() is called, especially
+    // if it was incomplete at the end of the final chunk.
     if (text_json_stream_finish(stream, &err) != TEXT_JSON_OK) {
         fprintf(stderr, "Finish error: %s\n", err.message);
         text_json_error_free(&err);

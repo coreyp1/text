@@ -274,7 +274,12 @@ static void json_stream_compact_buffer(text_json_stream* st) {
     memmove(st->input_buffer, st->input_buffer + st->input_buffer_processed, remaining);
 
     // Update buffer start offset to reflect the new buffer position
-    st->buffer_start_offset += st->input_buffer_processed;
+    // Check for overflow (for tracking purposes - if overflow, clamp to SIZE_MAX)
+    if (st->buffer_start_offset > SIZE_MAX - st->input_buffer_processed) {
+        st->buffer_start_offset = SIZE_MAX;
+    } else {
+        st->buffer_start_offset += st->input_buffer_processed;
+    }
     st->input_buffer_used = remaining;
     st->input_buffer_processed = 0;
 }
@@ -298,7 +303,8 @@ static text_json_status json_stream_process_tokens(
         &st->lexer,
         st->input_buffer,
         st->input_buffer_used,
-        &st->opts
+        &st->opts,
+        1  // streaming mode
     );
     if (status != TEXT_JSON_OK) {
         st->state = JSON_STREAM_STATE_ERROR;
@@ -320,6 +326,15 @@ static text_json_status json_stream_process_tokens(
 
         text_json_status status = json_lexer_next(&st->lexer, &token);
         if (status != TEXT_JSON_OK) {
+            // Check for incomplete input (string or number spanning chunks)
+            if (status == TEXT_JSON_E_INCOMPLETE) {
+                // Incomplete token - need more input
+                // Don't advance processed offset, so the incomplete token stays in buffer
+                // When more input arrives, lexer will be reinitialized and will resume
+                json_token_cleanup(&token);
+                return TEXT_JSON_OK;
+            }
+
             // Error tokenizing - might be incomplete input or actual error
             // If it's a string/number parsing error, might need more input
             if (token.type == JSON_TOKEN_ERROR) {
@@ -336,7 +351,7 @@ static text_json_status json_stream_process_tokens(
             if (err) {
                 err->code = status;
                 err->message = "Tokenization error";
-                err->offset = st->total_bytes_consumed - st->input_buffer_used + token.pos.offset;
+                err->offset = st->buffer_start_offset + token.pos.offset;
                 err->line = token.pos.line;
                 err->col = token.pos.col;
             }
@@ -648,7 +663,7 @@ static text_json_status json_stream_handle_token(
             if (err) {
                 err->code = TEXT_JSON_E_STATE;
                 err->message = "Invalid parser state";
-                err->offset = st->total_bytes_consumed - st->input_buffer_used + token->pos.offset;
+                err->offset = st->buffer_start_offset + token->pos.offset;
                 err->line = token->pos.line;
                 err->col = token->pos.col;
             }
@@ -786,7 +801,7 @@ static text_json_status json_stream_handle_value_token(
             if (err) {
                 err->code = TEXT_JSON_E_BAD_TOKEN;
                 err->message = "Unexpected token, expected value";
-                err->offset = st->total_bytes_consumed - st->input_buffer_used + token->pos.offset;
+                err->offset = st->buffer_start_offset + token->pos.offset;
                 err->line = token->pos.line;
                 err->col = token->pos.col;
             }
@@ -1085,30 +1100,177 @@ TEXT_API text_json_status text_json_stream_finish(
     }
 
     // Complete parsing of any remaining buffered input
+    // First, compact buffer to ensure unprocessed data is at the start
+    json_stream_compact_buffer(st);
+
     text_json_status status = json_stream_process_tokens(st, err);
     if (status != TEXT_JSON_OK) {
         return status;
     }
 
-    // Check if we're in a valid final state
-    if (st->state != JSON_STREAM_STATE_DONE && st->state != JSON_STREAM_STATE_INIT) {
-        // Still have unprocessed input or incomplete structure
-        if (st->input_buffer_used > st->input_buffer_processed) {
+    // Check if we have unprocessed input that needs to be force-completed
+    // This can happen even if state is INIT (when an incomplete token was encountered)
+    if (st->input_buffer_used > st->input_buffer_processed) {
             // Have unprocessed input - might be incomplete token
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = TEXT_JSON_E_INCOMPLETE;
-                err->message = "Incomplete JSON input";
-                err->offset = st->total_bytes_consumed;
-                err->line = 1;
-                err->col = 1;
+            // Since finish() was called, we have all input, so force completion
+            // by temporarily disabling streaming mode and trying again
+            int old_streaming_mode = st->lexer.streaming_mode;
+            st->lexer.streaming_mode = 0;  // Force complete mode
+
+            // Reinitialize lexer to start from unprocessed position
+            // First, ensure we have unprocessed data to work with
+            // Safe subtraction: we already checked st->input_buffer_used > st->input_buffer_processed
+            size_t unprocessed_len = st->input_buffer_used - st->input_buffer_processed;
+
+            // Defensive check: ensure unprocessed_len doesn't exceed buffer size
+            if (unprocessed_len > st->input_buffer_size) {
+                st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = TEXT_JSON_E_INVALID;
+                    err->message = "Invalid buffer state";
+                    err->offset = st->total_bytes_consumed;
+                    err->line = 1;
+                    err->col = 1;
+                }
+                return TEXT_JSON_E_INVALID;
             }
-            return TEXT_JSON_E_INCOMPLETE;
-        }
+
+            if (unprocessed_len == 0) {
+                // No unprocessed data, nothing to do
+                st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                // Continue to next check
+            } else {
+
+            // After compaction, unprocessed data is at the start of the buffer
+            // and input_buffer_processed should be 0
+            // So we use st->input_buffer directly (not st->input_buffer + st->input_buffer_processed)
+            // Safe: unprocessed_len <= st->input_buffer_size, so st->input_buffer + unprocessed_len is valid
+            status = json_lexer_init(
+                &st->lexer,
+                st->input_buffer,
+                unprocessed_len,
+                &st->opts,
+                0  // force complete mode (not streaming)
+            );
+            if (status != TEXT_JSON_OK) {
+                st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                st->state = JSON_STREAM_STATE_ERROR;
+                if (err) {
+                    err->code = status;
+                    err->message = "Failed to reinitialize lexer for completion";
+                    err->offset = st->total_bytes_consumed;
+                    err->line = 1;
+                    err->col = 1;
+                }
+                return status;
+            }
+            // Ensure streaming_mode is set correctly (json_lexer_init should have set it, but be explicit)
+            st->lexer.streaming_mode = 0;
+            st->lexer_initialized = 1;
+
+            // Process the remaining input with force-complete mode
+            // After compaction, input_buffer_processed is 0, so we start from the beginning
+            json_token token;
+            while (1) {
+                memset(&token, 0, sizeof(token));
+                status = json_lexer_next(&st->lexer, &token);
+                if (status != TEXT_JSON_OK) {
+                    // If still incomplete or error, it's a real problem
+                    st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = status;
+                        err->message = "Incomplete or invalid JSON input";
+                        // Check for overflow in offset calculation (for error reporting)
+                        if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
+                            err->offset = SIZE_MAX;
+                        } else {
+                            err->offset = st->buffer_start_offset + token.pos.offset;
+                        }
+                        err->line = token.pos.line;
+                        err->col = token.pos.col;
+                    }
+                    json_token_cleanup(&token);
+                    return status;
+                }
+
+                // Handle EOF
+                if (token.type == JSON_TOKEN_EOF) {
+                    // Update processed offset before breaking
+                    // Safe: lexer.current_offset is always <= lexer.input_len (which is unprocessed_len)
+                    if (st->lexer.current_offset > unprocessed_len) {
+                        // Defensive check
+                        st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                        st->state = JSON_STREAM_STATE_ERROR;
+                        if (err) {
+                            err->code = TEXT_JSON_E_INVALID;
+                            err->message = "Lexer offset out of bounds";
+                            err->offset = st->buffer_start_offset;
+                            err->line = 1;
+                            err->col = 1;
+                        }
+                        json_token_cleanup(&token);
+                        return TEXT_JSON_E_INVALID;
+                    }
+                    st->input_buffer_processed = st->lexer.current_offset;
+                    json_token_cleanup(&token);
+                    break;
+                }
+
+                // Adjust token position to be relative to original buffer start
+                // token.pos.offset is relative to the reinitialized buffer start (which is st->input_buffer)
+                // After compaction, buffer_start_offset points to where the unprocessed data originally started
+                // Check for overflow in offset calculation (for error reporting - not critical but avoids UB)
+                json_token adjusted_token = token;
+                if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
+                    // Overflow in offset calculation - clamp to SIZE_MAX for error reporting
+                    adjusted_token.pos.offset = SIZE_MAX;
+                } else {
+                    adjusted_token.pos.offset = st->buffer_start_offset + token.pos.offset;
+                }
+
+                // Process token
+                status = json_stream_handle_token(st, &adjusted_token, err);
+                json_token_cleanup(&token);
+
+                if (status != TEXT_JSON_OK) {
+                    st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                    return status;
+                }
+
+                // Update processed offset after successful token processing
+                // After compaction, we start from 0, so current_offset is the amount processed
+                // Safe: lexer.current_offset is always <= lexer.input_len (which is unprocessed_len)
+                // and unprocessed_len <= st->input_buffer_used, so this assignment is safe
+                if (st->lexer.current_offset > unprocessed_len) {
+                    // Defensive check: current_offset should not exceed what we gave the lexer
+                    st->lexer.streaming_mode = old_streaming_mode;  // Restore
+                    st->state = JSON_STREAM_STATE_ERROR;
+                    if (err) {
+                        err->code = TEXT_JSON_E_INVALID;
+                        err->message = "Lexer offset out of bounds";
+                        err->offset = st->buffer_start_offset;
+                        err->line = 1;
+                        err->col = 1;
+                    }
+                    return TEXT_JSON_E_INVALID;
+                }
+                st->input_buffer_processed = st->lexer.current_offset;
+
+                // If we're in error or done state, stop processing
+                if (st->state == JSON_STREAM_STATE_ERROR || st->state == JSON_STREAM_STATE_DONE) {
+                    break;
+                }
+            }
+            st->lexer.streaming_mode = old_streaming_mode;  // Restore
+            }
     }
 
     // Validate final state
-    if (st->state == JSON_STREAM_STATE_INIT) {
+    // After force-completion, state should be DONE if we successfully processed a value
+    // Only report INIT as error if we truly have no input (buffer is empty)
+    if (st->state == JSON_STREAM_STATE_INIT && st->input_buffer_used == 0) {
         // No input was provided
         st->state = JSON_STREAM_STATE_ERROR;
         if (err) {

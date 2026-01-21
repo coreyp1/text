@@ -293,7 +293,9 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
     }
 
     if (string_end >= lexer->input_len) {
-        return TEXT_JSON_E_BAD_TOKEN;  // Unclosed string
+        // String is incomplete - might need more input in streaming mode
+        // Don't advance lexer position, return incomplete status
+        return TEXT_JSON_E_INCOMPLETE;
     }
 
     // string_start to string_end is the string content (without quotes)
@@ -399,6 +401,39 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
         return TEXT_JSON_E_BAD_NUMBER;
     }
 
+    // Check if number might be incomplete (at EOF)
+    // A number is incomplete if it ends with: '.', 'e', 'E', '+', '-' (after e/E)
+    // Note: Numbers ending with digits at EOF are treated as complete, even in streaming mode.
+    // In streaming mode, if a number like "123" is actually incomplete (followed by ".456"),
+    // the streaming parser will handle it by checking the next chunk.
+    if (end >= lexer->input_len && end > start) {
+        // We're at EOF - check if the number might continue
+        // Defensive check: ensure end - 1 is valid (end > start guarantees end >= 1)
+        if (end == 0) {
+            // Shouldn't happen due to end > start check, but be defensive
+            return TEXT_JSON_E_BAD_NUMBER;
+        }
+        // At this point, end == input_len (loop ensures end <= input_len, and we check end >= input_len)
+        // So end - 1 == input_len - 1, which is the last valid index
+        char last_char = lexer->input[end - 1];
+
+        // If ends with '.', 'e', 'E', '+', or '-' (and not at start), clearly incomplete
+        if (last_char == '.' || last_char == 'e' || last_char == 'E' ||
+            last_char == '+' || (last_char == '-' && end > start + 1)) {
+            // Number appears incomplete - might need more input
+            // Don't advance lexer position
+            return TEXT_JSON_E_INCOMPLETE;
+        }
+
+        // In streaming mode, if number ends with a digit at EOF, it might continue
+        // with '.', 'e', or 'E' in the next chunk, so treat as incomplete
+        if (lexer->streaming_mode && last_char >= '0' && last_char <= '9') {
+            return TEXT_JSON_E_INCOMPLETE;
+        }
+
+        // At EOF but number looks complete - parse it
+    }
+
     size_t number_len = end - start;
 
     // Parse the number
@@ -431,7 +466,8 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
     json_lexer* lexer,
     const char* input,
     size_t input_len,
-    const text_json_parse_options* opts
+    const text_json_parse_options* opts,
+    int streaming_mode
 ) {
     if (!lexer || !input) {
         return TEXT_JSON_E_INVALID;
@@ -444,6 +480,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
     lexer->pos.line = 1;
     lexer->pos.col = 1;
     lexer->opts = opts;
+    lexer->streaming_mode = streaming_mode ? 1 : 0;
 
     // Skip leading BOM if enabled
     if (opts && opts->allow_leading_bom && input_len >= 3 &&
