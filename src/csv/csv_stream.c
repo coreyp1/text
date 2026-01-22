@@ -89,6 +89,12 @@ static size_t csv_get_limit(size_t configured, size_t default_val) {
     return configured > 0 ? configured : default_val;
 }
 
+// Constants
+#define CSV_FIELD_BUFFER_INITIAL_SIZE 64
+#define CSV_FIELD_BUFFER_MIN_SIZE 1
+#define CSV_BUFFER_GROWTH_MULTIPLIER 2
+#define CSV_BUFFER_SMALL_THRESHOLD 1024  // 1KB threshold for hybrid growth strategy
+
 // Forward declarations
 static text_csv_status csv_stream_grow_field_buffer(
     text_csv_stream* stream,
@@ -99,6 +105,236 @@ static text_csv_status csv_stream_append_to_field_buffer(
     const char* data,
     size_t data_len
 );
+static text_csv_status csv_stream_unescape_field(
+    text_csv_stream* stream,
+    const char* input_data,
+    size_t input_len,
+    const char** output_data,
+    size_t* output_len
+);
+static text_csv_status csv_stream_emit_event(
+    text_csv_stream* stream,
+    text_csv_event_type type,
+    const char* data,
+    size_t data_len
+);
+static text_csv_status csv_stream_set_error(
+    text_csv_stream* stream,
+    text_csv_status code,
+    const char* message
+);
+
+// Clear field state
+static void csv_stream_clear_field_state(text_csv_stream* stream) {
+    stream->field_buffer_used = 0;
+    stream->field_is_buffered = false;
+    stream->field_needs_copy = false;
+    stream->just_processed_doubled_quote = false;
+    stream->quote_in_quoted_at_chunk_boundary = false;
+    stream->field_start = NULL;
+    stream->field_start_offset = SIZE_MAX;
+    stream->field_length = 0;
+}
+
+// Emit a field (unescape and emit, optionally emit record end)
+static text_csv_status csv_stream_emit_field(
+    text_csv_stream* stream,
+    bool emit_record_end
+) {
+    // Get field data
+    const char* field_data = stream->field_is_buffered ? stream->field_buffer : stream->field_start;
+    size_t actual_field_len = stream->field_is_buffered ? stream->field_buffer_used : stream->field_length;
+
+    // Unescape if needed
+    const char* unescaped_data;
+    size_t unescaped_len;
+    text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
+
+    // Emit field
+    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
+
+    stream->field_count++;
+
+    // Optionally emit record end
+    if (emit_record_end) {
+        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+    }
+
+    return TEXT_CSV_OK;
+}
+
+// Advance position tracking
+static void csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes) {
+    *offset += bytes;
+    stream->pos.offset += bytes;
+    stream->pos.column += bytes;
+    stream->total_bytes_consumed += bytes;
+}
+
+// Handle newline detection and position update
+// Returns the newline type (CSV_NEWLINE_NONE if no newline detected)
+static csv_newline_type csv_stream_handle_newline(
+    text_csv_stream* stream,
+    const char* input,
+    size_t input_len,
+    size_t* offset,
+    size_t byte_pos
+) {
+    csv_position pos_before = stream->pos;
+    pos_before.offset = byte_pos;
+    csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, &stream->opts.dialect);
+
+    if (nl == CSV_NEWLINE_NONE) {
+        return CSV_NEWLINE_NONE;
+    }
+
+    size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
+    stream->pos.offset += (pos_before.offset - byte_pos);
+    stream->pos.line = pos_before.line;
+    stream->pos.column = pos_before.column;
+    stream->total_bytes_consumed += newline_bytes;
+    *offset = pos_before.offset;
+
+    return nl;
+}
+
+// Validate input parameters for field processing
+static text_csv_status csv_stream_validate_field_input(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t byte_pos
+) {
+    if (!process_input) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "process_input is NULL");
+    }
+    if (byte_pos > process_len) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Invalid byte position");
+    }
+    return TEXT_CSV_OK;
+}
+
+// Check if field can use in-situ mode
+static bool csv_stream_can_use_in_situ(
+    text_csv_stream* stream,
+    const char* field_start,
+    size_t field_len
+) {
+    if (!stream->opts.in_situ_mode || !stream->original_input_buffer || !field_start) {
+        return false;
+    }
+
+    const char* input_start = stream->original_input_buffer;
+    size_t input_buffer_len = stream->original_input_buffer_len;
+
+    // Check for pointer arithmetic overflow safety
+    // Use subtraction to check bounds instead of addition to avoid overflow
+    if (field_start >= input_start) {
+        size_t offset_from_start = (size_t)(field_start - input_start);
+        // Check that field fits within buffer and doesn't overflow
+        if (offset_from_start <= input_buffer_len &&
+            field_len <= input_buffer_len - offset_from_start) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Scan ahead in unquoted field for special characters (delimiter, newline, quote)
+// Returns the number of safe characters that can be processed in bulk,
+// or 0 if a special character is found immediately.
+// Sets *found_special to true if a special character was found, false otherwise.
+// Sets *special_char to the character found (if found_special is true).
+// Sets *special_pos to the position of the special character (if found_special is true).
+static size_t csv_stream_scan_unquoted_field_ahead(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t start_offset,
+    bool* found_special,
+    char* special_char,
+    size_t* special_pos
+) {
+    const char delimiter = stream->opts.dialect.delimiter;
+    const char quote = stream->opts.dialect.quote;
+    bool allow_unquoted_quotes = stream->opts.dialect.allow_unquoted_quotes;
+    bool allow_unquoted_newlines = stream->opts.dialect.allow_unquoted_newlines;
+
+    size_t pos = start_offset;
+    *found_special = false;
+
+    while (pos < process_len) {
+        char c = process_input[pos];
+
+        // Check for delimiter (always ends field)
+        if (c == delimiter) {
+            *found_special = true;
+            *special_char = c;
+            *special_pos = pos;
+            return pos - start_offset;
+        }
+
+        // Check for newline
+        if (c == '\n' || c == '\r') {
+            // Check if it's a complete newline sequence
+            csv_position pos_before = stream->pos;
+            pos_before.offset = pos;
+            csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
+            if (nl != CSV_NEWLINE_NONE) {
+                // Found a complete newline sequence
+                if (!allow_unquoted_newlines) {
+                    // Newlines not allowed - this ends the field
+                    *found_special = true;
+                    *special_char = c;
+                    *special_pos = pos;
+                    return pos - start_offset;
+                }
+                // Newlines allowed - this is just part of the field content
+                // Advance past the newline sequence and continue scanning
+                pos += (nl == CSV_NEWLINE_CRLF ? 2 : 1);
+                continue;
+            }
+            // Not a complete newline sequence (e.g., standalone CR when dialect expects CRLF)
+            // If newlines not allowed, this is an error
+            if (!allow_unquoted_newlines) {
+                *found_special = true;
+                *special_char = c;
+                *special_pos = pos;
+                return pos - start_offset;
+            }
+            // Newlines allowed - single newline character is just field content
+            // Continue scanning
+        }
+
+        // Check for quote
+        if (c == quote) {
+            if (!allow_unquoted_quotes) {
+                // Quote not allowed - this is an error
+                *found_special = true;
+                *special_char = c;
+                *special_pos = pos;
+                return pos - start_offset;
+            }
+            // Quote allowed, continue scanning (it's just part of the field)
+        }
+
+        pos++;
+    }
+
+    // Reached end of chunk without finding special character
+    *found_special = false;
+    return pos - start_offset;
+}
 
 // Buffer field data when reaching end of chunk in middle of field
 // When a field spans chunks, we need to copy the partial field data from the current
@@ -149,7 +385,7 @@ static text_csv_status csv_stream_buffer_field_at_chunk_boundary(
             stream->field_length = stream->field_buffer_used;
         } else {
             // Empty field - just allocate buffer
-            text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
+            text_csv_status status = csv_stream_grow_field_buffer(stream, CSV_FIELD_BUFFER_INITIAL_SIZE);
             if (status != TEXT_CSV_OK) {
                 return status;
             }
@@ -160,7 +396,7 @@ static text_csv_status csv_stream_buffer_field_at_chunk_boundary(
         }
     } else {
         // Empty field or invalid offset
-        text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
+        text_csv_status status = csv_stream_grow_field_buffer(stream, CSV_FIELD_BUFFER_INITIAL_SIZE);
         if (status != TEXT_CSV_OK) {
             return status;
         }
@@ -172,39 +408,88 @@ static text_csv_status csv_stream_buffer_field_at_chunk_boundary(
     return TEXT_CSV_OK;
 }
 
-// Grow input buffer (kept for compatibility, but not used in new algorithm)
-static text_csv_status csv_stream_grow_input_buffer(
+// Buffer unquoted field if in-situ mode cannot be used
+// This reduces nesting in the newline handling code
+static text_csv_status csv_stream_buffer_unquoted_field_if_needed(
     text_csv_stream* stream,
-    size_t needed
+    const char* process_input,
+    size_t process_len
 ) {
-    if (stream->input_buffer_size >= needed) {
+    if (stream->field_is_buffered) {
         return TEXT_CSV_OK;
     }
 
-    size_t new_size = stream->input_buffer_size * 2;
-    if (new_size < needed) {
-        new_size = needed;
+    // Check if we can use in-situ mode
+    bool can_use_in_situ = csv_stream_can_use_in_situ(stream, stream->field_start, stream->field_length);
+    if (can_use_in_situ) {
+        return TEXT_CSV_OK;
     }
 
-    if (new_size < stream->input_buffer_size) {
-        return TEXT_CSV_E_OOM;
+    // Copy to buffer to ensure stability
+    size_t copy_len = stream->field_length;
+    if (stream->field_start < process_input ||
+        stream->field_start >= process_input + process_len) {
+        // field_start is out of bounds - handle gracefully
+        stream->field_length = 0;
+        return TEXT_CSV_OK;
     }
 
-    char* new_buffer = realloc(stream->input_buffer, new_size);
-    if (!new_buffer) {
-        return TEXT_CSV_E_OOM;
+    // field_start is valid - copy what we can
+    size_t available = (process_input + process_len) - stream->field_start;
+    if (copy_len > available) {
+        copy_len = available;
+    }
+    if (copy_len == 0) {
+        return TEXT_CSV_OK;
     }
 
-    // Update field_start if it was pointing into the old input buffer
-    if (!stream->field_is_buffered && stream->input_buffer && stream->field_start &&
-        stream->field_start >= stream->input_buffer &&
-        stream->field_start < stream->input_buffer + stream->input_buffer_size) {
-        // field_start points into the old input buffer - update it
-        size_t offset = stream->field_start - stream->input_buffer;
-        stream->field_start = new_buffer + offset;
+    stream->field_buffer_used = 0;
+    text_csv_status status = csv_stream_grow_field_buffer(stream, copy_len + 1);
+    if (status != TEXT_CSV_OK) {
+        return status;
     }
-    stream->input_buffer = new_buffer;
-    stream->input_buffer_size = new_size;
+    memcpy(stream->field_buffer, stream->field_start, copy_len);
+    stream->field_buffer_used = copy_len;
+    stream->field_is_buffered = true;
+    stream->field_start = stream->field_buffer;
+    stream->field_length = copy_len;
+    return TEXT_CSV_OK;
+}
+
+// Ensure field is buffered at chunk boundary (helper to reduce duplication)
+// This function handles the common pattern of checking if field is buffered,
+// calculating field_start_off, and calling csv_stream_buffer_field_at_chunk_boundary
+static text_csv_status csv_stream_ensure_field_buffered(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t current_offset
+) {
+    if (stream->field_is_buffered) {
+        // Field is already buffered - ensure field_start points to buffer
+        stream->field_start = stream->field_buffer;
+        stream->field_length = stream->field_buffer_used;
+        return TEXT_CSV_OK;
+    }
+
+    // Calculate field_start_off
+    size_t field_start_off = SIZE_MAX;
+    if (stream->field_start &&
+        stream->field_start >= process_input &&
+        stream->field_start < process_input + process_len) {
+        field_start_off = stream->field_start - process_input;
+    } else if (stream->field_start) {
+        // field_start exists but is not in current chunk - use 0 as fallback
+        field_start_off = 0;
+    }
+
+    // Buffer the field
+    text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
+        stream, process_input, process_len, field_start_off, current_offset);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
+
     return TEXT_CSV_OK;
 }
 
@@ -219,13 +504,24 @@ static text_csv_status csv_stream_grow_field_buffer(
 
     size_t new_size;
     if (stream->field_buffer_size == 0) {
-        // Initial allocation - start with at least the needed size
-        new_size = needed;
+        // Initial allocation - use minimum size or needed size, whichever is larger
+        new_size = (needed < CSV_FIELD_BUFFER_INITIAL_SIZE) ? CSV_FIELD_BUFFER_INITIAL_SIZE : needed;
     } else {
-        // Grow by at least 2x, or to needed size
-        new_size = stream->field_buffer_size * 2;
-        if (new_size < needed) {
-            new_size = needed;
+        // Hybrid growth strategy:
+        // - For small buffers (< 1KB): grow by fixed increments (64 bytes)
+        // - For large buffers (>= 1KB): use doubling strategy
+        if (stream->field_buffer_size < CSV_BUFFER_SMALL_THRESHOLD) {
+            // Small buffer: grow by fixed increment
+            new_size = stream->field_buffer_size + 64;
+            if (new_size < needed) {
+                new_size = needed;
+            }
+        } else {
+            // Large buffer: double the size
+            new_size = stream->field_buffer_size * CSV_BUFFER_GROWTH_MULTIPLIER;
+            if (new_size < needed) {
+                new_size = needed;
+            }
         }
     }
 
@@ -577,6 +873,11 @@ static bool csv_stream_is_comment_start(
         return false;
     }
 
+    // Early exit if first character doesn't match
+    if (input[offset] != stream->opts.dialect.comment_prefix[0]) {
+        return false;
+    }
+
     return memcmp(input + offset, stream->opts.dialect.comment_prefix, stream->comment_prefix_len) == 0;
 }
 
@@ -653,6 +954,716 @@ static text_csv_status csv_stream_append_to_field_buffer(
     return TEXT_CSV_OK;
 }
 
+// State handler functions - each processes one character in a specific state
+// Returns TEXT_CSV_OK to continue, or an error status
+// If returns TEXT_CSV_OK and *offset >= process_len, caller should wait for next chunk
+
+// Process START_OF_RECORD state
+static text_csv_status csv_stream_process_start_of_record(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    (void)c;  // Not used in this state, but kept for consistent signature
+    // Check for comment
+    if (csv_stream_is_comment_start(stream, process_input, process_len, byte_pos)) {
+        stream->state = CSV_STREAM_STATE_COMMENT;
+        stream->in_comment = true;
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    // Check for newline at start of record - skip trailing empty records
+    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    if (nl != CSV_NEWLINE_NONE) {
+        // Skip the newline without creating a record
+        // Position already updated by csv_stream_handle_newline
+        return TEXT_CSV_OK;
+    }
+
+    // Emit RECORD_BEGIN
+    text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_BEGIN, NULL, 0);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
+
+    stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+    stream->in_record = true;
+    stream->current_record_bytes = 0;
+    stream->field_count = 0;
+    // Fall through to START_OF_FIELD
+    return TEXT_CSV_OK;
+}
+
+// Process START_OF_FIELD state
+static text_csv_status csv_stream_process_start_of_field(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    if (stream->field_count >= stream->max_cols) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_TOO_MANY_COLS, "Too many columns in record");
+    }
+
+    // Clear any previous field buffering
+    stream->field_buffer_used = 0;
+    stream->field_is_buffered = false;
+    // Validate input parameters (consolidated safety checks)
+    text_csv_status validate_status = csv_stream_validate_field_input(stream, process_input, process_len, byte_pos);
+    if (validate_status != TEXT_CSV_OK) {
+        return validate_status;
+    }
+    stream->field_start = process_input + byte_pos;
+    stream->field_length = 0;
+    stream->field_is_quoted = false;
+    stream->field_needs_copy = false;
+    stream->just_processed_doubled_quote = false;
+    stream->quote_in_quoted_at_chunk_boundary = false;
+
+    if (c == stream->opts.dialect.quote) {
+        stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
+        stream->field_is_quoted = true;
+        stream->field_start = process_input + byte_pos + 1;
+        csv_stream_advance_position(stream, offset, 1);
+
+        // If we're at the end of the chunk, initialize buffer for the next chunk
+        if (*offset >= process_len) {
+            // field_start is past the chunk (e.g., quoted field started but no content yet)
+            // Initialize empty buffer so we can append to it in the next chunk
+            if (!stream->field_is_buffered) {
+                text_csv_status status = csv_stream_grow_field_buffer(stream, CSV_FIELD_BUFFER_INITIAL_SIZE);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                stream->field_buffer_used = 0;
+                stream->field_is_buffered = true;
+                stream->field_start = stream->field_buffer;
+                stream->field_length = 0;
+            }
+            return TEXT_CSV_OK;  // Wait for next chunk
+        }
+        return TEXT_CSV_OK;
+    }
+
+    if (c == stream->opts.dialect.delimiter) {
+        // Empty field
+        text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_count++;
+        stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    // Check for newline
+    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    if (nl != CSV_NEWLINE_NONE) {
+        // Empty field, end of record
+        text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_count = 0;
+        stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+        stream->in_record = false;
+        stream->row_count++;
+        // Position already updated by csv_stream_handle_newline
+        return TEXT_CSV_OK;
+    }
+
+    // Start unquoted field
+    stream->state = CSV_STREAM_STATE_UNQUOTED_FIELD;
+    // Validate input parameters (consolidated safety checks)
+    text_csv_status validate_status2 = csv_stream_validate_field_input(stream, process_input, process_len, byte_pos);
+    if (validate_status2 != TEXT_CSV_OK) {
+        return validate_status2;
+    }
+    // Set field_start to current position - we'll only buffer when necessary:
+    // 1. When field spans chunk boundary (handled in UNQUOTED_FIELD state)
+    // 2. When field completes and in-situ mode can't be used (handled when emitting)
+    // 3. When in-situ mode is disabled
+    stream->field_start = process_input + byte_pos;
+    stream->field_start_offset = byte_pos;
+    stream->field_length = 1;
+    stream->field_is_buffered = false;
+    csv_stream_advance_position(stream, offset, 1);
+    return TEXT_CSV_OK;
+}
+
+// Process UNQUOTED_FIELD state
+static text_csv_status csv_stream_process_unquoted_field(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    // Check field length limit
+    if (stream->field_length >= stream->max_field_bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
+    }
+
+    // First, check if current character is a special character that ends the field
+    if (c == stream->opts.dialect.delimiter) {
+        // Field complete - csv_stream_emit_field handles buffered fields correctly
+        text_csv_status status = csv_stream_emit_field(stream, false);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        // Field complete
+        // Clear buffering state before transitioning
+        csv_stream_clear_field_state(stream);
+        stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+        // Field tracking will be reset in START_OF_FIELD state
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    // Check for newline
+    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    if (nl != CSV_NEWLINE_NONE) {
+        // Field complete, end of record
+        // Buffer field if needed (reduces nesting)
+        text_csv_status status = csv_stream_buffer_unquoted_field_if_needed(stream, process_input, process_len);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        status = csv_stream_emit_field(stream, true);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_count = 0;
+        stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+        stream->in_record = false;
+        stream->row_count++;
+        // Clear buffering state
+        csv_stream_clear_field_state(stream);
+        // Position already updated by csv_stream_handle_newline
+        return TEXT_CSV_OK;
+    }
+
+    // Check for quote
+    if (c == stream->opts.dialect.quote && !stream->opts.dialect.allow_unquoted_quotes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_UNEXPECTED_QUOTE, "Unexpected quote in unquoted field");
+    }
+
+    // Check for newline character (if not already handled by csv_stream_handle_newline)
+    if ((c == '\n' || c == '\r') && !stream->opts.dialect.allow_unquoted_newlines) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Newline in unquoted field");
+    }
+
+    // Bulk processing: scan ahead for special characters
+    // This allows us to process multiple characters at once for better performance
+    bool found_special;
+    char special_char;
+    size_t special_pos;
+    size_t safe_chars = csv_stream_scan_unquoted_field_ahead(
+        stream, process_input, process_len, byte_pos, &found_special, &special_char, &special_pos);
+
+    // Respect field length limit
+    size_t remaining_capacity = stream->max_field_bytes - stream->field_length;
+    if (safe_chars > remaining_capacity) {
+        safe_chars = remaining_capacity;
+        found_special = false;  // We'll hit the limit instead
+    }
+
+    // Process safe characters in bulk
+    if (safe_chars > 0) {
+        if (stream->field_is_buffered) {
+            // Append bulk data to buffer
+            text_csv_status status = csv_stream_append_to_field_buffer(
+                stream, process_input + byte_pos, safe_chars);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+            stream->field_length = stream->field_buffer_used;
+        } else {
+            // Just update length - field_start already points to the data
+            stream->field_length += safe_chars;
+        }
+        csv_stream_advance_position(stream, offset, safe_chars);
+    }
+
+    // If we found a special character, handle it
+    if (found_special) {
+        // Update offset to point to the special character
+        *offset = special_pos;
+
+        // Handle the special character based on what it is
+        if (special_char == stream->opts.dialect.delimiter) {
+            // Field complete
+            text_csv_status status = csv_stream_emit_field(stream, false);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+            csv_stream_clear_field_state(stream);
+            stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+            csv_stream_advance_position(stream, offset, 1);
+            return TEXT_CSV_OK;
+        } else if (special_char == '\n' || special_char == '\r') {
+            // Check for newline (may have been detected during scan)
+            csv_newline_type nl2 = csv_stream_handle_newline(stream, process_input, process_len, offset, special_pos);
+            if (nl2 != CSV_NEWLINE_NONE) {
+                // Field complete, end of record
+                text_csv_status status = csv_stream_buffer_unquoted_field_if_needed(stream, process_input, process_len);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                status = csv_stream_emit_field(stream, true);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                stream->field_count = 0;
+                stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+                stream->in_record = false;
+                stream->row_count++;
+                csv_stream_clear_field_state(stream);
+                return TEXT_CSV_OK;
+            }
+            // If newlines are allowed, continue processing
+            if (!stream->opts.dialect.allow_unquoted_newlines) {
+                return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Newline in unquoted field");
+            }
+            // Process the newline character as part of the field
+            if (stream->field_is_buffered) {
+                text_csv_status status = csv_stream_append_to_field_buffer(stream, &special_char, 1);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                stream->field_length = stream->field_buffer_used;
+            } else {
+                stream->field_length++;
+            }
+            csv_stream_advance_position(stream, offset, 1);
+        } else if (special_char == stream->opts.dialect.quote) {
+            // Quote not allowed in unquoted field
+            return csv_stream_set_error(stream, TEXT_CSV_E_UNEXPECTED_QUOTE, "Unexpected quote in unquoted field");
+        }
+    }
+
+    // Check if we're at end of chunk and field is incomplete
+    if (*offset >= process_len && stream->state == CSV_STREAM_STATE_UNQUOTED_FIELD) {
+        // Ensure field_start points to buffer if buffered
+        if (stream->field_is_buffered) {
+            stream->field_start = stream->field_buffer;
+            stream->field_length = stream->field_buffer_used;
+        } else {
+            // Start buffering - copy the partial field data
+            stream->field_buffer_used = 0;
+            const char* partial_data = stream->field_start;
+            size_t partial_len = stream->field_length;
+            // Safety check: ensure field_start is valid before using it
+            if (partial_data && partial_len > 0) {
+                text_csv_status status = csv_stream_append_to_field_buffer(stream, partial_data, partial_len);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+            }
+            stream->field_is_buffered = true;
+            stream->field_start = stream->field_buffer;
+            stream->field_length = stream->field_buffer_used;
+        }
+
+        // Don't clear input buffer - we need to accumulate data across chunks
+        // The buffer will be cleared when we've processed everything
+        return TEXT_CSV_OK;  // Wait for next chunk
+    }
+    return TEXT_CSV_OK;
+}
+
+// Process QUOTED_FIELD state
+static text_csv_status csv_stream_process_quoted_field(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    // Ensure field_start and field_length are correct if buffered
+    if (stream->field_is_buffered) {
+        stream->field_start = stream->field_buffer;
+        stream->field_length = stream->field_buffer_used;
+    }
+
+    if (stream->field_length >= stream->max_field_bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
+    }
+
+    // If we just processed a doubled quote and see a delimiter, end the field
+    // This handles the case: "text"",field2 where the doubled quote is followed by delimiter
+    if (stream->just_processed_doubled_quote && c == stream->opts.dialect.delimiter) {
+        // End of quoted field - emit field
+        // Ensure field is buffered if needed
+        text_csv_status status = csv_stream_ensure_field_buffered(
+            stream, process_input, process_len, *offset);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Emit the field
+        status = csv_stream_emit_field(stream, false);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Clear field state
+        csv_stream_clear_field_state(stream);
+        stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    // If we just processed a doubled quote and see a newline, end the field and record
+    if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
+        csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+        if (nl != CSV_NEWLINE_NONE) {
+            // End of quoted field, end of record
+            // Ensure field is buffered if needed
+            text_csv_status status = csv_stream_ensure_field_buffered(
+                stream, process_input, process_len, *offset);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+
+            // Emit field and record
+            status = csv_stream_emit_field(stream, true);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+            stream->field_count = 0;
+            stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+            stream->in_record = false;
+            stream->row_count++;
+
+            // Clear field state
+            csv_stream_clear_field_state(stream);
+
+            // Position already updated by csv_stream_handle_newline
+            return TEXT_CSV_OK;
+        }
+    }
+
+    if (stream->opts.dialect.escape == TEXT_CSV_ESCAPE_BACKSLASH && c == '\\') {
+        stream->state = CSV_STREAM_STATE_ESCAPE_IN_QUOTED;
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    if (c == stream->opts.dialect.quote) {
+        // Don't append the quote yet - we need to check if it's doubled or closing
+        // Transition to QUOTE_IN_QUOTED to check next character
+        stream->state = CSV_STREAM_STATE_QUOTE_IN_QUOTED;
+        csv_stream_advance_position(stream, offset, 1);
+
+        // If we're at the end of the chunk, buffer the field data (up to but not including the quote)
+        // The quote will be handled in the next chunk when we see what follows it
+        if (*offset >= process_len) {
+            // Buffer field data from field_start to offset-1 (before the quote)
+            // The quote is at position offset-1 after we advanced offset
+            // We need to buffer everything up to (but not including) the quote
+            size_t quote_pos = *offset - 1;
+            text_csv_status status = csv_stream_ensure_field_buffered(
+                stream, process_input, process_len, quote_pos);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+            // Mark that we transitioned to QUOTE_IN_QUOTED at chunk boundary
+            stream->quote_in_quoted_at_chunk_boundary = true;
+            return TEXT_CSV_OK;  // Wait for next chunk
+        }
+        // Not at chunk boundary - clear the flag
+        stream->quote_in_quoted_at_chunk_boundary = false;
+        return TEXT_CSV_OK;
+    }
+
+    // CRITICAL: In a quoted field, a delimiter or newline can only appear after a closing quote.
+    // If we see a delimiter or newline directly in QUOTED_FIELD state, it means we're missing
+    // a closing quote. However, if we just processed a doubled quote and are at a chunk boundary,
+    // we might be in QUOTED_FIELD state when we should actually be looking for a closing quote.
+    // This case is handled by checking if we're at the start of a new chunk with a buffered field.
+    // For now, treat delimiter/newline as field content (they're valid inside quoted fields).
+    // Regular character in quoted field - accumulate it
+    if (stream->field_is_buffered) {
+        // Append to field buffer
+        text_csv_status status = csv_stream_append_to_field_buffer(stream, &c, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_start = stream->field_buffer;
+        stream->field_length = stream->field_buffer_used;
+    } else {
+        // Track in current chunk - set field_start if not set
+        if (!stream->field_start) {
+            stream->field_start = process_input + *offset;
+            stream->field_start_offset = *offset;
+            stream->field_length = 0;
+        }
+        stream->field_length++;
+    }
+    csv_stream_advance_position(stream, offset, 1);
+
+    // If we're at the end of the chunk, buffer the field data
+    if (*offset >= process_len) {
+        text_csv_status status = csv_stream_ensure_field_buffered(
+            stream, process_input, process_len, *offset);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        return TEXT_CSV_OK;  // Wait for next chunk
+    }
+    return TEXT_CSV_OK;
+}
+
+// Process QUOTE_IN_QUOTED state
+static text_csv_status csv_stream_process_quote_in_quoted(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    // We saw a quote - check if it's doubled (next char is quote) or closing (next char is delimiter/newline)
+
+    if (stream->opts.dialect.escape == TEXT_CSV_ESCAPE_DOUBLED_QUOTE && c == stream->opts.dialect.quote) {
+        // Doubled quote escape - append both quotes to field data
+        // Ensure field is buffered
+        // Buffer up to offset - 1 (before the second quote)
+        text_csv_status status = csv_stream_ensure_field_buffered(
+            stream, process_input, process_len, *offset - 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Append both quotes (the one that put us in QUOTE_IN_QUOTED + this one)
+        char quote_char = stream->opts.dialect.quote;
+        status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_start = stream->field_buffer;
+        stream->field_length = stream->field_buffer_used;
+        // Mark that field needs unescaping (doubled quotes need to be converted to single quotes)
+        stream->field_needs_copy = true;
+
+        // Doubled quote processed - return to QUOTED_FIELD state to continue field
+        stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
+        stream->just_processed_doubled_quote = true;  // Mark that we just processed a doubled quote
+        stream->quote_in_quoted_at_chunk_boundary = false;  // Clear flag
+        csv_stream_advance_position(stream, offset, 1);
+
+        // If at end of chunk, buffer field data
+        if (*offset >= process_len) {
+            // Field is already buffered, so we're good
+            return TEXT_CSV_OK;
+        }
+        return TEXT_CSV_OK;
+    }
+
+    if (c == stream->opts.dialect.delimiter) {
+        // End of quoted field - emit field
+        // Save quote position (quote is at byte_pos - 1 since we advanced past it when entering QUOTE_IN_QUOTED)
+        size_t quote_pos = byte_pos - 1;
+        // Special case: if we transitioned to QUOTE_IN_QUOTED at chunk boundary with empty field,
+        // and we're using doubled quote escape, treat "" as doubled quote (literal quote)
+        if (stream->quote_in_quoted_at_chunk_boundary &&
+            stream->opts.dialect.escape == TEXT_CSV_ESCAPE_DOUBLED_QUOTE) {
+            bool is_empty = stream->field_is_buffered ?
+                (stream->field_buffer_used == 0) : (stream->field_length == 0);
+            if (is_empty) {
+                // Treat as doubled quote
+                if (!stream->field_is_buffered) {
+                    text_csv_status status = csv_stream_grow_field_buffer(stream, 2);
+                    if (status != TEXT_CSV_OK) {
+                        return status;
+                    }
+                    stream->field_buffer_used = 0;
+                    stream->field_is_buffered = true;
+                    stream->field_start = stream->field_buffer;
+                    stream->field_length = 0;
+                }
+                char quote_char = stream->opts.dialect.quote;
+                text_csv_status status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                stream->field_needs_copy = true;
+            }
+        }
+        // Clear the flag
+        stream->quote_in_quoted_at_chunk_boundary = false;
+
+        // Ensure field is buffered if needed
+        // Buffer up to (but not including) the quote position
+        text_csv_status status = csv_stream_ensure_field_buffered(
+            stream, process_input, process_len, quote_pos);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Emit the field
+        status = csv_stream_emit_field(stream, false);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+
+        // Clear field state
+        csv_stream_clear_field_state(stream);
+        stream->state = CSV_STREAM_STATE_START_OF_FIELD;
+        csv_stream_advance_position(stream, offset, 1);
+        return TEXT_CSV_OK;
+    }
+
+    // Check for newline
+    if (c == '\n' || c == '\r') {
+        // Save quote position before processing newline (quote is at byte_pos - 1 since we advanced past it)
+        size_t quote_pos = byte_pos - 1;
+        csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+        if (nl != CSV_NEWLINE_NONE) {
+            // End of quoted field, end of record
+            // Ensure field is buffered if needed
+            // Buffer up to (but not including) the quote position
+            text_csv_status status = csv_stream_ensure_field_buffered(
+                stream, process_input, process_len, quote_pos);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+
+            // Emit field and record
+            status = csv_stream_emit_field(stream, true);
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+            stream->field_count = 0;
+            stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+            stream->in_record = false;
+            stream->row_count++;
+
+            // Clear field state
+            csv_stream_clear_field_state(stream);
+
+            // Position already updated by csv_stream_handle_newline
+            return TEXT_CSV_OK;
+        }
+    }
+
+    // Regular character after quote - invalid quote usage
+    // In a quoted field, a quote must be followed by:
+    // 1. Another quote (doubled quote escape)
+    // 2. A delimiter (end of field)
+    // 3. A newline (end of field and record)
+    // Anything else is an error
+    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID,
+        "Quote in quoted field must be followed by quote, delimiter, or newline");
+}
+
+// Process ESCAPE_IN_QUOTED state
+static text_csv_status csv_stream_process_escape_in_quoted(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    (void)byte_pos;  // Not used in this state, but kept for consistent signature
+    switch (c) {
+        case 'n':
+        case 'r':
+        case 't':
+        case '\\':
+        case '"':
+            // Valid escape sequence
+            break;
+        default:
+            return csv_stream_set_error(stream, TEXT_CSV_E_INVALID_ESCAPE, "Invalid escape sequence");
+    }
+
+    stream->field_needs_copy = true;
+    stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
+
+    // Append escaped character to field buffer
+    if (stream->field_is_buffered) {
+        char escaped_char = c;
+        if (c == 'n') escaped_char = '\n';
+        else if (c == 'r') escaped_char = '\r';
+        else if (c == 't') escaped_char = '\t';
+        // '\\' and '"' stay as-is
+        text_csv_status status = csv_stream_append_to_field_buffer(stream, &escaped_char, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        stream->field_start = stream->field_buffer;
+        stream->field_length = stream->field_buffer_used;
+    } else {
+        // If not buffered, we need to buffer when we see escape sequences
+        // since we need to transform them
+        if (!stream->field_start) {
+            stream->field_start = process_input + *offset - 1; // Point to backslash
+            stream->field_start_offset = *offset - 1;
+            stream->field_length = 0;
+        }
+        stream->field_length += 2; // Backslash + escaped char
+    }
+
+    csv_stream_advance_position(stream, offset, 1);
+
+    // If at end of chunk, buffer field data
+    if (*offset >= process_len) {
+        text_csv_status status = csv_stream_ensure_field_buffered(
+            stream, process_input, process_len, *offset);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
+        return TEXT_CSV_OK;  // Wait for next chunk
+    }
+    return TEXT_CSV_OK;
+}
+
+// Process COMMENT state
+static text_csv_status csv_stream_process_comment(
+    text_csv_stream* stream,
+    const char* process_input,
+    size_t process_len,
+    size_t* offset,
+    size_t byte_pos,
+    char c
+) {
+    (void)c;  // Not used in this state, but kept for consistent signature
+    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    if (nl != CSV_NEWLINE_NONE) {
+        stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+        stream->in_comment = false;
+        stream->row_count++;
+        // Position already updated by csv_stream_handle_newline
+        return TEXT_CSV_OK;
+    }
+    csv_stream_advance_position(stream, offset, 1);
+    return TEXT_CSV_OK;
+}
+
 // Process a chunk of input data
 // Algorithm:
 // 1. Always process the chunk directly (no input buffering for combining chunks)
@@ -697,946 +1708,81 @@ static text_csv_status csv_stream_process_chunk(
             }
         }
 
+        // Call appropriate state handler
+        text_csv_status status;
         switch (stream->state) {
-            case CSV_STREAM_STATE_START_OF_RECORD: {
-                // Check for comment
-                if (csv_stream_is_comment_start(stream, process_input, process_len, byte_pos)) {
-                    stream->state = CSV_STREAM_STATE_COMMENT;
-                    stream->in_comment = true;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                // Check for newline at start of record - skip trailing empty records
-                csv_position pos_before = stream->pos;
-                pos_before.offset = byte_pos;
-                csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                if (nl != CSV_NEWLINE_NONE) {
-                    // Skip the newline without creating a record
-                    size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                    stream->pos.offset += (pos_before.offset - byte_pos);
-                    stream->pos.line = pos_before.line;
-                    stream->pos.column = pos_before.column;
-                        stream->total_bytes_consumed += newline_bytes;
-                        offset = pos_before.offset;
-                        // Mark data as processed up to and including the newline
-                        // This is unambiguously recognized - the record is complete
-                        continue;
-                }
-
-                // Emit RECORD_BEGIN
-                text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_BEGIN, NULL, 0);
+            case CSV_STREAM_STATE_START_OF_RECORD:
+                status = csv_stream_process_start_of_record(stream, process_input, process_len, &offset, byte_pos, c);
                 if (status != TEXT_CSV_OK) {
                     return status;
                 }
-
-                stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-                stream->in_record = true;
-                stream->current_record_bytes = 0;
-                stream->field_count = 0;
+                // If state changed to START_OF_FIELD, fall through to process it
+                if (stream->state != CSV_STREAM_STATE_START_OF_FIELD) {
+                    continue;
+                }
                 // Fall through
-            }
-            // Fall through
             case CSV_STREAM_STATE_START_OF_FIELD: {
-                if (stream->field_count >= stream->max_cols) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_TOO_MANY_COLS, "Too many columns in record");
-                }
-
-                // Clear any previous field buffering
-                stream->field_buffer_used = 0;
-                stream->field_is_buffered = false;
-                // Validate byte_pos before setting field_start
-                if (byte_pos > process_len) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Invalid byte position");
-                }
-                // Ensure process_input is valid
-                if (!process_input) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "process_input is NULL");
-                }
-                stream->field_start = process_input + byte_pos;
-                // Safety check: ensure field_start is within bounds
-                if (stream->field_start < process_input ||
-                    stream->field_start > process_input + process_len) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "field_start out of bounds");
-                }
-                stream->field_length = 0;
-                stream->field_is_quoted = false;
-                stream->field_needs_copy = false;
-                stream->just_processed_doubled_quote = false;
-                stream->quote_in_quoted_at_chunk_boundary = false;
-
-                if (c == stream->opts.dialect.quote) {
-                    stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
-                    stream->field_is_quoted = true;
-                    stream->field_start = process_input + byte_pos + 1;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-
-                    // If we're at the end of the chunk, initialize buffer for the next chunk
-                    if (offset >= process_len) {
-                        // field_start is past the chunk (e.g., quoted field started but no content yet)
-                        // Initialize empty buffer so we can append to it in the next chunk
-                        if (!stream->field_is_buffered) {
-                            text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            stream->field_buffer_used = 0;
-                            stream->field_is_buffered = true;
-                            stream->field_start = stream->field_buffer;
-                            stream->field_length = 0;
-                        }
-                        return TEXT_CSV_OK;  // Wait for next chunk
-                    }
-                    continue;
-                }
-
-                if (c == stream->opts.dialect.delimiter) {
-                    // Empty field
-                    text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count++;
-                    stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                // Check for newline
-                csv_position pos_before = stream->pos;
-                // csv_detect_newline uses pos->offset as an index into input, so we need to set it to the current offset
-                pos_before.offset = byte_pos;
-                csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                if (nl != CSV_NEWLINE_NONE) {
-                    // Empty field, end of record
-                    text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count = 0;
-                    stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-                    stream->in_record = false;
-                    stream->row_count++;
-                    // pos_before.offset is now the position in process_input after the newline
-                    // stream->pos.offset is the absolute position before processing the character at byte_pos
-                    // csv_detect_newline has already advanced pos_before.offset by newline_bytes
-                    // So the absolute position after the newline is stream->pos.offset + (pos_before.offset - byte_pos)
-                    size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                    stream->pos.offset += (pos_before.offset - byte_pos);
-                    stream->pos.line = pos_before.line;
-                    stream->pos.column = pos_before.column;
-                    stream->total_bytes_consumed += newline_bytes;
-                    offset = pos_before.offset;
-                    // Record complete
-                    continue;
-                }
-
-                // Start unquoted field
-                stream->state = CSV_STREAM_STATE_UNQUOTED_FIELD;
-                // Safety check: ensure process_input is valid
-                if (!process_input || byte_pos >= process_len) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Invalid process_input or byte_pos");
-                }
-                // For unquoted fields, immediately buffer the first character to ensure stability
-                // This prevents issues if process_input is cleared or reallocated
-                stream->field_buffer_used = 0;
-                text_csv_status status = csv_stream_grow_field_buffer(stream, 2);
+                status = csv_stream_process_start_of_field(stream, process_input, process_len, &offset, byte_pos, c);
                 if (status != TEXT_CSV_OK) {
                     return status;
                 }
-                stream->field_buffer[0] = c;
-                stream->field_buffer_used = 1;
-                stream->field_is_buffered = true;
-                stream->field_start = stream->field_buffer;
-                stream->field_length = 1;
-                offset++;
-                stream->pos.offset++;
-                stream->pos.column++;
-                stream->total_bytes_consumed++;
-                continue;
-            }
-
-            case CSV_STREAM_STATE_UNQUOTED_FIELD: {
-                if (stream->field_length >= stream->max_field_bytes) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
-                }
-
-                if (c == stream->opts.dialect.quote && !stream->opts.dialect.allow_unquoted_quotes) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_UNEXPECTED_QUOTE, "Unexpected quote in unquoted field");
-                }
-
-                if (c == stream->opts.dialect.delimiter) {
-                    // Field complete - ensure field_start is correct
-                    if (stream->field_is_buffered) {
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    }
-                    const char* field_data = stream->field_is_buffered ? stream->field_buffer : stream->field_start;
-                    // For buffered fields, use field_buffer_used as the source of truth
-                    size_t actual_field_len = stream->field_is_buffered ? stream->field_buffer_used : stream->field_length;
-                    const char* unescaped_data;
-                    size_t unescaped_len;
-                    text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count++;
-                    // Field complete
-                    // Clear buffering state before transitioning
-                    stream->field_buffer_used = 0;
-                    stream->field_is_buffered = false;
-                    stream->field_needs_copy = false;
-                    stream->just_processed_doubled_quote = false;
-                    stream->quote_in_quoted_at_chunk_boundary = false;
-                    stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-                    // Field tracking will be reset in START_OF_FIELD state
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                // Check for newline
-                csv_position pos_before = stream->pos;
-                // csv_detect_newline uses pos->offset as an index into input, so we need to set it to the current offset
-                pos_before.offset = offset;
-                csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                if (nl != CSV_NEWLINE_NONE) {
-                    // Field complete, end of record - ensure field_start is correct
-                    if (stream->field_is_buffered) {
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    } else {
-                        // For non-buffered fields, check if we can use in-situ mode
-                        bool can_use_in_situ = false;
-                        if (stream->opts.in_situ_mode && stream->original_input_buffer && stream->field_start) {
-                            const char* input_start = stream->original_input_buffer;
-                            size_t input_buffer_len = stream->original_input_buffer_len;
-                            const char* field_start = stream->field_start;
-                            size_t field_len = stream->field_length;
-
-                            // Check for pointer arithmetic overflow safety
-                            // Use subtraction to check bounds instead of addition to avoid overflow
-                            if (field_start >= input_start) {
-                                size_t offset_from_start = (size_t)(field_start - input_start);
-                                // Check that field fits within buffer and doesn't overflow
-                                if (offset_from_start <= input_buffer_len &&
-                                    field_len <= input_buffer_len - offset_from_start) {
-                                    can_use_in_situ = true;
-                                }
-                            }
-                        }
-
-                        if (!can_use_in_situ) {
-                            // Copy to buffer to ensure stability
-                            // This prevents issues if process_input is cleared or modified
-                            size_t copy_len = stream->field_length;
-                            // Validate field_start is within bounds before copying
-                            if (stream->field_start >= process_input &&
-                                stream->field_start < process_input + process_len) {
-                                // field_start is valid - copy what we can
-                                size_t available = (process_input + process_len) - stream->field_start;
-                                if (copy_len > available) {
-                                    copy_len = available;
-                                }
-                                if (copy_len > 0) {
-                                    stream->field_buffer_used = 0;
-                                    text_csv_status status = csv_stream_grow_field_buffer(stream, copy_len + 1);
-                                    if (status != TEXT_CSV_OK) {
-                                        return status;
-                                    }
-                                    memcpy(stream->field_buffer, stream->field_start, copy_len);
-                                    stream->field_buffer_used = copy_len;
-                                    stream->field_is_buffered = true;
-                                    stream->field_start = stream->field_buffer;
-                                    stream->field_length = copy_len;
-                                }
-                            } else {
-                                // field_start is out of bounds - this shouldn't happen for valid input
-                                // but handle gracefully by using empty field
-                                stream->field_length = 0;
-                            }
-                        }
-                        // If can_use_in_situ is true, field_start already points to original input, so we're done
-                    }
-                    const char* field_data = stream->field_is_buffered ? stream->field_buffer : stream->field_start;
-                    // For buffered fields, use field_buffer_used as the source of truth
-                    size_t actual_field_len = stream->field_is_buffered ? stream->field_buffer_used : stream->field_length;
-                    const char* unescaped_data;
-                    size_t unescaped_len;
-                    text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count = 0;
-                    stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-                    stream->in_record = false;
-                    stream->row_count++;
-                    // Clear buffering state
-                    stream->field_buffer_used = 0;
-                    stream->field_is_buffered = false;
-                    stream->field_needs_copy = false;
-                    stream->just_processed_doubled_quote = false;
-                    stream->quote_in_quoted_at_chunk_boundary = false;
-                    stream->field_start = NULL;
-                    stream->field_length = 0;
-                    // pos_before.offset is now the position in process_input after the newline
-                    // stream->pos.offset is the absolute position before processing the character at offset
-                    // csv_detect_newline has already advanced pos_before.offset by newline_bytes
-                    // So the absolute position after the newline is stream->pos.offset + (pos_before.offset - offset)
-                    size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                    stream->pos.offset += (pos_before.offset - offset);
-                    stream->pos.line = pos_before.line;
-                    stream->pos.column = pos_before.column;
-                        stream->total_bytes_consumed += newline_bytes;
-                        offset = pos_before.offset;
-                        // Mark data as processed up to and including the newline
-                        // This is unambiguously recognized - the record is complete
-                        continue;
-                }
-
-                if ((c == '\n' || c == '\r') && !stream->opts.dialect.allow_unquoted_newlines) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_INVALID, "Newline in unquoted field");
-                }
-
-                // If field is buffered, append new character to buffer
-                if (stream->field_is_buffered) {
-                    text_csv_status status = csv_stream_append_to_field_buffer(stream, &c, 1);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_length = stream->field_buffer_used;
-                } else {
-                    stream->field_length++;
-                }
-                offset++;
-                stream->pos.offset++;
-                stream->pos.column++;
-                stream->total_bytes_consumed++;
-
-                // Check if we're at end of chunk and field is incomplete
-                if (offset >= process_len && stream->state == CSV_STREAM_STATE_UNQUOTED_FIELD) {
-                    // Ensure field_start points to buffer if buffered
-                    if (stream->field_is_buffered) {
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    } else {
-                        // Start buffering - copy the partial field data
-                        stream->field_buffer_used = 0;
-                        const char* partial_data = stream->field_start;
-                        size_t partial_len = stream->field_length;
-                        // Safety check: ensure field_start is valid before using it
-                        if (partial_data && partial_len > 0) {
-                            text_csv_status status = csv_stream_append_to_field_buffer(stream, partial_data, partial_len);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        }
-                        stream->field_is_buffered = true;
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    }
-
-                    // Don't clear input buffer - we need to accumulate data across chunks
-                    // The buffer will be cleared when we've processed everything
-                    return TEXT_CSV_OK;  // Wait for next chunk
-                }
-                continue;
-            }
-
-            case CSV_STREAM_STATE_QUOTED_FIELD: {
-                // Ensure field_start and field_length are correct if buffered
-                if (stream->field_is_buffered) {
-                    stream->field_start = stream->field_buffer;
-                    stream->field_length = stream->field_buffer_used;
-                }
-
-                if (stream->field_length >= stream->max_field_bytes) {
-                    return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
-                }
-
-                // If we just processed a doubled quote and see a delimiter, end the field
-                // This handles the case: "text"",field2 where the doubled quote is followed by delimiter
-                if (stream->just_processed_doubled_quote && c == stream->opts.dialect.delimiter) {
-                    // End of quoted field - emit field
-                    // Ensure field is buffered if needed
-                    if (!stream->field_is_buffered) {
-                        size_t field_start_off = stream->field_start ? (stream->field_start - process_input) : 0;
-                        text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                            stream, process_input, process_len, field_start_off, offset);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                    }
-
-                    // Emit the field
-                    const char* field_data = stream->field_buffer;
-                    size_t actual_field_len = stream->field_buffer_used;
-                    const char* unescaped_data;
-                    size_t unescaped_len;
-                    text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count++;
-
-                    // Clear field state
-                    stream->field_buffer_used = 0;
-                    stream->field_is_buffered = false;
-                    stream->field_needs_copy = false;
-                    stream->just_processed_doubled_quote = false;
-                    stream->quote_in_quoted_at_chunk_boundary = false;
-                    stream->field_start = NULL;
-                    stream->field_start_offset = SIZE_MAX;
-                    stream->field_length = 0;
-                    stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                // If we just processed a doubled quote and see a newline, end the field and record
-                if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
-                    csv_position pos_before = stream->pos;
-                    pos_before.offset = offset;
-                    csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                    if (nl != CSV_NEWLINE_NONE) {
-                        // End of quoted field, end of record
-                        // Ensure field is buffered if needed
-                        if (!stream->field_is_buffered) {
-                            size_t field_start_off = stream->field_start ? (stream->field_start - process_input) : 0;
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, offset);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        }
-
-                        // Emit field and record
-                        const char* field_data = stream->field_buffer;
-                        size_t actual_field_len = stream->field_buffer_used;
-                        const char* unescaped_data;
-                        size_t unescaped_len;
-                        text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        stream->field_count = 0;
-                        stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-                        stream->in_record = false;
-                        stream->row_count++;
-
-                        // Clear field state
-                        stream->field_buffer_used = 0;
-                        stream->field_is_buffered = false;
-                        stream->field_needs_copy = false;
-                        stream->just_processed_doubled_quote = false;
-                        stream->field_start = NULL;
-                        stream->field_start_offset = SIZE_MAX;
-                        stream->field_length = 0;
-
-                        size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                        stream->pos.offset += (pos_before.offset - offset);
-                        stream->pos.line = pos_before.line;
-                        stream->pos.column = pos_before.column;
-                        stream->total_bytes_consumed += newline_bytes;
-                        offset = pos_before.offset;
-                        continue;
-                    }
-                }
-
-                if (stream->opts.dialect.escape == TEXT_CSV_ESCAPE_BACKSLASH && c == '\\') {
-                    stream->state = CSV_STREAM_STATE_ESCAPE_IN_QUOTED;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                if (c == stream->opts.dialect.quote) {
-                    // Don't append the quote yet - we need to check if it's doubled or closing
-                    // Transition to QUOTE_IN_QUOTED to check next character
-                    stream->state = CSV_STREAM_STATE_QUOTE_IN_QUOTED;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-
-                    // If we're at the end of the chunk, buffer the field data (up to but not including the quote)
-                    // The quote will be handled in the next chunk when we see what follows it
-                    if (offset >= process_len) {
-                        // Buffer field data from field_start to offset-1 (before the quote)
-                        // The quote is at position byte_pos (which is offset-1 after we advanced)
-                        // We need to buffer everything up to (but not including) the quote
-                        if (!stream->field_is_buffered) {
-                            size_t field_start_off = SIZE_MAX;
-                            if (stream->field_start &&
-                                stream->field_start >= process_input &&
-                                stream->field_start < process_input + process_len) {
-                                field_start_off = stream->field_start - process_input;
-                            }
-                            // Buffer from field_start_off to byte_pos (the quote position, which we don't include)
-                            // byte_pos is offset - 1 after we advanced offset
-                            size_t quote_pos = offset - 1;
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, quote_pos);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        } else {
-                            // Field is already buffered - ensure field_start points to buffer
-                            stream->field_start = stream->field_buffer;
-                            stream->field_length = stream->field_buffer_used;
-                        }
-                        // Mark that we transitioned to QUOTE_IN_QUOTED at chunk boundary
-                        stream->quote_in_quoted_at_chunk_boundary = true;
-                        return TEXT_CSV_OK;  // Wait for next chunk
-                    }
-                    // Not at chunk boundary - clear the flag
-                    stream->quote_in_quoted_at_chunk_boundary = false;
-                    continue;
-                }
-
-                // CRITICAL: In a quoted field, a delimiter or newline can only appear after a closing quote.
-                // If we see a delimiter or newline directly in QUOTED_FIELD state, it means we're missing
-                // a closing quote. However, if we just processed a doubled quote and are at a chunk boundary,
-                // we might be in QUOTED_FIELD state when we should actually be looking for a closing quote.
-                // This case is handled by checking if we're at the start of a new chunk with a buffered field.
-                // For now, treat delimiter/newline as field content (they're valid inside quoted fields).
-                // Regular character in quoted field - accumulate it
-                if (stream->field_is_buffered) {
-                    // Append to field buffer
-                    text_csv_status status = csv_stream_append_to_field_buffer(stream, &c, 1);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_start = stream->field_buffer;
-                    stream->field_length = stream->field_buffer_used;
-                } else {
-                    // Track in current chunk - set field_start if not set
-                    if (!stream->field_start) {
-                        stream->field_start = process_input + offset;
-                        stream->field_start_offset = offset;
-                        stream->field_length = 0;
-                    }
-                    stream->field_length++;
-                }
-                offset++;
-                stream->pos.offset++;
-                stream->pos.column++;
-                stream->total_bytes_consumed++;
-
-                // If we're at the end of the chunk, buffer the field data
+                // If at end of chunk, wait for next chunk
                 if (offset >= process_len) {
-                    if (!stream->field_is_buffered) {
-                        size_t field_start_off = SIZE_MAX;
-                        if (stream->field_start &&
-                            stream->field_start >= process_input &&
-                            stream->field_start < process_input + process_len) {
-                            field_start_off = stream->field_start - process_input;
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, offset);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        } else {
-                            // field_start is past the chunk (e.g., quoted field started but no content yet)
-                            // Initialize empty buffer so we can append to it in the next chunk
-                            text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            stream->field_buffer_used = 0;
-                            stream->field_is_buffered = true;
-                            stream->field_start = stream->field_buffer;
-                            stream->field_length = 0;
-                        }
-                    } else {
-                        // Field is already buffered - ensure field_start points to buffer
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    }
-                    return TEXT_CSV_OK;  // Wait for next chunk
+                    return TEXT_CSV_OK;
                 }
                 continue;
             }
 
-            case CSV_STREAM_STATE_QUOTE_IN_QUOTED: {
-                // We saw a quote - check if it's doubled (next char is quote) or closing (next char is delimiter/newline)
-
-                if (stream->opts.dialect.escape == TEXT_CSV_ESCAPE_DOUBLED_QUOTE && c == stream->opts.dialect.quote) {
-                    // Doubled quote escape - append both quotes to field data
-                    // Ensure field is buffered
-                    if (!stream->field_is_buffered) {
-                        // Buffer existing field data first (if any)
-                        size_t field_start_off = SIZE_MAX;
-                        if (stream->field_start && !stream->field_is_buffered &&
-                            stream->field_start >= process_input &&
-                            stream->field_start < process_input + process_len) {
-                            field_start_off = stream->field_start - process_input;
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, offset - 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        } else {
-                            // Field is empty or field_start is not in current chunk - initialize empty buffer
-                            text_csv_status status = csv_stream_grow_field_buffer(stream, 2);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            stream->field_buffer_used = 0;
-                            stream->field_is_buffered = true;
-                            stream->field_start = stream->field_buffer;
-                            stream->field_length = 0;
-                        }
-                    } else {
-                        // Field is already buffered - ensure field_start points to buffer
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    }
-
-                    // Append both quotes (the one that put us in QUOTE_IN_QUOTED + this one)
-                    char quote_char = stream->opts.dialect.quote;
-                    text_csv_status status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_start = stream->field_buffer;
-                    stream->field_length = stream->field_buffer_used;
-                    // Mark that field needs unescaping (doubled quotes need to be converted to single quotes)
-                    stream->field_needs_copy = true;
-
-                    // Doubled quote processed - return to QUOTED_FIELD state to continue field
-                    stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
-                    stream->just_processed_doubled_quote = true;  // Mark that we just processed a doubled quote
-                    stream->quote_in_quoted_at_chunk_boundary = false;  // Clear flag
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-
-                    // If at end of chunk, buffer field data
-                    if (offset >= process_len) {
-                        // Field is already buffered, so we're good
-                        return TEXT_CSV_OK;
-                    }
-                    continue;
+            case CSV_STREAM_STATE_UNQUOTED_FIELD:
+                status = csv_stream_process_unquoted_field(stream, process_input, process_len, &offset, byte_pos, c);
+                if (status != TEXT_CSV_OK) {
+                    return status;
                 }
-
-                if (c == stream->opts.dialect.delimiter) {
-                    // End of quoted field - emit field
-                    // Special case: if we transitioned to QUOTE_IN_QUOTED at chunk boundary with empty field,
-                    // and we're using doubled quote escape, treat "" as doubled quote (literal quote)
-                    if (stream->quote_in_quoted_at_chunk_boundary &&
-                        stream->opts.dialect.escape == TEXT_CSV_ESCAPE_DOUBLED_QUOTE) {
-                        bool is_empty = stream->field_is_buffered ?
-                            (stream->field_buffer_used == 0) : (stream->field_length == 0);
-                        if (is_empty) {
-                            // Treat as doubled quote
-                            if (!stream->field_is_buffered) {
-                                text_csv_status status = csv_stream_grow_field_buffer(stream, 2);
-                                if (status != TEXT_CSV_OK) {
-                                    return status;
-                                }
-                                stream->field_buffer_used = 0;
-                                stream->field_is_buffered = true;
-                                stream->field_start = stream->field_buffer;
-                                stream->field_length = 0;
-                            }
-                            char quote_char = stream->opts.dialect.quote;
-                            text_csv_status status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            stream->field_needs_copy = true;
-                        }
-                    }
-                    // Clear the flag
-                    stream->quote_in_quoted_at_chunk_boundary = false;
-
-                    // Ensure field is buffered if needed
-                    if (!stream->field_is_buffered) {
-                        if (stream->field_start && stream->field_start >= process_input &&
-                            stream->field_start < process_input + process_len) {
-                            size_t field_start_off = stream->field_start - process_input;
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, offset - 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        } else {
-                            // Field is empty or field_start is not in current chunk - initialize empty buffer
-                            text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                            stream->field_buffer_used = 0;
-                            stream->field_is_buffered = true;
-                            stream->field_start = stream->field_buffer;
-                            stream->field_length = 0;
-                        }
-                    } else {
-                        // Field is already buffered - ensure field_start points to buffer
-                        stream->field_start = stream->field_buffer;
-                        stream->field_length = stream->field_buffer_used;
-                    }
-
-                    // Emit the field
-                    const char* field_data = stream->field_buffer;
-                    size_t actual_field_len = stream->field_buffer_used;
-                    const char* unescaped_data;
-                    size_t unescaped_len;
-                    text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_count++;
-
-                    // Clear field state
-                    stream->field_buffer_used = 0;
-                    stream->field_is_buffered = false;
-                    stream->field_needs_copy = false;
-                    stream->field_start = NULL;
-                    stream->field_start_offset = SIZE_MAX;
-                    stream->field_length = 0;
-                    stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-                    offset++;
-                    stream->pos.offset++;
-                    stream->pos.column++;
-                    stream->total_bytes_consumed++;
-                    continue;
-                }
-
-                // Check for newline
-                if (c == '\n' || c == '\r') {
-                    csv_position pos_before = stream->pos;
-                    pos_before.offset = byte_pos;
-                    csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                    if (nl != CSV_NEWLINE_NONE) {
-                        // End of quoted field, end of record
-                        // Ensure field is buffered if needed
-                        if (!stream->field_is_buffered) {
-                            size_t field_start_off = SIZE_MAX;
-                            if (stream->field_start &&
-                                stream->field_start >= process_input &&
-                                stream->field_start < process_input + process_len) {
-                                field_start_off = stream->field_start - process_input;
-                            } else {
-                                field_start_off = 0;
-                            }
-                            text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                                stream, process_input, process_len, field_start_off, offset - 1);
-                            if (status != TEXT_CSV_OK) {
-                                return status;
-                            }
-                        }
-
-                        // Emit field and record
-                        const char* field_data = stream->field_buffer;
-                        size_t actual_field_len = stream->field_buffer_used;
-                        const char* unescaped_data;
-                        size_t unescaped_len;
-                        text_csv_status status = csv_stream_unescape_field(stream, field_data, actual_field_len, &unescaped_data, &unescaped_len);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_END, NULL, 0);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                        stream->field_count = 0;
-                        stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-                        stream->in_record = false;
-                        stream->row_count++;
-
-                        // Clear field state
-                        stream->field_buffer_used = 0;
-                        stream->field_is_buffered = false;
-                        stream->field_needs_copy = false;
-                        stream->just_processed_doubled_quote = false;
-                        stream->field_start = NULL;
-                        stream->field_start_offset = SIZE_MAX;
-                        stream->field_length = 0;
-
-                        size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                        stream->pos.offset += (pos_before.offset - byte_pos);
-                        stream->pos.line = pos_before.line;
-                        stream->pos.column = pos_before.column;
-                        stream->total_bytes_consumed += newline_bytes;
-                        offset = pos_before.offset;
-                        continue;
-                    }
-                }
-
-                // Regular character after quote - invalid quote usage
-                // In a quoted field, a quote must be followed by:
-                // 1. Another quote (doubled quote escape)
-                // 2. A delimiter (end of field)
-                // 3. A newline (end of field and record)
-                // Anything else is an error
-                return csv_stream_set_error(stream, TEXT_CSV_E_INVALID,
-                    "Quote in quoted field must be followed by quote, delimiter, or newline");
-            }
-
-            // Orphaned code block removed - this was duplicate logic that's already handled above
-
-            // Duplicate QUOTE_IN_QUOTED case removed - handled above at line 1128
-            // (This was the old complex logic with input_buffer reprocessing - completely removed)
-
-            case CSV_STREAM_STATE_ESCAPE_IN_QUOTED: {
-                switch (c) {
-                    case 'n':
-                    case 'r':
-                    case 't':
-                    case '\\':
-                    case '"':
-                        // Valid escape sequence
-                        break;
-                    default:
-                        return csv_stream_set_error(stream, TEXT_CSV_E_INVALID_ESCAPE, "Invalid escape sequence");
-                }
-
-                stream->field_needs_copy = true;
-                stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
-
-                // Append escaped character to field buffer
-                if (stream->field_is_buffered) {
-                    char escaped_char = c;
-                    if (c == 'n') escaped_char = '\n';
-                    else if (c == 'r') escaped_char = '\r';
-                    else if (c == 't') escaped_char = '\t';
-                    // '\\' and '"' stay as-is
-                    text_csv_status status = csv_stream_append_to_field_buffer(stream, &escaped_char, 1);
-                    if (status != TEXT_CSV_OK) {
-                        return status;
-                    }
-                    stream->field_start = stream->field_buffer;
-                    stream->field_length = stream->field_buffer_used;
-                } else {
-                    // If not buffered, we need to buffer when we see escape sequences
-                    // since we need to transform them
-                    if (!stream->field_start) {
-                        stream->field_start = process_input + offset - 1; // Point to backslash
-                        stream->field_start_offset = offset - 1;
-                        stream->field_length = 0;
-                    }
-                    stream->field_length += 2; // Backslash + escaped char
-                }
-
-                offset++;
-                stream->pos.offset++;
-                stream->pos.column++;
-                stream->total_bytes_consumed++;
-
-                // If at end of chunk, buffer field data
+                // If at end of chunk, wait for next chunk
                 if (offset >= process_len) {
-                    size_t field_start_off = SIZE_MAX;
-                    if (!stream->field_is_buffered && stream->field_start &&
-                        stream->field_start >= process_input &&
-                        stream->field_start < process_input + process_len) {
-                        field_start_off = stream->field_start - process_input;
-                    } else if (!stream->field_is_buffered && stream->field_start_offset != SIZE_MAX) {
-                        field_start_off = stream->field_start_offset;
-                    }
-                    if (field_start_off != SIZE_MAX) {
-                        text_csv_status status = csv_stream_buffer_field_at_chunk_boundary(
-                            stream, process_input, process_len, field_start_off, offset);
-                        if (status != TEXT_CSV_OK) {
-                            return status;
-                        }
-                    }
-                    return TEXT_CSV_OK;  // Wait for next chunk
+                    return TEXT_CSV_OK;
                 }
                 continue;
-            }
 
-            case CSV_STREAM_STATE_COMMENT: {
-                csv_position pos_before = stream->pos;
-                // csv_detect_newline uses pos->offset as an index into input, so we need to set it to the current offset
-                pos_before.offset = byte_pos;
-                csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
-                if (nl != CSV_NEWLINE_NONE) {
-                    stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-                    stream->in_comment = false;
-                    stream->row_count++;
-                    // pos_before.offset is now the position in process_input after the newline
-                    // stream->pos.offset is the absolute position before processing the character at byte_pos
-                    // csv_detect_newline has already advanced pos_before.offset by newline_bytes
-                    // So the absolute position after the newline is stream->pos.offset + (pos_before.offset - byte_pos)
-                    size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-                    stream->pos.offset += (pos_before.offset - byte_pos);
-                    stream->pos.line = pos_before.line;
-                    stream->pos.column = pos_before.column;
-                        stream->total_bytes_consumed += newline_bytes;
-                        offset = pos_before.offset;
-                        // Mark data as processed up to and including the newline
-                        // This is unambiguously recognized - the record is complete
-                        continue;
+            case CSV_STREAM_STATE_QUOTED_FIELD:
+                status = csv_stream_process_quoted_field(stream, process_input, process_len, &offset, byte_pos, c);
+                if (status != TEXT_CSV_OK) {
+                    return status;
                 }
-                offset++;
-                stream->pos.offset++;
-                stream->pos.column++;
-                stream->total_bytes_consumed++;
+                // If at end of chunk, wait for next chunk
+                if (offset >= process_len) {
+                    return TEXT_CSV_OK;
+                }
                 continue;
-            }
+
+            case CSV_STREAM_STATE_QUOTE_IN_QUOTED:
+                status = csv_stream_process_quote_in_quoted(stream, process_input, process_len, &offset, byte_pos, c);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                // If at end of chunk, wait for next chunk
+                if (offset >= process_len) {
+                    return TEXT_CSV_OK;
+                }
+                continue;
+
+            case CSV_STREAM_STATE_ESCAPE_IN_QUOTED:
+                status = csv_stream_process_escape_in_quoted(stream, process_input, process_len, &offset, byte_pos, c);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                // If at end of chunk, wait for next chunk
+                if (offset >= process_len) {
+                    return TEXT_CSV_OK;
+                }
+                continue;
+
+            case CSV_STREAM_STATE_COMMENT:
+                status = csv_stream_process_comment(stream, process_input, process_len, &offset, byte_pos, c);
+                if (status != TEXT_CSV_OK) {
+                    return status;
+                }
+                continue;
 
             case CSV_STREAM_STATE_END:
                 return TEXT_CSV_OK;
@@ -1701,7 +1847,7 @@ static text_csv_status csv_stream_process_chunk(
                 // The field data should have been buffered earlier, but if it wasn't, we'll create an empty buffer.
                 if (!stream->field_buffer) {
                     // Initialize field buffer if it doesn't exist
-                    text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
+                    text_csv_status status = csv_stream_grow_field_buffer(stream, CSV_FIELD_BUFFER_INITIAL_SIZE);
                     if (status != TEXT_CSV_OK) {
                         return status;
                     }
@@ -1831,7 +1977,7 @@ TEXT_API text_csv_status text_csv_stream_feed(
         // This is a bug in the previous chunk processing. We can't recover the field data,
         // but we can at least ensure the parser doesn't crash.
         if (!stream->field_buffer) {
-            text_csv_status status = csv_stream_grow_field_buffer(stream, 1);
+            text_csv_status status = csv_stream_grow_field_buffer(stream, CSV_FIELD_BUFFER_INITIAL_SIZE);
             if (status != TEXT_CSV_OK) {
                 if (err) {
                     csv_error_copy(err, &stream->error);
