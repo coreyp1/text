@@ -313,16 +313,12 @@ TEXT_INTERNAL_API text_json_status json_decode_string(
         if (pos) {
             pos->offset = in_idx;
             if (in_idx > 0 && input[in_idx - 1] == '\n') {
-                // Check for integer overflow in line
-                if (pos->line < INT_MAX) {
-                    pos->line++;
-                }
+                // Newline detected - increment line and reset column
+                json_position_increment_line(pos);
                 pos->col = 1;
             } else {
-                // Check for integer overflow in column
-                if (pos->col < INT_MAX) {
-                    pos->col++;
-                }
+                // Regular character - increment column
+                json_position_update_column(pos, 1);
             }
         }
     }

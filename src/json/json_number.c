@@ -338,19 +338,9 @@ TEXT_INTERNAL_API text_json_status json_parse_number(
 
     // Update position if provided
     if (pos) {
-        // Check for overflow in offset (size_t, so wraps around, but we check anyway)
-        if (pos->offset > SIZE_MAX - input_len) {
-            pos->offset = SIZE_MAX;  // Saturate at max
-        } else {
-            pos->offset += input_len;
-        }
-        // Update column (line doesn't change for numbers)
-        // Check for integer overflow in column
-        if (input_len > (size_t)INT_MAX || pos->col > INT_MAX - (int)input_len) {
-            pos->col = INT_MAX;  // Saturate at max
-        } else {
-            pos->col += (int)input_len;
-        }
+        // Update offset and column (line doesn't change for numbers)
+        json_position_update_offset(pos, input_len);
+        json_position_update_column(pos, input_len);
     }
 
     return TEXT_JSON_OK;

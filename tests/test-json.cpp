@@ -8,6 +8,7 @@
 #include <limits>
 #include <fstream>
 #include <sstream>
+#include <tuple>
 
 // Include internal header for testing internal functions
 extern "C" {
@@ -3741,6 +3742,341 @@ TEST(StreamingParser, ValueSpanningManyChunks) {
         // Should have received a 50-digit number
         EXPECT_EQ(number_values.size(), 1u);
         EXPECT_EQ(number_values[0].length(), 50u);
+
+        text_json_stream_free(st);
+    }
+}
+
+/**
+ * Test streaming parser - torture test feeding complex JSON byte-by-byte
+ *
+ * This test feeds complex JSON structures one character at a time to stress-test
+ * the streaming parser's ability to handle edge cases, especially:
+ * - Escape sequences split across byte boundaries
+ * - Unicode escapes split across byte boundaries
+ * - Deeply nested structures
+ * - Numbers with various formats
+ * - Mixed content types
+ *
+ * This is similar to the CSV torture test and helps find bugs in state management
+ * and buffering when input arrives incrementally.
+ */
+TEST(StreamingParser, TortureTestByteByByte) {
+    text_json_parse_options opts = text_json_parse_options_default();
+
+    // Track all events and string values for verification
+    std::vector<text_json_event_type> events;
+    std::vector<std::string> string_values;
+    std::vector<std::string> number_values;
+    std::vector<bool> bool_values;
+
+    auto callback = [](void* user, const text_json_event* evt, text_json_error* err) -> text_json_status {
+        (void)err;
+        auto* data = static_cast<std::tuple<
+            std::vector<text_json_event_type>*,
+            std::vector<std::string>*,
+            std::vector<std::string>*,
+            std::vector<bool>*
+        >*>(user);
+
+        auto* evts = std::get<0>(*data);
+        auto* strings = std::get<1>(*data);
+        auto* numbers = std::get<2>(*data);
+        auto* bools = std::get<3>(*data);
+
+        evts->push_back(evt->type);
+
+        switch (evt->type) {
+            case TEXT_JSON_EVT_STRING:
+            case TEXT_JSON_EVT_KEY:
+                strings->push_back(std::string(evt->as.str.s, evt->as.str.len));
+                break;
+            case TEXT_JSON_EVT_NUMBER:
+                numbers->push_back(std::string(evt->as.number.s, evt->as.number.len));
+                break;
+            case TEXT_JSON_EVT_BOOL:
+                bools->push_back(evt->as.boolean);
+                break;
+            default:
+                break;
+        }
+        return TEXT_JSON_OK;
+    };
+
+    // Test 1: Complex nested structure with escape sequences
+    {
+        // JSON with nested objects/arrays, escape sequences, and Unicode
+        const char* complex_json =
+            "{\"key1\":\"value\\nwith\\tescapes\","
+            "\"key2\":[1,2.5,-3.14e+10],"
+            "\"key3\":{\"nested\":\"\\u0041\\u0042\\u0043\","
+            "\"deep\":{\"array\":[true,false,null]}},"
+            "\"unicode\":\"\\uD83D\\uDE00\","
+            "\"escapes\":\"\\\\\\\"\\/\\b\\f\\n\\r\\t\"}";
+
+        std::vector<text_json_event_type> test_events;
+        std::vector<std::string> test_strings;
+        std::vector<std::string> test_numbers;
+        std::vector<bool> test_bools;
+
+        auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+        size_t json_len = strlen(complex_json);
+
+        // Feed byte by byte
+        for (size_t i = 0; i < json_len; ++i) {
+            text_json_status status = text_json_stream_feed(st, complex_json + i, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK)
+                << "Failed at byte " << i << " (char: '" << complex_json[i] << "')";
+        }
+
+        text_json_status status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Verify we got events
+        EXPECT_GT(test_events.size(), 0u) << "Should have received events";
+
+        // Verify string values were decoded correctly
+        bool found_escaped = false;
+        bool found_unicode = false;
+        for (const auto& str : test_strings) {
+            if (str.find('\n') != std::string::npos || str.find('\t') != std::string::npos) {
+                found_escaped = true;
+            }
+            // Check for emoji (UTF-8 encoding of U+1F600)
+            if (str.find("\xF0\x9F\x98\x80") != std::string::npos) {
+                found_unicode = true;
+            }
+        }
+        EXPECT_TRUE(found_escaped) << "Should have decoded escape sequences";
+        EXPECT_TRUE(found_unicode) << "Should have decoded Unicode escape";
+
+        text_json_stream_free(st);
+    }
+
+    // Test 2: Escape sequence split at every possible boundary
+    {
+        // Test each escape sequence type, split at different points
+        const char* escape_tests[] = {
+            "\"test\\nvalue\"",      // \n escape
+            "\"test\\rvalue\"",      // \r escape
+            "\"test\\tvalue\"",      // \t escape
+            "\"test\\bvalue\"",      // \b escape
+            "\"test\\fvalue\"",      // \f escape
+            "\"test\\\\value\"",     // \\ escape
+            "\"test\\\"value\"",     // \" escape
+            "\"test\\/value\"",      // \/ escape
+        };
+
+        for (size_t test_idx = 0; test_idx < sizeof(escape_tests) / sizeof(escape_tests[0]); ++test_idx) {
+            const char* test_json = escape_tests[test_idx];
+            size_t test_len = strlen(test_json);
+
+            std::vector<text_json_event_type> test_events;
+            std::vector<std::string> test_strings;
+            std::vector<std::string> test_numbers;
+            std::vector<bool> test_bools;
+
+            auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+            text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+            ASSERT_NE(st, nullptr);
+
+            text_json_error err;
+
+            // Feed byte by byte
+            for (size_t i = 0; i < test_len; ++i) {
+                text_json_status status = text_json_stream_feed(st, test_json + i, 1, &err);
+                EXPECT_EQ(status, TEXT_JSON_OK)
+                    << "Escape test " << test_idx << " failed at byte " << i;
+            }
+
+            text_json_status status = text_json_stream_finish(st, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK);
+
+            // Should have received at least one string event
+            EXPECT_GT(test_strings.size(), 0u)
+                << "Escape test " << test_idx << " should have produced string";
+
+            text_json_stream_free(st);
+        }
+    }
+
+    // Test 3: Unicode escape sequences split at various boundaries
+    {
+        const char* unicode_tests[] = {
+            "\"\\u0041\"",           // Simple Unicode (A)
+            "\"\\u00E9\"",           // é
+            "\"\\u4E2D\"",           // 中 (Chinese)
+            "\"\\uD83D\\uDE00\"",    // Emoji (surrogate pair)
+        };
+
+        for (size_t test_idx = 0; test_idx < sizeof(unicode_tests) / sizeof(unicode_tests[0]); ++test_idx) {
+            const char* test_json = unicode_tests[test_idx];
+            size_t test_len = strlen(test_json);
+
+            std::vector<text_json_event_type> test_events;
+            std::vector<std::string> test_strings;
+            std::vector<std::string> test_numbers;
+            std::vector<bool> test_bools;
+
+            auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+            text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+            ASSERT_NE(st, nullptr);
+
+            text_json_error err;
+
+            // Feed byte by byte - this is especially tricky for Unicode escapes
+            // as the \uXXXX sequence can be split anywhere
+            for (size_t i = 0; i < test_len; ++i) {
+                text_json_status status = text_json_stream_feed(st, test_json + i, 1, &err);
+                EXPECT_EQ(status, TEXT_JSON_OK)
+                    << "Unicode test " << test_idx << " failed at byte " << i;
+            }
+
+            text_json_status status = text_json_stream_finish(st, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK);
+
+            // Should have received at least one string event
+            EXPECT_GT(test_strings.size(), 0u)
+                << "Unicode test " << test_idx << " should have produced string";
+
+            text_json_stream_free(st);
+        }
+    }
+
+    // Test 4: Numbers with various formats, split byte-by-byte
+    {
+        const char* number_tests[] = {
+            "0",
+            "123",
+            "-456",
+            "789.012",
+            "-3.14159",
+            "1e10",
+            "2E-5",
+            "-1.5e+20",
+            "0.000001",
+            "999999999999999999",
+        };
+
+        for (size_t test_idx = 0; test_idx < sizeof(number_tests) / sizeof(number_tests[0]); ++test_idx) {
+            const char* test_json = number_tests[test_idx];
+            size_t test_len = strlen(test_json);
+
+            std::vector<text_json_event_type> test_events;
+            std::vector<std::string> test_strings;
+            std::vector<std::string> test_numbers;
+            std::vector<bool> test_bools;
+
+            auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+            text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+            ASSERT_NE(st, nullptr);
+
+            text_json_error err;
+
+            // Feed byte by byte
+            for (size_t i = 0; i < test_len; ++i) {
+                text_json_status status = text_json_stream_feed(st, test_json + i, 1, &err);
+                EXPECT_EQ(status, TEXT_JSON_OK)
+                    << "Number test " << test_idx << " failed at byte " << i;
+            }
+
+            text_json_status status = text_json_stream_finish(st, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK);
+
+            // Should have received at least one number event
+            EXPECT_GT(test_numbers.size(), 0u)
+                << "Number test " << test_idx << " should have produced number";
+            EXPECT_EQ(test_numbers[0], test_json)
+                << "Number should match input";
+
+            text_json_stream_free(st);
+        }
+    }
+
+    // Test 5: Deeply nested structure with mixed content
+    {
+        // Create a deeply nested structure that will stress-test the parser
+        // 20 opening brackets, 20 closing brackets (one for each nested array)
+        const char* nested_json =
+            "[[[[[[[[[[[[[[[[[[[[\"deep\"]]]]]]]]]]]]]]]]]]]]";
+
+        std::vector<text_json_event_type> test_events;
+        std::vector<std::string> test_strings;
+        std::vector<std::string> test_numbers;
+        std::vector<bool> test_bools;
+
+        auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+        size_t json_len = strlen(nested_json);
+
+        // Feed byte by byte
+        for (size_t i = 0; i < json_len; ++i) {
+            text_json_status status = text_json_stream_feed(st, nested_json + i, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK)
+                << "Nested test failed at byte " << i;
+        }
+
+        text_json_status status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Should have received events for nested structure
+        EXPECT_GT(test_events.size(), 0u) << "Should have received events";
+        EXPECT_GT(test_strings.size(), 0u) << "Should have received string";
+
+        text_json_stream_free(st);
+    }
+
+    // Test 6: Complex real-world-like JSON with all features
+    {
+        const char* realworld_json =
+            "{\"users\":["
+            "{\"id\":1,\"name\":\"Alice\\nSmith\",\"email\":\"alice@example.com\",\"active\":true},"
+            "{\"id\":2,\"name\":\"Bob\\tJones\",\"email\":\"bob@example.com\",\"active\":false},"
+            "{\"id\":3,\"name\":\"Charlie\\u00E9\",\"email\":\"charlie@example.com\",\"score\":98.5}"
+            "],"
+            "\"metadata\":{\"version\":\"1.0\",\"unicode\":\"\\uD83D\\uDE00\"}}";
+
+        std::vector<text_json_event_type> test_events;
+        std::vector<std::string> test_strings;
+        std::vector<std::string> test_numbers;
+        std::vector<bool> test_bools;
+
+        auto test_data = std::make_tuple(&test_events, &test_strings, &test_numbers, &test_bools);
+
+        text_json_stream* st = text_json_stream_new(&opts, callback, &test_data);
+        ASSERT_NE(st, nullptr);
+
+        text_json_error err;
+        size_t json_len = strlen(realworld_json);
+
+        // Feed byte by byte - this is the ultimate torture test
+        for (size_t i = 0; i < json_len; ++i) {
+            text_json_status status = text_json_stream_feed(st, realworld_json + i, 1, &err);
+            EXPECT_EQ(status, TEXT_JSON_OK)
+                << "Real-world test failed at byte " << i
+                << " (char: '" << (realworld_json[i] >= 32 && realworld_json[i] < 127 ? realworld_json[i] : '?') << "')";
+        }
+
+        text_json_status status = text_json_stream_finish(st, &err);
+        EXPECT_EQ(status, TEXT_JSON_OK);
+
+        // Verify we got a reasonable number of events
+        EXPECT_GT(test_events.size(), 10u) << "Should have received many events";
+        EXPECT_GT(test_strings.size(), 5u) << "Should have received multiple strings";
+        EXPECT_GT(test_numbers.size(), 3u) << "Should have received multiple numbers";
+        EXPECT_GT(test_bools.size(), 0u) << "Should have received boolean values";
 
         text_json_stream_free(st);
     }

@@ -225,6 +225,9 @@ typedef struct {
     } data;
 } json_token;
 
+// Forward declaration (defined in json_stream_internal.h)
+struct json_token_buffer;
+
 /**
  * @brief JSON lexer structure
  *
@@ -237,6 +240,7 @@ typedef struct {
     json_position pos;           ///< Current position (offset, line, col)
     const text_json_parse_options* opts; ///< Parse options
     int streaming_mode;          ///< Non-zero if in streaming mode (allows incomplete tokens at EOF)
+    struct json_token_buffer* token_buffer; ///< Token buffer for incomplete tokens (streaming mode only, can be NULL)
 } json_lexer;
 
 /**
@@ -489,6 +493,252 @@ text_json_status json_error_generate_context_snippet(
  * @return Static string describing the token, or "unknown token" if invalid
  */
 const char* json_token_type_description(int token_type);
+
+/**
+ * @brief Get effective limit value (use default if configured is 0)
+ *
+ * This utility function returns the effective limit value. If the configured
+ * value is greater than 0, it returns that value. Otherwise, it returns the
+ * default value. This is used throughout the JSON parser to handle optional
+ * limit configurations.
+ *
+ * @param configured The configured limit value (0 means use default)
+ * @param default_val The default limit value to use if configured is 0
+ * @return The effective limit value (either configured or default)
+ */
+size_t json_get_limit(size_t configured, size_t default_val);
+
+/**
+ * @brief Safely update position offset, checking for overflow
+ *
+ * Updates the offset field of a position structure, checking for overflow
+ * and saturating at SIZE_MAX if overflow would occur.
+ *
+ * @param pos Position structure to update (must not be NULL)
+ * @param increment Number of bytes to add to offset
+ */
+void json_position_update_offset(json_position* pos, size_t increment);
+
+/**
+ * @brief Safely update position column, checking for overflow
+ *
+ * Updates the column field of a position structure, checking for integer
+ * overflow and saturating at INT_MAX if overflow would occur.
+ *
+ * @param pos Position structure to update (must not be NULL)
+ * @param increment Number of columns to add
+ */
+void json_position_update_column(json_position* pos, size_t increment);
+
+/**
+ * @brief Safely increment line number, checking for overflow
+ *
+ * Increments the line number in a position structure, checking for integer
+ * overflow and saturating at INT_MAX if already at maximum.
+ *
+ * @param pos Position structure to update (must not be NULL)
+ */
+void json_position_increment_line(json_position* pos);
+
+/**
+ * @brief Advance position by bytes, handling newlines
+ *
+ * Advances the position by a specified number of bytes, updating offset
+ * and column appropriately. If the input contains newlines, line numbers
+ * are incremented and columns are reset appropriately.
+ *
+ * This function scans the input buffer to detect newlines and updates
+ * position tracking accordingly. It handles both single-byte newlines (\n)
+ * and multi-byte newlines (\r\n).
+ *
+ * @param pos Position structure to update (must not be NULL)
+ * @param input Input buffer to scan for newlines (can be NULL if input_len is 0)
+ * @param input_len Number of bytes to advance
+ * @param start_offset Starting offset in input buffer (for newline detection)
+ */
+void json_position_advance(json_position* pos, const char* input, size_t input_len, size_t start_offset);
+
+/**
+ * @brief Buffer growth strategy type
+ */
+typedef enum {
+    JSON_BUFFER_GROWTH_SIMPLE,      ///< Simple doubling strategy
+    JSON_BUFFER_GROWTH_HYBRID       ///< Hybrid: fixed increment for small, doubling for large
+} json_buffer_growth_strategy;
+
+/**
+ * @brief Unified buffer growth function
+ *
+ * Grows a buffer to accommodate at least the needed size, using a configurable
+ * growth strategy. Supports both simple doubling and hybrid growth strategies.
+ *
+ * The hybrid strategy uses:
+ * - Fixed increment (64 bytes) for small buffers (< threshold)
+ * - Exponential growth (doubling) for large buffers (>= threshold)
+ *
+ * The simple strategy always doubles the size (with optional headroom).
+ *
+ * All operations include overflow protection to prevent integer overflow.
+ *
+ * @param buffer Pointer to buffer pointer (will be updated on reallocation)
+ * @param capacity Pointer to current capacity (will be updated)
+ * @param needed Minimum size needed
+ * @param strategy Growth strategy to use
+ * @param initial_size Initial size to use if capacity is 0 (0 = use default 64)
+ * @param small_threshold Threshold for hybrid strategy (0 = use default 1024)
+ * @param growth_multiplier Multiplier for exponential growth (0 = use default 2)
+ * @param fixed_increment Fixed increment for hybrid small buffers (0 = use default 64)
+ * @param headroom Additional headroom to add after growth (0 = no headroom)
+ * @return TEXT_JSON_OK on success, TEXT_JSON_E_OOM on failure
+ */
+text_json_status json_buffer_grow_unified(
+    char** buffer,
+    size_t* capacity,
+    size_t needed,
+    json_buffer_growth_strategy strategy,
+    size_t initial_size,
+    size_t small_threshold,
+    size_t growth_multiplier,
+    size_t fixed_increment,
+    size_t headroom
+);
+
+/**
+ * @brief Check if addition would overflow (size_t)
+ *
+ * Returns true if adding b to a would cause an overflow.
+ *
+ * @param a First operand
+ * @param b Second operand
+ * @return 1 if overflow would occur, 0 otherwise
+ */
+int json_check_add_overflow(size_t a, size_t b);
+
+/**
+ * @brief Check if multiplication would overflow (size_t)
+ *
+ * Returns true if multiplying a by b would cause an overflow.
+ *
+ * @param a First operand
+ * @param b Second operand
+ * @return 1 if overflow would occur, 0 otherwise
+ */
+int json_check_mul_overflow(size_t a, size_t b);
+
+/**
+ * @brief Check if subtraction would underflow (size_t)
+ *
+ * Returns true if subtracting b from a would cause an underflow.
+ *
+ * @param a First operand (minuend)
+ * @param b Second operand (subtrahend)
+ * @return 1 if underflow would occur, 0 otherwise
+ */
+int json_check_sub_underflow(size_t a, size_t b);
+
+/**
+ * @brief Check if integer addition would overflow (int)
+ *
+ * Returns true if adding increment to current would cause an integer overflow.
+ * Used for column/line tracking where values are int.
+ *
+ * @param current Current integer value
+ * @param increment Value to add
+ * @return 1 if overflow would occur, 0 otherwise
+ */
+int json_check_int_overflow(int current, size_t increment);
+
+/**
+ * @brief Validate a pointer parameter and optionally set error
+ *
+ * This helper function checks if a pointer is NULL and, if so, optionally
+ * sets an error code and message if an error output structure is provided.
+ * This is useful for parameter validation at function entry points.
+ *
+ * Note: Many NULL checks are context-specific and don't need this helper.
+ * Use this only when the pattern matches: check NULL, set error if provided,
+ * return error code.
+ *
+ * @param ptr Pointer to validate (can be NULL)
+ * @param err Error output structure (can be NULL, in which case no error is set)
+ * @param error_code Error code to set if ptr is NULL
+ * @param error_message Error message to set if ptr is NULL
+ * @return 1 if ptr is NULL (error case), 0 if ptr is valid
+ */
+int json_check_null_param(const void* ptr, text_json_error* err, text_json_status error_code, const char* error_message);
+
+/**
+ * @brief Check if an array index is within bounds
+ *
+ * Returns true if the index is valid (within bounds) for an array of the given size.
+ * An index is valid if it is less than the size.
+ *
+ * @param index Index to check
+ * @param size Size of the array
+ * @return 1 if index is in bounds (valid), 0 if out of bounds
+ */
+int json_check_bounds_index(size_t index, size_t size);
+
+/**
+ * @brief Check if a buffer offset is within bounds
+ *
+ * Returns true if the offset is valid (within bounds) for a buffer of the given size.
+ * An offset is valid if it is less than the size.
+ *
+ * @param offset Offset to check
+ * @param size Size of the buffer
+ * @return 1 if offset is in bounds (valid), 0 if out of bounds
+ */
+int json_check_bounds_offset(size_t offset, size_t size);
+
+/**
+ * @brief Check if a pointer is within a range
+ *
+ * Returns true if the pointer is within the range [start, end) (start inclusive, end exclusive).
+ * This is useful for validating pointer arithmetic results.
+ *
+ * @param ptr Pointer to check
+ * @param start Start of valid range (inclusive)
+ * @param end End of valid range (exclusive)
+ * @return 1 if ptr is in range, 0 if out of range
+ */
+int json_check_bounds_ptr(const void* ptr, const void* start, const void* end);
+
+/**
+ * @brief Initialize error structure fields to defaults
+ *
+ * Initializes an error structure to default values. This is useful for
+ * setting up error structures before populating them with specific error
+ * information. Note that this does NOT free any existing context snippet;
+ * use text_json_error_free() first if needed.
+ *
+ * @param err Error structure to initialize (must not be NULL)
+ * @param code Error code to set
+ * @param message Error message to set
+ * @param offset Byte offset of error
+ * @param line Line number of error (1-based)
+ * @param col Column number of error (1-based)
+ */
+void json_error_init_fields(
+    text_json_error* err,
+    text_json_status code,
+    const char* message,
+    size_t offset,
+    int line,
+    int col
+);
+
+/**
+ * @brief Check if a string length would overflow when adding null terminator
+ *
+ * This is a common validation pattern used when allocating buffers for strings.
+ * Returns true if adding 1 (for null terminator) to the length would cause
+ * an overflow. This is equivalent to checking `len > SIZE_MAX - 1`.
+ *
+ * @param len String length to check
+ * @return 1 if overflow would occur, 0 otherwise
+ */
+int json_check_string_length_overflow(size_t len);
 
 #ifdef __cplusplus
 }

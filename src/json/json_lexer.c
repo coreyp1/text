@@ -7,29 +7,13 @@
  */
 
 #include "json_internal.h"
+#include "json_stream_internal.h"
 #include <ghoti.io/text/json/json_core.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <limits.h>
-
-// Safely update column position, checking for overflow
-static void json_lexer_update_col(json_position* pos, size_t increment) {
-    if (increment > (size_t)INT_MAX || pos->col > INT_MAX - (int)increment) {
-        // Overflow would occur - clamp to INT_MAX
-        pos->col = INT_MAX;
-    } else {
-        pos->col += (int)increment;
-    }
-}
-
-// Safely increment line number, checking for overflow
-static void json_lexer_increment_line(json_position* pos) {
-    if (pos->line < INT_MAX) {
-        pos->line++;
-    }
-    // If already at INT_MAX, don't increment (avoid overflow)
-}
+#include <stdio.h>
 
 // Skip whitespace characters
 static void json_lexer_skip_whitespace(json_lexer* lexer) {
@@ -37,10 +21,10 @@ static void json_lexer_skip_whitespace(json_lexer* lexer) {
         char c = lexer->input[lexer->current_offset];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
             if (c == '\n') {
-                json_lexer_increment_line(&lexer->pos);
+                json_position_increment_line(&lexer->pos);
                 lexer->pos.col = 1;
             } else {
-                json_lexer_update_col(&lexer->pos, 1);
+                json_position_update_column(&lexer->pos, 1);
             }
             lexer->pos.offset = ++lexer->current_offset;
         } else {
@@ -60,7 +44,7 @@ static int json_lexer_skip_single_line_comment(json_lexer* lexer) {
         // Skip to end of line or end of input
         while (lexer->current_offset < lexer->input_len) {
             if (lexer->input[lexer->current_offset] == '\n') {
-                json_lexer_increment_line(&lexer->pos);
+                json_position_increment_line(&lexer->pos);
                 lexer->pos.col = 1;
                 lexer->pos.offset = ++lexer->current_offset;
                 return 1;
@@ -94,10 +78,10 @@ static int json_lexer_skip_multi_line_comment(json_lexer* lexer) {
                 return 1;
             }
             if (lexer->input[lexer->current_offset] == '\n') {
-                json_lexer_increment_line(&lexer->pos);
+                json_position_increment_line(&lexer->pos);
                 lexer->pos.col = 1;
             } else {
-                json_lexer_update_col(&lexer->pos, 1);
+                json_position_update_column(&lexer->pos, 1);
             }
             lexer->current_offset++;
         }
@@ -146,6 +130,43 @@ static int json_is_identifier_cont(char c) {
     return json_is_identifier_start(c) || (c >= '0' && c <= '9');
 }
 
+// Check if a partial identifier could be a prefix of a JSON keyword
+// Returns 1 if it's a valid prefix, 0 if not
+static int json_is_keyword_prefix(const char* str, size_t len) {
+    if (len == 0) {
+        return 0;
+    }
+
+    // Check prefixes of standard keywords
+    if (str[0] == 't') {
+        // Could be "true"
+        if (len == 1) return 1;  // "t"
+        if (len == 2 && str[1] == 'r') return 1;  // "tr"
+        if (len == 3 && str[1] == 'r' && str[2] == 'u') return 1;  // "tru"
+        if (len == 4 && str[1] == 'r' && str[2] == 'u' && str[3] == 'e') return 1;  // "true" (complete)
+        return 0;
+    }
+    if (str[0] == 'f') {
+        // Could be "false"
+        if (len == 1) return 1;  // "f"
+        if (len == 2 && str[1] == 'a') return 1;  // "fa"
+        if (len == 3 && str[1] == 'a' && str[2] == 'l') return 1;  // "fal"
+        if (len == 4 && str[1] == 'a' && str[2] == 'l' && str[3] == 's') return 1;  // "fals"
+        if (len == 5 && str[1] == 'a' && str[2] == 'l' && str[3] == 's' && str[4] == 'e') return 1;  // "false" (complete)
+        return 0;
+    }
+    if (str[0] == 'n') {
+        // Could be "null"
+        if (len == 1) return 1;  // "n"
+        if (len == 2 && str[1] == 'u') return 1;  // "nu"
+        if (len == 3 && str[1] == 'u' && str[2] == 'l') return 1;  // "nul"
+        if (len == 4 && str[1] == 'u' && str[2] == 'l' && str[3] == 'l') return 1;  // "null" (complete)
+        return 0;
+    }
+
+    return 0;
+}
+
 // Try to match a keyword or extension token. Returns 1 if matched, 0 if not.
 static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
     size_t start = lexer->current_offset;
@@ -175,7 +196,7 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->length = len;
         lexer->current_offset = start + len;
         lexer->pos.offset = lexer->current_offset;
-        json_lexer_update_col(&lexer->pos, len);
+        json_position_update_column(&lexer->pos, len);
         return 1;
     }
     if (json_matches(keyword_start, len, "true")) {
@@ -184,7 +205,7 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->length = len;
         lexer->current_offset = start + len;
         lexer->pos.offset = lexer->current_offset;
-        json_lexer_update_col(&lexer->pos, len);
+        json_position_update_column(&lexer->pos, len);
         return 1;
     }
     if (json_matches(keyword_start, len, "false")) {
@@ -193,7 +214,7 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->length = len;
         lexer->current_offset = start + len;
         lexer->pos.offset = lexer->current_offset;
-        json_lexer_update_col(&lexer->pos, len);
+        json_position_update_column(&lexer->pos, len);
         return 1;
     }
 
@@ -209,7 +230,7 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             token->length = len;
             lexer->current_offset = start + len;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, len);
+            json_position_update_column(&lexer->pos, len);
             return 1;
         }
         if (json_matches(keyword_start, len, "Infinity")) {
@@ -218,7 +239,7 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             token->length = len;
             lexer->current_offset = start + len;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, len);
+            json_position_update_column(&lexer->pos, len);
             return 1;
         }
     }
@@ -252,7 +273,7 @@ static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
         token->length = 9;
         lexer->current_offset = start + 9;
         lexer->pos.offset = lexer->current_offset;
-        json_lexer_update_col(&lexer->pos, 9);
+        json_position_update_column(&lexer->pos, 9);
         return 1;
     }
 
@@ -261,72 +282,233 @@ static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
 
 // Parse a string token
 static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* token) {
+    json_token_buffer* tb = lexer->token_buffer;
     size_t start = lexer->current_offset;
-    char quote_char = lexer->input[start];
+    char quote_char;
+    int resuming = 0;
 
-    // Check for single quotes (if enabled)
-    int allow_single = lexer->opts && lexer->opts->allow_single_quotes;
-    if (quote_char != '"' && (!allow_single || quote_char != '\'')) {
-        return TEXT_JSON_E_BAD_TOKEN;
+    // Check if resuming from incomplete string
+    if (tb && tb->type == JSON_TOKEN_BUFFER_STRING) {
+        resuming = 1;
+        // We're resuming - the opening quote and partial content are already in the buffer
+        // Determine quote character from buffered data
+        if (tb->buffer_used > 0 && tb->buffer[0] == '"') {
+            quote_char = '"';
+        } else if (tb->buffer_used > 0 && tb->buffer[0] == '\'') {
+            quote_char = '\'';
+        } else {
+            // Invalid state - buffer should have opening quote
+            json_token_buffer_clear(tb);
+            return TEXT_JSON_E_BAD_TOKEN;
+        }
+        // When resuming, we continue parsing from current_offset
+        // The buffer already has opening quote and previous content, we'll append new content
+        // string_start tracks where we start in the current input chunk
+    } else {
+        // Starting new string
+        if (start >= lexer->input_len) {
+            return TEXT_JSON_E_BAD_TOKEN;
+        }
+        quote_char = lexer->input[start];
+
+        // Check for single quotes (if enabled)
+        int allow_single = lexer->opts && lexer->opts->allow_single_quotes;
+        if (quote_char != '"' && (!allow_single || quote_char != '\'')) {
+            return TEXT_JSON_E_BAD_TOKEN;
+        }
+
+        // Initialize token buffer if available
+        if (tb) {
+            json_token_buffer_clear(tb);
+            tb->type = JSON_TOKEN_BUFFER_STRING;
+            tb->start_offset = start;
+            // Append opening quote to buffer
+            text_json_status status = json_token_buffer_append(tb, &quote_char, 1);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+        }
+        start++;  // Move past opening quote
     }
 
-    size_t string_start = start + 1;  // After opening quote
+    size_t string_start = start;
     size_t string_end = string_start;
-    int escaped = 0;
 
-    // Find closing quote
-    while (string_end < lexer->input_len) {
-        if (escaped) {
-            escaped = 0;
-            string_end++;
-            continue;
-        }
-        if (lexer->input[string_end] == '\\') {
-            escaped = 1;
-            string_end++;
-            continue;
-        }
-        if (lexer->input[string_end] == quote_char) {
-            break;  // Found closing quote
-        }
-        string_end++;
+    // Restore escape sequence state if resuming
+    int in_escape = 0;
+    int unicode_escape_remaining = 0;
+    int high_surrogate_seen = 0;
+
+    if (resuming && tb) {
+        in_escape = tb->parse_state.string_state.in_escape;
+        unicode_escape_remaining = tb->parse_state.string_state.unicode_escape_remaining;
+        high_surrogate_seen = tb->parse_state.string_state.high_surrogate_seen;
     }
 
+    // Find closing quote, tracking escape sequences
+    while (string_end < lexer->input_len) {
+        char c = lexer->input[string_end];
+
+        if (unicode_escape_remaining > 0) {
+            // Parsing Unicode escape - accumulate hex digits
+            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+                unicode_escape_remaining--;
+                string_end++;
+                // Append to buffer if available
+                if (tb) {
+                    text_json_status status = json_token_buffer_append(tb, &c, 1);
+                    if (status != TEXT_JSON_OK) {
+                        return status;
+                    }
+                }
+                continue;
+            } else {
+                // Invalid hex digit in Unicode escape
+                if (tb) {
+                    json_token_buffer_clear(tb);
+                }
+                return TEXT_JSON_E_BAD_UNICODE;
+            }
+        }
+
+        if (in_escape) {
+            in_escape = 0;
+            if (c == 'u') {
+                // Start of Unicode escape - need 4 more hex digits
+                unicode_escape_remaining = 4;
+                string_end++;
+                // Append to buffer if available
+                if (tb) {
+                    text_json_status status = json_token_buffer_append(tb, &c, 1);
+                    if (status != TEXT_JSON_OK) {
+                        return status;
+                    }
+                }
+                continue;
+            } else {
+                // Standard escape character - consume it
+                string_end++;
+                // Append to buffer if available
+                if (tb) {
+                    text_json_status status = json_token_buffer_append(tb, &c, 1);
+                    if (status != TEXT_JSON_OK) {
+                        return status;
+                    }
+                }
+                continue;
+            }
+        }
+
+        if (c == '\\') {
+            in_escape = 1;
+            string_end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
+            continue;
+        }
+
+        if (c == quote_char) {
+            // Found closing quote
+            // Append closing quote to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
+            break;
+        }
+
+        // Regular character
+        string_end++;
+        // Append to buffer if available
+        if (tb) {
+            text_json_status status = json_token_buffer_append(tb, &c, 1);
+            if (status != TEXT_JSON_OK) {
+                return status;
+            }
+        }
+    }
+
+    // Check if string is incomplete
     if (string_end >= lexer->input_len) {
-        // String is incomplete - might need more input in streaming mode
-        // Don't advance lexer position, return incomplete status
+        // String is incomplete - preserve state and return incomplete status
+        if (tb) {
+            tb->parse_state.string_state.in_escape = in_escape;
+            tb->parse_state.string_state.unicode_escape_remaining = unicode_escape_remaining;
+            tb->parse_state.string_state.high_surrogate_seen = high_surrogate_seen;
+        }
+        // Advance current_offset to string_end so the incomplete token gets removed from input buffer
+        lexer->current_offset = string_end;
         return TEXT_JSON_E_INCOMPLETE;
     }
 
+    // String is complete
     // string_start to string_end is the string content (without quotes)
     size_t string_content_len = string_end - string_start;
 
-    // Check for integer overflow in token_length calculation
-    if (string_end + 1 < start) {
-        return TEXT_JSON_E_INVALID;  // Underflow (shouldn't happen, but be safe)
+    // Get the complete string content from buffer or input
+    const char* string_content;
+    size_t string_content_actual_len;
+
+    // If we used the buffer (either resuming or started buffering in this chunk), use it
+    if (tb && tb->is_buffered && tb->buffer_used >= 2) {
+        // Use buffered content - buffer has: [opening quote][content][closing quote]
+        // We need just the content without quotes for decoding
+        string_content = tb->buffer + 1;  // Skip opening quote
+        string_content_actual_len = tb->buffer_used - 2;  // Exclude both quotes
+    } else {
+        // Use input directly (no buffering was used - string was complete in one chunk)
+        string_content = lexer->input + string_start;
+        string_content_actual_len = string_content_len;
     }
-    size_t token_length = string_end + 1 - start;  // Include quotes
+
+    // Check for integer overflow in token_length calculation
+    size_t token_length;
+    if (resuming && tb && tb->is_buffered) {
+        token_length = tb->buffer_used;  // Includes both quotes
+    } else {
+        if (string_end + 1 < (resuming ? tb->start_offset : start)) {
+            return TEXT_JSON_E_INVALID;  // Underflow (shouldn't happen, but be safe)
+        }
+        token_length = string_end + 1 - (resuming ? tb->start_offset : start);  // Include quotes
+    }
 
     // Decode the string
     // Allocate buffer for decoded string (worst case: same size as input)
     // Check for integer overflow in allocation size
-    if (string_content_len > SIZE_MAX - 1) {
+    if (string_content_actual_len > SIZE_MAX - 1) {
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
         return TEXT_JSON_E_LIMIT;  // String too large
     }
-    size_t decode_capacity = string_content_len + 1;  // +1 for null terminator
+    size_t decode_capacity = string_content_actual_len + 1;  // +1 for null terminator
     char* decoded = (char*)malloc(decode_capacity);
     if (!decoded) {
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
         return TEXT_JSON_E_OOM;
     }
 
     json_position decode_pos = lexer->pos;
-    decode_pos.offset = string_start;
+    if (resuming && tb) {
+        decode_pos.offset = tb->start_offset + 1;  // After opening quote
+    } else {
+        decode_pos.offset = string_start;
+    }
     decode_pos.col++;  // After opening quote
 
     size_t decoded_len;
     text_json_status status = json_decode_string(
-        lexer->input + string_start,
-        string_content_len,
+        string_content,
+        string_content_actual_len,
         decoded,
         decode_capacity,
         &decoded_len,
@@ -338,6 +520,9 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
 
     if (status != TEXT_JSON_OK) {
         free(decoded);
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
         return status;
     }
 
@@ -346,100 +531,289 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
     token->length = token_length;
     token->data.string.value = decoded;
     token->data.string.value_len = decoded_len;
-    token->data.string.original_start = string_start;
-    token->data.string.original_len = string_content_len;
+    if (resuming && tb) {
+        token->data.string.original_start = tb->start_offset + 1;
+        token->data.string.original_len = string_content_actual_len;
+    } else {
+        token->data.string.original_start = string_start;
+        token->data.string.original_len = string_content_len;
+    }
+
+    // Clear token buffer since string is complete
+    if (tb) {
+        json_token_buffer_clear(tb);
+    }
 
     // Update lexer position
-    lexer->current_offset = start + token_length;
+    lexer->current_offset = string_end + 1;
     lexer->pos.offset = lexer->current_offset;
-    json_lexer_update_col(&lexer->pos, token_length);
+    json_position_update_column(&lexer->pos, token_length);
 
     return TEXT_JSON_OK;
 }
 
 // Parse a number token
 static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* token) {
+    json_token_buffer* tb = lexer->token_buffer;
     size_t start = lexer->current_offset;
     size_t end = start;
+    int resuming = 0;
+
+    // Check if resuming from incomplete number
+    int has_dot = 0;
+    int has_exp = 0;
+    int exp_sign_seen = 0;
+    int starts_with_minus = 0;
+
+    if (tb && tb->type == JSON_TOKEN_BUFFER_NUMBER) {
+        resuming = 1;
+        // Restore number state
+        has_dot = tb->parse_state.number_state.has_dot;
+        has_exp = tb->parse_state.number_state.has_exp;
+        exp_sign_seen = tb->parse_state.number_state.exp_sign_seen;
+        starts_with_minus = tb->parse_state.number_state.starts_with_minus;
+    } else {
+        // Starting new number - initialize token buffer if available
+        if (tb) {
+            json_token_buffer_clear(tb);
+            tb->type = JSON_TOKEN_BUFFER_NUMBER;
+            tb->start_offset = start;
+        }
+    }
 
     // Determine number end by finding first non-number character
     // Numbers can contain: digits, '.', 'e', 'E', '+', '-'
-    int has_dot = 0;
-    int has_exp = 0;
-
+    // When resuming with has_exp=1 but exp_sign_seen=0, we might need to handle exponent sign first
     while (end < lexer->input_len) {
         char c = lexer->input[end];
+
+        // If resuming with exponent but no sign seen yet, check for exponent sign first
+        if (resuming && has_exp && !exp_sign_seen && (c == '+' || c == '-')) {
+            exp_sign_seen = 1;
+            end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
+            continue;
+        }
+
         if (c >= '0' && c <= '9') {
             end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
             continue;
         }
         if (c == '.' && !has_dot && !has_exp) {
             has_dot = 1;
             end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
             continue;
         }
         if ((c == 'e' || c == 'E') && !has_exp) {
             has_exp = 1;
+            exp_sign_seen = 0;
             end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
             // Exponent can have + or -
             if (end < lexer->input_len &&
                 (lexer->input[end] == '+' || lexer->input[end] == '-')) {
+                exp_sign_seen = 1;
                 end++;
+                // Append to buffer if available
+                if (tb) {
+                    text_json_status status = json_token_buffer_append(tb, &lexer->input[end - 1], 1);
+                    if (status != TEXT_JSON_OK) {
+                        return status;
+                    }
+                }
             }
             continue;
         }
         if (c == '-' && end == start) {
             // Leading minus sign
+            starts_with_minus = 1;
             end++;
+            // Append to buffer if available
+            if (tb) {
+                text_json_status status = json_token_buffer_append(tb, &c, 1);
+                if (status != TEXT_JSON_OK) {
+                    return status;
+                }
+            }
             continue;
         }
         // Not part of number
         break;
     }
 
-    if (end == start || (end == start + 1 && lexer->input[start] == '-')) {
-        return TEXT_JSON_E_BAD_NUMBER;
-    }
-
-    // Check if number might be incomplete (at EOF)
-    // A number is incomplete if it ends with: '.', 'e', 'E', '+', '-' (after e/E)
-    // Note: Numbers ending with digits at EOF are treated as complete, even in streaming mode.
-    // In streaming mode, if a number like "123" is actually incomplete (followed by ".456"),
-    // the streaming parser will handle it by checking the next chunk.
+    // Check if number might be incomplete (at EOF) - do this BEFORE validation
+    // because an incomplete number (like just "-" or "123") is not invalid, just incomplete
     if (end >= lexer->input_len && end > start) {
         // We're at EOF - check if the number might continue
         // Defensive check: ensure end - 1 is valid (end > start guarantees end >= 1)
         if (end == 0) {
             // Shouldn't happen due to end > start check, but be defensive
+            if (tb) {
+                json_token_buffer_clear(tb);
+            }
             return TEXT_JSON_E_BAD_NUMBER;
         }
-        // At this point, end == input_len (loop ensures end <= input_len, and we check end >= input_len)
-        // So end - 1 == input_len - 1, which is the last valid index
-        char last_char = lexer->input[end - 1];
 
-        // If ends with '.', 'e', 'E', '+', or '-' (and not at start), clearly incomplete
-        if (last_char == '.' || last_char == 'e' || last_char == 'E' ||
-            last_char == '+' || (last_char == '-' && end > start + 1)) {
-            // Number appears incomplete - might need more input
-            // Don't advance lexer position
+        // Special case: if we only have "-" (just a minus sign), it's incomplete
+        size_t total_len = resuming && tb ? tb->buffer_used : (end - start);
+        if (total_len == 1) {
+            char first_char = resuming && tb ? tb->buffer[0] : lexer->input[start];
+            if (first_char == '-') {
+                // Just a minus sign - incomplete, need digits
+                if (tb) {
+                    tb->parse_state.number_state.has_dot = has_dot;
+                    tb->parse_state.number_state.has_exp = has_exp;
+                    tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                    tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+                }
+                lexer->current_offset = end;
+                return TEXT_JSON_E_INCOMPLETE;
+            }
+        }
+
+        // Determine the last character of the number
+        // When resuming, check the buffer's last character (it has the complete token so far)
+        // When not resuming, check the input's last character
+        char last_char;
+        if (resuming && tb && tb->buffer_used > 0) {
+            // Resuming - buffer has the complete token so far
+            last_char = tb->buffer[tb->buffer_used - 1];
+        } else {
+            // Not resuming - check input's last character
+            // At this point, end == input_len (loop ensures end <= input_len, and we check end >= input_len)
+            // So end - 1 == input_len - 1, which is the last valid index
+            last_char = lexer->input[end - 1];
+        }
+
+        // If ends with '.', 'e', 'E', '+', or '-' (exponent sign), clearly incomplete
+        // For '-', check if it's an exponent sign (has_exp) - if so, it's incomplete
+        if (last_char == '.' || last_char == 'e' || last_char == 'E' || last_char == '+' ||
+            (last_char == '-' && has_exp)) {
+            // Number ends with incomplete indicator - preserve state and return incomplete
+            if (tb) {
+                tb->parse_state.number_state.has_dot = has_dot;
+                tb->parse_state.number_state.has_exp = has_exp;
+                tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+            }
+            // Advance current_offset to end so the incomplete token gets removed from input buffer
+            lexer->current_offset = end;
             return TEXT_JSON_E_INCOMPLETE;
         }
 
         // In streaming mode, if number ends with a digit at EOF, it might continue
         // with '.', 'e', or 'E' in the next chunk, so treat as incomplete
+        // EXCEPTIONS when resuming:
+        // 1. If number has an exponent with sign and digits, it's complete (exponent is complete)
+        // NOTE: A number with a dot but no exponent can still continue with 'e' or 'E', so it's incomplete
         if (lexer->streaming_mode && last_char >= '0' && last_char <= '9') {
-            return TEXT_JSON_E_INCOMPLETE;
+            // Check if number is actually complete when resuming
+            if (resuming && tb) {
+                // A number with a dot but no exponent can still continue with 'e' or 'E'
+                // So we don't treat it as complete here - it might continue
+                // (We used to treat it as complete, but that was wrong)
+                // In streaming mode, numbers ending with a digit at EOF are always incomplete
+                // because they could continue with more digits (e.g., "1.5e+2" could become "1.5e+20")
+                // The only exception is when we're in non-streaming mode (finish() was called)
+                // Check if number ends with exponent sign - if so, it's incomplete
+                if (has_exp && exp_sign_seen) {
+                    char last_char_in_buffer = tb->buffer[tb->buffer_used - 1];
+                    if (last_char_in_buffer == '+' || last_char_in_buffer == '-') {
+                        // Ends with exponent sign - incomplete, need digits
+                        tb->parse_state.number_state.has_dot = has_dot;
+                        tb->parse_state.number_state.has_exp = has_exp;
+                        tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                        tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+                        lexer->current_offset = end;
+                        return TEXT_JSON_E_INCOMPLETE;
+                    }
+                    // Has exponent with sign and digits, but ends with digit at EOF
+                    // In streaming mode, this is incomplete (could continue with more digits)
+                    // Fall through to preserve state and return incomplete
+                }
+                {
+                    // Preserve state - number might continue
+                    tb->parse_state.number_state.has_dot = has_dot;
+                    tb->parse_state.number_state.has_exp = has_exp;
+                    tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                    tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+                    // Advance current_offset to end so the incomplete token gets removed from input buffer
+                    lexer->current_offset = end;
+                    return TEXT_JSON_E_INCOMPLETE;
+                }
+            } else {
+                // Not resuming - preserve state, number might continue
+                if (tb) {
+                    tb->parse_state.number_state.has_dot = has_dot;
+                    tb->parse_state.number_state.has_exp = has_exp;
+                    tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                    tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+                }
+                // Advance current_offset to end so the incomplete token gets removed from input buffer
+                lexer->current_offset = end;
+                return TEXT_JSON_E_INCOMPLETE;
+            }
         }
 
         // At EOF but number looks complete - parse it
     }
 
-    size_t number_len = end - start;
+    // Check if number is valid (only for complete numbers)
+    size_t total_len = resuming && tb ? (tb->buffer_used + (end - start)) : (end - start);
+
+    if (total_len == 0 || (total_len == 1 && (resuming && tb ? tb->buffer[0] : lexer->input[start]) == '-')) {
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
+        return TEXT_JSON_E_BAD_NUMBER;
+    }
+
+    // Number is complete - get the complete number content
+    // If we appended to buffer in the loop, use buffer; otherwise use input directly
+    const char* number_content;
+    size_t number_len;
+
+    // Use buffer if: resuming (buffer has previous chunk data) OR buffer was used in this chunk
+    if (tb && tb->buffer_used > 0 && (resuming || tb->is_buffered)) {
+        // Use buffered content (was appended in loop above)
+        number_content = tb->buffer;
+        number_len = tb->buffer_used;
+    } else {
+        // Use input directly (no buffering was needed)
+        number_content = lexer->input + start;
+        number_len = end - start;
+    }
 
     // Parse the number
     json_position num_pos = lexer->pos;
     text_json_status status = json_parse_number(
-        lexer->input + start,
+        number_content,
         number_len,
         &token->data.number,
         &num_pos,
@@ -447,17 +821,40 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
     );
 
     if (status != TEXT_JSON_OK) {
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
         return status;
     }
 
     token->type = JSON_TOKEN_NUMBER;
     token->pos = lexer->pos;
-    token->length = number_len;
+    if (resuming && tb) {
+        token->length = tb->buffer_used;
+    } else {
+        token->length = number_len;
+    }
+
+    // Clear token buffer since number is complete
+    if (tb) {
+        json_token_buffer_clear(tb);
+    }
 
     // Update lexer position
-    lexer->current_offset = end;
+    // When resuming from buffer, if end == start (no new input consumed),
+    // we should NOT advance past the non-number character - it needs to be
+    // processed as the next token (e.g., closing bracket, comma, etc.)
+    // The next call to json_lexer_next() will process it
+    if (resuming && end == start) {
+        // We completed the number from the buffer, but didn't consume any new input
+        // The character at position 0 is the non-number character that ended the number
+        // We should NOT advance past it - leave it for the next token
+        lexer->current_offset = end;  // Keep at start, so next token is read
+    } else {
+        lexer->current_offset = end;
+    }
     lexer->pos.offset = lexer->current_offset;
-    json_lexer_update_col(&lexer->pos, number_len);
+    json_position_update_column(&lexer->pos, token->length);
 
     return TEXT_JSON_OK;
 }
@@ -481,6 +878,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
     lexer->pos.col = 1;
     lexer->opts = opts;
     lexer->streaming_mode = streaming_mode ? 1 : 0;
+    lexer->token_buffer = NULL;  // Set by caller if needed
 
     // Skip leading BOM if enabled
     if (opts && opts->allow_leading_bom && input_len >= 3 &&
@@ -503,6 +901,16 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
     // Initialize token
     memset(token, 0, sizeof(*token));
     token->type = JSON_TOKEN_ERROR;
+
+    // Check if we're resuming from an incomplete token
+    if (lexer->token_buffer && lexer->token_buffer->type != JSON_TOKEN_BUFFER_NONE) {
+        // We're resuming - directly call the appropriate parse function
+        if (lexer->token_buffer->type == JSON_TOKEN_BUFFER_STRING) {
+            return json_lexer_parse_string(lexer, token);
+        } else if (lexer->token_buffer->type == JSON_TOKEN_BUFFER_NUMBER) {
+            return json_lexer_parse_number(lexer, token);
+        }
+    }
 
     // Skip whitespace
     json_lexer_skip_whitespace(lexer);
@@ -532,7 +940,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
         case '}':
@@ -541,7 +949,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
         case '[':
@@ -550,7 +958,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
         case ']':
@@ -559,7 +967,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
         case ':':
@@ -568,7 +976,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
         case ',':
@@ -577,7 +985,7 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->length = 1;
             lexer->current_offset++;
             lexer->pos.offset = lexer->current_offset;
-            json_lexer_update_col(&lexer->pos, 1);
+            json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
     }
 
@@ -601,6 +1009,25 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
     // Keyword tokens (true, false, null, NaN, Infinity)
     if (json_lexer_match_keyword(lexer, token)) {
         return TEXT_JSON_OK;
+    }
+
+    // In streaming mode, check if we have a partial keyword prefix
+    // This allows keywords to span chunk boundaries
+    if (lexer->streaming_mode && json_is_identifier_start(c)) {
+        // We have an identifier start character but keyword didn't match
+        // Check if it's a valid keyword prefix - if so, it's incomplete, not bad
+        size_t prefix_len = 0;
+        while (prefix_len < lexer->input_len - start &&
+               json_is_identifier_cont(lexer->input[start + prefix_len])) {
+            prefix_len++;
+        }
+
+        if (prefix_len > 0 && json_is_keyword_prefix(lexer->input + start, prefix_len)) {
+            // Valid keyword prefix but incomplete - need more input
+            // Don't advance current_offset - keep the partial keyword in the buffer
+            // The stream parser will handle this by not marking input as processed
+            return TEXT_JSON_E_INCOMPLETE;
+        }
     }
 
     // Unknown token

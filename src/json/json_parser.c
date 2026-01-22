@@ -102,11 +102,6 @@ static text_json_status json_parser_set_error_with_tokens(
     return code;
 }
 
-// Get effective limit value (use default if 0)
-static size_t json_get_limit(size_t configured, size_t default_val) {
-    return configured > 0 ? configured : default_val;
-}
-
 // Check depth limit
 static text_json_status json_parser_check_depth(json_parser* parser) {
     size_t max_depth = json_get_limit(
