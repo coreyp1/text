@@ -18,6 +18,10 @@
 // Skip whitespace characters
 static void json_lexer_skip_whitespace(json_lexer* lexer) {
     while (lexer->current_offset < lexer->input_len) {
+        // Defensive bounds check before buffer access
+        if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len)) {
+            break;
+        }
         char c = lexer->input[lexer->current_offset];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
             if (c == '\n') {
@@ -26,7 +30,15 @@ static void json_lexer_skip_whitespace(json_lexer* lexer) {
             } else {
                 json_position_update_column(&lexer->pos, 1);
             }
-            lexer->pos.offset = ++lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                json_position_update_offset(&lexer->pos, 1);
+                break;
+            }
+            lexer->current_offset++;
+            json_position_update_offset(&lexer->pos, 1);
         } else {
             break;
         }
@@ -35,22 +47,48 @@ static void json_lexer_skip_whitespace(json_lexer* lexer) {
 
 // Skip a single-line comment (//). Returns 1 if comment was skipped, 0 if not a comment.
 static int json_lexer_skip_single_line_comment(json_lexer* lexer) {
-    // Check for overflow and sufficient length
-    if (lexer->current_offset > lexer->input_len - 2 || lexer->input_len < 2) {
+    // Check for underflow and sufficient length using shared helper
+    if (lexer->input_len < 2 || json_check_sub_underflow(lexer->input_len, 2) ||
+        lexer->current_offset > lexer->input_len - 2) {
+        return 0;
+    }
+    // Defensive bounds checks before buffer access
+    if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len) ||
+        !json_check_bounds_offset(lexer->current_offset + 1, lexer->input_len)) {
         return 0;
     }
     if (lexer->input[lexer->current_offset] == '/' &&
         lexer->input[lexer->current_offset + 1] == '/') {
         // Skip to end of line or end of input
         while (lexer->current_offset < lexer->input_len) {
+            // Defensive bounds check before buffer access
+            if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len)) {
+                break;
+            }
             if (lexer->input[lexer->current_offset] == '\n') {
                 json_position_increment_line(&lexer->pos);
                 lexer->pos.col = 1;
-                lexer->pos.offset = ++lexer->current_offset;
+                // Check for overflow before incrementing
+                if (json_check_add_overflow(lexer->current_offset, 1)) {
+                    // Overflow - saturate at SIZE_MAX
+                    lexer->current_offset = SIZE_MAX;
+                    json_position_update_offset(&lexer->pos, 1);
+                    return 1;
+                }
+                lexer->current_offset++;
+                json_position_update_offset(&lexer->pos, 1);
                 return 1;
             }
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                // Overflow - saturate at SIZE_MAX and break
+                lexer->current_offset = SIZE_MAX;
+                break;
+            }
             lexer->current_offset++;
+            json_position_update_offset(&lexer->pos, 1);
         }
+        // Update position offset to match current_offset
         lexer->pos.offset = lexer->current_offset;
         return 1;
     }
@@ -59,23 +97,60 @@ static int json_lexer_skip_single_line_comment(json_lexer* lexer) {
 
 // Skip a multi-line comment of the form /* ... */. Returns 1 if skipped, 0 if not a comment, -1 on error (unclosed comment).
 static int json_lexer_skip_multi_line_comment(json_lexer* lexer) {
-    // Check for overflow and sufficient length
-    if (lexer->current_offset > lexer->input_len - 2 || lexer->input_len < 2) {
+    // Check for underflow and sufficient length using shared helper
+    if (lexer->input_len < 2 || json_check_sub_underflow(lexer->input_len, 2) ||
+        lexer->current_offset > lexer->input_len - 2) {
+        return 0;
+    }
+    // Defensive bounds checks before buffer access
+    if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len) ||
+        !json_check_bounds_offset(lexer->current_offset + 1, lexer->input_len)) {
         return 0;
     }
     if (lexer->input[lexer->current_offset] == '/' &&
         lexer->input[lexer->current_offset + 1] == '*') {
         // Skip /* and look for */
+        // Check for overflow before adding 2
+        if (json_check_add_overflow(lexer->current_offset, 2)) {
+            // Overflow - saturate at SIZE_MAX
+            lexer->current_offset = SIZE_MAX;
+            return -1;  // Error: unclosed comment
+        }
         lexer->current_offset += 2;
-        // Check for overflow: current_offset + 1 could overflow
-        while (lexer->current_offset < lexer->input_len - 1) {
+        json_position_update_offset(&lexer->pos, 2);
+        // Check for underflow: current_offset + 1 could overflow
+        while (lexer->current_offset < lexer->input_len) {
+            // Defensive bounds check before buffer access
+            if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len)) {
+                break;
+            }
+            // Check if we have at least 2 bytes remaining
+            if (json_check_sub_underflow(lexer->input_len, lexer->current_offset) ||
+                lexer->input_len - lexer->current_offset < 2) {
+                break;  // Not enough bytes for "*/"
+            }
+            // Defensive bounds check for current_offset + 1
+            if (!json_check_bounds_offset(lexer->current_offset + 1, lexer->input_len)) {
+                break;
+            }
             if (lexer->input[lexer->current_offset] == '*' &&
                 lexer->input[lexer->current_offset + 1] == '/') {
                 // Found closing */
+                // Check for overflow before adding 2
+                if (json_check_add_overflow(lexer->current_offset, 2)) {
+                    // Overflow - saturate at SIZE_MAX
+                    lexer->current_offset = SIZE_MAX;
+                    json_position_update_offset(&lexer->pos, 2);
+                    return 1;
+                }
                 lexer->current_offset += 2;
-                lexer->pos.offset = lexer->current_offset;
+                json_position_update_offset(&lexer->pos, 2);
                 // Update line/col if needed (we don't track precisely in comments)
                 return 1;
+            }
+            // Defensive bounds check before buffer access
+            if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len)) {
+                break;
             }
             if (lexer->input[lexer->current_offset] == '\n') {
                 json_position_increment_line(&lexer->pos);
@@ -83,7 +158,14 @@ static int json_lexer_skip_multi_line_comment(json_lexer* lexer) {
             } else {
                 json_position_update_column(&lexer->pos, 1);
             }
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                // Overflow - saturate at SIZE_MAX and break
+                lexer->current_offset = SIZE_MAX;
+                break;
+            }
             lexer->current_offset++;
+            json_position_update_offset(&lexer->pos, 1);
         }
         // Unclosed comment
         return -1;
@@ -173,13 +255,35 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
     size_t len = 0;
 
     // Read identifier
-    if (start >= lexer->input_len || !json_is_identifier_start(lexer->input[start])) {
+    // Defensive bounds check before buffer access
+    if (start >= lexer->input_len || !json_check_bounds_offset(start, lexer->input_len)) {
+        return 0;
+    }
+    if (!json_is_identifier_start(lexer->input[start])) {
         return 0;
     }
 
-    // Check for overflow: start + len could overflow size_t
-    while (len < lexer->input_len - start &&
-           json_is_identifier_cont(lexer->input[start + len])) {
+    // Check for underflow in subtraction and overflow in addition
+    while (len < lexer->input_len) {
+        // Check for underflow: input_len - start
+        if (json_check_sub_underflow(lexer->input_len, start) || len >= lexer->input_len - start) {
+            break;
+        }
+        // Check for overflow: start + len
+        if (json_check_add_overflow(start, len)) {
+            break;
+        }
+        // Defensive bounds check before buffer access
+        if (!json_check_bounds_offset(start + len, lexer->input_len)) {
+            break;
+        }
+        if (!json_is_identifier_cont(lexer->input[start + len])) {
+            break;
+        }
+        // Check for overflow before incrementing len
+        if (json_check_add_overflow(len, 1)) {
+            break;
+        }
         len++;
     }
 
@@ -194,8 +298,15 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->type = JSON_TOKEN_NULL;
         token->pos = lexer->pos;
         token->length = len;
-        lexer->current_offset = start + len;
-        lexer->pos.offset = lexer->current_offset;
+        // Check for overflow before adding start + len
+        if (json_check_add_overflow(start, len)) {
+            // Overflow - saturate at SIZE_MAX
+            lexer->current_offset = SIZE_MAX;
+            lexer->pos.offset = SIZE_MAX;
+        } else {
+            lexer->current_offset = start + len;
+            lexer->pos.offset = lexer->current_offset;
+        }
         json_position_update_column(&lexer->pos, len);
         return 1;
     }
@@ -203,8 +314,15 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->type = JSON_TOKEN_TRUE;
         token->pos = lexer->pos;
         token->length = len;
-        lexer->current_offset = start + len;
-        lexer->pos.offset = lexer->current_offset;
+        // Check for overflow before adding start + len
+        if (json_check_add_overflow(start, len)) {
+            // Overflow - saturate at SIZE_MAX
+            lexer->current_offset = SIZE_MAX;
+            lexer->pos.offset = SIZE_MAX;
+        } else {
+            lexer->current_offset = start + len;
+            lexer->pos.offset = lexer->current_offset;
+        }
         json_position_update_column(&lexer->pos, len);
         return 1;
     }
@@ -212,8 +330,15 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         token->type = JSON_TOKEN_FALSE;
         token->pos = lexer->pos;
         token->length = len;
-        lexer->current_offset = start + len;
-        lexer->pos.offset = lexer->current_offset;
+        // Check for overflow before adding start + len
+        if (json_check_add_overflow(start, len)) {
+            // Overflow - saturate at SIZE_MAX
+            lexer->current_offset = SIZE_MAX;
+            lexer->pos.offset = SIZE_MAX;
+        } else {
+            lexer->current_offset = start + len;
+            lexer->pos.offset = lexer->current_offset;
+        }
         json_position_update_column(&lexer->pos, len);
         return 1;
     }
@@ -228,8 +353,15 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             token->type = JSON_TOKEN_NAN;
             token->pos = lexer->pos;
             token->length = len;
-            lexer->current_offset = start + len;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before adding start + len
+            if (json_check_add_overflow(start, len)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + len;
+                lexer->pos.offset = lexer->current_offset;
+            }
             json_position_update_column(&lexer->pos, len);
             return 1;
         }
@@ -237,8 +369,15 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             token->type = JSON_TOKEN_INFINITY;
             token->pos = lexer->pos;
             token->length = len;
-            lexer->current_offset = start + len;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before adding start + len
+            if (json_check_add_overflow(start, len)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + len;
+                lexer->pos.offset = lexer->current_offset;
+            }
             json_position_update_column(&lexer->pos, len);
             return 1;
         }
@@ -261,8 +400,14 @@ static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
     }
 
     size_t start = lexer->current_offset;
-    // Check for overflow and sufficient length
-    if (start > lexer->input_len - 9 || lexer->input_len < 9) {  // "-Infinity" is 9 chars
+    // Check for underflow and sufficient length using shared helper
+    if (lexer->input_len < 9 || json_check_sub_underflow(lexer->input_len, 9) ||
+        start > lexer->input_len - 9) {  // "-Infinity" is 9 chars
+        return 0;
+    }
+    // Defensive bounds checks before buffer access
+    if (!json_check_bounds_offset(start, lexer->input_len) ||
+        !json_check_bounds_offset(start + 1, lexer->input_len)) {
         return 0;
     }
 
@@ -271,8 +416,15 @@ static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
         token->type = JSON_TOKEN_NEG_INFINITY;
         token->pos = lexer->pos;
         token->length = 9;
-        lexer->current_offset = start + 9;
-        lexer->pos.offset = lexer->current_offset;
+        // Check for overflow before adding start + 9
+        if (json_check_add_overflow(start, 9)) {
+            // Overflow - saturate at SIZE_MAX
+            lexer->current_offset = SIZE_MAX;
+            lexer->pos.offset = SIZE_MAX;
+        } else {
+            lexer->current_offset = start + 9;
+            lexer->pos.offset = lexer->current_offset;
+        }
         json_position_update_column(&lexer->pos, 9);
         return 1;
     }
@@ -306,7 +458,8 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
         // string_start tracks where we start in the current input chunk
     } else {
         // Starting new string
-        if (start >= lexer->input_len) {
+        // Defensive bounds check before buffer access
+        if (start >= lexer->input_len || !json_check_bounds_offset(start, lexer->input_len)) {
             return TEXT_JSON_E_BAD_TOKEN;
         }
         quote_char = lexer->input[start];
@@ -328,6 +481,10 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
                 return status;
             }
         }
+        // Check for overflow before incrementing start
+        if (json_check_add_overflow(start, 1)) {
+            return TEXT_JSON_E_INVALID;  // Overflow
+        }
         start++;  // Move past opening quote
     }
 
@@ -347,6 +504,10 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
 
     // Find closing quote, tracking escape sequences
     while (string_end < lexer->input_len) {
+        // Defensive bounds check before buffer access
+        if (!json_check_bounds_offset(string_end, lexer->input_len)) {
+            break;
+        }
         char c = lexer->input[string_end];
 
         if (unicode_escape_remaining > 0) {
@@ -450,6 +611,13 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
 
     // String is complete
     // string_start to string_end is the string content (without quotes)
+    // Check for underflow in subtraction
+    if (json_check_sub_underflow(string_end, string_start)) {
+        if (tb) {
+            json_token_buffer_clear(tb);
+        }
+        return TEXT_JSON_E_INVALID;  // Underflow
+    }
     size_t string_content_len = string_end - string_start;
 
     // Get the complete string content from buffer or input
@@ -473,16 +641,29 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
     if (resuming && tb && tb->is_buffered) {
         token_length = tb->buffer_used;  // Includes both quotes
     } else {
-        if (string_end + 1 < (resuming ? tb->start_offset : start)) {
-            return TEXT_JSON_E_INVALID;  // Underflow (shouldn't happen, but be safe)
+        size_t start_pos = resuming ? tb->start_offset : start;
+        // Check for overflow: string_end + 1
+        if (json_check_add_overflow(string_end, 1)) {
+            if (tb) {
+                json_token_buffer_clear(tb);
+            }
+            return TEXT_JSON_E_INVALID;  // Overflow
         }
-        token_length = string_end + 1 - (resuming ? tb->start_offset : start);  // Include quotes
+        size_t end_plus_one = string_end + 1;
+        // Check for underflow: end_plus_one - start_pos
+        if (json_check_sub_underflow(end_plus_one, start_pos)) {
+            if (tb) {
+                json_token_buffer_clear(tb);
+            }
+            return TEXT_JSON_E_INVALID;  // Underflow
+        }
+        token_length = end_plus_one - start_pos;  // Include quotes
     }
 
     // Decode the string
     // Allocate buffer for decoded string (worst case: same size as input)
-    // Check for integer overflow in allocation size
-    if (string_content_actual_len > SIZE_MAX - 1) {
+    // Check for integer overflow in allocation size using shared helper
+    if (json_check_string_length_overflow(string_content_actual_len)) {
         if (tb) {
             json_token_buffer_clear(tb);
         }
@@ -545,8 +726,15 @@ static text_json_status json_lexer_parse_string(json_lexer* lexer, json_token* t
     }
 
     // Update lexer position
-    lexer->current_offset = string_end + 1;
-    lexer->pos.offset = lexer->current_offset;
+    // Check for overflow before adding string_end + 1
+    if (json_check_add_overflow(string_end, 1)) {
+        // Overflow - saturate at SIZE_MAX
+        lexer->current_offset = SIZE_MAX;
+        lexer->pos.offset = SIZE_MAX;
+    } else {
+        lexer->current_offset = string_end + 1;
+        lexer->pos.offset = lexer->current_offset;
+    }
     json_position_update_column(&lexer->pos, token_length);
 
     return TEXT_JSON_OK;
@@ -585,6 +773,10 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
     // Numbers can contain: digits, '.', 'e', 'E', '+', '-'
     // When resuming with has_exp=1 but exp_sign_seen=0, we might need to handle exponent sign first
     while (end < lexer->input_len) {
+        // Defensive bounds check before buffer access
+        if (!json_check_bounds_offset(end, lexer->input_len)) {
+            break;
+        }
         char c = lexer->input[end];
 
         // If resuming with exponent but no sign seen yet, check for exponent sign first
@@ -636,15 +828,19 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
                 }
             }
             // Exponent can have + or -
-            if (end < lexer->input_len &&
+            // Defensive bounds check before buffer access
+            if (end < lexer->input_len && json_check_bounds_offset(end, lexer->input_len) &&
                 (lexer->input[end] == '+' || lexer->input[end] == '-')) {
                 exp_sign_seen = 1;
                 end++;
                 // Append to buffer if available
                 if (tb) {
-                    text_json_status status = json_token_buffer_append(tb, &lexer->input[end - 1], 1);
-                    if (status != TEXT_JSON_OK) {
-                        return status;
+                    // Defensive bounds check for end - 1
+                    if (end > 0 && json_check_bounds_offset(end - 1, lexer->input_len)) {
+                        text_json_status status = json_token_buffer_append(tb, &lexer->input[end - 1], 1);
+                        if (status != TEXT_JSON_OK) {
+                            return status;
+                        }
                     }
                 }
             }
@@ -683,7 +879,9 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
         // Special case: if we only have "-" (just a minus sign), it's incomplete
         size_t total_len = resuming && tb ? tb->buffer_used : (end - start);
         if (total_len == 1) {
-            char first_char = resuming && tb ? tb->buffer[0] : lexer->input[start];
+            // Defensive bounds check before buffer access
+            char first_char = resuming && tb ? tb->buffer[0] :
+                (json_check_bounds_offset(start, lexer->input_len) ? lexer->input[start] : '\0');
             if (first_char == '-') {
                 // Just a minus sign - incomplete, need digits
                 if (tb) {
@@ -708,7 +906,12 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
             // Not resuming - check input's last character
             // At this point, end == input_len (loop ensures end <= input_len, and we check end >= input_len)
             // So end - 1 == input_len - 1, which is the last valid index
-            last_char = lexer->input[end - 1];
+            // Defensive bounds check before buffer access
+            if (end > 0 && json_check_bounds_offset(end - 1, lexer->input_len)) {
+                last_char = lexer->input[end - 1];
+            } else {
+                last_char = '\0';  // Fallback if bounds check fails
+            }
         }
 
         // If ends with '.', 'e', 'E', '+', or '-' (exponent sign), clearly incomplete
@@ -787,7 +990,10 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
     // Check if number is valid (only for complete numbers)
     size_t total_len = resuming && tb ? (tb->buffer_used + (end - start)) : (end - start);
 
-    if (total_len == 0 || (total_len == 1 && (resuming && tb ? tb->buffer[0] : lexer->input[start]) == '-')) {
+    // Defensive bounds check before buffer access
+    char first_char_check = resuming && tb ? tb->buffer[0] :
+        (json_check_bounds_offset(start, lexer->input_len) ? lexer->input[start] : '\0');
+    if (total_len == 0 || (total_len == 1 && first_char_check == '-')) {
         if (tb) {
             json_token_buffer_clear(tb);
         }
@@ -866,7 +1072,11 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
     const text_json_parse_options* opts,
     int streaming_mode
 ) {
-    if (!lexer || !input) {
+    // Defensive NULL pointer checks
+    if (!lexer) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!input && input_len > 0) {
         return TEXT_JSON_E_INVALID;
     }
 
@@ -894,7 +1104,15 @@ TEXT_INTERNAL_API text_json_status json_lexer_init(
 }
 
 TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token* token) {
-    if (!lexer || !token) {
+    // Defensive NULL pointer checks
+    if (!lexer) {
+        return TEXT_JSON_E_INVALID;
+    }
+    if (!token) {
+        return TEXT_JSON_E_INVALID;
+    }
+    // Additional defensive check: ensure input is valid if we have input_len > 0
+    if (lexer->input_len > 0 && !lexer->input) {
         return TEXT_JSON_E_INVALID;
     }
 
@@ -930,6 +1148,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
     }
 
     size_t start = lexer->current_offset;
+    // Defensive bounds check before buffer access
+    if (!json_check_bounds_offset(start, lexer->input_len)) {
+        token->type = JSON_TOKEN_ERROR;
+        token->pos = lexer->pos;
+        token->length = 0;
+        return TEXT_JSON_E_INVALID;
+    }
     char c = lexer->input[start];
 
     // Punctuation tokens
@@ -938,8 +1163,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_LBRACE;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
@@ -947,8 +1177,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_RBRACE;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
@@ -956,8 +1191,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_LBRACKET;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
@@ -965,8 +1205,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_RBRACKET;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
@@ -974,8 +1219,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_COLON;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
 
@@ -983,8 +1233,13 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
             token->type = JSON_TOKEN_COMMA;
             token->pos = lexer->pos;
             token->length = 1;
-            lexer->current_offset++;
-            lexer->pos.offset = lexer->current_offset;
+            // Check for overflow before incrementing
+            if (json_check_add_overflow(lexer->current_offset, 1)) {
+                lexer->current_offset = SIZE_MAX;
+            } else {
+                lexer->current_offset++;
+            }
+            json_position_update_offset(&lexer->pos, 1);
             json_position_update_column(&lexer->pos, 1);
             return TEXT_JSON_OK;
     }
@@ -1017,8 +1272,26 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
         // We have an identifier start character but keyword didn't match
         // Check if it's a valid keyword prefix - if so, it's incomplete, not bad
         size_t prefix_len = 0;
-        while (prefix_len < lexer->input_len - start &&
-               json_is_identifier_cont(lexer->input[start + prefix_len])) {
+        while (prefix_len < lexer->input_len) {
+            // Check for underflow: input_len - start
+            if (json_check_sub_underflow(lexer->input_len, start) || prefix_len >= lexer->input_len - start) {
+                break;
+            }
+            // Check for overflow: start + prefix_len
+            if (json_check_add_overflow(start, prefix_len)) {
+                break;
+            }
+            // Defensive bounds check before buffer access
+            if (!json_check_bounds_offset(start + prefix_len, lexer->input_len)) {
+                break;
+            }
+            if (!json_is_identifier_cont(lexer->input[start + prefix_len])) {
+                break;
+            }
+            // Check for overflow before incrementing prefix_len
+            if (json_check_add_overflow(prefix_len, 1)) {
+                break;
+            }
             prefix_len++;
         }
 

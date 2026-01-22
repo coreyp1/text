@@ -125,8 +125,17 @@ static text_json_status json_parser_check_total_bytes(json_parser* parser, size_
         parser->opts ? parser->opts->max_total_bytes : 0,
         JSON_DEFAULT_MAX_TOTAL_BYTES
     );
+    // Check for overflow in total_bytes_consumed + additional using shared helper
+    if (json_check_add_overflow(parser->total_bytes_consumed, additional)) {
+        return json_parser_set_error(
+            parser,
+            TEXT_JSON_E_LIMIT,
+            "Maximum total input size exceeded (overflow)",
+            parser->lexer.pos
+        );
+    }
     // Check for underflow: if additional > max_total, subtraction would underflow
-    if (additional > max_total) {
+    if (additional > max_total || json_check_sub_underflow(max_total, additional)) {
         return json_parser_set_error(
             parser,
             TEXT_JSON_E_LIMIT,
@@ -302,11 +311,12 @@ static text_json_status json_parse_array_element(
                 ctx->input_buffer && ctx->input_buffer_len > 0 &&
                 num->lexeme && num->lexeme_len > 0) {
                 // Verify the number position is within bounds
-                // Check for integer overflow and bounds
+                // Check for integer overflow and bounds using shared helpers
                 number_offset = token->pos.offset;
                 number_len = token->length;
-                if (number_offset < ctx->input_buffer_len &&
-                    number_len <= ctx->input_buffer_len - number_offset) {
+                if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
+                    !json_check_add_overflow(number_offset, number_len) &&
+                    number_offset + number_len <= ctx->input_buffer_len) {
                     use_in_situ = 1;
                 }
             }
@@ -413,6 +423,10 @@ static size_t json_object_find_key(const text_json_value* object, const char* ke
     }
 
     for (size_t i = 0; i < object->as.object.count; ++i) {
+        // Defensive bounds check before array access
+        if (!json_check_bounds_index(i, object->as.object.count)) {
+            break;
+        }
         if (object->as.object.pairs[i].key_len == key_len) {
             if (key_len == 0 || memcmp(object->as.object.pairs[i].key, key, key_len) == 0) {
                 return i;
@@ -431,6 +445,15 @@ static text_json_status json_parse_array(json_parser* parser, text_json_value** 
         return status;
     }
 
+    // Check for overflow before incrementing depth
+    if (json_check_add_overflow(parser->depth, 1)) {
+        return json_parser_set_error(
+            parser,
+            TEXT_JSON_E_DEPTH,
+            "Maximum nesting depth exceeded (overflow)",
+            parser->lexer.pos
+        );
+    }
     parser->depth++;
     text_json_status result = TEXT_JSON_OK;
 
@@ -623,6 +646,15 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
         return status;
     }
 
+    // Check for overflow before incrementing depth
+    if (json_check_add_overflow(parser->depth, 1)) {
+        return json_parser_set_error(
+            parser,
+            TEXT_JSON_E_DEPTH,
+            "Maximum nesting depth exceeded (overflow)",
+            parser->lexer.pos
+        );
+    }
     parser->depth++;
     text_json_status result = TEXT_JSON_OK;
 
@@ -858,7 +890,21 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
                     // Note: Don't free the old value - it's part of object's arena.
                     // It will be freed when the object is freed. Just overwrite the pointer.
                     // Set the new value
-                    object->as.object.pairs[existing_idx].value = value;
+                    // Defensive bounds check before array access
+                    if (json_check_bounds_index(existing_idx, object->as.object.count)) {
+                        object->as.object.pairs[existing_idx].value = value;
+                    } else {
+                        // Bounds check failed - should not happen, but be defensive
+                        if (key_copy) {
+                            free(key_copy);
+                        }
+                        return json_parser_set_error(
+                            parser,
+                            TEXT_JSON_E_INVALID,
+                            "Internal error: array index out of bounds",
+                            parser->lexer.pos
+                        );
+                    }
                     // Free temporary key copy (key already in arena)
                     if (key_copy) {
                         free(key_copy);
@@ -871,6 +917,18 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
 
                 case TEXT_JSON_DUPKEY_COLLECT: {
                     // Convert to array on collision
+                    // Defensive bounds check before array access
+                    if (!json_check_bounds_index(existing_idx, object->as.object.count)) {
+                        if (key_copy) {
+                            free(key_copy);
+                        }
+                        return json_parser_set_error(
+                            parser,
+                            TEXT_JSON_E_INVALID,
+                            "Internal error: array index out of bounds",
+                            parser->lexer.pos
+                        );
+                    }
                     text_json_value* existing_value = object->as.object.pairs[existing_idx].value;
 
                     // Check if existing value is already an array
@@ -933,7 +991,21 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
                         }
 
                         // Replace old value with array
-                        object->as.object.pairs[existing_idx].value = array;
+                        // Defensive bounds check before array access (already checked above, but be safe)
+                        if (json_check_bounds_index(existing_idx, object->as.object.count)) {
+                            object->as.object.pairs[existing_idx].value = array;
+                        } else {
+                            // Should not happen, but be defensive
+                            if (key_copy) {
+                                free(key_copy);
+                            }
+                            return json_parser_set_error(
+                                parser,
+                                TEXT_JSON_E_INVALID,
+                                "Internal error: array index out of bounds",
+                                parser->lexer.pos
+                            );
+                        }
                         // Free temporary key copy (key already in arena)
                         if (key_copy) {
                             free(key_copy);
@@ -1178,11 +1250,12 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                     ctx->input_buffer && ctx->input_buffer_len > 0 &&
                     num->lexeme && num->lexeme_len > 0) {
                     // Verify the number position is within bounds
-                    // Check for integer overflow and bounds
+                    // Check for integer overflow and bounds using shared helpers
                     number_offset = token.pos.offset;
                     number_len = token.length;
-                    if (number_offset < ctx->input_buffer_len &&
-                        number_len <= ctx->input_buffer_len - number_offset) {
+                    if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
+                        !json_check_add_overflow(number_offset, number_len) &&
+                        number_offset + number_len <= ctx->input_buffer_len) {
                         use_in_situ = 1;
                     }
                 }
@@ -1318,7 +1391,8 @@ static text_json_value* json_parse_internal(
     int allow_multiple,
     size_t* bytes_consumed
 ) {
-    if (!bytes) {
+    // Defensive NULL pointer checks
+    if (!bytes && len > 0) {
         if (err) {
             err->code = TEXT_JSON_E_INVALID;
             err->message = "Input bytes must not be NULL";

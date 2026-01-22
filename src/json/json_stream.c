@@ -1008,8 +1008,9 @@ TEXT_API text_json_status text_json_stream_feed(
         return status;
     }
 
-    // Verify bounds before memcpy (defensive check)
-    if (st->input_buffer_used + len > st->input_buffer_size) {
+    // Verify bounds before memcpy (defensive check) using shared helper
+    if (json_check_add_overflow(st->input_buffer_used, len) ||
+        st->input_buffer_used + len > st->input_buffer_size) {
         st->state = JSON_STREAM_STATE_ERROR;
         if (err) {
             err->code = TEXT_JSON_E_OOM;
@@ -1029,8 +1030,8 @@ TEXT_API text_json_status text_json_stream_feed(
         st->buffer_start_offset = 0;  // First chunk starts at offset 0
     }
 
-    // Check for integer overflow before updating total_bytes_consumed
-    if (st->total_bytes_consumed > SIZE_MAX - len) {
+    // Check for integer overflow before updating total_bytes_consumed using shared helper
+    if (json_check_add_overflow(st->total_bytes_consumed, len)) {
         st->state = JSON_STREAM_STATE_ERROR;
         if (err) {
             err->code = TEXT_JSON_E_OOM;
@@ -1211,7 +1212,7 @@ TEXT_API text_json_status text_json_stream_finish(
             // After compaction, buffer_start_offset points to where the unprocessed data originally started
             // Check for overflow in offset calculation (for error reporting - not critical but avoids UB)
             json_token adjusted_token = token;
-            if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
+            if (json_check_add_overflow(st->buffer_start_offset, token.pos.offset)) {
                 // Overflow in offset calculation - clamp to SIZE_MAX for error reporting
                 adjusted_token.pos.offset = SIZE_MAX;
             } else {
