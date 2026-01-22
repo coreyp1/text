@@ -35,10 +35,10 @@ extern "C" {
  * - Object keys are reference tokens
  *
  * Examples:
- * - "" → root value
- * - "/a" → value at key "a" in root object
- * - "/0" → first element of root array
- * - "/a/0/b" → value at key "b" in first element of array at key "a"
+ * - "" -> root value
+ * - "/a" -> value at key "a" in root object
+ * - "/0" -> first element of root array
+ * - "/a/0/b" -> value at key "b" in first element of array at key "a"
  *
  * @param root Root JSON value to evaluate pointer against (must not be NULL)
  * @param ptr JSON Pointer string (must not be NULL)

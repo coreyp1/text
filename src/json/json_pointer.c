@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 // Decode a JSON Pointer reference token
-// Decodes escape sequences: ~0 → ~, ~1 → /
+// Decodes escape sequences: ~0 -> ~, ~1 -> /
 // The output buffer must be large enough (worst case: same size as input)
 static text_json_status json_pointer_decode_token(
     const char* input,

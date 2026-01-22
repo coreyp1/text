@@ -112,8 +112,8 @@ TEXT_API text_json_stream* text_json_stream_new(
  * number of chunks, limited only by the `max_total_bytes` option (default: 64MB).
  *
  * **Examples:**
- * - String spanning chunks: `"hello` (chunk 1) + `world"` (chunk 2) → `"helloworld"`
- * - Number spanning chunks: `12345` (chunk 1) + `.678` (chunk 2) → `12345.678`
+ * - String spanning chunks: `"hello` (chunk 1) + `world"` (chunk 2) -> `"helloworld"`
+ * - Number spanning chunks: `12345` (chunk 1) + `.678` (chunk 2) -> `12345.678`
  * - Values can span 2, 3, 100, or more chunks as long as total size is within limits
  *
  * **Important:** If the last value in the JSON is incomplete at the end of

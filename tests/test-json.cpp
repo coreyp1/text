@@ -150,8 +150,8 @@ TEST(StringHandling, UnicodeEscapes) {
         size_t expected_len;
     } tests[] = {
         {"\\u0041", "A", 1},           // U+0041 = 'A'
-        {"\\u00E9", "\xC3\xA9", 2},    // U+00E9 = 'é' (UTF-8)
-        {"\\u20AC", "\xE2\x82\xAC", 3} // U+20AC = '€' (UTF-8)
+        {"\\u00E9", "\xC3\xA9", 2},    // U+00E9 = 'e with acute' (UTF-8)
+        {"\\u20AC", "\xE2\x82\xAC", 3} // U+20AC = 'Euro sign' (UTF-8)
     };
 
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
@@ -187,7 +187,7 @@ TEST(StringHandling, SurrogatePairs) {
     size_t output_len;
     json_position pos = {0, 1, 1};
 
-    // U+1F600 = 😀 (grinning face)
+    // U+1F600 = grinning face emoji
     // High surrogate: U+D83D, Low surrogate: U+DE00
     const char* input = "\\uD83D\\uDE00";
     const char* expected = "\xF0\x9F\x98\x80";  // UTF-8 for U+1F600
@@ -309,7 +309,7 @@ TEST(StringHandling, BufferOverflowUnicode) {
     size_t output_len;
     json_position pos = {0, 1, 1};
 
-    // Unicode escape produces 3 bytes (€), but buffer is only 2
+    // Unicode escape produces 3 bytes (Euro sign), but buffer is only 2
     const char* input = "\\u20AC";
     text_json_status status = json_decode_string(
         input,
@@ -4460,7 +4460,7 @@ TEST(JsonPointer, ComplexNestedStructures) {
 }
 
 /**
- * Test JSON Pointer - escape sequences (~0 → ~, ~1 → /)
+ * Test JSON Pointer - escape sequences (~0 -> ~, ~1 -> /)
  */
 TEST(JsonPointer, EscapeSequences) {
     // Create object with keys containing ~ and /
@@ -4492,7 +4492,7 @@ TEST(JsonPointer, EscapeSequences) {
 
     // Access key with both escapes
     // Key is "key~0/with~1both", so pointer is "/key~00~1with~01both"
-    // (~00 → ~0, ~1 → /, ~01 → ~1)
+    // (~00 -> ~0, ~1 -> /, ~01 -> ~1)
     result = text_json_pointer_get(root, "/key~00~1with~01both", 20);
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(text_json_typeof(result), TEXT_JSON_STRING);

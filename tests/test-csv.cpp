@@ -494,9 +494,9 @@ TEST(CsvUtils, UTF8ValidationValidASCII) {
 
 TEST(CsvUtils, UTF8ValidationValidMultiByte) {
     csv_position pos = {0, 1, 1};
-    // "Hello 世界" in UTF-8
+    // "Hello " + Chinese characters (U+4E16 U+754C) in UTF-8
     const char* input = "Hello \xE4\xB8\x96\xE7\x95\x8C";
-    size_t input_len = 12;  // "Hello " (6) + "世界" (6)
+    size_t input_len = 12;  // "Hello " (6) + Chinese chars (6)
 
     text_csv_status error = TEXT_CSV_OK;
     csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
@@ -1079,8 +1079,8 @@ TEST(CsvStream, DoubledQuoteSplitAcrossChunks) {
 // Complete CSV: `1,"a b"\n2,"c"` where the newline comes immediately after the closing quote
 // Chunk 1: `1,"a b"` - field1="1" complete, field2="a b" ends with quote (enters QUOTE_IN_QUOTED state)
 //         The parser cannot know if this quote is:
-//         - A closing quote (followed by newline/delimiter) → field ends, record ends
-//         - First quote of doubled quote `""` (followed by another quote) → field continues
+//         - A closing quote (followed by newline/delimiter) -> field ends, record ends
+//         - First quote of doubled quote `""` (followed by another quote) -> field continues
 //         So it must wait for the next chunk before emitting field2
 // Chunk 2: `\n2,"c"` - the newline at start should be recognized as ending the quoted field and record
 //                       Then field1="2" and field2="c" in the next record

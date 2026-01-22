@@ -72,12 +72,12 @@ TEXT_API text_json_status text_json_patch_apply(
  * - Arrays are replaced entirely (not merged)
  *
  * Examples:
- * - Target: {"a":"b"}, Patch: {"a":"c"} → Result: {"a":"c"}
- * - Target: {"a":"b"}, Patch: {"b":"c"} → Result: {"a":"b","b":"c"}
- * - Target: {"a":"b"}, Patch: {"a":null} → Result: {}
- * - Target: {"a":["b"]}, Patch: {"a":"c"} → Result: {"a":"c"}
- * - Target: ["a","b"], Patch: ["c","d"] → Result: ["c","d"]
- * - Target: {"a":"foo"}, Patch: null → Result: null
+ * - Target: {"a":"b"}, Patch: {"a":"c"} -> Result: {"a":"c"}
+ * - Target: {"a":"b"}, Patch: {"b":"c"} -> Result: {"a":"b","b":"c"}
+ * - Target: {"a":"b"}, Patch: {"a":null} -> Result: {}
+ * - Target: {"a":["b"]}, Patch: {"a":"c"} -> Result: {"a":"c"}
+ * - Target: ["a","b"], Patch: ["c","d"] -> Result: ["c","d"]
+ * - Target: {"a":"foo"}, Patch: null -> Result: null
  *
  * @param target Target JSON value to apply patch to (must not be NULL)
  * @param patch Patch JSON value to merge into target (must not be NULL)
