@@ -320,14 +320,15 @@ text_csv_status csv_stream_process_chunk(
     const char* input,
     size_t input_len
 );
-csv_newline_type csv_stream_handle_newline(
+text_csv_status csv_stream_handle_newline(
     text_csv_stream* stream,
     const char* input,
     size_t input_len,
     size_t* offset,
-    size_t byte_pos
+    size_t byte_pos,
+    csv_newline_type* nl_out
 );
-void csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes);
+text_csv_status csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes);
 bool csv_stream_is_comment_start(
     text_csv_stream* stream,
     const char* input,

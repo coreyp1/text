@@ -345,7 +345,11 @@ static text_csv_status csv_parser_process_byte(
 
             // Check for newline (empty field, end of record)
             csv_position pos_before = parser->pos;
-            csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect);
+            text_csv_status detect_error = TEXT_CSV_OK;
+            csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect, &detect_error);
+            if (detect_error != TEXT_CSV_OK) {
+                return csv_parser_set_error(parser, detect_error, "Overflow in newline detection");
+            }
             if (nl != CSV_NEWLINE_NONE) {
                 // Empty field, end of record
                 parser->current_field.length = 0;
@@ -403,7 +407,11 @@ static text_csv_status csv_parser_process_byte(
             }
 
             // Check for newline
-            csv_newline_type nl = csv_detect_newline(input, input_len, &parser->pos, parser->dialect);
+            text_csv_status detect_error = TEXT_CSV_OK;
+            csv_newline_type nl = csv_detect_newline(input, input_len, &parser->pos, parser->dialect, &detect_error);
+            if (detect_error != TEXT_CSV_OK) {
+                return csv_parser_set_error(parser, detect_error, "Overflow in newline detection");
+            }
             if (nl != CSV_NEWLINE_NONE) {
                 // Field complete, end of record
                 parser->field_count++;
@@ -461,7 +469,11 @@ static text_csv_status csv_parser_process_byte(
                 }
                 // Check for newline sequence
                 csv_position pos_before = parser->pos;
-                csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect);
+                text_csv_status detect_error = TEXT_CSV_OK;
+                csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect, &detect_error);
+                if (detect_error != TEXT_CSV_OK) {
+                    return csv_parser_set_error(parser, detect_error, "Overflow in newline detection");
+                }
                 if (nl != CSV_NEWLINE_NONE) {
                     parser->pos = pos_before;
                     parser->total_bytes_consumed += (nl == CSV_NEWLINE_CRLF ? 2 : 1);
@@ -505,7 +517,11 @@ static text_csv_status csv_parser_process_byte(
             } else {
                 // Check for newline (end of record)
                 csv_position pos_before = parser->pos;
-                csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect);
+                text_csv_status detect_error = TEXT_CSV_OK;
+                csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect, &detect_error);
+                if (detect_error != TEXT_CSV_OK) {
+                    return csv_parser_set_error(parser, detect_error, "Overflow in newline detection");
+                }
                 if (nl != CSV_NEWLINE_NONE) {
                     // End of quoted field, end of record
                     parser->field_count++;
@@ -556,7 +572,11 @@ static text_csv_status csv_parser_process_byte(
         case CSV_STATE_COMMENT: {
             // Consume until newline
             csv_position pos_before = parser->pos;
-            csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect);
+            text_csv_status detect_error = TEXT_CSV_OK;
+            csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, parser->dialect, &detect_error);
+            if (detect_error != TEXT_CSV_OK) {
+                return csv_parser_set_error(parser, detect_error, "Overflow in newline detection");
+            }
             if (nl != CSV_NEWLINE_NONE) {
                 // End of comment line
                 parser->state = CSV_STATE_START_OF_RECORD;

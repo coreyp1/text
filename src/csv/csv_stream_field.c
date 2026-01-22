@@ -36,13 +36,15 @@ text_csv_status csv_stream_complete_field(
         stream->field_count = 0;
         stream->state = CSV_STREAM_STATE_START_OF_RECORD;
         stream->in_record = false;
+        if (stream->row_count >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+        }
         stream->row_count++;
     } else {
         stream->state = CSV_STREAM_STATE_START_OF_FIELD;
     }
 
-    csv_stream_advance_position(stream, offset, 1);
-    return TEXT_CSV_OK;
+    return csv_stream_advance_position(stream, offset, 1);
 }
 
 // Complete field at delimiter (field separator, not end of record)
@@ -111,6 +113,9 @@ text_csv_status csv_stream_emit_field(
         return status;
     }
 
+    if (stream->field_count >= SIZE_MAX) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Field count overflow");
+    }
     stream->field_count++;
 
     // Optionally emit record end
@@ -206,7 +211,10 @@ size_t csv_stream_scan_unquoted_field_ahead(
             // Check if it's a complete newline sequence
             csv_position pos_before = stream->pos;
             pos_before.offset = pos;
-            csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect);
+            text_csv_status detect_error = TEXT_CSV_OK;
+            csv_newline_type nl = csv_detect_newline(process_input, process_len, &pos_before, &stream->opts.dialect, &detect_error);
+            // Note: We ignore overflow errors here since this is just scanning ahead
+            // The actual newline handling will check for overflow
             if (nl != CSV_NEWLINE_NONE) {
                 // Found a complete newline sequence
                 if (!allow_unquoted_newlines) {

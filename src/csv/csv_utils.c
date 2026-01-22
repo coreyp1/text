@@ -10,12 +10,19 @@
 #include <limits.h>
 
 // Detect and consume newline from input
+// Returns CSV_NEWLINE_* type if newline detected, CSV_NEWLINE_NONE otherwise
+// Sets *error_out to TEXT_CSV_E_LIMIT if overflow occurs, TEXT_CSV_OK otherwise
 TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
     const char* input,
     size_t input_len,
     csv_position* pos,
-    const text_csv_dialect* dialect
+    const text_csv_dialect* dialect,
+    text_csv_status* error_out
 ) {
+    if (error_out) {
+        *error_out = TEXT_CSV_OK;
+    }
+
     if (!input || input_len == 0 || !pos || !dialect) {
         return CSV_NEWLINE_NONE;
     }
@@ -28,15 +35,22 @@ TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
     // Check for CRLF first (must check before LF/CR individually)
     if (dialect->accept_crlf && offset + 1 < input_len) {
         if (input[offset] == '\r' && input[offset + 1] == '\n') {
-            // Check for overflow before updating offset
+            // Check all overflow conditions upfront before performing any operations
             if (pos->offset > SIZE_MAX - 2) {
+                if (error_out) {
+                    *error_out = TEXT_CSV_E_LIMIT;
+                }
                 return CSV_NEWLINE_NONE;  // Offset would overflow
             }
-            pos->offset += 2;
-            // Check for integer overflow in line (int can overflow)
-            if (pos->line < INT_MAX) {
-                pos->line++;
+            if (pos->line >= INT_MAX) {
+                if (error_out) {
+                    *error_out = TEXT_CSV_E_LIMIT;
+                }
+                return CSV_NEWLINE_NONE;  // Line would overflow
             }
+            // All checks passed, perform all updates
+            pos->offset += 2;
+            pos->line++;
             pos->column = 1;
             return CSV_NEWLINE_CRLF;
         }
@@ -44,30 +58,44 @@ TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
 
     // Check for LF
     if (dialect->accept_lf && input[offset] == '\n') {
-        // Check for overflow before updating offset
-        if (pos->offset == SIZE_MAX) {
+        // Check all overflow conditions upfront before performing any operations
+        if (pos->offset >= SIZE_MAX) {
+            if (error_out) {
+                *error_out = TEXT_CSV_E_LIMIT;
+            }
             return CSV_NEWLINE_NONE;  // Offset would overflow
         }
-        pos->offset += 1;
-        // Check for integer overflow in line (int can overflow)
-        if (pos->line < INT_MAX) {
-            pos->line++;
+        if (pos->line >= INT_MAX) {
+            if (error_out) {
+                *error_out = TEXT_CSV_E_LIMIT;
+            }
+            return CSV_NEWLINE_NONE;  // Line would overflow
         }
+        // All checks passed, perform all updates
+        pos->offset += 1;
+        pos->line++;
         pos->column = 1;
         return CSV_NEWLINE_LF;
     }
 
     // Check for CR (only if CRLF not accepted or not present)
     if (dialect->accept_cr && input[offset] == '\r') {
-        // Check for overflow before updating offset
-        if (pos->offset == SIZE_MAX) {
+        // Check all overflow conditions upfront before performing any operations
+        if (pos->offset >= SIZE_MAX) {
+            if (error_out) {
+                *error_out = TEXT_CSV_E_LIMIT;
+            }
             return CSV_NEWLINE_NONE;  // Offset would overflow
         }
-        pos->offset += 1;
-        // Check for integer overflow in line (int can overflow)
-        if (pos->line < INT_MAX) {
-            pos->line++;
+        if (pos->line >= INT_MAX) {
+            if (error_out) {
+                *error_out = TEXT_CSV_E_LIMIT;
+            }
+            return CSV_NEWLINE_NONE;  // Line would overflow
         }
+        // All checks passed, perform all updates
+        pos->offset += 1;
+        pos->line++;
         pos->column = 1;
         return CSV_NEWLINE_CR;
     }
@@ -76,12 +104,18 @@ TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
 }
 
 // Validate UTF-8 sequence
+// Sets *error_out to TEXT_CSV_E_LIMIT if overflow occurs, TEXT_CSV_OK otherwise
 csv_utf8_result csv_validate_utf8(
     const char* input,
     size_t input_len,
     csv_position* pos,
-    bool validate
+    bool validate,
+    text_csv_status* error_out
 ) {
+    if (error_out) {
+        *error_out = TEXT_CSV_OK;
+    }
+
     if (!input || input_len == 0) {
         return CSV_UTF8_VALID;
     }
@@ -89,18 +123,23 @@ csv_utf8_result csv_validate_utf8(
     if (!validate) {
         // Skip validation, just advance position
         if (pos) {
-            // Check for overflow before updating offset
+            // Check all overflow conditions upfront before performing any operations
             if (pos->offset > SIZE_MAX - input_len) {
+                if (error_out) {
+                    *error_out = TEXT_CSV_E_LIMIT;
+                }
                 return CSV_UTF8_INVALID;  // Offset would overflow
             }
-            pos->offset += input_len;
-            // Check for integer overflow in column (int can overflow)
             if (input_len > (size_t)INT_MAX || pos->column > INT_MAX - (int)input_len) {
-                // Column overflow - clamp to INT_MAX
-                pos->column = INT_MAX;
-            } else {
-                pos->column += (int)input_len;
+                // Column overflow - return error
+                if (error_out) {
+                    *error_out = TEXT_CSV_E_LIMIT;
+                }
+                return CSV_UTF8_INVALID;  // Column would overflow
             }
+            // All checks passed, perform all updates
+            pos->offset += input_len;
+            pos->column += (int)input_len;
         }
         return CSV_UTF8_VALID;
     }
@@ -194,26 +233,29 @@ csv_utf8_result csv_validate_utf8(
             }
         }
 
-        // Advance position
-        // Check for overflow before updating offset
-        if (offset > SIZE_MAX - seq_len) {
-            return CSV_UTF8_INVALID;  // Offset would overflow
-        }
-        offset += seq_len;
-        // Check for underflow in remaining
+        // Check for underflow in remaining (defensive check)
         if (remaining < seq_len) {
             return CSV_UTF8_INVALID;  // Logic error - remaining < seq_len
         }
+        // Check all overflow conditions upfront before performing any operations
+        if (offset > SIZE_MAX - seq_len) {
+            return CSV_UTF8_INVALID;  // Offset would overflow
+        }
+        if (pos) {
+            if (seq_len > (size_t)INT_MAX || pos->column > INT_MAX - (int)seq_len) {
+                // Column overflow - return error
+                if (error_out) {
+                    *error_out = TEXT_CSV_E_LIMIT;
+                }
+                return CSV_UTF8_INVALID;  // Column would overflow
+            }
+        }
+        // All checks passed, perform all updates
+        offset += seq_len;
         remaining -= seq_len;
         if (pos) {
             pos->offset = offset;
-            // Check for integer overflow in column (int can overflow)
-            if (seq_len > (size_t)INT_MAX || pos->column > INT_MAX - (int)seq_len) {
-                // Column overflow - clamp to INT_MAX
-                pos->column = INT_MAX;
-            } else {
-                pos->column += (int)seq_len;
-            }
+            pos->column += (int)seq_len;
         }
     }
 
@@ -221,47 +263,55 @@ csv_utf8_result csv_validate_utf8(
 }
 
 // Strip UTF-8 BOM from input (BOM is 0xEF 0xBB 0xBF)
-TEXT_INTERNAL_API bool csv_strip_bom(
+// Returns TEXT_CSV_OK on success (BOM stripped or no BOM found), TEXT_CSV_E_LIMIT on overflow
+// Sets *was_stripped to true if BOM was found and stripped, false otherwise
+TEXT_INTERNAL_API text_csv_status csv_strip_bom(
     const char** input,
     size_t* input_len,
     csv_position* pos,
-    bool strip
+    bool strip,
+    bool* was_stripped
 ) {
+    if (was_stripped) {
+        *was_stripped = false;
+    }
+
     if (!input || !input_len || !*input || *input_len < 3) {
-        return false;
+        return TEXT_CSV_OK;  // No BOM found (not an error)
     }
 
     if (!strip) {
-        return false;
+        return TEXT_CSV_OK;  // Stripping disabled (not an error)
     }
 
     // Check for UTF-8 BOM: 0xEF 0xBB 0xBF
     if ((unsigned char)(*input)[0] == 0xEF &&
         (unsigned char)(*input)[1] == 0xBB &&
         (unsigned char)(*input)[2] == 0xBF) {
-        // Strip BOM
-        *input += 3;
-        // Check for underflow before subtracting
+        // Check for underflow before subtracting (defensive check)
         if (*input_len < 3) {
-            return false;  // Should not happen due to earlier check, but be safe
+            return TEXT_CSV_OK;  // Should not happen due to earlier check, but be safe
         }
-        *input_len -= 3;
         if (pos) {
-            // Check for overflow before updating offset
+            // Check all overflow conditions upfront before performing any operations
             if (pos->offset > SIZE_MAX - 3) {
-                return false;  // Offset would overflow
+                return TEXT_CSV_E_LIMIT;  // Offset would overflow
             }
-            pos->offset += 3;
-            // Check for integer overflow in column (int can overflow)
             if (pos->column > INT_MAX - 3) {
-                // Column overflow - clamp to INT_MAX
-                pos->column = INT_MAX;
-            } else {
-                pos->column += 3;
+                return TEXT_CSV_E_LIMIT;  // Column would overflow
             }
+            // All checks passed, perform all updates
+            pos->offset += 3;
+            pos->column += 3;
         }
-        return true;
+        // Strip BOM (update input pointers after position checks)
+        *input += 3;
+        *input_len -= 3;
+        if (was_stripped) {
+            *was_stripped = true;
+        }
+        return TEXT_CSV_OK;
     }
 
-    return false;
+    return TEXT_CSV_OK;  // No BOM found (not an error)
 }

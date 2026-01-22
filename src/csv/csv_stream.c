@@ -201,8 +201,12 @@ TEXT_API text_csv_status text_csv_stream_feed(
     if (stream->total_bytes_consumed == 0 && !stream->opts.keep_bom) {
         const char* input = (const char*)data;
         size_t input_len = len;
-        csv_strip_bom(&input, &input_len, &stream->pos, true);
-        if (input != (const char*)data) {
+        bool was_stripped = false;
+        text_csv_status status = csv_strip_bom(&input, &input_len, &stream->pos, true, &was_stripped);
+        if (status != TEXT_CSV_OK) {
+            return csv_stream_set_error(stream, status, "Overflow in BOM stripping");
+        }
+        if (was_stripped) {
             // BOM was stripped, adjust data pointer
             data = input;
             len = input_len;

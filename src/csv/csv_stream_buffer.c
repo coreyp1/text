@@ -66,9 +66,18 @@ text_csv_status csv_field_buffer_grow(
             }
         } else {
             // Large buffer: double the size
-            new_size = fb->buffer_size * CSV_BUFFER_GROWTH_MULTIPLIER;
-            if (new_size < needed) {
+            // Check for overflow before multiplication
+            if (fb->buffer_size > SIZE_MAX / CSV_BUFFER_GROWTH_MULTIPLIER) {
+                // Cannot double without overflow - use needed size if possible
+                if (needed > SIZE_MAX) {
+                    return TEXT_CSV_E_OOM;
+                }
                 new_size = needed;
+            } else {
+                new_size = fb->buffer_size * CSV_BUFFER_GROWTH_MULTIPLIER;
+                if (new_size < needed) {
+                    new_size = needed;
+                }
             }
         }
     }
@@ -96,6 +105,11 @@ text_csv_status csv_field_buffer_append(
     const char* data,
     size_t len
 ) {
+    // Check for overflow before addition
+    if (len > SIZE_MAX - fb->buffer_used) {
+        return TEXT_CSV_E_OOM;
+    }
+
     // Grow buffer if needed
     if (fb->buffer_used + len > fb->buffer_size) {
         text_csv_status status = csv_field_buffer_grow(fb, fb->buffer_used + len);

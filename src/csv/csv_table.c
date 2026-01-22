@@ -577,7 +577,25 @@ TEXT_API text_csv_table* text_csv_parse_table(
     size_t input_len = len;
     csv_position pos = {0, 1, 1};
     if (!opts->keep_bom) {
-        csv_strip_bom(&input, &input_len, &pos, true);
+        bool was_stripped = false;
+        text_csv_status status = csv_strip_bom(&input, &input_len, &pos, true, &was_stripped);
+        if (status != TEXT_CSV_OK) {
+            if (err) {
+                err->code = status;
+                err->message = "Overflow in BOM stripping";
+                err->byte_offset = 0;
+                err->line = 1;
+                err->column = 1;
+                err->row_index = 0;
+                err->col_index = 0;
+                err->context_snippet = NULL;
+                err->context_snippet_len = 0;
+                err->caret_offset = 0;
+            }
+            free(table);
+            csv_context_free(ctx);
+            return NULL;
+        }
     }
 
     // Set input buffer for in-situ mode (use adjusted input after BOM stripping)

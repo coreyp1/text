@@ -356,7 +356,8 @@ TEST(CsvUtils, NewlineDetectionLF) {
     const char* input = "test\nnext";
     size_t input_len = strlen(input);
 
-    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect, &error);
 
     EXPECT_EQ(result, CSV_NEWLINE_LF);
     EXPECT_EQ(pos.offset, 5u);  // "test\n" = 5 bytes
@@ -374,7 +375,8 @@ TEST(CsvUtils, NewlineDetectionCRLF) {
     const char* input = "test\r\nnext";
     size_t input_len = strlen(input);
 
-    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect, &error);
 
     EXPECT_EQ(result, CSV_NEWLINE_CRLF);
     EXPECT_EQ(pos.offset, 6u);  // "test\r\n" = 6 bytes
@@ -392,7 +394,8 @@ TEST(CsvUtils, NewlineDetectionCR) {
     const char* input = "test\rnext";
     size_t input_len = strlen(input);
 
-    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect, &error);
 
     EXPECT_EQ(result, CSV_NEWLINE_CR);
     EXPECT_EQ(pos.offset, 5u);  // "test\r" = 5 bytes
@@ -407,7 +410,8 @@ TEST(CsvUtils, NewlineDetectionNone) {
     const char* input = "test";
     size_t input_len = strlen(input);
 
-    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect, &error);
 
     EXPECT_EQ(result, CSV_NEWLINE_NONE);
     EXPECT_EQ(pos.offset, 0u);
@@ -426,7 +430,8 @@ TEST(CsvUtils, NewlineDetectionCRLFPrecedence) {
     const char* input = "test\r\nnext";
     size_t input_len = strlen(input);
 
-    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_newline_type result = csv_detect_newline(input, input_len, &pos, &dialect, &error);
 
     EXPECT_EQ(result, CSV_NEWLINE_CRLF);  // Should prefer CRLF
     EXPECT_EQ(pos.offset, 6u);
@@ -439,9 +444,10 @@ TEST(CsvUtils, BOMStripping) {
     const char* input = (const char*)bom_input;
     size_t input_len = 7;  // 3 BOM + 4 "test"
 
-    bool stripped = csv_strip_bom(&input, &input_len, &pos, true);
-
-    EXPECT_TRUE(stripped);
+    bool was_stripped = false;
+    text_csv_status status = csv_strip_bom(&input, &input_len, &pos, true, &was_stripped);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(was_stripped);
     EXPECT_EQ(input_len, 4u);  // "test" = 4 bytes
     EXPECT_EQ(pos.offset, 3u);
     EXPECT_EQ(pos.column, 4);  // 1 + 3 BOM bytes
@@ -454,9 +460,10 @@ TEST(CsvUtils, BOMNoStrip) {
     size_t input_len = strlen(input_with_bom) + 3;
 
     const char* input = input_with_bom;
-    bool stripped = csv_strip_bom(&input, &input_len, &pos, false);
-
-    EXPECT_FALSE(stripped);
+    bool was_stripped = false;
+    text_csv_status status = csv_strip_bom(&input, &input_len, &pos, false, &was_stripped);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(was_stripped);
     EXPECT_EQ(input, input_with_bom);  // Should not change
 }
 
@@ -466,9 +473,10 @@ TEST(CsvUtils, BOMNoBOM) {
     size_t input_len = strlen(input);
 
     const char* original_input = input;
-    bool stripped = csv_strip_bom(&input, &input_len, &pos, true);
-
-    EXPECT_FALSE(stripped);
+    bool was_stripped = false;
+    text_csv_status status = csv_strip_bom(&input, &input_len, &pos, true, &was_stripped);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(was_stripped);
     EXPECT_EQ(input, original_input);
 }
 
@@ -477,7 +485,8 @@ TEST(CsvUtils, UTF8ValidationValidASCII) {
     const char* input = "Hello";
     size_t input_len = strlen(input);
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_VALID);
     EXPECT_EQ(pos.offset, input_len);
@@ -489,7 +498,8 @@ TEST(CsvUtils, UTF8ValidationValidMultiByte) {
     const char* input = "Hello \xE4\xB8\x96\xE7\x95\x8C";
     size_t input_len = 12;  // "Hello " (6) + "世界" (6)
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_VALID);
     EXPECT_EQ(pos.offset, input_len);
@@ -501,7 +511,8 @@ TEST(CsvUtils, UTF8ValidationInvalid) {
     const char* input = "\x80";
     size_t input_len = 1;
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_INVALID);
 }
@@ -512,7 +523,8 @@ TEST(CsvUtils, UTF8ValidationIncomplete) {
     const char* input = "\xC2";  // Missing continuation byte
     size_t input_len = 1;
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_INCOMPLETE);
 }
@@ -523,7 +535,8 @@ TEST(CsvUtils, UTF8ValidationDisabled) {
     const char* input = "\x80\xFF";
     size_t input_len = 2;
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, false);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, false, &error);
 
     EXPECT_EQ(result, CSV_UTF8_VALID);
     EXPECT_EQ(pos.offset, input_len);
@@ -535,7 +548,8 @@ TEST(CsvUtils, UTF8ValidationOverlong) {
     const char* input = "\xC0\x81";
     size_t input_len = 2;
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_INVALID);
 }
@@ -546,7 +560,8 @@ TEST(CsvUtils, UTF8ValidationTooLarge) {
     const char* input = "\xF4\x90\x80\x80";
     size_t input_len = 4;
 
-    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true);
+    text_csv_status error = TEXT_CSV_OK;
+    csv_utf8_result result = csv_validate_utf8(input, input_len, &pos, true, &error);
 
     EXPECT_EQ(result, CSV_UTF8_INVALID);
 }

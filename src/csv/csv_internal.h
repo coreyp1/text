@@ -80,7 +80,8 @@ TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
     const char* input,
     size_t input_len,
     csv_position* pos,
-    const text_csv_dialect* dialect
+    const text_csv_dialect* dialect,
+    text_csv_status* error_out
 );
 
 /**
@@ -99,7 +100,8 @@ TEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(
     const char* input,
     size_t input_len,
     csv_position* pos,
-    bool validate
+    bool validate,
+    text_csv_status* error_out
 );
 
 /**
@@ -114,11 +116,12 @@ TEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(
  * @param strip Whether to strip BOM (if false, does nothing)
  * @return true if BOM was stripped, false otherwise
  */
-TEXT_INTERNAL_API bool csv_strip_bom(
+TEXT_INTERNAL_API text_csv_status csv_strip_bom(
     const char** input,
     size_t* input_len,
     csv_position* pos,
-    bool strip
+    bool strip,
+    bool* was_stripped
 );
 
 /**

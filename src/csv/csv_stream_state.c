@@ -9,38 +9,74 @@
 #include <string.h>
 
 // Advance position tracking
-void csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes) {
+text_csv_status csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes) {
+    // Check all overflow conditions upfront before performing any operations
+    if (*offset > SIZE_MAX - bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Offset overflow");
+    }
+    if (stream->pos.offset > SIZE_MAX - bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Position offset overflow");
+    }
+    if (stream->pos.column > INT_MAX - (int)bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Column overflow");
+    }
+    if (stream->total_bytes_consumed > SIZE_MAX - bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Total bytes consumed overflow");
+    }
+
+    // All checks passed, perform all increments
     *offset += bytes;
     stream->pos.offset += bytes;
-    stream->pos.column += bytes;
+    stream->pos.column += (int)bytes;
     stream->total_bytes_consumed += bytes;
+
+    return TEXT_CSV_OK;
 }
 
 // Handle newline detection and position update
-// Returns the newline type (CSV_NEWLINE_NONE if no newline detected)
-csv_newline_type csv_stream_handle_newline(
+// Returns TEXT_CSV_OK if newline detected and processed, TEXT_CSV_E_LIMIT on overflow, or TEXT_CSV_OK with CSV_NEWLINE_NONE if no newline
+text_csv_status csv_stream_handle_newline(
     text_csv_stream* stream,
     const char* input,
     size_t input_len,
     size_t* offset,
-    size_t byte_pos
+    size_t byte_pos,
+    csv_newline_type* nl_out
 ) {
     csv_position pos_before = stream->pos;
     pos_before.offset = byte_pos;
-    csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, &stream->opts.dialect);
+    text_csv_status detect_error = TEXT_CSV_OK;
+    csv_newline_type nl = csv_detect_newline(input, input_len, &pos_before, &stream->opts.dialect, &detect_error);
+
+    if (detect_error != TEXT_CSV_OK) {
+        return csv_stream_set_error(stream, detect_error, "Overflow in newline detection");
+    }
 
     if (nl == CSV_NEWLINE_NONE) {
-        return CSV_NEWLINE_NONE;
+        *nl_out = CSV_NEWLINE_NONE;
+        return TEXT_CSV_OK;
     }
 
     size_t newline_bytes = (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-    stream->pos.offset += (pos_before.offset - byte_pos);
+
+    // Check all overflow conditions upfront before performing any operations
+    size_t offset_delta = pos_before.offset - byte_pos;
+    if (stream->pos.offset > SIZE_MAX - offset_delta) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Position offset overflow in newline handling");
+    }
+    if (stream->total_bytes_consumed > SIZE_MAX - newline_bytes) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Total bytes consumed overflow in newline handling");
+    }
+
+    // All checks passed, perform all updates
+    stream->pos.offset = pos_before.offset;
     stream->pos.line = pos_before.line;
     stream->pos.column = pos_before.column;
     stream->total_bytes_consumed += newline_bytes;
     *offset = pos_before.offset;
+    *nl_out = nl;
 
-    return nl;
+    return TEXT_CSV_OK;
 }
 /**
  * @brief Check if at start of comment line
@@ -84,12 +120,15 @@ text_csv_status csv_stream_process_start_of_record(
     if (csv_stream_is_comment_start(stream, process_input, process_len, byte_pos)) {
         stream->state = CSV_STREAM_STATE_COMMENT;
         stream->in_comment = true;
-        csv_stream_advance_position(stream, offset, 1);
-        return TEXT_CSV_OK;
+        return csv_stream_advance_position(stream, offset, 1);
     }
 
     // Check for newline at start of record - skip trailing empty records
-    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    csv_newline_type nl;
+    text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
     if (nl != CSV_NEWLINE_NONE) {
         // Skip the newline without creating a record
         // Position already updated by csv_stream_handle_newline
@@ -97,7 +136,7 @@ text_csv_status csv_stream_process_start_of_record(
     }
 
     // Emit RECORD_BEGIN
-    text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_BEGIN, NULL, 0);
+    status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_RECORD_BEGIN, NULL, 0);
     if (status != TEXT_CSV_OK) {
         return status;
     }
@@ -138,14 +177,17 @@ text_csv_status csv_stream_process_start_of_field(
         stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
         stream->field.is_quoted = true;
         csv_field_buffer_set_from_input(&stream->field, process_input + byte_pos + 1, 0, true, byte_pos + 1);
-        csv_stream_advance_position(stream, offset, 1);
+        text_csv_status status = csv_stream_advance_position(stream, offset, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
 
         // If we're at the end of the chunk, initialize buffer for the next chunk
         if (*offset >= process_len) {
             // field.data is past the chunk (e.g., quoted field started but no content yet)
             // Initialize empty buffer so we can append to it in the next chunk
             if (!stream->field.is_buffered) {
-                text_csv_status status = csv_field_buffer_grow(&stream->field, CSV_FIELD_BUFFER_INITIAL_SIZE);
+                status = csv_field_buffer_grow(&stream->field, CSV_FIELD_BUFFER_INITIAL_SIZE);
                 if (status != TEXT_CSV_OK) {
                     return status;
                 }
@@ -165,17 +207,23 @@ text_csv_status csv_stream_process_start_of_field(
         if (status != TEXT_CSV_OK) {
             return status;
         }
+        if (stream->field_count >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Field count overflow");
+        }
         stream->field_count++;
         stream->state = CSV_STREAM_STATE_START_OF_FIELD;
-        csv_stream_advance_position(stream, offset, 1);
-        return TEXT_CSV_OK;
+        return csv_stream_advance_position(stream, offset, 1);
     }
 
     // Check for newline
-    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    csv_newline_type nl;
+    text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
     if (nl != CSV_NEWLINE_NONE) {
         // Empty field, end of record
-        text_csv_status status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
+        status = csv_stream_emit_event(stream, TEXT_CSV_EVENT_FIELD, "", 0);
         if (status != TEXT_CSV_OK) {
             return status;
         }
@@ -186,6 +234,9 @@ text_csv_status csv_stream_process_start_of_field(
         stream->field_count = 0;
         stream->state = CSV_STREAM_STATE_START_OF_RECORD;
         stream->in_record = false;
+        if (stream->row_count >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+        }
         stream->row_count++;
         // Position already updated by csv_stream_handle_newline
         return TEXT_CSV_OK;
@@ -203,8 +254,7 @@ text_csv_status csv_stream_process_start_of_field(
     // 2. When field completes and in-situ mode can't be used (handled when emitting)
     // 3. When in-situ mode is disabled
     csv_field_buffer_set_from_input(&stream->field, process_input + byte_pos, 1, false, byte_pos);
-    csv_stream_advance_position(stream, offset, 1);
-    return TEXT_CSV_OK;
+    return csv_stream_advance_position(stream, offset, 1);
 }
 
 // Helper: Handle delimiter in unquoted field
@@ -223,14 +273,18 @@ text_csv_status csv_stream_unquoted_handle_newline(
     size_t* offset,
     size_t byte_pos
 ) {
-    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    csv_newline_type nl;
+    text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
     if (nl == CSV_NEWLINE_NONE) {
         return TEXT_CSV_OK;
     }
 
     // Field complete, end of record
     // Buffer field if needed
-    text_csv_status status = csv_stream_buffer_unquoted_field_if_needed(stream);
+    status = csv_stream_buffer_unquoted_field_if_needed(stream);
     if (status != TEXT_CSV_OK) {
         return status;
     }
@@ -244,6 +298,9 @@ text_csv_status csv_stream_unquoted_handle_newline(
     stream->field_count = 0;
     stream->state = CSV_STREAM_STATE_START_OF_RECORD;
     stream->in_record = false;
+    if (stream->row_count >= SIZE_MAX) {
+        return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+    }
     stream->row_count++;
     // Position already updated by csv_stream_handle_newline
     return TEXT_CSV_OK;
@@ -285,7 +342,11 @@ text_csv_status csv_stream_unquoted_handle_special_char(
 
     if (special_char == '\n' || special_char == '\r') {
         // Check for newline (may have been detected during scan)
-        csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, special_pos);
+        csv_newline_type nl;
+        text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, special_pos, &nl);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
         if (nl != CSV_NEWLINE_NONE) {
             // Field complete, end of record
             text_csv_status status = csv_stream_buffer_unquoted_field_if_needed(stream);
@@ -301,6 +362,9 @@ text_csv_status csv_stream_unquoted_handle_special_char(
             stream->field_count = 0;
             stream->state = CSV_STREAM_STATE_START_OF_RECORD;
             stream->in_record = false;
+            if (stream->row_count >= SIZE_MAX) {
+                return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+            }
             stream->row_count++;
             // Position already updated by csv_stream_handle_newline
             return TEXT_CSV_OK;
@@ -319,10 +383,12 @@ text_csv_status csv_stream_unquoted_handle_special_char(
             }
             stream->field.length = stream->field.buffer_used;
         } else {
+            if (stream->field.length >= SIZE_MAX) {
+                return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Field length overflow");
+            }
             stream->field.length++;
         }
-        csv_stream_advance_position(stream, offset, 1);
-        return TEXT_CSV_OK;
+        return csv_stream_advance_position(stream, offset, 1);
     }
 
     if (special_char == stream->opts.dialect.quote) {
@@ -369,7 +435,10 @@ text_csv_status csv_stream_unquoted_process_bulk(
             // Just update length - field.data already points to the data
             stream->field.length += safe_chars;
         }
-        csv_stream_advance_position(stream, offset, safe_chars);
+        text_csv_status status = csv_stream_advance_position(stream, offset, safe_chars);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
     }
 
     // If we found a special character, handle it
@@ -401,13 +470,17 @@ text_csv_status csv_stream_process_unquoted_field(
     }
 
     // Handle newline
-    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    csv_newline_type nl;
+    text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
     if (nl != CSV_NEWLINE_NONE) {
         return csv_stream_unquoted_handle_newline(stream, process_input, process_len, offset, byte_pos);
     }
 
     // Validate character
-    text_csv_status status = csv_stream_unquoted_validate_char(stream, c);
+    status = csv_stream_unquoted_validate_char(stream, c);
     if (status != TEXT_CSV_OK) {
         return status;
     }
@@ -462,7 +535,11 @@ text_csv_status csv_stream_process_quoted_field(
 
     // If we just processed a doubled quote and see a newline, end the field and record
     if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
-        csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+        csv_newline_type nl;
+        text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
         if (nl == CSV_NEWLINE_NONE) {
             // Not a complete newline sequence, continue processing
             // Fall through to regular character handling
@@ -484,6 +561,9 @@ text_csv_status csv_stream_process_quoted_field(
             stream->field_count = 0;
             stream->state = CSV_STREAM_STATE_START_OF_RECORD;
             stream->in_record = false;
+            if (stream->row_count >= SIZE_MAX) {
+                return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+            }
             stream->row_count++;
             // Position already updated by csv_stream_handle_newline
             return TEXT_CSV_OK;
@@ -492,7 +572,10 @@ text_csv_status csv_stream_process_quoted_field(
 
     if (stream->opts.dialect.escape == TEXT_CSV_ESCAPE_BACKSLASH && c == '\\') {
         stream->state = CSV_STREAM_STATE_ESCAPE_IN_QUOTED;
-        csv_stream_advance_position(stream, offset, 1);
+        text_csv_status status = csv_stream_advance_position(stream, offset, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
         return TEXT_CSV_OK;
     }
 
@@ -500,7 +583,10 @@ text_csv_status csv_stream_process_quoted_field(
         // Don't append the quote yet - we need to check if it's doubled or closing
         // Transition to QUOTE_IN_QUOTED to check next character
         stream->state = CSV_STREAM_STATE_QUOTE_IN_QUOTED;
-        csv_stream_advance_position(stream, offset, 1);
+        text_csv_status status = csv_stream_advance_position(stream, offset, 1);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
 
         // If we're at the end of the chunk, buffer the field data (up to but not including the quote)
         // The quote will be handled in the next chunk when we see what follows it
@@ -546,9 +632,15 @@ text_csv_status csv_stream_process_quoted_field(
             stream->field.start_offset = *offset;
             stream->field.length = 0;
         }
+        if (stream->field.length >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Field length overflow");
+        }
         stream->field.length++;
     }
-    csv_stream_advance_position(stream, offset, 1);
+    text_csv_status status = csv_stream_advance_position(stream, offset, 1);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
 
     // If we're at the end of the chunk, buffer the field data
     if (*offset >= process_len) {
@@ -602,10 +694,8 @@ text_csv_status csv_stream_process_quote_in_quoted(
         stream->state = CSV_STREAM_STATE_QUOTED_FIELD;
         stream->just_processed_doubled_quote = true;  // Mark that we just processed a doubled quote
         stream->quote_in_quoted_at_chunk_boundary = false;  // Clear flag
-        csv_stream_advance_position(stream, offset, 1);
-
         // Field is already buffered, so we're good (whether at chunk boundary or not)
-        return TEXT_CSV_OK;
+        return csv_stream_advance_position(stream, offset, 1);
     }
 
     if (c == stream->opts.dialect.delimiter) {
@@ -662,7 +752,11 @@ text_csv_status csv_stream_process_quote_in_quoted(
     if (c == '\n' || c == '\r') {
         // Save quote position before processing newline (quote is at byte_pos - 1 since we advanced past it)
         size_t quote_pos = byte_pos - 1;
-        csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+        csv_newline_type nl;
+        text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+        if (status != TEXT_CSV_OK) {
+            return status;
+        }
         if (nl == CSV_NEWLINE_NONE) {
             return TEXT_CSV_OK;
         }
@@ -670,7 +764,7 @@ text_csv_status csv_stream_process_quote_in_quoted(
         // End of quoted field, end of record
         // Ensure field is buffered if needed
         // Buffer up to (but not including) the quote position
-        text_csv_status status = csv_stream_ensure_field_buffered(
+        status = csv_stream_ensure_field_buffered(
             stream, process_input, process_len, quote_pos);
         if (status != TEXT_CSV_OK) {
             return status;
@@ -685,6 +779,9 @@ text_csv_status csv_stream_process_quote_in_quoted(
         stream->field_count = 0;
         stream->state = CSV_STREAM_STATE_START_OF_RECORD;
         stream->in_record = false;
+        if (stream->row_count >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+        }
         stream->row_count++;
         // Position already updated by csv_stream_handle_newline
         return TEXT_CSV_OK;
@@ -747,7 +844,10 @@ text_csv_status csv_stream_process_escape_in_quoted(
         stream->field.length += 2; // Backslash + escaped char
     }
 
-    csv_stream_advance_position(stream, offset, 1);
+    text_csv_status status = csv_stream_advance_position(stream, offset, 1);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
 
     // If at end of chunk, buffer field data
     if (*offset >= process_len) {
@@ -771,15 +871,25 @@ text_csv_status csv_stream_process_comment(
     char c
 ) {
     (void)c;  // Not used in this state, but kept for consistent signature
-    csv_newline_type nl = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos);
+    csv_newline_type nl;
+    text_csv_status status = csv_stream_handle_newline(stream, process_input, process_len, offset, byte_pos, &nl);
+    if (status != TEXT_CSV_OK) {
+        return status;
+    }
     if (nl != CSV_NEWLINE_NONE) {
         stream->state = CSV_STREAM_STATE_START_OF_RECORD;
         stream->in_comment = false;
+        if (stream->row_count >= SIZE_MAX) {
+            return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Row count overflow");
+        }
         stream->row_count++;
         // Position already updated by csv_stream_handle_newline
         return TEXT_CSV_OK;
     }
-    csv_stream_advance_position(stream, offset, 1);
+    text_csv_status advance_status = csv_stream_advance_position(stream, offset, 1);
+    if (advance_status != TEXT_CSV_OK) {
+        return advance_status;
+    }
     return TEXT_CSV_OK;
 }
 
@@ -821,6 +931,9 @@ text_csv_status csv_stream_process_chunk(
         }
 
         if (stream->in_record) {
+            if (stream->current_record_bytes >= SIZE_MAX) {
+                return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Current record bytes overflow");
+            }
             stream->current_record_bytes++;
             if (stream->current_record_bytes > stream->max_record_bytes) {
                 return csv_stream_set_error(stream, TEXT_CSV_E_LIMIT, "Maximum record bytes exceeded");
