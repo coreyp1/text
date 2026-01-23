@@ -87,6 +87,18 @@ typedef struct text_json_stream text_json_stream;
  * and event callback. The parser accepts input via text_json_stream_feed()
  * and emits events through the callback.
  *
+ * **Parameter Validation:**
+ * - If `cb` is NULL, returns NULL (callback is required)
+ * - If `opt` is NULL, uses default parse options
+ *
+ * **Error Handling:**
+ * - Returns NULL on allocation failure
+ * - All resources are cleaned up automatically on failure
+ *
+ * **Resource Cleanup:**
+ * - Caller must free returned stream using text_json_stream_free()
+ * - Stream must be freed even if feed/finish operations fail
+ *
  * @param opt Parse options (can be NULL for defaults)
  * @param cb Event callback function (must not be NULL)
  * @param user User context pointer passed to callback
@@ -121,6 +133,32 @@ TEXT_API text_json_stream* text_json_stream_new(
  * is called. Always call `finish()` after feeding all input to ensure all
  * values are processed and emitted.
  *
+ * **Parameter Validation:**
+ * - If `st` is NULL, returns TEXT_JSON_E_INVALID
+ * - If `bytes` is NULL, returns TEXT_JSON_E_INVALID
+ * - If `len` exceeds SIZE_MAX/2, returns TEXT_JSON_E_INVALID
+ *   (prevents obvious overflow in internal calculations)
+ * - If `err` is NULL, error details are not populated
+ * - State validation ensures stream is in a valid state for feeding
+ *
+ * **Overflow Protection:**
+ * - All arithmetic operations are protected against integer overflow
+ * - Input size validation prevents overflow in buffer calculations
+ * - String length, container size, and total bytes are validated against limits
+ * - Buffer growth operations use overflow-safe calculations
+ *
+ * **Error Handling:**
+ * - Returns error code on failure (parse error, limit exceeded, state error)
+ * - Error details are populated in `err` structure if provided
+ * - Error structure includes position information (offset, line, column)
+ * - Context snippets are generated for better error diagnostics
+ * - Stream enters error state on failure (subsequent operations return error)
+ *
+ * **Resource Cleanup:**
+ * - On error: stream state is preserved for error reporting
+ * - Buffered data is maintained until stream is freed
+ * - Error context snippets (if generated) must be freed via text_json_error_free()
+ *
  * @param st Stream instance (must not be NULL)
  * @param bytes Input data (must not be NULL)
  * @param len Length of input data in bytes
@@ -147,6 +185,22 @@ TEXT_API text_json_status text_json_stream_feed(
  * if it was incomplete at the end of the final chunk (e.g., a number ending
  * with a digit, or a string without a closing quote).
  *
+ * **Parameter Validation:**
+ * - If `st` is NULL, returns TEXT_JSON_E_INVALID
+ * - If `err` is NULL, error details are not populated
+ * - State validation ensures stream is in a valid state for finishing
+ *
+ * **Error Handling:**
+ * - Returns error code on failure (incomplete structure, parse error)
+ * - Error details are populated in `err` structure if provided
+ * - Error structure includes position information (offset, line, column)
+ * - Stream enters error state on failure
+ *
+ * **Resource Cleanup:**
+ * - On success: stream is ready for freeing (no more operations needed)
+ * - On error: stream state is preserved for error reporting
+ * - Error context snippets (if generated) must be freed via text_json_error_free()
+ *
  * @param st Stream instance (must not be NULL)
  * @param err Error structure for error reporting (can be NULL)
  * @return TEXT_JSON_OK on success, error code on failure
@@ -161,6 +215,15 @@ TEXT_API text_json_status text_json_stream_finish(
  *
  * Frees all resources associated with the stream, including any buffered
  * data. After calling this function, the stream pointer is invalid.
+ *
+ * **Parameter Validation:**
+ * - If `st` is NULL, this function is a no-op (safe to call with NULL)
+ *
+ * **Resource Cleanup:**
+ * - Frees all internal buffers (input buffer, token buffer, stack)
+ * - Frees any error context snippets that were allocated
+ * - All resources are properly cleaned up (no memory leaks)
+ * - Safe to call even if stream is in an error state
  *
  * @param st Stream instance to free (can be NULL, in which case this is a no-op)
  */

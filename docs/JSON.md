@@ -359,3 +359,158 @@ JSONPath is a query language for JSON that provides XPath-like expressions for s
 JSONPath support would complement the existing JSON Pointer functionality and provide more powerful query capabilities for JSON documents.
 
 ---
+
+## 15. Security Considerations
+
+The JSON library implements comprehensive defensive programming practices to ensure memory safety, prevent undefined behavior, and handle malicious or malformed input gracefully.
+
+### 15.1 Integer Overflow Protection
+
+All arithmetic operations throughout the library are protected against integer overflow and underflow:
+
+- **Addition overflow checks**: All additions use overflow-safe checks (e.g., `if (a > SIZE_MAX - b)`) before performing operations
+- **Multiplication overflow checks**: Multiplications are validated to prevent overflow (e.g., `if (a > SIZE_MAX / b)`)
+- **Subtraction underflow checks**: Subtractions are validated to prevent underflow
+- **Position tracking**: Line and column numbers use overflow-safe increment operations with INT_MAX limits
+
+**Shared Utilities:**
+The library uses shared utility functions from `json_utils.c` for consistent overflow protection:
+- `json_check_add_overflow()` - checks if addition would overflow
+- `json_check_mul_overflow()` - checks if multiplication would overflow
+- `json_check_sub_underflow()` - checks if subtraction would underflow
+- `json_check_int_overflow()` - checks integer overflow for position tracking
+
+**Examples:**
+- Buffer size calculations are validated before allocation
+- String length calculations are checked for overflow
+- Container element counts are validated against limits
+- Total bytes consumed are tracked with overflow protection
+
+### 15.2 Bounds Checking
+
+All array and buffer accesses are protected with defensive bounds checking:
+
+- **Array access**: All array element accesses validate indices against array size before access
+- **Buffer access**: All buffer operations validate offsets against buffer size
+- **Pointer arithmetic**: All pointer arithmetic is validated to ensure pointers remain within valid ranges
+- **String operations**: String operations validate lengths and offsets before access
+
+**Examples:**
+- `text_json_array_get()` validates index against array size before access
+- `text_json_object_key()` validates index against object size before access
+- Lexer and parser validate buffer offsets before reading
+- Stream operations validate stack indices before access
+
+### 15.3 NULL Pointer Handling
+
+All functions implement comprehensive NULL pointer checks:
+
+- **Public API functions**: All public API functions validate required parameters for NULL
+- **Internal functions**: Internal functions validate pointers before dereferencing
+- **Error handling**: NULL pointer errors are handled gracefully with appropriate error codes
+- **Resource cleanup**: Cleanup functions handle NULL gracefully (no-op for NULL pointers)
+
+**Examples:**
+- `text_json_parse()` returns NULL and sets error if input buffer is NULL
+- `text_json_stream_new()` returns NULL if callback is NULL
+- `text_json_stream_free()` safely handles NULL (no-op)
+- All accessor functions validate value pointers before access
+
+### 15.4 Input Validation
+
+Comprehensive input validation is performed at all API boundaries:
+
+- **Input size validation**: Input sizes are validated to prevent obvious overflow (SIZE_MAX/2 limit)
+- **Resource limits**: All resource limits (string length, container size, total bytes) are enforced
+- **State validation**: Stream state is validated before operations
+- **Option validation**: Parse options are validated (limits checked via `json_get_limit()`)
+
+**Examples:**
+- `text_json_parse()` validates input size before parsing
+- `text_json_stream_feed()` validates input size and stream state
+- String length limits are enforced during parsing
+- Container element limits are enforced during parsing
+
+### 15.5 Error Handling
+
+The library provides comprehensive error handling with detailed diagnostics:
+
+- **Error codes**: Stable error codes for programmatic error handling
+- **Error context**: Error structures include position information (offset, line, column)
+- **Context snippets**: Error context snippets show the error location in input
+- **Resource cleanup**: All error paths properly clean up resources (no memory leaks)
+- **Error state**: Streams enter error state on failure (subsequent operations return error)
+
+**Error Reporting:**
+- Error structures include detailed position information
+- Context snippets are generated for better diagnostics
+- Error messages are descriptive and actionable
+- Error cleanup is automatic (no resource leaks on error)
+
+### 15.6 Resource Management
+
+The library implements safe resource management patterns:
+
+- **Arena allocation**: DOM values are allocated from an arena (single free operation)
+- **Automatic cleanup**: Error paths automatically clean up allocated resources
+- **Buffer management**: Buffers are properly managed with overflow-safe growth
+- **Context snippet cleanup**: Error context snippets are properly freed
+
+**Examples:**
+- DOM values are freed via single `text_json_free()` call
+- Stream resources are freed via `text_json_stream_free()`
+- Error context snippets are freed via `text_json_error_free()`
+- All cleanup functions handle NULL gracefully
+
+### 15.7 Testing and Validation
+
+The library includes comprehensive test coverage for security-critical scenarios:
+
+- **Overflow/underflow tests**: 6 test cases covering overflow scenarios
+- **NULL pointer tests**: 8 test cases covering NULL pointer handling
+- **Bounds violation tests**: 4 test cases covering bounds checking
+- **Invalid state tests**: 5 test cases covering state machine validation
+- **Memory safety**: All tests pass Valgrind validation (no memory leaks)
+
+**Test Coverage:**
+- All overflow protection code paths are tested
+- All NULL pointer checks are tested
+- All bounds checking code paths are tested
+- All error handling paths are tested
+- Memory safety is validated with Valgrind
+
+### 15.8 Best Practices for Users
+
+When using the JSON library, follow these security best practices:
+
+1. **Validate input sizes**: Check input sizes before parsing (library enforces SIZE_MAX/2 limit)
+2. **Handle errors**: Always check return values and error structures
+3. **Free resources**: Always free allocated values and error structures
+4. **Set appropriate limits**: Configure resource limits based on your use case
+5. **Validate UTF-8**: Enable UTF-8 validation for untrusted input
+6. **Use streaming parser**: For large inputs, use streaming parser to limit memory usage
+
+**Example:**
+```c
+// Validate input size before parsing
+if (input_len > SIZE_MAX / 2) {
+    // Handle error - input too large
+    return;
+}
+
+// Parse with error handling
+text_json_error err = {0};
+text_json_value* value = text_json_parse(input, input_len, NULL, &err);
+if (value == NULL) {
+    // Handle error - check err.code and err.message
+    text_json_error_free(&err);
+    return;
+}
+
+// Use value...
+
+// Free resources
+text_json_free(value);
+```
+
+---

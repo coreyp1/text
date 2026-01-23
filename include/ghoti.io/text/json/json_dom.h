@@ -234,6 +234,15 @@ TEXT_API size_t text_json_array_size(const text_json_value* v);
  * is valid for the lifetime of the array value. Returns NULL if the value
  * is not an array, if the index is out of bounds, or if v is NULL.
  *
+ * **Parameter Validation:**
+ * - If `v` is NULL, returns NULL
+ * - If `v` is not an array type, returns NULL
+ * - Bounds checking: if `idx >= array_size`, returns NULL
+ *
+ * **Bounds Checking:**
+ * - Index is validated against array size before access
+ * - No buffer overflows possible (defensive bounds checking)
+ *
  * @param v JSON value (must not be NULL)
  * @param idx Index of the element (0-based)
  * @return Pointer to the element, or NULL on error
@@ -311,6 +320,20 @@ TEXT_API text_json_status text_json_array_push(text_json_value* arr, text_json_v
  *
  * Replaces the value at the specified index in the array. The index must
  * be within the current bounds of the array.
+ *
+ * **Parameter Validation:**
+ * - If `arr` is NULL, returns TEXT_JSON_E_INVALID
+ * - If `arr` is not an array type, returns TEXT_JSON_E_INVALID
+ * - If `child` is NULL, returns TEXT_JSON_E_INVALID
+ * - Bounds checking: if `idx >= array_size`, returns TEXT_JSON_E_INVALID
+ *
+ * **Bounds Checking:**
+ * - Index is validated against array size before access
+ * - No buffer overflows possible (defensive bounds checking)
+ *
+ * **Error Handling:**
+ * - Returns TEXT_JSON_E_INVALID on any validation failure
+ * - Array structure remains unchanged on error
  *
  * @param arr Array value (must not be NULL, must be TEXT_JSON_ARRAY type)
  * @param idx Index of the element to set (0-based, must be < array size)
@@ -412,6 +435,30 @@ TEXT_API text_json_value* text_json_parse(
  * Unlike text_json_parse(), this function allows trailing content after
  * the parsed value. The bytes_consumed parameter indicates where the next
  * value begins (or end of input if no more values).
+ *
+ * **Parameter Validation:**
+ * - If `bytes` is NULL, returns NULL and sets error code TEXT_JSON_E_INVALID
+ * - If `bytes_consumed` is NULL, returns NULL and sets error code TEXT_JSON_E_INVALID
+ * - If `len` exceeds SIZE_MAX/2, returns NULL and sets error code TEXT_JSON_E_INVALID
+ *   (prevents obvious overflow in internal calculations)
+ * - If `opt` is NULL, uses default parse options
+ * - If `err` is NULL, error details are not populated
+ *
+ * **Overflow Protection:**
+ * - All arithmetic operations are protected against integer overflow
+ * - Input size validation prevents overflow in buffer calculations
+ * - String length, container size, and total bytes are validated against limits
+ *
+ * **Error Handling:**
+ * - Returns NULL on any error (allocation failure, parse error, limit exceeded)
+ * - Error details are populated in `err` structure if provided
+ * - `bytes_consumed` is set to 0 on error
+ * - Error structure includes position information (offset, line, column)
+ *
+ * **Resource Cleanup:**
+ * - On success: caller must free returned value using text_json_free()
+ * - On error: no resources are leaked (arena cleanup is automatic)
+ * - Error context snippets (if generated) must be freed via text_json_error_free()
  *
  * @param bytes Input JSON string (must not be NULL)
  * @param len Length of input string in bytes
