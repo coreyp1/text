@@ -120,41 +120,6 @@ static text_json_status json_parser_check_depth(json_parser* parser) {
     return TEXT_JSON_OK;
 }
 
-// Check total bytes limit
-static text_json_status json_parser_check_total_bytes(json_parser* parser, size_t additional) {
-    size_t max_total = json_get_limit(
-        parser->opts ? parser->opts->max_total_bytes : 0,
-        JSON_DEFAULT_MAX_TOTAL_BYTES
-    );
-    // Check for overflow in total_bytes_consumed + additional using shared helper
-    if (json_check_add_overflow(parser->total_bytes_consumed, additional)) {
-        return json_parser_set_error(
-            parser,
-            TEXT_JSON_E_LIMIT,
-            "Maximum total input size exceeded (overflow)",
-            parser->lexer.pos
-        );
-    }
-    // Check for underflow: if additional > max_total, subtraction would underflow
-    if (additional > max_total || json_check_sub_underflow(max_total, additional)) {
-        return json_parser_set_error(
-            parser,
-            TEXT_JSON_E_LIMIT,
-            "Maximum total input size exceeded",
-            parser->lexer.pos
-        );
-    }
-    if (parser->total_bytes_consumed > max_total - additional) {
-        return json_parser_set_error(
-            parser,
-            TEXT_JSON_E_LIMIT,
-            "Maximum total input size exceeded",
-            parser->lexer.pos
-        );
-    }
-    return TEXT_JSON_OK;
-}
-
 // Check string size limit
 static text_json_status json_parser_check_string_size(json_parser* parser, size_t string_len) {
     size_t max_string = json_get_limit(
