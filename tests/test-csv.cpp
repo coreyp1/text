@@ -3925,6 +3925,242 @@ TEST(TestCorpus, MilestoneDialectMatrix) {
     }
 }
 
+// ============================================================================
+// CSV Mutation API Tests
+// ============================================================================
+
+// Task M1: Create Empty Table Function
+TEST(CsvMutation, NewTableEmpty) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Test empty table has 0 rows (public API)
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Test table structure is properly initialized (internal verification)
+    EXPECT_EQ(table->row_count, 0u);
+    EXPECT_EQ(table->row_capacity, 16u);
+    EXPECT_EQ(table->column_count, 0u);
+    EXPECT_EQ(table->has_header, false);
+    EXPECT_EQ(table->header_map, nullptr);
+    EXPECT_NE(table->ctx, nullptr);
+    EXPECT_NE(table->rows, nullptr);
+
+    // Test empty table can be freed without errors
+    text_csv_free_table(table);
+}
+
+// Task M2: Row Append Function
+TEST(CsvMutation, RowAppendFirstRow) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Verify row data
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field0, "a");
+    EXPECT_EQ(len, 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendMultipleRows) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(table->column_count, 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendFieldCountMismatch) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify column count was set correctly
+    EXPECT_EQ(table->column_count, 3u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Try to append row with wrong field count
+    const char* row2[] = {"d", "e"};
+    status = text_csv_row_append(table, row2, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Verify column count is unchanged after failed append
+    EXPECT_EQ(table->column_count, 3u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendNullTable) {
+    const char* fields[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(nullptr, fields, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, RowAppendNullFields) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    text_csv_status status = text_csv_row_append(table, nullptr, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendZeroFieldCount) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendWithExplicitLengths) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"abc", "def", "ghi"};
+    size_t lengths[] = {3, 3, 3};
+    text_csv_status status = text_csv_row_append(table, fields, lengths, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(field, "abc", 3), 0);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendWithNullBytes) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Test that null bytes in field data are preserved correctly.
+    //
+    // This is a single field containing 3 bytes: 'a', '\0', 'b' (not three separate strings).
+    // The null byte is part of the field data, not a string terminator.
+    //
+    // Note: Null bytes are unusual in CSV (which is typically text-based), but the
+    // implementation correctly preserves binary data. This test verifies:
+    // 1. The length-based storage system preserves all bytes (including nulls)
+    // 2. The implementation can handle binary data, not just text strings
+    // 3. This is an edge case test for correctness, not typical CSV usage
+    //
+    // In practice, null bytes in CSV may not be compatible with all CSV tools, but
+    // our implementation handles them correctly for completeness.
+    const char field_data[] = {'a', '\0', 'b'};  // One field: 3 bytes including null
+    const char* fields[] = {field_data};
+    size_t lengths[] = {3};  // Explicit length tells us to copy all 3 bytes
+    text_csv_status status = text_csv_row_append(table, fields, lengths, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 3u);
+
+    // field is a pointer to 3 consecutive bytes in the arena: {'a', '\0', 'b'}
+    // Verify the field data matches exactly, including the null byte
+    // memcmp returns 0 when the memory regions are equal
+    EXPECT_EQ(memcmp(field, field_data, 3), 0);
+
+    // Verify each byte individually for clarity
+    EXPECT_EQ(field[0], 'a');
+    EXPECT_EQ(field[1], '\0');  // Null byte preserved in the middle
+    EXPECT_EQ(field[2], 'b');
+
+    // Verify that fields[0] is not the same as field (which is a pointer to the 3 bytes in the arena)
+    EXPECT_NE(fields[0], field);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendEmptyFields) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"", "b", ""};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size_t len;
+    const char* field0 = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(len, 0u);
+    EXPECT_STREQ(field0, "");
+
+    const char* field1 = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(len, 1u);
+    EXPECT_STREQ(field1, "b");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendCapacityGrowth) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Append more than 16 rows to trigger capacity growth
+    for (size_t i = 0; i < 20; i++) {
+        char field_data[32];
+        snprintf(field_data, sizeof(field_data), "row%zu", i);
+        const char* fields[] = {field_data};
+        text_csv_status status = text_csv_row_append(table, fields, nullptr, 1);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+    }
+
+    EXPECT_EQ(text_csv_row_count(table), 20u);
+    EXPECT_GE(table->row_capacity, 20u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowAppendFieldDataCopied) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    char* original_data = strdup("test");
+    const char* fields[] = {original_data};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Modify original data
+    original_data[0] = 'X';
+
+    // Verify field data is independent (copied, not referenced)
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "test");  // Should still be "test", not "Xest"
+
+    free(original_data);
+    text_csv_free_table(table);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

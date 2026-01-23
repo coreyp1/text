@@ -729,6 +729,123 @@ TEXT_API const char* text_csv_field(
     return field->data;
 }
 
+TEXT_API text_csv_status text_csv_row_append(
+    text_csv_table* table,
+    const char* const* fields,
+    const size_t* field_lengths,
+    size_t field_count
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+    if (!fields) {
+        return TEXT_CSV_E_INVALID;
+    }
+    if (field_count == 0) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Adjust row_count for header if present
+    size_t data_row_count = table->row_count;
+    if (table->has_header && table->row_count > 0) {
+        data_row_count = table->row_count - 1;
+    }
+
+    // For first data row: set column count (if not already set from header)
+    // For subsequent rows: validate field count matches
+    if (data_row_count == 0 && table->column_count == 0) {
+        // First data row sets column count (table has no headers or column_count not set)
+        table->column_count = field_count;
+    } else {
+        // Subsequent rows (or first data row when header exists) must match column count
+        if (field_count != table->column_count) {
+            return TEXT_CSV_E_INVALID;
+        }
+    }
+
+    // Grow row capacity if needed
+    if (table->row_count >= table->row_capacity) {
+        size_t new_capacity = table->row_capacity * 2;
+        // Check for overflow
+        if (new_capacity < table->row_capacity) {
+            return TEXT_CSV_E_OOM;
+        }
+        csv_table_row* new_rows = (csv_table_row*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_row) * new_capacity, 8
+        );
+        if (!new_rows) {
+            return TEXT_CSV_E_OOM;
+        }
+        // Copy existing rows
+        memcpy(new_rows, table->rows, sizeof(csv_table_row) * table->row_count);
+        table->rows = new_rows;
+        table->row_capacity = new_capacity;
+    }
+
+    // Allocate new row structure from arena
+    csv_table_row* new_row = &table->rows[table->row_count];
+    
+    // Allocate field array from arena
+    csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+        table->ctx, sizeof(csv_table_field) * field_count, 8
+    );
+    if (!new_fields) {
+        return TEXT_CSV_E_OOM;
+    }
+
+    // Copy each field data to arena
+    for (size_t i = 0; i < field_count; i++) {
+        csv_table_field* field = &new_fields[i];
+        const char* field_data = fields[i];
+        
+        // Determine field length
+        size_t field_len;
+        if (field_lengths) {
+            field_len = field_lengths[i];
+        } else {
+            // Null-terminated string
+            if (field_data) {
+                field_len = strlen(field_data);
+            } else {
+                field_len = 0;
+            }
+        }
+
+        // Allocate field data in arena (always copy, never reference external)
+        // Check for overflow in field_len + 1
+        if (field_len > SIZE_MAX - 1) {
+            return TEXT_CSV_E_OOM;
+        }
+        char* arena_data = (char*)csv_arena_alloc_for_context(
+            table->ctx, field_len + 1, 1
+        );
+        if (!arena_data) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy field data
+        if (field_len > 0 && field_data) {
+            memcpy(arena_data, field_data, field_len);
+        }
+        arena_data[field_len] = '\0';
+
+        // Set field structure
+        field->data = arena_data;
+        field->length = field_len;
+        field->is_in_situ = false;  // All mutations copy to arena
+    }
+
+    // Set row structure
+    new_row->fields = new_fields;
+    new_row->field_count = field_count;
+
+    // Update row count
+    table->row_count++;
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_header_index(
     const text_csv_table* table,
     const char* name,
@@ -755,4 +872,41 @@ TEXT_API text_csv_status text_csv_header_index(
     }
 
     return TEXT_CSV_E_INVALID;
+}
+
+TEXT_API text_csv_table* text_csv_new_table(void) {
+    // Create context with arena
+    csv_context* ctx = csv_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    // Allocate table structure
+    text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
+    if (!table) {
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    // Initialize table structure
+    memset(table, 0, sizeof(text_csv_table));
+    table->ctx = ctx;
+    table->row_capacity = 16;
+    table->row_count = 0;
+    table->column_count = 0;  // No columns defined until first row
+    table->has_header = false;
+    table->header_map = NULL;
+    table->header_map_size = 0;
+
+    // Allocate initial rows array
+    table->rows = (csv_table_row*)csv_arena_alloc_for_context(
+        ctx, sizeof(csv_table_row) * table->row_capacity, 8
+    );
+    if (!table->rows) {
+        free(table);
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    return table;
 }

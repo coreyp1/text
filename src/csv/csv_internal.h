@@ -307,7 +307,8 @@ struct text_csv_table {
     csv_context* ctx;           ///< Context with arena
     csv_table_row* rows;         ///< Array of rows
     size_t row_count;            ///< Number of rows
-    size_t row_capacity;         ///< Allocated row capacity
+    size_t row_capacity;          ///< Allocated row capacity
+    size_t column_count;         ///< Expected column count (set by first row, 0 if empty)
 
     // Header map (optional, only if header processing enabled)
     csv_header_entry** header_map;  ///< Hash table for header lookup

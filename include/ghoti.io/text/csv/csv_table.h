@@ -113,6 +113,42 @@ TEXT_API text_csv_status text_csv_header_index(
     size_t* out_idx
 );
 
+/**
+ * @brief Create an empty CSV table
+ *
+ * Creates a new empty table with initialized context and arena.
+ * The table starts with a default row capacity of 16 rows.
+ * No columns are defined until the first row is added.
+ *
+ * The table must be freed with text_csv_free_table() when no longer needed.
+ *
+ * @return New empty table, or NULL on allocation failure
+ */
+TEXT_API text_csv_table* text_csv_new_table(void);
+
+/**
+ * @brief Append a row to the end of the table
+ *
+ * Adds a new row with the specified field values to the end of the table.
+ * The first row added sets the column count for the table. Subsequent rows
+ * must have the same number of fields (strict validation).
+ *
+ * All field data is copied to the arena and does not reference external buffers.
+ * If field_lengths is NULL, all fields are assumed to be null-terminated strings.
+ *
+ * @param table Table (must not be NULL)
+ * @param fields Array of field data pointers (must not be NULL)
+ * @param field_lengths Array of field lengths, or NULL if all fields are null-terminated
+ * @param field_count Number of fields (must be > 0)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_row_append(
+    text_csv_table* table,
+    const char* const* fields,
+    const size_t* field_lengths,
+    size_t field_count
+);
+
 #ifdef __cplusplus
 }
 #endif
