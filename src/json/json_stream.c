@@ -15,6 +15,10 @@
 #include <limits.h>
 #include <stdio.h>
 
+// Context window sizes for error snippets
+#define JSON_ERROR_CONTEXT_BEFORE 20
+#define JSON_ERROR_CONTEXT_AFTER 20
+
 // Streaming parser state machine states
 typedef enum {
     JSON_STREAM_STATE_INIT,        ///< Initial state, waiting for first value
@@ -178,6 +182,99 @@ static json_stream_stack_entry* json_stream_top(text_json_stream* st) {
     return &st->stack[st->stack_size - 1];
 }
 
+// Set error in stream and error structure (standardized error handling)
+// Similar to csv_stream_set_error() in CSV module
+static text_json_status json_stream_set_error(
+    text_json_stream* st,
+    text_json_status code,
+    const char* message,
+    json_position pos,
+    text_json_error* err
+) {
+    // Set stream state to error
+    st->state = JSON_STREAM_STATE_ERROR;
+
+    // Set error in provided error structure if available
+    if (err) {
+        // Free any existing context snippet
+        // Note: err is always initialized (via memset) at public API entry points
+        // (text_json_stream_feed and text_json_stream_finish), so context_snippet
+        // will be NULL if properly initialized. However, if err is reused across
+        // multiple calls, we need to free any existing snippet.
+        // Since err is always initialized at entry points, we can safely check
+        // and free context_snippet if it's non-NULL. This matches the CSV pattern.
+        if (err->context_snippet != NULL) {
+            free(err->context_snippet);
+            err->context_snippet = NULL;
+        }
+        // Clear context snippet fields
+        err->context_snippet_len = 0;
+        err->caret_offset = 0;
+
+        // Set error fields
+        err->code = code;
+        err->message = message;
+        err->offset = pos.offset;
+        err->line = pos.line;
+        err->col = pos.col;
+        err->expected_token = NULL;
+        err->actual_token = NULL;
+        err->context_snippet = NULL;
+        err->context_snippet_len = 0;
+        err->caret_offset = 0;
+
+        // Generate context snippet if we have input buffer access
+        const char* input_for_snippet = NULL;
+        size_t input_len_for_snippet = 0;
+        size_t error_offset = pos.offset;
+
+        // Use input buffer if available
+        if (st->input_buffer && st->input_buffer_used > 0) {
+            input_for_snippet = st->input_buffer;
+            input_len_for_snippet = st->input_buffer_used;
+            // For buffered input, error offset is relative to buffer_start_offset
+            // Adjust error_offset to be relative to input_buffer
+            if (error_offset >= st->buffer_start_offset) {
+                size_t buffer_relative_offset = error_offset - st->buffer_start_offset;
+                // Clamp to buffer bounds
+                if (buffer_relative_offset > input_len_for_snippet) {
+                    error_offset = input_len_for_snippet;
+                } else {
+                    error_offset = buffer_relative_offset;
+                }
+            } else {
+                // Error offset is before buffer start - use 0
+                error_offset = 0;
+            }
+        }
+
+        if (input_for_snippet && input_len_for_snippet > 0 && error_offset <= input_len_for_snippet) {
+            char* snippet = NULL;
+            size_t snippet_len = 0;
+            size_t caret_offset = 0;
+
+            text_json_status snippet_status = json_error_generate_context_snippet(
+                input_for_snippet,
+                input_len_for_snippet,
+                error_offset,
+                JSON_ERROR_CONTEXT_BEFORE,
+                JSON_ERROR_CONTEXT_AFTER,
+                &snippet,
+                &snippet_len,
+                &caret_offset
+            );
+
+            if (snippet_status == TEXT_JSON_OK && snippet) {
+                err->context_snippet = snippet;
+                err->context_snippet_len = snippet_len;
+                err->caret_offset = caret_offset;
+            }
+        }
+    }
+
+    return code;
+}
+
 // Forward declarations
 static text_json_status json_stream_handle_token(
     text_json_stream* st,
@@ -270,15 +367,12 @@ static text_json_status json_stream_process_tokens(
         1  // streaming mode
     );
     if (status != TEXT_JSON_OK) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = status;
-            err->message = "Failed to initialize lexer";
-                err->offset = st->buffer_start_offset;
-            err->line = 1;
-            err->col = 1;
-        }
-        return status;
+        json_position pos = {
+            .offset = st->buffer_start_offset,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, status, "Failed to initialize lexer", pos, err);
     }
     // Set token buffer pointer for resumption support
     st->lexer.token_buffer = &st->token_buffer;
@@ -358,16 +452,13 @@ static text_json_status json_stream_process_tokens(
             }
 
             // Real error
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = status;
-                err->message = "Tokenization error";
-                err->offset = st->buffer_start_offset + token.pos.offset;
-                err->line = token.pos.line;
-                err->col = token.pos.col;
-            }
+            json_position pos = {
+                .offset = st->buffer_start_offset + token.pos.offset,
+                .line = token.pos.line,
+                .col = token.pos.col
+            };
             json_token_cleanup(&token);
-            return status;
+            return json_stream_set_error(st, status, "Tokenization error", pos, err);
         }
 
         // Update processed offset
@@ -377,6 +468,12 @@ static text_json_status json_stream_process_tokens(
         if (token.type == JSON_TOKEN_EOF) {
             json_token_cleanup(&token);
             // At end of buffer, wait for more input (unless finish() was called)
+            return TEXT_JSON_OK;
+        }
+
+        // Validate state before processing token (defensive check)
+        if (st->state == JSON_STREAM_STATE_ERROR || st->state == JSON_STREAM_STATE_DONE) {
+            json_token_cleanup(&token);
             return TEXT_JSON_OK;
         }
 
@@ -396,12 +493,49 @@ static text_json_status json_stream_process_tokens(
     }
 }
 
+// Validate stream state before processing (defensive check)
+static text_json_status json_stream_validate_state(
+    text_json_stream* st,
+    text_json_error* err
+) {
+    // Check for invalid states
+    if (st->state == JSON_STREAM_STATE_ERROR) {
+        // Already in error state - don't process further
+        return TEXT_JSON_E_STATE;
+    }
+    if (st->state == JSON_STREAM_STATE_DONE) {
+        // Already done - don't process further
+        return TEXT_JSON_E_STATE;
+    }
+    // Validate state is one of the expected active states
+    if (st->state != JSON_STREAM_STATE_INIT &&
+        st->state != JSON_STREAM_STATE_VALUE &&
+        st->state != JSON_STREAM_STATE_ARRAY &&
+        st->state != JSON_STREAM_STATE_OBJECT_KEY &&
+        st->state != JSON_STREAM_STATE_OBJECT_VALUE &&
+        st->state != JSON_STREAM_STATE_EXPECT_VALUE) {
+        // Invalid state - this should not happen
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_STATE, "Invalid parser state", pos, err);
+    }
+    return TEXT_JSON_OK;
+}
+
 // Handle a token based on current parser state
 static text_json_status json_stream_handle_token(
     text_json_stream* st,
     const json_token* token,
     text_json_error* err
 ) {
+    // Validate state before processing token
+    text_json_status state_status = json_stream_validate_state(st, err);
+    if (state_status != TEXT_JSON_OK) {
+        return state_status;
+    }
     text_json_status status;
 
     // Handle based on current state
@@ -417,15 +551,12 @@ static text_json_status json_stream_handle_token(
                 json_stream_stack_entry* top = json_stream_top(st);
                 if (!top) {
                     // Comma at root level - invalid
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                    err->code = TEXT_JSON_E_BAD_TOKEN;
-                    err->message = "Unexpected comma at root level";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected comma at root level", pos, err);
                 }
 
                 // Update state based on container type
@@ -439,28 +570,22 @@ static text_json_status json_stream_handle_token(
                 // End of array
                 json_stream_stack_entry* top = json_stream_top(st);
                 if (!top || !top->is_array) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Unexpected ]";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected ]", pos, err);
                 }
 
                 // Check for trailing comma (if container has elements and we're expecting a value)
                 if (top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE && !st->opts.allow_trailing_commas) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Trailing comma not allowed";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
                 }
 
                 // Emit array end event
@@ -487,28 +612,22 @@ static text_json_status json_stream_handle_token(
                 // End of object
                 json_stream_stack_entry* top = json_stream_top(st);
                 if (!top || top->is_array) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Unexpected }";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected }", pos, err);
                 }
 
                 // Check for trailing comma (if container has elements and we're expecting a key)
                 if (top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY && !st->opts.allow_trailing_commas) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Trailing comma not allowed";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
                 }
 
                 // Emit object end event
@@ -533,15 +652,12 @@ static text_json_status json_stream_handle_token(
                 return TEXT_JSON_OK;
             } else {
                 // Unexpected token
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = TEXT_JSON_E_BAD_TOKEN;
-                    err->message = "Unexpected token after value";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                }
-                return TEXT_JSON_E_BAD_TOKEN;
+                json_position pos = {
+                    .offset = st->buffer_start_offset + token->pos.offset,
+                    .line = token->pos.line,
+                    .col = token->pos.col
+                };
+                return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected token after value", pos, err);
             }
 
         case JSON_STREAM_STATE_ARRAY:
@@ -555,15 +671,12 @@ static text_json_status json_stream_handle_token(
                 // End of array (empty array)
                 json_stream_stack_entry* top = json_stream_top(st);
                 if (!top || !top->is_array) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Unexpected ]";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected ]", pos, err);
                 }
 
                 // Emit array end event
@@ -589,15 +702,12 @@ static text_json_status json_stream_handle_token(
                 // End of object (empty object)
                 json_stream_stack_entry* top = json_stream_top(st);
                 if (!top || top->is_array) {
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_BAD_TOKEN;
-                        err->message = "Unexpected }";
-                        err->offset = st->buffer_start_offset + token->pos.offset;
-                        err->line = token->pos.line;
-                        err->col = token->pos.col;
-                    }
-                    return TEXT_JSON_E_BAD_TOKEN;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset + token->pos.offset,
+                        .line = token->pos.line,
+                        .col = token->pos.col
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected }", pos, err);
                 }
 
                 // Emit object end event
@@ -626,15 +736,12 @@ static text_json_status json_stream_handle_token(
         case JSON_STREAM_STATE_OBJECT_KEY:
             // Expecting object key
             if (token->type != JSON_TOKEN_STRING) {
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = TEXT_JSON_E_BAD_TOKEN;
-                    err->message = "Expected object key (string)";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                }
-                return TEXT_JSON_E_BAD_TOKEN;
+                json_position pos = {
+                    .offset = st->buffer_start_offset + token->pos.offset,
+                    .line = token->pos.line,
+                    .col = token->pos.col
+                };
+                return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Expected object key (string)", pos, err);
             }
 
             // Emit key event
@@ -652,34 +759,30 @@ static text_json_status json_stream_handle_token(
             st->state = JSON_STREAM_STATE_OBJECT_VALUE;
             return TEXT_JSON_OK;
 
-        case JSON_STREAM_STATE_OBJECT_VALUE:
+        case JSON_STREAM_STATE_OBJECT_VALUE: {
             // Expecting colon after key
             if (token->type != JSON_TOKEN_COLON) {
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = TEXT_JSON_E_BAD_TOKEN;
-                    err->message = "Expected colon after object key";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                }
-                return TEXT_JSON_E_BAD_TOKEN;
+                json_position pos = {
+                    .offset = st->buffer_start_offset + token->pos.offset,
+                    .line = token->pos.line,
+                    .col = token->pos.col
+                };
+                return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Expected colon after object key", pos, err);
             }
 
             // After colon, expect value
             st->state = JSON_STREAM_STATE_EXPECT_VALUE;
             return TEXT_JSON_OK;
+        }
 
-        default:
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = TEXT_JSON_E_STATE;
-                err->message = "Invalid parser state";
-                err->offset = st->buffer_start_offset + token->pos.offset;
-                err->line = token->pos.line;
-                err->col = token->pos.col;
-            }
-            return TEXT_JSON_E_STATE;
+        default: {
+            json_position pos = {
+                .offset = st->buffer_start_offset + token->pos.offset,
+                .line = token->pos.line,
+                .col = token->pos.col
+            };
+            return json_stream_set_error(st, TEXT_JSON_E_STATE, "Invalid parser state", pos, err);
+        }
     }
 }
 
@@ -735,15 +838,12 @@ static text_json_status json_stream_handle_value_token(
             // Array begin
             status = json_stream_push(st, st->state, 1);
             if (status != TEXT_JSON_OK) {
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = status;
-                    err->message = "Failed to push array onto stack";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                }
-                return status;
+                json_position pos = {
+                    .offset = st->buffer_start_offset + token->pos.offset,
+                    .line = token->pos.line,
+                    .col = token->pos.col
+                };
+                return json_stream_set_error(st, status, "Failed to push array onto stack", pos, err);
             }
 
             // Reset element count for new container
@@ -762,15 +862,12 @@ static text_json_status json_stream_handle_value_token(
             // Object begin
             status = json_stream_push(st, st->state, 0);
             if (status != TEXT_JSON_OK) {
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = status;
-                    err->message = "Failed to push object onto stack";
-                    err->offset = st->buffer_start_offset + token->pos.offset;
-                    err->line = token->pos.line;
-                    err->col = token->pos.col;
-                }
-                return status;
+                json_position pos = {
+                    .offset = st->buffer_start_offset + token->pos.offset,
+                    .line = token->pos.line,
+                    .col = token->pos.col
+                };
+                return json_stream_set_error(st, status, "Failed to push object onto stack", pos, err);
             }
 
             // Reset element count for new container
@@ -808,16 +905,14 @@ static text_json_status json_stream_handle_value_token(
             }
             break;
 
-        default:
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = TEXT_JSON_E_BAD_TOKEN;
-                err->message = "Unexpected token, expected value";
-                err->offset = st->buffer_start_offset + token->pos.offset;
-                err->line = token->pos.line;
-                err->col = token->pos.col;
-            }
-            return TEXT_JSON_E_BAD_TOKEN;
+        default: {
+            json_position pos = {
+                .offset = st->buffer_start_offset + token->pos.offset,
+                .line = token->pos.line,
+                .col = token->pos.col
+            };
+            return json_stream_set_error(st, TEXT_JSON_E_BAD_TOKEN, "Unexpected token, expected value", pos, err);
+        }
     }
 
     // After emitting a scalar value, update state
@@ -838,15 +933,12 @@ static text_json_status json_stream_handle_value_token(
             JSON_DEFAULT_MAX_CONTAINER_ELEMS
         );
         if (st->container_elem_count > max_elems) {
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = TEXT_JSON_E_LIMIT;
-                err->message = "Maximum container element count exceeded";
-                err->offset = st->buffer_start_offset + token->pos.offset;
-                err->line = token->pos.line;
-                err->col = token->pos.col;
-            }
-            return TEXT_JSON_E_LIMIT;
+            json_position pos = {
+                .offset = st->buffer_start_offset + token->pos.offset,
+                .line = token->pos.line,
+                .col = token->pos.col
+            };
+            return json_stream_set_error(st, TEXT_JSON_E_LIMIT, "Maximum container element count exceeded", pos, err);
         }
 
         // Inside container - expect comma or closing bracket/brace
@@ -861,6 +953,7 @@ TEXT_API text_json_stream* text_json_stream_new(
     text_json_event_cb cb,
     void* user
 ) {
+    // Input validation: callback is required
     if (!cb) {
         return NULL;
     }
@@ -873,6 +966,11 @@ TEXT_API text_json_stream* text_json_stream_new(
     // Copy parse options or use defaults
     if (opt) {
         st->opts = *opt;
+        // Validate option values (defensive checks)
+        // Note: Limits are validated when used via json_get_limit(), but we can
+        // check for obviously invalid values here
+        // Most limits are size_t, so 0 is valid (means use default)
+        // We don't need to validate boolean flags or enum values as they're type-safe
     } else {
         st->opts = text_json_parse_options_default();
     }
@@ -937,6 +1035,15 @@ TEXT_API text_json_status text_json_stream_feed(
     size_t len,
     text_json_error* err
 ) {
+    // Initialize error structure at entry point to ensure it's always in a known state
+    // This ensures that when json_stream_set_error() is called, err is always initialized
+    // and we can safely free any existing context_snippet without heuristics.
+    // Note: We don't free existing context_snippet here - if err was reused, the caller
+    // should have freed it, or json_stream_set_error() will free it when setting a new error.
+    if (err) {
+        memset(err, 0, sizeof(*err));
+    }
+
     if (!st) {
         if (err) {
             err->code = TEXT_JSON_E_INVALID;
@@ -970,24 +1077,31 @@ TEXT_API text_json_status text_json_stream_feed(
         return TEXT_JSON_E_STATE;
     }
 
-    // TODO: Implement incremental parsing logic
-    // Currently just buffers input; parsing will process buffered data and emit events
+    // Input validation: empty input is valid (no-op)
     if (len == 0) {
         return TEXT_JSON_OK;
+    }
+
+    // Input validation: check for reasonable input size (prevent obvious overflow)
+    // This is a defensive check - the actual limit is enforced via max_total_bytes
+    if (len > SIZE_MAX / 2) {
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Input chunk size is too large", pos, err);
     }
 
     // Append to input buffer
     // Check for integer overflow before addition
     if (st->input_buffer_used > SIZE_MAX - len) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Input buffer size would overflow";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_OOM;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_OOM, "Input buffer size would overflow", pos, err);
     }
 
     size_t needed = st->input_buffer_used + len;
@@ -997,29 +1111,23 @@ TEXT_API text_json_status text_json_stream_feed(
         needed
     );
     if (status != TEXT_JSON_OK) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = status;
-            err->message = "Failed to grow input buffer";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return status;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, status, "Failed to grow input buffer", pos, err);
     }
 
     // Verify bounds before memcpy (defensive check) using shared helper
     if (json_check_add_overflow(st->input_buffer_used, len) ||
         st->input_buffer_used + len > st->input_buffer_size) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Buffer size mismatch";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_OOM;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_OOM, "Buffer size mismatch", pos, err);
     }
 
     memcpy(st->input_buffer + st->input_buffer_used, bytes, len);
@@ -1032,15 +1140,12 @@ TEXT_API text_json_status text_json_stream_feed(
 
     // Check for integer overflow before updating total_bytes_consumed using shared helper
     if (json_check_add_overflow(st->total_bytes_consumed, len)) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Total bytes consumed would overflow";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_OOM;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_OOM, "Total bytes consumed would overflow", pos, err);
     }
     st->total_bytes_consumed += len;
 
@@ -1050,15 +1155,12 @@ TEXT_API text_json_status text_json_stream_feed(
         JSON_DEFAULT_MAX_TOTAL_BYTES
     );
     if (st->total_bytes_consumed > max_total) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_LIMIT;
-            err->message = "Maximum total input size exceeded";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_LIMIT;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_LIMIT, "Maximum total input size exceeded", pos, err);
     }
 
     // Process buffered input and emit events through callback
@@ -1075,6 +1177,15 @@ TEXT_API text_json_status text_json_stream_finish(
     text_json_stream* st,
     text_json_error* err
 ) {
+    // Initialize error structure at entry point to ensure it's always in a known state
+    // This ensures that when json_stream_set_error() is called, err is always initialized
+    // and we can safely free any existing context_snippet without heuristics.
+    // Note: We don't free existing context_snippet here - if err was reused, the caller
+    // should have freed it, or json_stream_set_error() will free it when setting a new error.
+    if (err) {
+        memset(err, 0, sizeof(*err));
+    }
+
     if (!st) {
         if (err) {
             err->code = TEXT_JSON_E_INVALID;
@@ -1121,15 +1232,12 @@ TEXT_API text_json_status text_json_stream_finish(
         // Defensive check: ensure unprocessed_len doesn't exceed buffer size
         if (unprocessed_len > st->input_buffer_size) {
             st->lexer.streaming_mode = old_streaming_mode;  // Restore
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Invalid buffer state";
-                err->offset = st->total_bytes_consumed;
-                err->line = 1;
-                err->col = 1;
-            }
-            return TEXT_JSON_E_INVALID;
+            json_position pos = {
+                .offset = st->total_bytes_consumed,
+                .line = 1,
+                .col = 1
+            };
+            return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Invalid buffer state", pos, err);
         }
 
         // Reinitialize lexer - if there's unprocessed input, use it; otherwise use empty buffer
@@ -1142,15 +1250,12 @@ TEXT_API text_json_status text_json_stream_finish(
         );
         if (status != TEXT_JSON_OK) {
             st->lexer.streaming_mode = old_streaming_mode;  // Restore
-            st->state = JSON_STREAM_STATE_ERROR;
-            if (err) {
-                err->code = status;
-                err->message = "Failed to reinitialize lexer for completion";
-                err->offset = st->total_bytes_consumed;
-                err->line = 1;
-                err->col = 1;
-            }
-            return status;
+            json_position pos = {
+                .offset = st->total_bytes_consumed,
+                .line = 1,
+                .col = 1
+            };
+            return json_stream_set_error(st, status, "Failed to reinitialize lexer for completion", pos, err);
         }
         // Ensure streaming_mode is set correctly
         st->lexer.streaming_mode = 0;
@@ -1167,21 +1272,17 @@ TEXT_API text_json_status text_json_stream_finish(
             if (status != TEXT_JSON_OK) {
                 // If still incomplete or error, it's a real problem
                 st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = status;
-                    err->message = "Incomplete or invalid JSON input";
-                    // Check for overflow in offset calculation (for error reporting)
-                    if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
-                        err->offset = SIZE_MAX;
-                    } else {
-                        err->offset = st->buffer_start_offset + token.pos.offset;
-                    }
-                    err->line = token.pos.line;
-                    err->col = token.pos.col;
+                json_position pos;
+                // Check for overflow in offset calculation (for error reporting)
+                if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
+                    pos.offset = SIZE_MAX;
+                } else {
+                    pos.offset = st->buffer_start_offset + token.pos.offset;
                 }
+                pos.line = token.pos.line;
+                pos.col = token.pos.col;
                 json_token_cleanup(&token);
-                return status;
+                return json_stream_set_error(st, status, "Incomplete or invalid JSON input", pos, err);
             }
 
             // Handle EOF
@@ -1191,16 +1292,13 @@ TEXT_API text_json_status text_json_stream_finish(
                 if (st->lexer.current_offset > unprocessed_len) {
                     // Defensive check
                     st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_INVALID;
-                        err->message = "Lexer offset out of bounds";
-                        err->offset = st->buffer_start_offset;
-                        err->line = 1;
-                        err->col = 1;
-                    }
+                    json_position pos = {
+                        .offset = st->buffer_start_offset,
+                        .line = 1,
+                        .col = 1
+                    };
                     json_token_cleanup(&token);
-                    return TEXT_JSON_E_INVALID;
+                    return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Lexer offset out of bounds", pos, err);
                 }
                 st->input_buffer_processed = st->lexer.current_offset;
                 json_token_cleanup(&token);
@@ -1235,15 +1333,12 @@ TEXT_API text_json_status text_json_stream_finish(
             if (st->lexer.current_offset > unprocessed_len) {
                 // Defensive check: current_offset should not exceed what we gave the lexer
                 st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Lexer offset out of bounds";
-                    err->offset = st->buffer_start_offset;
-                    err->line = 1;
-                    err->col = 1;
-                }
-                return TEXT_JSON_E_INVALID;
+                json_position pos = {
+                    .offset = st->buffer_start_offset,
+                    .line = 1,
+                    .col = 1
+                };
+                return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Lexer offset out of bounds", pos, err);
             }
             st->input_buffer_processed = st->lexer.current_offset;
 
@@ -1273,15 +1368,12 @@ TEXT_API text_json_status text_json_stream_finish(
             // Defensive check: ensure unprocessed_len doesn't exceed buffer size
             if (unprocessed_len > st->input_buffer_size) {
                 st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid buffer state";
-                    err->offset = st->total_bytes_consumed;
-                    err->line = 1;
-                    err->col = 1;
-                }
-                return TEXT_JSON_E_INVALID;
+                json_position pos = {
+                    .offset = st->total_bytes_consumed,
+                    .line = 1,
+                    .col = 1
+                };
+                return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Invalid buffer state", pos, err);
             }
 
             if (unprocessed_len == 0) {
@@ -1303,15 +1395,12 @@ TEXT_API text_json_status text_json_stream_finish(
             );
             if (status != TEXT_JSON_OK) {
                 st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                st->state = JSON_STREAM_STATE_ERROR;
-                if (err) {
-                    err->code = status;
-                    err->message = "Failed to reinitialize lexer for completion";
-                    err->offset = st->total_bytes_consumed;
-                    err->line = 1;
-                    err->col = 1;
-                }
-                return status;
+                json_position pos = {
+                    .offset = st->total_bytes_consumed,
+                    .line = 1,
+                    .col = 1
+                };
+                return json_stream_set_error(st, status, "Failed to reinitialize lexer for completion", pos, err);
             }
             // Ensure streaming_mode is set correctly (json_lexer_init should have set it, but be explicit)
             st->lexer.streaming_mode = 0;
@@ -1328,21 +1417,17 @@ TEXT_API text_json_status text_json_stream_finish(
                 if (status != TEXT_JSON_OK) {
                     // If still incomplete or error, it's a real problem
                     st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = status;
-                        err->message = "Incomplete or invalid JSON input";
-                        // Check for overflow in offset calculation (for error reporting)
-                        if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
-                            err->offset = SIZE_MAX;
-                        } else {
-                            err->offset = st->buffer_start_offset + token.pos.offset;
-                        }
-                        err->line = token.pos.line;
-                        err->col = token.pos.col;
+                    json_position pos;
+                    // Check for overflow in offset calculation (for error reporting)
+                    if (st->buffer_start_offset > SIZE_MAX - token.pos.offset) {
+                        pos.offset = SIZE_MAX;
+                    } else {
+                        pos.offset = st->buffer_start_offset + token.pos.offset;
                     }
+                    pos.line = token.pos.line;
+                    pos.col = token.pos.col;
                     json_token_cleanup(&token);
-                    return status;
+                    return json_stream_set_error(st, status, "Incomplete or invalid JSON input", pos, err);
                 }
 
                 // Handle EOF
@@ -1352,16 +1437,13 @@ TEXT_API text_json_status text_json_stream_finish(
                     if (st->lexer.current_offset > unprocessed_len) {
                         // Defensive check
                         st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                        st->state = JSON_STREAM_STATE_ERROR;
-                        if (err) {
-                            err->code = TEXT_JSON_E_INVALID;
-                            err->message = "Lexer offset out of bounds";
-                            err->offset = st->buffer_start_offset;
-                            err->line = 1;
-                            err->col = 1;
-                        }
+                        json_position pos = {
+                            .offset = st->buffer_start_offset,
+                            .line = 1,
+                            .col = 1
+                        };
                         json_token_cleanup(&token);
-                        return TEXT_JSON_E_INVALID;
+                        return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Lexer offset out of bounds", pos, err);
                     }
                     st->input_buffer_processed = st->lexer.current_offset;
                     json_token_cleanup(&token);
@@ -1396,15 +1478,12 @@ TEXT_API text_json_status text_json_stream_finish(
                 if (st->lexer.current_offset > unprocessed_len) {
                     // Defensive check: current_offset should not exceed what we gave the lexer
                     st->lexer.streaming_mode = old_streaming_mode;  // Restore
-                    st->state = JSON_STREAM_STATE_ERROR;
-                    if (err) {
-                        err->code = TEXT_JSON_E_INVALID;
-                        err->message = "Lexer offset out of bounds";
-                        err->offset = st->buffer_start_offset;
-                        err->line = 1;
-                        err->col = 1;
-                    }
-                    return TEXT_JSON_E_INVALID;
+                    json_position pos = {
+                        .offset = st->buffer_start_offset,
+                        .line = 1,
+                        .col = 1
+                    };
+                    return json_stream_set_error(st, TEXT_JSON_E_INVALID, "Lexer offset out of bounds", pos, err);
                 }
                 st->input_buffer_processed = st->lexer.current_offset;
 
@@ -1420,15 +1499,12 @@ TEXT_API text_json_status text_json_stream_finish(
     // Validate that structure is complete (no unmatched brackets)
     // Check this AFTER processing all remaining tokens
     if (st->stack_size > 0) {
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_INCOMPLETE;
-            err->message = "Incomplete JSON structure";
-            err->offset = st->total_bytes_consumed;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_INCOMPLETE;
+        json_position pos = {
+            .offset = st->total_bytes_consumed,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_INCOMPLETE, "Incomplete JSON structure", pos, err);
     }
 
     // Validate final state
@@ -1436,15 +1512,12 @@ TEXT_API text_json_status text_json_stream_finish(
     // Only report INIT as error if we truly have no input (buffer is empty)
     if (st->state == JSON_STREAM_STATE_INIT && st->input_buffer_used == 0) {
         // No input was provided
-        st->state = JSON_STREAM_STATE_ERROR;
-        if (err) {
-            err->code = TEXT_JSON_E_INCOMPLETE;
-            err->message = "No JSON value provided";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
-        }
-        return TEXT_JSON_E_INCOMPLETE;
+        json_position pos = {
+            .offset = 0,
+            .line = 1,
+            .col = 1
+        };
+        return json_stream_set_error(st, TEXT_JSON_E_INCOMPLETE, "No JSON value provided", pos, err);
     }
 
     st->state = JSON_STREAM_STATE_DONE;

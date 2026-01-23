@@ -1411,6 +1411,23 @@ static text_json_value* json_parse_internal(
         return NULL;
     }
 
+    // Input size validation: check for reasonable input size before processing
+    // This is a defensive check - actual limits are enforced during parsing
+    if (len > SIZE_MAX / 2) {
+        if (err) {
+            memset(err, 0, sizeof(*err));
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Input size is too large";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        if (bytes_consumed) {
+            *bytes_consumed = 0;
+        }
+        return NULL;
+    }
+
     // Initialize parser state
     json_parser parser = {0};
     parser.opts = opt;
@@ -1579,6 +1596,36 @@ TEXT_API text_json_value* text_json_parse(
     const text_json_parse_options* opt,
     text_json_error* err
 ) {
+    // Input validation: check for NULL bytes when len > 0
+    if (!bytes && len > 0) {
+        if (err) {
+            memset(err, 0, sizeof(*err));
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Input bytes must not be NULL when length is non-zero";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        return NULL;
+    }
+
+    // Input validation: check for reasonable input size (prevent obvious overflow issues)
+    // Note: We don't enforce a hard limit here, but check for obviously invalid values
+    // The actual limit checking happens in json_parse_internal via max_total_bytes
+    if (len > SIZE_MAX / 2) {
+        // Input size is suspiciously large (more than half of SIZE_MAX)
+        // This could indicate an overflow or invalid input
+        if (err) {
+            memset(err, 0, sizeof(*err));
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Input size is too large";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        return NULL;
+    }
+
     // Always treat trailing content as error (single value only)
     return json_parse_internal(bytes, len, opt, err, 0, NULL);
 }
@@ -1590,19 +1637,44 @@ TEXT_API text_json_value* text_json_parse_multiple(
     text_json_error* err,
     size_t* bytes_consumed
 ) {
+    // Input validation: bytes_consumed is required
     if (!bytes_consumed) {
         if (err) {
+            memset(err, 0, sizeof(*err));
             err->code = TEXT_JSON_E_INVALID;
             err->message = "bytes_consumed must not be NULL";
             err->offset = 0;
             err->line = 1;
             err->col = 1;
-            err->context_snippet = NULL;
-            err->context_snippet_len = 0;
-            err->caret_offset = 0;
-            err->expected_token = NULL;
-            err->actual_token = NULL;
         }
+        return NULL;
+    }
+
+    // Input validation: check for NULL bytes when len > 0
+    if (!bytes && len > 0) {
+        if (err) {
+            memset(err, 0, sizeof(*err));
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Input bytes must not be NULL when length is non-zero";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        *bytes_consumed = 0;
+        return NULL;
+    }
+
+    // Input validation: check for reasonable input size
+    if (len > SIZE_MAX / 2) {
+        if (err) {
+            memset(err, 0, sizeof(*err));
+            err->code = TEXT_JSON_E_INVALID;
+            err->message = "Input size is too large";
+            err->offset = 0;
+            err->line = 1;
+            err->col = 1;
+        }
+        *bytes_consumed = 0;
         return NULL;
     }
     // Allow multiple values and return bytes consumed
