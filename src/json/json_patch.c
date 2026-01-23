@@ -552,12 +552,10 @@ static text_json_status json_patch_add(
 ) {
     if (!root || !path || !value) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments for add operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments for add operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -565,12 +563,10 @@ static text_json_status json_patch_add(
     if (path_len == 0 || (path_len == 1 && path[0] == '/')) {
         // Cannot add at root (would need to replace entire tree)
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Cannot add at root path";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Cannot add at root path"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -584,23 +580,20 @@ static text_json_status json_patch_add(
     );
     if (status != TEXT_JSON_OK) {
         if (err) {
-            err->code = status;
-            err->message = "Invalid path for add operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
+            *err = (text_json_error){
+                                        .code = status,
+                                        .message = "Invalid path for add operation"
+                                    };
         }
         return status;
     }
 
     if (!parent) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Parent not found for add operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Parent not found for add operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -609,12 +602,10 @@ static text_json_status json_patch_add(
     text_json_value* cloned_value = json_value_clone(value, ctx);
     if (!cloned_value) {
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory cloning value for add operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory cloning value for add operation"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 
@@ -626,12 +617,10 @@ static text_json_status json_patch_add(
         char* token_buf = (char*)malloc(token_len + 1);
         if (!token_buf) {
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory parsing array index";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory parsing array index"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
         memcpy(token_buf, token, token_len);
@@ -643,12 +632,10 @@ static text_json_status json_patch_add(
         if (!decoded) {
             free(token_buf);
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory decoding array index";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory decoding array index"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
         size_t out_pos = 0;
@@ -681,12 +668,10 @@ static text_json_status json_patch_add(
                 free(decoded);
                 free(token_buf);
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid array index";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid array index"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             idx = (size_t)parsed;
@@ -694,12 +679,10 @@ static text_json_status json_patch_add(
                 free(decoded);
                 free(token_buf);
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Array index out of bounds";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Array index out of bounds"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
         }
@@ -711,11 +694,10 @@ static text_json_status json_patch_add(
         status = text_json_array_insert(parent, idx, cloned_value);
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Failed to insert into array";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Failed to insert into array"
+                                        };
             }
             return status;
         }
@@ -723,12 +705,10 @@ static text_json_status json_patch_add(
         // Add to object (or replace existing key)
         if (parent->type != TEXT_JSON_OBJECT) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Path points to object key but parent is not an object";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Path points to object key but parent is not an object"
+                                        };}
             return TEXT_JSON_E_INVALID;
         }
 
@@ -736,12 +716,10 @@ static text_json_status json_patch_add(
         char* decoded_key = (char*)malloc(token_len + 1);
         if (!decoded_key) {
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory decoding object key";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory decoding object key"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
 
@@ -751,12 +729,10 @@ static text_json_status json_patch_add(
             if (out_pos >= token_len) {
                 free(decoded_key);
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Buffer overflow in key decoding";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Buffer overflow in key decoding"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             if (token[i] == '~' && i + 1 < token_len) {
@@ -781,11 +757,10 @@ static text_json_status json_patch_add(
 
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Failed to add to object";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Failed to add to object"
+                                        };
             }
             return status;
         }
@@ -803,24 +778,20 @@ static text_json_status json_patch_remove(
 ) {
     if (!root || !path) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments for remove operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments for remove operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
     // Empty path means remove root (not allowed)
     if (path_len == 0 || (path_len == 1 && path[0] == '/')) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Cannot remove root";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Cannot remove root"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -834,23 +805,20 @@ static text_json_status json_patch_remove(
     );
     if (status != TEXT_JSON_OK) {
         if (err) {
-            err->code = status;
-            err->message = "Invalid path for remove operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
+            *err = (text_json_error){
+                                        .code = status,
+                                        .message = "Invalid path for remove operation"
+                                    };
         }
         return status;
     }
 
     if (!parent) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Parent not found for remove operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Parent not found for remove operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -862,12 +830,10 @@ static text_json_status json_patch_remove(
         char* token_buf = (char*)malloc(token_len + 1);
         if (!token_buf) {
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory parsing array index";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory parsing array index"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
         memcpy(token_buf, token, token_len);
@@ -879,12 +845,10 @@ static text_json_status json_patch_remove(
         if (!decoded) {
             free(token_buf);
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory decoding array index";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory decoding array index"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
         size_t out_pos = 0;
@@ -894,12 +858,10 @@ static text_json_status json_patch_remove(
                 free(decoded);
                 free(token_buf);
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Buffer overflow in token decoding";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Buffer overflow in token decoding"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             if (token_buf[i] == '~' && i + 1 < token_len) {
@@ -925,12 +887,10 @@ static text_json_status json_patch_remove(
             free(decoded);
             free(token_buf);
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Invalid array index";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Invalid array index"
+                                        };}
             return TEXT_JSON_E_INVALID;
         }
         size_t idx = (size_t)parsed;
@@ -940,23 +900,20 @@ static text_json_status json_patch_remove(
 
         if (idx >= parent->as.array.count) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Array index out of bounds";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Array index out of bounds"
+                                        };}
             return TEXT_JSON_E_INVALID;
         }
 
         status = text_json_array_remove(parent, idx);
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Failed to remove from array";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Failed to remove from array"
+                                        };
             }
             return status;
         }
@@ -964,12 +921,10 @@ static text_json_status json_patch_remove(
         // Remove from object
         if (parent->type != TEXT_JSON_OBJECT) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Path points to object key but parent is not an object";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Path points to object key but parent is not an object"
+                                        };}
             return TEXT_JSON_E_INVALID;
         }
 
@@ -977,12 +932,10 @@ static text_json_status json_patch_remove(
         char* decoded_key = (char*)malloc(token_len + 1);
         if (!decoded_key) {
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Out of memory decoding object key";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Out of memory decoding object key"
+                                        };}
             return TEXT_JSON_E_OOM;
         }
 
@@ -992,12 +945,10 @@ static text_json_status json_patch_remove(
             if (out_pos >= token_len) {
                 free(decoded_key);
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Buffer overflow in key decoding";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Buffer overflow in key decoding"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             if (token[i] == '~' && i + 1 < token_len) {
@@ -1021,11 +972,10 @@ static text_json_status json_patch_remove(
 
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Failed to remove from object";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Failed to remove from object"
+                                        };
             }
             return status;
         }
@@ -1047,12 +997,10 @@ static text_json_status json_patch_replace(
     const text_json_value* target = text_json_pointer_get(root, path, path_len);
     if (!target) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Target path does not exist for replace operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Target path does not exist for replace operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1076,24 +1024,20 @@ static text_json_status json_patch_move(
 ) {
     if (!root || !from || !path) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments for move operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments for move operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
     // Check that "from" is not a proper prefix of "path"
     if (json_pointer_is_prefix(from, from_len, path, path_len)) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Cannot move a location into one of its own descendants";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Cannot move a location into one of its own descendants"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1101,12 +1045,10 @@ static text_json_status json_patch_move(
     const text_json_value* from_value = text_json_pointer_get(root, from, from_len);
     if (!from_value) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Source path does not exist for move operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Source path does not exist for move operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1121,11 +1063,10 @@ static text_json_status json_patch_move(
     );
     if (status != TEXT_JSON_OK || !target_parent) {
         if (err) {
-            err->code = status != TEXT_JSON_OK ? status : TEXT_JSON_E_INVALID;
-            err->message = "Invalid target path for move operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
+            *err = (text_json_error){
+                                        .code = status != TEXT_JSON_OK ? status : TEXT_JSON_E_INVALID,
+                                        .message = "Invalid target path for move operation"
+                                    };
         }
         return status != TEXT_JSON_OK ? status : TEXT_JSON_E_INVALID;
     }
@@ -1134,12 +1075,10 @@ static text_json_status json_patch_move(
     text_json_value* cloned_value = json_value_clone(from_value, target_ctx);
     if (!cloned_value) {
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory cloning value for move operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory cloning value for move operation"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 
@@ -1164,12 +1103,10 @@ static text_json_status json_patch_copy(
 ) {
     if (!root || !from || !path) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments for copy operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments for copy operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1177,12 +1114,10 @@ static text_json_status json_patch_copy(
     const text_json_value* from_value = text_json_pointer_get(root, from, from_len);
     if (!from_value) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Source path does not exist for copy operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Source path does not exist for copy operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1200,12 +1135,10 @@ static text_json_status json_patch_test(
 ) {
     if (!root || !path || !expected_value) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments for test operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments for test operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1213,24 +1146,20 @@ static text_json_status json_patch_test(
     const text_json_value* actual_value = text_json_pointer_get(root, path, path_len);
     if (!actual_value) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Path does not exist for test operation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Path does not exist for test operation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
     // Compare values
     if (!json_value_equal(actual_value, expected_value)) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Test operation failed: values are not equal";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Test operation failed: values are not equal"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1447,23 +1376,19 @@ TEXT_API text_json_status text_json_patch_apply(
 ) {
     if (!root || !patch_array) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments: root and patch_array must not be NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments: root and patch_array must not be NULL"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
     if (patch_array->type != TEXT_JSON_ARRAY) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Patch must be a JSON array";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Patch must be a JSON array"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1472,12 +1397,10 @@ TEXT_API text_json_status text_json_patch_apply(
     json_context* clone_ctx = json_context_new();
     if (!clone_ctx) {
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory creating clone for atomic patch";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory creating clone for atomic patch"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 
@@ -1485,12 +1408,10 @@ TEXT_API text_json_status text_json_patch_apply(
     if (!clone) {
         json_context_free(clone_ctx);
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory cloning root for atomic patch";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory cloning root for atomic patch"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 
@@ -1499,12 +1420,10 @@ TEXT_API text_json_status text_json_patch_apply(
         const text_json_value* op = patch_array->as.array.elems[i];
         if (!op || op->type != TEXT_JSON_OBJECT) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Patch operation must be an object";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Patch operation must be an object"
+                                        };}
             text_json_free(clone);
             return TEXT_JSON_E_INVALID;
         }
@@ -1515,11 +1434,10 @@ TEXT_API text_json_status text_json_patch_apply(
         text_json_status status = json_patch_get_op(op, &op_str, &op_len);
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Patch operation missing 'op' field";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Patch operation missing 'op' field"
+                                        };
             }
             text_json_free(clone);
             return status;
@@ -1531,11 +1449,10 @@ TEXT_API text_json_status text_json_patch_apply(
         status = json_patch_get_path(op, &path_str, &path_len);
         if (status != TEXT_JSON_OK) {
             if (err) {
-                err->code = status;
-                err->message = "Patch operation missing 'path' field";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = status,
+                                            .message = "Patch operation missing 'path' field"
+                                        };
             }
             text_json_free(clone);
             return status;
@@ -1546,12 +1463,10 @@ TEXT_API text_json_status text_json_patch_apply(
             const text_json_value* value = json_patch_get_value(op);
             if (!value) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Add operation missing 'value' field";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Add operation missing 'value' field"
+                                            };}
                 text_json_free(clone);
                 return TEXT_JSON_E_INVALID;
             }
@@ -1572,12 +1487,10 @@ TEXT_API text_json_status text_json_patch_apply(
             const text_json_value* value = json_patch_get_value(op);
             if (!value) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Replace operation missing 'value' field";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Replace operation missing 'value' field"
+                                            };}
                 text_json_free(clone);
                 return TEXT_JSON_E_INVALID;
             }
@@ -1633,12 +1546,10 @@ TEXT_API text_json_status text_json_patch_apply(
             const text_json_value* value = json_patch_get_value(op);
             if (!value) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Test operation missing 'value' field";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Test operation missing 'value' field"
+                                            };}
                 text_json_free(clone);
                 return TEXT_JSON_E_INVALID;
             }
@@ -1650,12 +1561,10 @@ TEXT_API text_json_status text_json_patch_apply(
             }
         } else {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Unknown patch operation type";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Unknown patch operation type"
+                                        };}
             text_json_free(clone);
             return TEXT_JSON_E_INVALID;
         }
@@ -1692,12 +1601,10 @@ static text_json_status json_merge_patch_recursive(
 ) {
     if (!target || !patch) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments: target and patch must not be NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments: target and patch must not be NULL"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1707,12 +1614,10 @@ static text_json_status json_merge_patch_recursive(
         json_context* target_ctx = target->ctx;
         if (!target_ctx) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Target value has no context";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Target value has no context"
+                                        };}
             return TEXT_JSON_E_INVALID;
         }
 
@@ -1734,23 +1639,19 @@ static text_json_status json_merge_patch_recursive(
                 // Check for integer overflow in len + 1
                 if (patch->as.string.len > SIZE_MAX - 1) {
                     if (err) {
-                        err->code = TEXT_JSON_E_OOM;
-                        err->message = "String length overflow";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_OOM,
+                                                    .message = "String length overflow"
+                                                };}
                     return TEXT_JSON_E_OOM;
                 }
                 char* str_data = (char*)json_arena_alloc_for_context(target_ctx, patch->as.string.len + 1, 1);
                 if (!str_data) {
                     if (err) {
-                        err->code = TEXT_JSON_E_OOM;
-                        err->message = "Out of memory cloning string";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_OOM,
+                                                    .message = "Out of memory cloning string"
+                                                };}
                     return TEXT_JSON_E_OOM;
                 }
                 memcpy(str_data, patch->as.string.data, patch->as.string.len);
@@ -1765,23 +1666,19 @@ static text_json_status json_merge_patch_recursive(
                 // Check for integer overflow in lexeme_len + 1
                 if (patch->as.number.lexeme_len > SIZE_MAX - 1) {
                     if (err) {
-                        err->code = TEXT_JSON_E_OOM;
-                        err->message = "Number lexeme length overflow";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_OOM,
+                                                    .message = "Number lexeme length overflow"
+                                                };}
                     return TEXT_JSON_E_OOM;
                 }
                 char* lexeme = (char*)json_arena_alloc_for_context(target_ctx, patch->as.number.lexeme_len + 1, 1);
                 if (!lexeme) {
                     if (err) {
-                        err->code = TEXT_JSON_E_OOM;
-                        err->message = "Out of memory cloning number lexeme";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_OOM,
+                                                    .message = "Out of memory cloning number lexeme"
+                                                };}
                     return TEXT_JSON_E_OOM;
                 }
                 memcpy(lexeme, patch->as.number.lexeme, patch->as.number.lexeme_len);
@@ -1805,12 +1702,10 @@ static text_json_status json_merge_patch_recursive(
                     size_t elem_size = sizeof(text_json_value*);
                     if (target->as.array.capacity > SIZE_MAX / elem_size) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Array capacity overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Array capacity overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     target->as.array.elems = (text_json_value**)json_arena_alloc_for_context(
@@ -1820,12 +1715,10 @@ static text_json_status json_merge_patch_recursive(
                     );
                     if (!target->as.array.elems) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory cloning array";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory cloning array"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                 } else {
@@ -1837,12 +1730,10 @@ static text_json_status json_merge_patch_recursive(
                     text_json_value* cloned_elem = json_value_clone(patch->as.array.elems[i], target_ctx);
                     if (!cloned_elem) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory cloning array element";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory cloning array element"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     target->as.array.elems[i] = cloned_elem;
@@ -1855,12 +1746,10 @@ static text_json_status json_merge_patch_recursive(
                 // This case shouldn't happen (we check patch->type != TEXT_JSON_OBJECT above)
                 // But handle it defensively
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Internal error: object patch in non-object branch";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Internal error: object patch in non-object branch"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
         }
@@ -1885,12 +1774,10 @@ static text_json_status json_merge_patch_recursive(
     // Verify target is actually an object (defensive check)
     if (target->type != TEXT_JSON_OBJECT) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Internal error: target type mismatch in merge";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Internal error: target type mismatch in merge"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1898,12 +1785,10 @@ static text_json_status json_merge_patch_recursive(
     // Defensive check: pairs should not be NULL when count > 0
     if (patch->as.object.count > 0 && !patch->as.object.pairs) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid patch object: count > 0 but pairs is NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid patch object: count > 0 but pairs is NULL"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -1973,12 +1858,10 @@ static text_json_status json_merge_patch_recursive(
             text_json_value* cloned_value = json_value_clone(patch_value, target_ctx);
             if (!cloned_value) {
                 if (err) {
-                    err->code = TEXT_JSON_E_OOM;
-                    err->message = "Out of memory cloning patch value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_OOM,
+                                                .message = "Out of memory cloning patch value"
+                                            };}
                 return TEXT_JSON_E_OOM;
             }
 
@@ -2011,12 +1894,10 @@ TEXT_API text_json_status text_json_merge_patch(
 ) {
     if (!target || !patch) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments: target and patch must not be NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments: target and patch must not be NULL"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -2025,12 +1906,10 @@ TEXT_API text_json_status text_json_merge_patch(
     json_context* clone_ctx = json_context_new();
     if (!clone_ctx) {
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory creating clone for atomic merge patch";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory creating clone for atomic merge patch"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 
@@ -2038,12 +1917,10 @@ TEXT_API text_json_status text_json_merge_patch(
     if (!clone) {
         json_context_free(clone_ctx);
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory cloning target for atomic merge patch";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory cloning target for atomic merge patch"
+                                    };}
         return TEXT_JSON_E_OOM;
     }
 

@@ -94,16 +94,12 @@ static text_csv_status csv_parser_init(
 ) {
     if (!parser || !opts) {
         if (err) {
-            err->code = TEXT_CSV_E_INVALID;
-            err->message = "Parser or options must not be NULL";
-            err->byte_offset = 0;
-            err->line = 1;
-            err->column = 1;
-            err->row_index = 0;
-            err->col_index = 0;
-            err->context_snippet = NULL;
-            err->context_snippet_len = 0;
-            err->caret_offset = 0;
+            *err = (text_csv_error){
+                                        .code = TEXT_CSV_E_INVALID,
+                                        .message = "Parser or options must not be NULL",
+                                        .line = 1,
+                                        .column = 1
+                                    };
         }
         return TEXT_CSV_E_INVALID;
     }

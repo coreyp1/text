@@ -214,6 +214,9 @@ static int json_is_identifier_cont(char c) {
 
 // Check if a partial identifier could be a prefix of a JSON keyword
 // Returns 1 if it's a valid prefix, 0 if not
+// Note: This function doesn't check for NaN/Infinity prefixes because those
+// are extension keywords that depend on allow_nonfinite_numbers option.
+// The lexer handles those separately in json_lexer_match_keyword().
 static int json_is_keyword_prefix(const char* str, size_t len) {
     if (len == 0) {
         return 0;
@@ -243,6 +246,25 @@ static int json_is_keyword_prefix(const char* str, size_t len) {
         if (len == 2 && str[1] == 'u') return 1;  // "nu"
         if (len == 3 && str[1] == 'u' && str[2] == 'l') return 1;  // "nul"
         if (len == 4 && str[1] == 'u' && str[2] == 'l' && str[3] == 'l') return 1;  // "null" (complete)
+        return 0;
+    }
+    if (str[0] == 'N') {
+        // Could be "NaN" (if extensions enabled)
+        if (len == 1) return 1;  // "N"
+        if (len == 2 && str[1] == 'a') return 1;  // "Na"
+        if (len == 3 && str[1] == 'a' && str[2] == 'N') return 1;  // "NaN" (complete)
+        return 0;
+    }
+    if (str[0] == 'I') {
+        // Could be "Infinity" (if extensions enabled)
+        if (len == 1) return 1;  // "I"
+        if (len == 2 && str[1] == 'n') return 1;  // "In"
+        if (len == 3 && str[1] == 'n' && str[2] == 'f') return 1;  // "Inf"
+        if (len == 4 && str[1] == 'n' && str[2] == 'f' && str[3] == 'i') return 1;  // "Infi"
+        if (len == 5 && str[1] == 'n' && str[2] == 'f' && str[3] == 'i' && str[4] == 'n') return 1;  // "Infin"
+        if (len == 6 && str[1] == 'n' && str[2] == 'f' && str[3] == 'i' && str[4] == 'n' && str[5] == 'i') return 1;  // "Infini"
+        if (len == 7 && str[1] == 'n' && str[2] == 'f' && str[3] == 'i' && str[4] == 'n' && str[5] == 'i' && str[6] == 't') return 1;  // "Infinit"
+        if (len == 8 && str[1] == 'n' && str[2] == 'f' && str[3] == 'i' && str[4] == 'n' && str[5] == 'i' && str[6] == 't' && str[7] == 'y') return 1;  // "Infinity" (complete)
         return 0;
     }
 
@@ -343,13 +365,13 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
         return 1;
     }
 
-    // Check for extension tokens (if enabled)
+    // Check for extension tokens (NaN, Infinity)
     // Note: "Infinity" is checked here because it starts with an identifier character.
     // "-Infinity" is checked separately in the number parsing path (see
     // json_lexer_match_neg_infinity()) because it starts with '-'.
-    // Both are gated behind allow_nonfinite_numbers.
-    if (lexer->opts && lexer->opts->allow_nonfinite_numbers) {
-        if (json_matches(keyword_start, len, "NaN")) {
+    // Always check for these tokens, but return error if not allowed
+    if (json_matches(keyword_start, len, "NaN")) {
+        if (lexer->opts && lexer->opts->allow_nonfinite_numbers) {
             token->type = JSON_TOKEN_NAN;
             token->pos = lexer->pos;
             token->length = len;
@@ -364,8 +386,26 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             }
             json_position_update_column(&lexer->pos, len);
             return 1;
+        } else {
+            // NaN not allowed - return error
+            token->type = JSON_TOKEN_ERROR;
+            token->pos = lexer->pos;
+            token->length = len;
+            // Check for overflow before adding start + len
+            if (json_check_add_overflow(start, len)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + len;
+                lexer->pos.offset = lexer->current_offset;
+            }
+            json_position_update_column(&lexer->pos, len);
+            return TEXT_JSON_E_NONFINITE;
         }
-        if (json_matches(keyword_start, len, "Infinity")) {
+    }
+    if (json_matches(keyword_start, len, "Infinity")) {
+        if (lexer->opts && lexer->opts->allow_nonfinite_numbers) {
             token->type = JSON_TOKEN_INFINITY;
             token->pos = lexer->pos;
             token->length = len;
@@ -380,6 +420,22 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
             }
             json_position_update_column(&lexer->pos, len);
             return 1;
+        } else {
+            // Infinity not allowed - return error
+            token->type = JSON_TOKEN_ERROR;
+            token->pos = lexer->pos;
+            token->length = len;
+            // Check for overflow before adding start + len
+            if (json_check_add_overflow(start, len)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + len;
+                lexer->pos.offset = lexer->current_offset;
+            }
+            json_position_update_column(&lexer->pos, len);
+            return TEXT_JSON_E_NONFINITE;
         }
     }
 
@@ -390,14 +446,10 @@ static int json_lexer_match_keyword(json_lexer* lexer, json_token* token) {
 // This is separate from the "Infinity" check in json_lexer_match_keyword()
 // because "-Infinity" starts with a minus sign, which is not an identifier
 // character. Therefore it cannot be matched by the keyword matcher and must
-// be handled in the number parsing path. Both are gated behind the same
-// option: allow_nonfinite_numbers.
-// Returns 1 if matched, 0 if not.
+// be handled in the number parsing path.
+// Returns 1 if matched and allowed, TEXT_JSON_E_NONFINITE if matched but not allowed, 0 if not matched.
 static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
-    // Gate behind same option as "Infinity" keyword
-    if (!lexer->opts || !lexer->opts->allow_nonfinite_numbers) {
-        return 0;
-    }
+    // Always check for -Infinity, but return error if not allowed
 
     size_t start = lexer->current_offset;
     // Check for underflow and sufficient length using shared helper
@@ -413,20 +465,38 @@ static int json_lexer_match_neg_infinity(json_lexer* lexer, json_token* token) {
 
     if (lexer->input[start] == '-' &&
         json_matches(lexer->input + start + 1, 8, "Infinity")) {
-        token->type = JSON_TOKEN_NEG_INFINITY;
-        token->pos = lexer->pos;
-        token->length = 9;
-        // Check for overflow before adding start + 9
-        if (json_check_add_overflow(start, 9)) {
-            // Overflow - saturate at SIZE_MAX
-            lexer->current_offset = SIZE_MAX;
-            lexer->pos.offset = SIZE_MAX;
+        if (lexer->opts && lexer->opts->allow_nonfinite_numbers) {
+            token->type = JSON_TOKEN_NEG_INFINITY;
+            token->pos = lexer->pos;
+            token->length = 9;
+            // Check for overflow before adding start + 9
+            if (json_check_add_overflow(start, 9)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + 9;
+                lexer->pos.offset = lexer->current_offset;
+            }
+            json_position_update_column(&lexer->pos, 9);
+            return 1;
         } else {
-            lexer->current_offset = start + 9;
-            lexer->pos.offset = lexer->current_offset;
+            // -Infinity not allowed - return error
+            token->type = JSON_TOKEN_ERROR;
+            token->pos = lexer->pos;
+            token->length = 9;
+            // Check for overflow before adding start + 9
+            if (json_check_add_overflow(start, 9)) {
+                // Overflow - saturate at SIZE_MAX
+                lexer->current_offset = SIZE_MAX;
+                lexer->pos.offset = SIZE_MAX;
+            } else {
+                lexer->current_offset = start + 9;
+                lexer->pos.offset = lexer->current_offset;
+            }
+            json_position_update_column(&lexer->pos, 9);
+            return TEXT_JSON_E_NONFINITE;
         }
-        json_position_update_column(&lexer->pos, 9);
-        return 1;
     }
 
     return 0;
@@ -760,6 +830,59 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
         has_exp = tb->parse_state.number_state.has_exp;
         exp_sign_seen = tb->parse_state.number_state.exp_sign_seen;
         starts_with_minus = tb->parse_state.number_state.starts_with_minus;
+
+        // If resuming and we have a minus sign but no dot/exp, check if we're in the middle of -Infinity
+        if (starts_with_minus && !has_dot && !has_exp &&
+            tb->buffer_used > 0 && tb->buffer_used < 9 &&
+            lexer->opts && lexer->opts->allow_nonfinite_numbers) {
+            // Check if what we have so far matches a prefix of "-Infinity"
+            const char* infinity_str = "-Infinity";
+            int is_infinity_prefix = 1;
+            for (size_t i = 0; i < tb->buffer_used && i < 9; i++) {
+                if (tb->buffer[i] != infinity_str[i]) {
+                    is_infinity_prefix = 0;
+                    break;
+                }
+            }
+            if (is_infinity_prefix) {
+                // We're resuming an incomplete -Infinity - continue reading
+                // We already have tb->buffer_used characters in the buffer
+                // We need to read the remaining (9 - tb->buffer_used) characters
+                const char* infinity_str = "-Infinity";
+                size_t chars_needed = 9 - tb->buffer_used;
+
+                while (chars_needed > 0 && end < lexer->input_len) {
+                    if (!json_check_bounds_offset(end, lexer->input_len)) {
+                        break;
+                    }
+                    char next_c = lexer->input[end];
+                    size_t expected_pos = tb->buffer_used;  // Position in "-Infinity" string
+                    if (expected_pos < 9 && next_c == infinity_str[expected_pos]) {
+                        end++;
+                        // Append to buffer if available
+                        if (tb) {
+                            text_json_status status = json_token_buffer_append(tb, &next_c, 1);
+                            if (status != TEXT_JSON_OK) {
+                                return status;
+                            }
+                        }
+                        chars_needed--;
+                    } else {
+                        // Not matching -Infinity, break and let validation handle it
+                        break;
+                    }
+                }
+                // If we've read all 9 characters, we can skip the main loop
+                // and go straight to validation
+                if (tb->buffer_used >= 9) {
+                    // Set end to indicate we've processed all input for this token
+                    // The validation below will handle the complete -Infinity
+                    // We need to make sure end reflects that we've read everything
+                    // Actually, we should just let the loop run, but it will break immediately
+                    // since we've already read all characters
+                }
+            }
+        }
     } else {
         // Starting new number - initialize token buffer if available
         if (tb) {
@@ -859,6 +982,44 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
             }
             continue;
         }
+
+        // Check if this could be part of -Infinity (if enabled and we started with minus)
+        // When we encounter a non-number character after '-', check if it's 'I' (start of "Infinity")
+        if (starts_with_minus && !has_dot && !has_exp &&
+            lexer->opts && lexer->opts->allow_nonfinite_numbers &&
+            (end == start + 1) && c == 'I') {
+            // After "-", we have "I" - could be start of "Infinity"
+            // Read the rest of "-Infinity" if available
+            const char* infinity_rest = "nfinity";
+            size_t infinity_rest_len = 7;
+            size_t read_pos = 0;
+
+            // Read as many characters as we can
+            while (read_pos < infinity_rest_len && end < lexer->input_len) {
+                if (!json_check_bounds_offset(end, lexer->input_len)) {
+                    break;
+                }
+                char next_c = lexer->input[end];
+                if (next_c == infinity_rest[read_pos]) {
+                    end++;
+                    read_pos++;
+                    // Append to buffer if available
+                    if (tb) {
+                        text_json_status status = json_token_buffer_append(tb, &next_c, 1);
+                        if (status != TEXT_JSON_OK) {
+                            return status;
+                        }
+                    }
+                } else {
+                    // Not matching -Infinity, break and let validation handle it
+                    break;
+                }
+            }
+            // After reading "-Infinity" (or as much as available), break out of the main loop
+            // The validation check below will handle complete vs incomplete -Infinity
+            break;
+        }
+
         // Not part of number
         break;
     }
@@ -989,6 +1150,74 @@ static text_json_status json_lexer_parse_number(json_lexer* lexer, json_token* t
 
     // Check if number is valid (only for complete numbers)
     size_t total_len = resuming && tb ? (tb->buffer_used + (end - start)) : (end - start);
+
+    // Before validating, check if this might be -Infinity (complete or prefix)
+    // This handles the case where -Infinity wasn't caught by json_lexer_match_neg_infinity
+    // because it was called before we had enough characters, or in streaming mode
+    // We need to check if what we have matches "-Infinity" or is a prefix of it
+    if (starts_with_minus && total_len >= 1 && total_len <= 9 &&
+        lexer->opts && lexer->opts->allow_nonfinite_numbers) {
+        const char* number_content;
+        size_t content_len;
+        if (resuming && tb && tb->buffer_used > 0) {
+            number_content = tb->buffer;
+            content_len = tb->buffer_used;
+        } else {
+            number_content = lexer->input + start;
+            content_len = end - start;
+        }
+        // Check if it matches "-Infinity" or is a prefix of it
+        const char* infinity_str = "-Infinity";
+        size_t infinity_len = 9;
+        int is_prefix = 1;
+        size_t check_len = (content_len < infinity_len) ? content_len : infinity_len;
+        for (size_t i = 0; i < check_len; i++) {
+            if (number_content[i] != infinity_str[i]) {
+                is_prefix = 0;
+                break;
+            }
+        }
+        if (is_prefix) {
+            if (content_len == 9) {
+                // Complete -Infinity - let json_parse_number handle it (it will recognize it)
+                // Make sure we use the buffered content if resuming
+                if (resuming && tb && tb->buffer_used > 0) {
+                    // We have complete -Infinity in buffer, use it for parsing
+                    // The validation and parsing below will handle it
+                }
+            } else {
+                // Incomplete -Infinity prefix - treat as incomplete
+                // Need to ensure characters are buffered
+                if (tb) {
+                    // Mark that we're buffering a number
+                    if (tb->type == JSON_TOKEN_BUFFER_NONE) {
+                        tb->type = JSON_TOKEN_BUFFER_NUMBER;
+                        tb->start_offset = start;
+                    }
+                    // If not resuming, buffer the characters we've read
+                    if (!resuming && content_len > 0) {
+                        for (size_t i = 0; i < content_len; i++) {
+                            if (start + i >= lexer->input_len) break;
+                            text_json_status buf_status = json_token_buffer_append(tb, &lexer->input[start + i], 1);
+                            if (buf_status != TEXT_JSON_OK) {
+                                json_token_buffer_clear(tb);
+                                return buf_status;
+                            }
+                        }
+                        tb->is_buffered = 1;
+                    }
+                    tb->parse_state.number_state.has_dot = has_dot;
+                    tb->parse_state.number_state.has_exp = has_exp;
+                    tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
+                    tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+                }
+                // Advance current_offset to end so the incomplete token gets removed from input buffer
+                // The token buffer has the data, so it's safe to mark input as processed
+                lexer->current_offset = end;
+                return TEXT_JSON_E_INCOMPLETE;
+            }
+        }
+    }
 
     // Defensive bounds check before buffer access
     char first_char_check = resuming && tb ? tb->buffer[0] :
@@ -1255,15 +1484,24 @@ TEXT_INTERNAL_API text_json_status json_lexer_next(json_lexer* lexer, json_token
     // (same as "Infinity" in the keyword path).
     if (c == '-' || (c >= '0' && c <= '9')) {
         // Check for -Infinity first (if enabled)
-        if (c == '-' && json_lexer_match_neg_infinity(lexer, token)) {
-            return TEXT_JSON_OK;
+        if (c == '-') {
+            int neg_inf_result = json_lexer_match_neg_infinity(lexer, token);
+            if (neg_inf_result == 1) {
+                return TEXT_JSON_OK;
+            } else if (neg_inf_result == TEXT_JSON_E_NONFINITE) {
+                return TEXT_JSON_E_NONFINITE;
+            }
+            // Otherwise (0), continue to number parsing
         }
         return json_lexer_parse_number(lexer, token);
     }
 
     // Keyword tokens (true, false, null, NaN, Infinity)
-    if (json_lexer_match_keyword(lexer, token)) {
+    int keyword_result = json_lexer_match_keyword(lexer, token);
+    if (keyword_result == 1) {
         return TEXT_JSON_OK;
+    } else if (keyword_result == TEXT_JSON_E_NONFINITE) {
+        return TEXT_JSON_E_NONFINITE;
     }
 
     // In streaming mode, check if we have a partial keyword prefix

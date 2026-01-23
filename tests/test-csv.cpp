@@ -16,7 +16,7 @@ TEST(CsvCore, StatusEnum) {
 }
 
 TEST(CsvCore, ErrorStruct) {
-    text_csv_error err;
+    text_csv_error err{};
     err.code = TEXT_CSV_E_UNTERMINATED_QUOTE;
     err.message = "Unterminated quote";
     err.byte_offset = 42;
@@ -38,7 +38,7 @@ TEST(CsvCore, ErrorStruct) {
 }
 
 TEST(CsvCore, ErrorFree) {
-    text_csv_error err;
+    text_csv_error err{};
     err.code = TEXT_CSV_OK;
     err.message = nullptr;
     err.context_snippet = (char*)malloc(10);
@@ -63,8 +63,7 @@ TEST(CsvError, ContextSnippetBasic) {
     const char* invalid_input = "a,b,c\nd,\"e,f\ng,h";
     size_t invalid_len = strlen(invalid_input);
 
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));  // Initialize error structure
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(invalid_input, invalid_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -89,8 +88,7 @@ TEST(CsvError, ContextSnippetCaretPosition) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -114,8 +112,7 @@ TEST(CsvError, ContextSnippetErrorAtStart) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -136,8 +133,7 @@ TEST(CsvError, ContextSnippetErrorAtEnd) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -159,8 +155,7 @@ TEST(CsvError, ContextSnippetInvalidEscape) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -180,8 +175,7 @@ TEST(CsvError, ContextSnippetUnexpectedQuote) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     EXPECT_EQ(table, nullptr);
@@ -201,9 +195,7 @@ TEST(CsvError, ContextSnippetStreamingParser) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     auto callback = [](const text_csv_event* event, void* user_data) -> text_csv_status {
         (void)event;
         (void)user_data;
@@ -239,8 +231,7 @@ TEST(CsvError, ContextSnippetDeepCopy) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err1;
-    memset(&err1, 0, sizeof(err1));
+    text_csv_error err1{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err1);
 
     EXPECT_EQ(table, nullptr);
@@ -250,8 +241,7 @@ TEST(CsvError, ContextSnippetDeepCopy) {
     // If it is generated, test deep copy
     if (err1.context_snippet && err1.context_snippet_len > 0) {
         // Copy error
-        text_csv_error err2;
-        memset(&err2, 0, sizeof(err2));
+        text_csv_error err2{};
         text_csv_status copy_status = csv_error_copy(&err2, &err1);
         EXPECT_EQ(copy_status, TEXT_CSV_OK);
 
@@ -1609,8 +1599,7 @@ TEST(CsvStream, QuoteAtBoundaryFollowedByInvalidCharacter) {
     text_csv_status status = text_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
     EXPECT_EQ(status, TEXT_CSV_OK);
 
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     status = text_csv_stream_feed(stream, chunk2, strlen(chunk2), &err);
     // Should fail with invalid quote usage - quote must be followed by delimiter, newline, or another quote
     EXPECT_NE(status, TEXT_CSV_OK);
@@ -1845,7 +1834,7 @@ TEST(CsvTable, BasicParsing) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.treat_first_row_as_header = true;  // First row is header
-    text_csv_error err;
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     ASSERT_NE(table, nullptr);
@@ -1874,7 +1863,7 @@ TEST(CsvTable, EmptyTable) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     ASSERT_NE(table, nullptr);
@@ -1889,7 +1878,7 @@ TEST(CsvTable, HeaderProcessing) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.treat_first_row_as_header = true;
-    text_csv_error err;
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     ASSERT_NE(table, nullptr);
@@ -1925,7 +1914,7 @@ TEST(CsvTable, DuplicateColumnNames) {
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.treat_first_row_as_header = true;
     opts.dialect.header_dup_mode = TEXT_CSV_DUPCOL_ERROR;
-    text_csv_error err;
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     // Should fail with duplicate column error
@@ -1938,7 +1927,7 @@ TEST(CsvTable, QuotedFieldsInTable) {
     size_t input_len = strlen(input);
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     ASSERT_NE(table, nullptr);
@@ -3282,9 +3271,7 @@ static void test_valid_csv_file(const std::string& filepath) {
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(table, nullptr) << "Failed to parse valid CSV from: " << filepath
                                 << " Error: " << (err.message ? err.message : "unknown");
@@ -3324,8 +3311,7 @@ static void test_valid_csv_stream(const std::string& filepath) {
     text_csv_stream* stream = text_csv_stream_new(&opts, callback, &user_data);
     ASSERT_NE(stream, nullptr);
 
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
+    text_csv_error err{};
     text_csv_status status = text_csv_stream_feed(stream, content.c_str(), content.size(), &err);
     EXPECT_EQ(status, TEXT_CSV_OK) << "Failed to feed stream from: " << filepath;
 
@@ -3344,9 +3330,7 @@ static void test_invalid_csv_file(const std::string& filepath) {
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     EXPECT_EQ(table, nullptr) << "Should have failed to parse invalid CSV from: " << filepath;
 
@@ -3362,9 +3346,7 @@ static void test_round_trip(const std::string& filepath) {
     ASSERT_FALSE(content.empty()) << "Failed to read file: " << filepath;
 
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     // Parse original
     text_csv_table* original = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
     ASSERT_NE(original, nullptr) << "Failed to parse: " << filepath;
@@ -3442,9 +3424,7 @@ TEST(TestCorpus, DialectTSV) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.delimiter = '\t';
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(table, nullptr);
     if (table) {
@@ -3461,9 +3441,7 @@ TEST(TestCorpus, DialectSemicolon) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.delimiter = ';';
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(table, nullptr);
     if (table) {
@@ -3480,9 +3458,7 @@ TEST(TestCorpus, DialectBackslashEscape) {
 
     text_csv_parse_options opts = text_csv_parse_options_default();
     opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     EXPECT_NE(table, nullptr);
     if (table) {
@@ -3504,8 +3480,7 @@ TEST(TestCorpus, EdgeCases) {
     if (!bom_content.empty()) {
         text_csv_parse_options opts = text_csv_parse_options_default();
         opts.keep_bom = false;  // Should strip BOM
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(bom_content.c_str(), bom_content.size(), &opts, &err);
         EXPECT_NE(table, nullptr);
         if (table) {
@@ -3522,8 +3497,7 @@ TEST(TestCorpus, EdgeCases) {
         std::string content = read_file(base_dir + "/empty-table.csv");
         // Empty file is valid - it should parse to a table with 0 rows
         text_csv_parse_options opts = text_csv_parse_options_default();
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
         EXPECT_NE(table, nullptr);
         if (table) {
@@ -3553,8 +3527,7 @@ TEST(TestCorpus, EdgeCasesNewlines) {
         opts.dialect.accept_crlf = true;
         opts.dialect.accept_lf = false;
         opts.dialect.accept_cr = false;
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(crlf_content.c_str(), crlf_content.size(), &opts, &err);
         EXPECT_NE(table, nullptr);
         if (table) {
@@ -3573,8 +3546,7 @@ TEST(TestCorpus, EdgeCasesNewlines) {
         opts.dialect.accept_cr = true;
         opts.dialect.accept_lf = false;
         opts.dialect.accept_crlf = false;
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(cr_content.c_str(), cr_content.size(), &opts, &err);
         // May or may not succeed depending on implementation
         if (table) {
@@ -3589,8 +3561,7 @@ TEST(TestCorpus, EdgeCasesNewlines) {
         text_csv_parse_options opts = text_csv_parse_options_default();
         opts.dialect.accept_lf = true;
         opts.dialect.accept_crlf = true;
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(mixed_content.c_str(), mixed_content.size(), &opts, &err);
         EXPECT_NE(table, nullptr);
         if (table) {
@@ -3614,9 +3585,7 @@ TEST(TestCorpus, UnequalColumnCounts) {
     ASSERT_FALSE(content.empty());
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     ASSERT_NE(table, nullptr) << "Failed to parse CSV with unequal columns";
 
@@ -3694,9 +3663,7 @@ TEST(TestCorpus, ConsecutiveEmptyFields) {
     ASSERT_FALSE(content.empty());
 
     text_csv_parse_options opts = text_csv_parse_options_default();
-    text_csv_error err;
-    memset(&err, 0, sizeof(err));
-
+    text_csv_error err{};
     text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &opts, &err);
     ASSERT_NE(table, nullptr) << "Failed to parse CSV with consecutive empty fields";
 
@@ -3811,8 +3778,7 @@ TEST(TestCorpus, InvalidCases) {
     if (!invalid_escape_content.empty()) {
         text_csv_parse_options opts = text_csv_parse_options_default();
         opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(invalid_escape_content.c_str(), invalid_escape_content.size(), &opts, &err);
         EXPECT_EQ(table, nullptr) << "Should have failed to parse invalid escape sequence";
         if (table) {
@@ -3887,9 +3853,7 @@ TEST(TestCorpus, MilestoneDialectMatrix) {
 
         text_csv_parse_options parse_opts = text_csv_parse_options_default();
         parse_opts.dialect.delimiter = '\t';
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
-
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
         ASSERT_NE(table, nullptr);
 
@@ -3915,9 +3879,7 @@ TEST(TestCorpus, MilestoneDialectMatrix) {
 
         text_csv_parse_options parse_opts = text_csv_parse_options_default();
         parse_opts.dialect.delimiter = ';';
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
-
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
         ASSERT_NE(table, nullptr);
 
@@ -3943,9 +3905,7 @@ TEST(TestCorpus, MilestoneDialectMatrix) {
 
         text_csv_parse_options parse_opts = text_csv_parse_options_default();
         parse_opts.dialect.escape = TEXT_CSV_ESCAPE_BACKSLASH;
-        text_csv_error err;
-        memset(&err, 0, sizeof(err));
-
+        text_csv_error err{};
         text_csv_table* table = text_csv_parse_table(content.c_str(), content.size(), &parse_opts, &err);
         ASSERT_NE(table, nullptr);
 

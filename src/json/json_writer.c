@@ -860,22 +860,20 @@ text_json_status text_json_write_value(
 ) {
   if (!sink || !v) {
     if (err) {
-      err->code = TEXT_JSON_E_INVALID;
-      err->message = "Invalid arguments: sink and value must not be NULL";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_INVALID,
+                      .message = "Invalid arguments: sink and value must not be NULL"
+                  };
     }
     return TEXT_JSON_E_INVALID;
   }
 
   if (!sink->write) {
     if (err) {
-      err->code = TEXT_JSON_E_INVALID;
-      err->message = "Invalid sink: write callback is NULL";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_INVALID,
+                      .message = "Invalid sink: write callback is NULL"
+                  };
     }
     return TEXT_JSON_E_INVALID;
   }
@@ -883,11 +881,10 @@ text_json_status text_json_write_value(
   int result = write_value_recursive(sink, v, opt, 0);
   if (result != 0) {
     if (err) {
-      err->code = TEXT_JSON_E_WRITE;
-      err->message = "Write operation failed";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_WRITE,
+                      .message = "Write operation failed"
+                  };
     }
     return TEXT_JSON_E_WRITE;
   }
@@ -898,11 +895,10 @@ text_json_status text_json_write_value(
     const char* newline = opts->newline ? opts->newline : "\n";
     if (write_string(sink, newline) != 0) {
       if (err) {
-        err->code = TEXT_JSON_E_WRITE;
-        err->message = "Failed to write trailing newline";
-        err->offset = 0;
-        err->line = 0;
-        err->col = 0;
+        *err = (text_json_error){
+                                    .code = TEXT_JSON_E_WRITE,
+                                    .message = "Failed to write trailing newline"
+                                };
       }
       return TEXT_JSON_E_WRITE;
     }
@@ -1765,22 +1761,20 @@ text_json_status text_json_writer_finish(
 ) {
   if (!w) {
     if (err) {
-      err->code = TEXT_JSON_E_INVALID;
-      err->message = "Writer is NULL";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_INVALID,
+                      .message = "Writer is NULL"
+                  };
     }
     return TEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
     if (err) {
-      err->code = TEXT_JSON_E_STATE;
-      err->message = "Writer is in error state";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_STATE,
+                      .message = "Writer is in error state"
+                  };
     }
     return TEXT_JSON_E_STATE;
   }
@@ -1788,11 +1782,10 @@ text_json_status text_json_writer_finish(
   // Check if stack is empty (structure is complete)
   if (w->stack_size != 0) {
     if (err) {
-      err->code = TEXT_JSON_E_INCOMPLETE;
-      err->message = "Incomplete JSON structure: unclosed containers";
-      err->offset = 0;
-      err->line = 0;
-      err->col = 0;
+      *err = (text_json_error){
+                      .code = TEXT_JSON_E_INCOMPLETE,
+                      .message = "Incomplete JSON structure: unclosed containers"
+                  };
     }
     return TEXT_JSON_E_INCOMPLETE;
   }
@@ -1803,11 +1796,10 @@ text_json_status text_json_writer_finish(
     if (writer_write_string(w, newline) != 0) {
       w->error = 1;
       if (err) {
-        err->code = TEXT_JSON_E_WRITE;
-        err->message = "Failed to write trailing newline";
-        err->offset = 0;
-        err->line = 0;
-        err->col = 0;
+        *err = (text_json_error){
+                                    .code = TEXT_JSON_E_WRITE,
+                                    .message = "Failed to write trailing newline"
+                                };
       }
       return TEXT_JSON_E_WRITE;
     }

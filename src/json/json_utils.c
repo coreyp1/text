@@ -367,16 +367,12 @@ int json_check_int_overflow(int current, size_t increment) {
 int json_check_null_param(const void* ptr, text_json_error* err, text_json_status error_code, const char* error_message) {
     if (ptr == NULL) {
         if (err) {
-            err->code = error_code;
-            err->message = error_message;
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
-            err->context_snippet = NULL;
-            err->context_snippet_len = 0;
-            err->caret_offset = 0;
-            err->expected_token = NULL;
-            err->actual_token = NULL;
+            *err = (text_json_error){
+                                        .code = error_code,
+                                        .message = error_message,
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         return 1;  // NULL detected
     }
@@ -456,15 +452,13 @@ void json_error_init_fields(
     if (!err) {
         return;
     }
-    err->code = code;
-    err->message = message;
-    err->offset = offset;
-    err->line = line;
-    err->col = col;
-    // Note: context_snippet should be freed and set separately
-    // This function does not modify context_snippet to avoid double-free issues
-    err->expected_token = NULL;
-    err->actual_token = NULL;
+    *err = (text_json_error){
+                    .code = code,
+                    .message = message,
+                    .offset = offset,
+                    .line = line,
+                    .col = col
+                };
 }
 
 /**

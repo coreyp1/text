@@ -232,26 +232,31 @@ TEXT_INTERNAL_API text_json_status json_parse_number(
     // Initialize output structure
     memset(num, 0, sizeof(json_number));
 
-    // Check for nonfinite numbers first (if enabled)
-    if (opts && opts->allow_nonfinite_numbers) {
-        if (json_parse_nonfinite(input, input_len, num)) {
-            // Preserve lexeme if requested
-            if (opts->preserve_number_lexeme) {
-                // Check for integer overflow
-                if (input_len > SIZE_MAX - 1) {
-                    return TEXT_JSON_E_LIMIT;
-                }
-                num->lexeme = malloc(input_len + 1);
-                if (!num->lexeme) {
-                    return TEXT_JSON_E_OOM;
-                }
-                memcpy(num->lexeme, input, input_len);
-                num->lexeme[input_len] = '\0';
-                num->lexeme_len = input_len;
-                num->flags |= JSON_NUMBER_HAS_LEXEME;
-            }
-            return TEXT_JSON_OK;
+    // Check for nonfinite numbers first (always check, but return error if disabled)
+    if (json_parse_nonfinite(input, input_len, num)) {
+        // Found a non-finite number
+        if (!opts || !opts->allow_nonfinite_numbers) {
+            // Non-finite numbers not allowed - return specific error
+            // Note: json_parse_nonfinite doesn't allocate memory, so no cleanup needed
+            memset(num, 0, sizeof(json_number));
+            return TEXT_JSON_E_NONFINITE;
         }
+        // Non-finite numbers allowed - preserve lexeme if requested
+        if (opts->preserve_number_lexeme) {
+            // Check for integer overflow
+            if (input_len > SIZE_MAX - 1) {
+                return TEXT_JSON_E_LIMIT;
+            }
+            num->lexeme = malloc(input_len + 1);
+            if (!num->lexeme) {
+                return TEXT_JSON_E_OOM;
+            }
+            memcpy(num->lexeme, input, input_len);
+            num->lexeme[input_len] = '\0';
+            num->lexeme_len = input_len;
+            num->flags |= JSON_NUMBER_HAS_LEXEME;
+        }
+        return TEXT_JSON_OK;
     }
 
     // Validate number syntax

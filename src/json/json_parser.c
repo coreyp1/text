@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdint.h>
+#include <math.h>
 
 // Context window sizes for error snippets
 #define JSON_ERROR_CONTEXT_BEFORE 20
@@ -383,6 +384,109 @@ static text_json_status json_parse_array_element(
             json_token_cleanup(token);
             result = json_parse_object(parser, &element, ctx);
             break;
+
+        case JSON_TOKEN_NAN:
+        case JSON_TOKEN_INFINITY:
+        case JSON_TOKEN_NEG_INFINITY: {
+            // Nonfinite numbers - create as number with special lexeme
+            if (!parser->opts || !parser->opts->allow_nonfinite_numbers) {
+                result = json_parser_set_error(
+                    parser,
+                    TEXT_JSON_E_NONFINITE,
+                    "Nonfinite numbers not allowed",
+                    token->pos
+                );
+                json_token_cleanup(token);
+                break;
+            }
+
+            // Determine lexeme and double value based on token type
+            const char* lexeme;
+            size_t lexeme_len;
+            double dbl_val;
+
+            if (token->type == JSON_TOKEN_NAN) {
+                lexeme = "NaN";
+                lexeme_len = 3;
+                dbl_val = NAN;
+            } else if (token->type == JSON_TOKEN_INFINITY) {
+                lexeme = "Infinity";
+                lexeme_len = 8;
+                dbl_val = INFINITY;
+            } else {  // JSON_TOKEN_NEG_INFINITY
+                lexeme = "-Infinity";
+                lexeme_len = 9;
+                dbl_val = -INFINITY;
+            }
+
+            // Create value with existing context
+            element = json_value_new_with_existing_context(TEXT_JSON_NUMBER, ctx);
+            if (!element) {
+                result = TEXT_JSON_E_OOM;
+                json_token_cleanup(token);
+                break;
+            }
+
+            // Check if we can use in-situ mode for lexeme
+            // Conditions: in-situ mode enabled, context has input buffer
+            int use_in_situ = 0;
+            size_t number_offset = 0;
+            size_t number_len = 0;
+            if (parser->opts && parser->opts->in_situ_mode &&
+                ctx->input_buffer && ctx->input_buffer_len > 0) {
+                // Verify the number position is within bounds
+                // Check for integer overflow and bounds using shared helpers
+                number_offset = token->pos.offset;
+                number_len = token->length;
+                if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
+                    !json_check_add_overflow(number_offset, number_len) &&
+                    number_offset + number_len <= ctx->input_buffer_len) {
+                    use_in_situ = 1;
+                }
+            }
+
+            if (use_in_situ && lexeme_len > 0) {
+                // Use in-situ mode: reference input buffer directly
+                // Safe: number_offset and number_len were validated above
+                element->as.number.lexeme = (char*)(ctx->input_buffer + number_offset);
+                element->as.number.lexeme_len = lexeme_len;
+                element->as.number.is_in_situ = 1;
+            } else if (lexeme_len > 0) {
+                // Copy lexeme to arena
+                // Check for overflow in lexeme_len + 1
+                if (lexeme_len > SIZE_MAX - 1) {
+                    result = TEXT_JSON_E_LIMIT;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                char* lexeme_copy = (char*)json_arena_alloc_for_context(ctx, lexeme_len + 1, 1);
+                if (!lexeme_copy) {
+                    result = TEXT_JSON_E_OOM;
+                    text_json_free(element);
+                    json_token_cleanup(token);
+                    break;
+                }
+                memcpy(lexeme_copy, lexeme, lexeme_len);
+                lexeme_copy[lexeme_len] = '\0';
+                element->as.number.lexeme = lexeme_copy;
+                element->as.number.lexeme_len = lexeme_len;
+                element->as.number.is_in_situ = 0;
+            } else {
+                element->as.number.lexeme = NULL;
+                element->as.number.lexeme_len = 0;
+                element->as.number.is_in_situ = 0;
+            }
+
+            // Set double representation
+            element->as.number.dbl = dbl_val;
+            element->as.number.has_dbl = 1;
+            element->as.number.has_i64 = 0;
+            element->as.number.has_u64 = 0;
+
+            json_token_cleanup(token);
+            break;
+        }
 
         default:
             // Invalid token for array element
@@ -1077,8 +1181,30 @@ static text_json_status json_parse_object(json_parser* parser, text_json_value**
 // Parse a JSON value (recursive entry point)
 static text_json_status json_parse_value(json_parser* parser, text_json_value** out, json_context* ctx) {
     json_token token;
+    memset(&token, 0, sizeof(token));
     text_json_status status = json_lexer_next(&parser->lexer, &token);
     if (status != TEXT_JSON_OK) {
+        // Lexer returned an error - set error structure if available
+        if (parser->error_out) {
+            parser->error_out->code = status;
+            // Set appropriate error message based on error code
+            if (status == TEXT_JSON_E_NONFINITE) {
+                parser->error_out->message = "Nonfinite numbers not allowed";
+            } else {
+                parser->error_out->message = "Lexer error";
+            }
+            // Use token position if available, otherwise use lexer position
+            if (token.type != 0) {  // Token was initialized
+                parser->error_out->offset = token.pos.offset;
+                parser->error_out->line = token.pos.line;
+                parser->error_out->col = token.pos.col;
+            } else {
+                parser->error_out->offset = parser->lexer.pos.offset;
+                parser->error_out->line = parser->lexer.pos.line;
+                parser->error_out->col = parser->lexer.pos.col;
+            }
+        }
+        json_token_cleanup(&token);
         return status;
     }
 
@@ -1330,9 +1456,8 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
 
         case JSON_TOKEN_NAN:
         case JSON_TOKEN_INFINITY:
-        case JSON_TOKEN_NEG_INFINITY:
+        case JSON_TOKEN_NEG_INFINITY: {
             // Nonfinite numbers - create as number with special lexeme
-            // TODO: Handle extension options (comments, trailing commas, etc.) if needed
             if (!parser->opts || !parser->opts->allow_nonfinite_numbers) {
                 result = json_parser_set_error(
                     parser,
@@ -1343,15 +1468,106 @@ static text_json_status json_parse_value(json_parser* parser, text_json_value** 
                 json_token_cleanup(&token);
                 break;
             }
-            // TODO: Create number value with NaN/Infinity representation
-            result = json_parser_set_error(
-                parser,
-                TEXT_JSON_E_INVALID,
-                "Nonfinite number support not yet implemented",
-                token.pos
-            );
+
+            // Determine lexeme and double value based on token type
+            const char* lexeme;
+            size_t lexeme_len;
+            double dbl_val;
+
+            if (token.type == JSON_TOKEN_NAN) {
+                lexeme = "NaN";
+                lexeme_len = 3;
+                dbl_val = NAN;
+            } else if (token.type == JSON_TOKEN_INFINITY) {
+                lexeme = "Infinity";
+                lexeme_len = 8;
+                dbl_val = INFINITY;
+            } else {  // JSON_TOKEN_NEG_INFINITY
+                lexeme = "-Infinity";
+                lexeme_len = 9;
+                dbl_val = -INFINITY;
+            }
+
+            // Create value (similar to regular number handling)
+            if (is_root) {
+                value = text_json_new_number_from_lexeme(lexeme, lexeme_len);
+                if (!value) {
+                    result = TEXT_JSON_E_OOM;
+                    json_token_cleanup(&token);
+                    break;
+                }
+                // After creating root value, input buffer will be set in text_json_parse()
+                // So we can't use in-situ mode for root numbers at creation time
+                // They will be copied, which is fine for root values
+                value->as.number.is_in_situ = 0;
+            } else {
+                value = json_value_new_with_existing_context(TEXT_JSON_NUMBER, ctx);
+                if (!value) {
+                    result = TEXT_JSON_E_OOM;
+                    json_token_cleanup(&token);
+                    break;
+                }
+
+                // Check if we can use in-situ mode for lexeme
+                // Conditions: in-situ mode enabled, context has input buffer
+                int use_in_situ = 0;
+                size_t number_offset = 0;
+                size_t number_len = 0;
+                if (parser->opts && parser->opts->in_situ_mode &&
+                    ctx->input_buffer && ctx->input_buffer_len > 0) {
+                    // Verify the number position is within bounds
+                    // Check for integer overflow and bounds using shared helpers
+                    number_offset = token.pos.offset;
+                    number_len = token.length;
+                    if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
+                        !json_check_add_overflow(number_offset, number_len) &&
+                        number_offset + number_len <= ctx->input_buffer_len) {
+                        use_in_situ = 1;
+                    }
+                }
+
+                if (use_in_situ && lexeme_len > 0) {
+                    // Use in-situ mode: reference input buffer directly
+                    // Safe: number_offset and number_len were validated above
+                    value->as.number.lexeme = (char*)(ctx->input_buffer + number_offset);
+                    value->as.number.lexeme_len = lexeme_len;
+                    value->as.number.is_in_situ = 1;
+                } else if (lexeme_len > 0) {
+                    // Copy lexeme to arena
+                    // Check for overflow in lexeme_len + 1
+                    if (lexeme_len > SIZE_MAX - 1) {
+                        result = TEXT_JSON_E_LIMIT;
+                        json_token_cleanup(&token);
+                        break;
+                    }
+                    char* lexeme_copy = (char*)json_arena_alloc_for_context(ctx, lexeme_len + 1, 1);
+                    if (!lexeme_copy) {
+                        result = TEXT_JSON_E_OOM;
+                        text_json_free(value);
+                        json_token_cleanup(&token);
+                        break;
+                    }
+                    memcpy(lexeme_copy, lexeme, lexeme_len);
+                    lexeme_copy[lexeme_len] = '\0';
+                    value->as.number.lexeme = lexeme_copy;
+                    value->as.number.lexeme_len = lexeme_len;
+                    value->as.number.is_in_situ = 0;
+                } else {
+                    value->as.number.lexeme = NULL;
+                    value->as.number.lexeme_len = 0;
+                    value->as.number.is_in_situ = 0;
+                }
+            }
+
+            // Set double representation
+            value->as.number.dbl = dbl_val;
+            value->as.number.has_dbl = 1;
+            value->as.number.has_i64 = 0;
+            value->as.number.has_u64 = 0;
+
             json_token_cleanup(&token);
             break;
+        }
 
         default:
             // This should not happen for valid JSON input
@@ -1394,16 +1610,12 @@ static text_json_value* json_parse_internal(
     // Defensive NULL pointer checks
     if (!bytes && len > 0) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input bytes must not be NULL";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
-            err->context_snippet = NULL;
-            err->context_snippet_len = 0;
-            err->caret_offset = 0;
-            err->expected_token = NULL;
-            err->actual_token = NULL;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input bytes must not be NULL",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         if (bytes_consumed) {
             *bytes_consumed = 0;
@@ -1415,12 +1627,12 @@ static text_json_value* json_parse_internal(
     // This is a defensive check - actual limits are enforced during parsing
     if (len > SIZE_MAX / 2) {
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input size is too large";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input size is too large",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         if (bytes_consumed) {
             *bytes_consumed = 0;
@@ -1439,16 +1651,12 @@ static text_json_value* json_parse_internal(
     text_json_status status = json_lexer_init(&parser.lexer, bytes, len, opt, 0);  // not streaming mode
     if (status != TEXT_JSON_OK) {
         if (err) {
-            err->code = status;
-            err->message = "Failed to initialize lexer";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
-            err->context_snippet = NULL;
-            err->context_snippet_len = 0;
-            err->caret_offset = 0;
-            err->expected_token = NULL;
-            err->actual_token = NULL;
+            *err = (text_json_error){
+                                        .code = status,
+                                        .message = "Failed to initialize lexer",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         if (bytes_consumed) {
             *bytes_consumed = 0;
@@ -1463,16 +1671,12 @@ static text_json_value* json_parse_internal(
         root_ctx = json_context_new();
         if (!root_ctx) {
             if (err) {
-                err->code = TEXT_JSON_E_OOM;
-                err->message = "Failed to allocate context";
-                err->offset = 0;
-                err->line = 1;
-                err->col = 1;
-                err->context_snippet = NULL;
-                err->context_snippet_len = 0;
-                err->caret_offset = 0;
-                err->expected_token = NULL;
-                err->actual_token = NULL;
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_OOM,
+                                            .message = "Failed to allocate context",
+                                            .line = 1,
+                                            .col = 1
+                                        };
             }
             if (bytes_consumed) {
                 *bytes_consumed = 0;
@@ -1599,12 +1803,12 @@ TEXT_API text_json_value* text_json_parse(
     // Input validation: check for NULL bytes when len > 0
     if (!bytes && len > 0) {
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input bytes must not be NULL when length is non-zero";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input bytes must not be NULL when length is non-zero",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         return NULL;
     }
@@ -1616,12 +1820,12 @@ TEXT_API text_json_value* text_json_parse(
         // Input size is suspiciously large (more than half of SIZE_MAX)
         // This could indicate an overflow or invalid input
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input size is too large";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input size is too large",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         return NULL;
     }
@@ -1640,12 +1844,12 @@ TEXT_API text_json_value* text_json_parse_multiple(
     // Input validation: bytes_consumed is required
     if (!bytes_consumed) {
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "bytes_consumed must not be NULL";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "bytes_consumed must not be NULL",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         return NULL;
     }
@@ -1653,12 +1857,12 @@ TEXT_API text_json_value* text_json_parse_multiple(
     // Input validation: check for NULL bytes when len > 0
     if (!bytes && len > 0) {
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input bytes must not be NULL when length is non-zero";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input bytes must not be NULL when length is non-zero",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         *bytes_consumed = 0;
         return NULL;
@@ -1667,12 +1871,12 @@ TEXT_API text_json_value* text_json_parse_multiple(
     // Input validation: check for reasonable input size
     if (len > SIZE_MAX / 2) {
         if (err) {
-            memset(err, 0, sizeof(*err));
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input size is too large";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Input size is too large",
+                                        .line = 1,
+                                        .col = 1
+                                    };
         }
         *bytes_consumed = 0;
         return NULL;

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 
 // Context window sizes for error snippets
 #define JSON_ERROR_CONTEXT_BEFORE 20
@@ -200,28 +201,25 @@ static text_json_status json_stream_set_error(
         // Note: err is always initialized (via memset) at public API entry points
         // (text_json_stream_feed and text_json_stream_finish), so context_snippet
         // will be NULL if properly initialized. However, if err is reused across
-        // multiple calls, we need to free any existing snippet.
+        // multiple calls without being freed by the caller, we need to free any existing snippet.
         // Since err is always initialized at entry points, we can safely check
         // and free context_snippet if it's non-NULL. This matches the CSV pattern.
+        // IMPORTANT: The entry points (text_json_stream_feed/text_json_stream_finish) free
+        // any existing snippet before zeroing, so by the time we get here, context_snippet
+        // should be NULL. But we check anyway for safety in case err is passed directly.
         if (err->context_snippet != NULL) {
             free(err->context_snippet);
             err->context_snippet = NULL;
         }
-        // Clear context snippet fields
-        err->context_snippet_len = 0;
-        err->caret_offset = 0;
 
         // Set error fields
-        err->code = code;
-        err->message = message;
-        err->offset = pos.offset;
-        err->line = pos.line;
-        err->col = pos.col;
-        err->expected_token = NULL;
-        err->actual_token = NULL;
-        err->context_snippet = NULL;
-        err->context_snippet_len = 0;
-        err->caret_offset = 0;
+        *err = (text_json_error){
+                        .code = code,
+                        .message = message,
+                        .offset = pos.offset,
+                        .line = pos.line,
+                        .col = pos.col
+                    };
 
         // Generate context snippet if we have input buffer access
         const char* input_for_snippet = NULL;
@@ -1036,43 +1034,44 @@ TEXT_API text_json_status text_json_stream_feed(
     text_json_error* err
 ) {
     // Initialize error structure at entry point to ensure it's always in a known state
-    // This ensures that when json_stream_set_error() is called, err is always initialized
-    // and we can safely free any existing context_snippet without heuristics.
-    // Note: We don't free existing context_snippet here - if err was reused, the caller
-    // should have freed it, or json_stream_set_error() will free it when setting a new error.
+    // This ensures that when json_stream_set_error() is called, err is always initialized.
+    // Free any existing context_snippet before zeroing to prevent leaks.
     if (err) {
-        memset(err, 0, sizeof(*err));
+        text_json_error_free(err);
+        *err = (text_json_error){0};
     }
-
     if (!st) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Stream must not be NULL";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                .code = TEXT_JSON_E_INVALID,
+                .message = "Stream must not be NULL",
+                .line = 1,
+                .col = 1
+            };
         }
         return TEXT_JSON_E_INVALID;
     }
 
     if (!bytes && len > 0) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Input bytes must not be NULL";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                .code = TEXT_JSON_E_INVALID,
+                .message = "Input bytes must not be NULL",
+                .line = 1,
+                .col = 1
+            };
         }
         return TEXT_JSON_E_INVALID;
     }
 
     if (st->state == JSON_STREAM_STATE_ERROR || st->state == JSON_STREAM_STATE_DONE) {
         if (err) {
-            err->code = TEXT_JSON_E_STATE;
-            err->message = "Stream is in invalid state for feeding";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                            .code = TEXT_JSON_E_STATE,
+                            .message = "Stream is in invalid state for feeding",
+                            .line = 1,
+                            .col = 1
+                        };
         }
         return TEXT_JSON_E_STATE;
     }
@@ -1178,32 +1177,32 @@ TEXT_API text_json_status text_json_stream_finish(
     text_json_error* err
 ) {
     // Initialize error structure at entry point to ensure it's always in a known state
-    // This ensures that when json_stream_set_error() is called, err is always initialized
-    // and we can safely free any existing context_snippet without heuristics.
-    // Note: We don't free existing context_snippet here - if err was reused, the caller
-    // should have freed it, or json_stream_set_error() will free it when setting a new error.
+    // This ensures that when json_stream_set_error() is called, err is always initialized.
+    // Free any existing context_snippet before zeroing to prevent leaks.
     if (err) {
-        memset(err, 0, sizeof(*err));
+        text_json_error_free(err);
+        *err = (text_json_error){0};
     }
-
     if (!st) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Stream must not be NULL";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                .code = TEXT_JSON_E_INVALID,
+                .message = "Stream must not be NULL",
+                .line = 1,
+                .col = 1
+            };
         }
         return TEXT_JSON_E_INVALID;
     }
 
     if (st->state == JSON_STREAM_STATE_ERROR) {
         if (err) {
-            err->code = TEXT_JSON_E_STATE;
-            err->message = "Stream is in error state";
-            err->offset = 0;
-            err->line = 1;
-            err->col = 1;
+            *err = (text_json_error){
+                .code = TEXT_JSON_E_STATE,
+                .message = "Stream is in error state",
+                .line = 1,
+                .col = 1
+            };
         }
         return TEXT_JSON_E_STATE;
     }

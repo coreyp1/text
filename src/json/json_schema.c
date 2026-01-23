@@ -136,11 +136,10 @@ static text_json_status json_schema_parse_type(
         size_t type_len;
         if (text_json_get_string(type_value, &type_str, &type_len) != TEXT_JSON_OK) {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Invalid type value in schema";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Invalid type value in schema"
+                                        };
             }
             return TEXT_JSON_E_INVALID;
         }
@@ -159,11 +158,10 @@ static text_json_status json_schema_parse_type(
             node->type_flags |= JSON_SCHEMA_TYPE_OBJECT;
         } else {
             if (err) {
-                err->code = TEXT_JSON_E_INVALID;
-                err->message = "Unknown type in schema";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_INVALID,
+                                            .message = "Unknown type in schema"
+                                        };
             }
             return TEXT_JSON_E_INVALID;
         }
@@ -174,11 +172,10 @@ static text_json_status json_schema_parse_type(
             const text_json_value* type_elem = text_json_array_get(type_value, i);
             if (!type_elem || type_elem->type != TEXT_JSON_STRING) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid type array element in schema";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid type array element in schema"
+                                            };
                 }
                 return TEXT_JSON_E_INVALID;
             }
@@ -190,12 +187,10 @@ static text_json_status json_schema_parse_type(
         }
     } else {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Type must be string or array of strings";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Type must be string or array of strings"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -213,12 +208,10 @@ static text_json_status json_schema_compile_node(
 ) {
     if (schema_doc->type != TEXT_JSON_OBJECT) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Schema must be an object";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Schema must be an object"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -238,12 +231,10 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "properties")) {
             if (value->type != TEXT_JSON_OBJECT) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Properties must be an object";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Properties must be an object"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -255,12 +246,10 @@ static text_json_status json_schema_compile_node(
                     // Check for integer overflow in multiplication
                     if (new_capacity > SIZE_MAX / sizeof(json_schema_property)) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Properties array size overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Properties array size overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     json_schema_property* new_props = (json_schema_property*)realloc(
@@ -269,12 +258,10 @@ static text_json_status json_schema_compile_node(
                     );
                     if (!new_props) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating properties";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating properties"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     node->properties = new_props;
@@ -295,23 +282,19 @@ static text_json_status json_schema_compile_node(
                     // Check for integer overflow in key_len + 1
                     if (prop_key_len > SIZE_MAX - 1) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Property key length overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Property key length overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     prop->key = (char*)malloc(prop_key_len + 1);
                     if (!prop->key) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating property key";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating property key"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     memcpy(prop->key, prop_key, prop_key_len);
@@ -322,12 +305,10 @@ static text_json_status json_schema_compile_node(
                     if (!prop->schema) {
                         free(prop->key);
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating property schema";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating property schema"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
 
@@ -344,12 +325,10 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "required")) {
             if (value->type != TEXT_JSON_ARRAY) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Required must be an array";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Required must be an array"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -360,12 +339,10 @@ static text_json_status json_schema_compile_node(
                     // Check for integer overflow in multiplication
                     if (new_capacity > SIZE_MAX / sizeof(char*)) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Required keys array size overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Required keys array size overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     char** new_keys = (char**)realloc(
@@ -374,12 +351,10 @@ static text_json_status json_schema_compile_node(
                     );
                     if (!new_keys) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating required keys";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating required keys"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     node->required_keys = new_keys;
@@ -390,12 +365,10 @@ static text_json_status json_schema_compile_node(
                     const text_json_value* req_key = text_json_array_get(value, j);
                     if (!req_key || req_key->type != TEXT_JSON_STRING) {
                         if (err) {
-                            err->code = TEXT_JSON_E_INVALID;
-                            err->message = "Required array must contain strings";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_INVALID,
+                                                        .message = "Required array must contain strings"
+                                                    };}
                         return TEXT_JSON_E_INVALID;
                     }
 
@@ -403,35 +376,29 @@ static text_json_status json_schema_compile_node(
                     size_t req_key_len;
                     if (text_json_get_string(req_key, &req_key_str, &req_key_len) != TEXT_JSON_OK) {
                         if (err) {
-                            err->code = TEXT_JSON_E_INVALID;
-                            err->message = "Invalid required key";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_INVALID,
+                                                        .message = "Invalid required key"
+                                                    };}
                         return TEXT_JSON_E_INVALID;
                     }
 
                     // Check for integer overflow in req_key_len + 1
                     if (req_key_len > SIZE_MAX - 1) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Required key length overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Required key length overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     node->required_keys[node->required_count] = (char*)malloc(req_key_len + 1);
                     if (!node->required_keys[node->required_count]) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating required key";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating required key"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     memcpy(node->required_keys[node->required_count], req_key_str, req_key_len);
@@ -444,12 +411,10 @@ static text_json_status json_schema_compile_node(
             node->items_schema = (json_schema_node*)calloc(1, sizeof(json_schema_node));
             if (!node->items_schema) {
                 if (err) {
-                    err->code = TEXT_JSON_E_OOM;
-                    err->message = "Out of memory allocating items schema";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_OOM,
+                                                .message = "Out of memory allocating items schema"
+                                            };}
                 return TEXT_JSON_E_OOM;
             }
 
@@ -462,12 +427,10 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "enum")) {
             if (value->type != TEXT_JSON_ARRAY) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Enum must be an array";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Enum must be an array"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -478,12 +441,10 @@ static text_json_status json_schema_compile_node(
                     // Check for integer overflow in multiplication
                     if (new_capacity > SIZE_MAX / sizeof(text_json_value*)) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Enum values array size overflow";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Enum values array size overflow"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     text_json_value** new_enum = (text_json_value**)realloc(
@@ -492,12 +453,10 @@ static text_json_status json_schema_compile_node(
                     );
                     if (!new_enum) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory allocating enum values";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory allocating enum values"
+                                                    };}
                         return TEXT_JSON_E_OOM;
                     }
                     node->enum_values = new_enum;
@@ -511,12 +470,10 @@ static text_json_status json_schema_compile_node(
                     const text_json_value* enum_val = text_json_array_get(value, j);
                     if (!enum_val) {
                         if (err) {
-                            err->code = TEXT_JSON_E_INVALID;
-                            err->message = "Invalid enum value";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_INVALID,
+                                                        .message = "Invalid enum value"
+                                                    };}
                         // Cleanup: enum_values already allocated, but enum_count is correct
                         // Context will free any cloned values on error
                         return TEXT_JSON_E_INVALID;
@@ -526,12 +483,10 @@ static text_json_status json_schema_compile_node(
                     text_json_value* cloned = json_value_clone(enum_val, ctx);
                     if (!cloned) {
                         if (err) {
-                            err->code = TEXT_JSON_E_OOM;
-                            err->message = "Out of memory cloning enum value";
-                            err->offset = 0;
-                            err->line = 0;
-                            err->col = 0;
-                        }
+                            *err = (text_json_error){
+                                                        .code = TEXT_JSON_E_OOM,
+                                                        .message = "Out of memory cloning enum value"
+                                                    };}
                         // Cleanup: enum_count is correct, context will free cloned values
                         return TEXT_JSON_E_OOM;
                     }
@@ -544,35 +499,29 @@ static text_json_status json_schema_compile_node(
             node->const_value = json_value_clone(value, ctx);
             if (!node->const_value) {
                 if (err) {
-                    err->code = TEXT_JSON_E_OOM;
-                    err->message = "Out of memory cloning const value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_OOM,
+                                                .message = "Out of memory cloning const value"
+                                            };}
                 return TEXT_JSON_E_OOM;
             }
         } else if (json_matches(key, key_len, "minimum")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Minimum must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Minimum must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double min_val;
             if (text_json_get_double(value, &min_val) != TEXT_JSON_OK) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid minimum value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid minimum value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -581,24 +530,20 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "maximum")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Maximum must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Maximum must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double max_val;
             if (text_json_get_double(value, &max_val) != TEXT_JSON_OK) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid maximum value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid maximum value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -607,35 +552,29 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "minLength")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "MinLength must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "MinLength must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double min_len_val;
             if (text_json_get_double(value, &min_len_val) != TEXT_JSON_OK || min_len_val < 0) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid minLength value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid minLength value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             // Check for overflow when casting to size_t
             if (min_len_val > (double)SIZE_MAX) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "minLength value exceeds maximum size_t";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "minLength value exceeds maximum size_t"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -644,35 +583,29 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "maxLength")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "MaxLength must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "MaxLength must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double max_len_val;
             if (text_json_get_double(value, &max_len_val) != TEXT_JSON_OK || max_len_val < 0) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid maxLength value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid maxLength value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             // Check for overflow when casting to size_t
             if (max_len_val > (double)SIZE_MAX) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "maxLength value exceeds maximum size_t";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "maxLength value exceeds maximum size_t"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -681,35 +614,29 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "minItems")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "MinItems must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "MinItems must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double min_items_val;
             if (text_json_get_double(value, &min_items_val) != TEXT_JSON_OK || min_items_val < 0) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid minItems value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid minItems value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             // Check for overflow when casting to size_t
             if (min_items_val > (double)SIZE_MAX) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "minItems value exceeds maximum size_t";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "minItems value exceeds maximum size_t"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -718,35 +645,29 @@ static text_json_status json_schema_compile_node(
         } else if (json_matches(key, key_len, "maxItems")) {
             if (value->type != TEXT_JSON_NUMBER) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "MaxItems must be a number";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "MaxItems must be a number"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
             double max_items_val;
             if (text_json_get_double(value, &max_items_val) != TEXT_JSON_OK || max_items_val < 0) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "Invalid maxItems value";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "Invalid maxItems value"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
             // Check for overflow when casting to size_t
             if (max_items_val > (double)SIZE_MAX) {
                 if (err) {
-                    err->code = TEXT_JSON_E_INVALID;
-                    err->message = "maxItems value exceeds maximum size_t";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_INVALID,
+                                                .message = "maxItems value exceeds maximum size_t"
+                                            };}
                 return TEXT_JSON_E_INVALID;
             }
 
@@ -770,12 +691,10 @@ static text_json_status json_schema_validate_node(
 ) {
     if (!node || !instance) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Invalid arguments to schema validation";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Invalid arguments to schema validation"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
@@ -783,12 +702,10 @@ static text_json_status json_schema_validate_node(
     if (node->const_value) {
         if (!json_value_equal(instance, node->const_value)) {
             if (err) {
-                err->code = TEXT_JSON_E_SCHEMA;
-                err->message = "Value does not match const";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_SCHEMA,
+                                            .message = "Value does not match const"
+                                        };}
             return TEXT_JSON_E_SCHEMA;
         }
         // If const matches, all other checks pass
@@ -806,12 +723,10 @@ static text_json_status json_schema_validate_node(
         }
         if (!found) {
             if (err) {
-                err->code = TEXT_JSON_E_SCHEMA;
-                err->message = "Value is not in enum";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_SCHEMA,
+                                            .message = "Value is not in enum"
+                                        };}
             return TEXT_JSON_E_SCHEMA;
         }
     }
@@ -842,12 +757,10 @@ static text_json_status json_schema_validate_node(
 
         if ((node->type_flags & instance_flag) == 0) {
             if (err) {
-                err->code = TEXT_JSON_E_SCHEMA;
-                err->message = "Value type does not match schema type";
-                err->offset = 0;
-                err->line = 0;
-                err->col = 0;
-            }
+                *err = (text_json_error){
+                                            .code = TEXT_JSON_E_SCHEMA,
+                                            .message = "Value type does not match schema type"
+                                        };}
             return TEXT_JSON_E_SCHEMA;
         }
     }
@@ -860,22 +773,18 @@ static text_json_status json_schema_validate_node(
             if (text_json_get_double(instance, &num_val) == TEXT_JSON_OK) {
                 if (node->has_minimum && num_val < node->minimum) {
                     if (err) {
-                        err->code = TEXT_JSON_E_SCHEMA;
-                        err->message = "Number is less than minimum";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_SCHEMA,
+                                                    .message = "Number is less than minimum"
+                                                };}
                     return TEXT_JSON_E_SCHEMA;
                 }
                 if (node->has_maximum && num_val > node->maximum) {
                     if (err) {
-                        err->code = TEXT_JSON_E_SCHEMA;
-                        err->message = "Number is greater than maximum";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_SCHEMA,
+                                                    .message = "Number is greater than maximum"
+                                                };}
                     return TEXT_JSON_E_SCHEMA;
                 }
             }
@@ -887,22 +796,18 @@ static text_json_status json_schema_validate_node(
             size_t str_len = instance->as.string.len;
             if (node->has_min_length && str_len < node->min_length) {
                 if (err) {
-                    err->code = TEXT_JSON_E_SCHEMA;
-                    err->message = "String is shorter than minLength";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_SCHEMA,
+                                                .message = "String is shorter than minLength"
+                                            };}
                 return TEXT_JSON_E_SCHEMA;
             }
             if (node->has_max_length && str_len > node->max_length) {
                 if (err) {
-                    err->code = TEXT_JSON_E_SCHEMA;
-                    err->message = "String is longer than maxLength";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_SCHEMA,
+                                                .message = "String is longer than maxLength"
+                                            };}
                 return TEXT_JSON_E_SCHEMA;
             }
             break;
@@ -913,22 +818,18 @@ static text_json_status json_schema_validate_node(
             size_t arr_size = text_json_array_size(instance);
             if (node->has_min_items && arr_size < node->min_items) {
                 if (err) {
-                    err->code = TEXT_JSON_E_SCHEMA;
-                    err->message = "Array has fewer items than minItems";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_SCHEMA,
+                                                .message = "Array has fewer items than minItems"
+                                            };}
                 return TEXT_JSON_E_SCHEMA;
             }
             if (node->has_max_items && arr_size > node->max_items) {
                 if (err) {
-                    err->code = TEXT_JSON_E_SCHEMA;
-                    err->message = "Array has more items than maxItems";
-                    err->offset = 0;
-                    err->line = 0;
-                    err->col = 0;
-                }
+                    *err = (text_json_error){
+                                                .code = TEXT_JSON_E_SCHEMA,
+                                                .message = "Array has more items than maxItems"
+                                            };}
                 return TEXT_JSON_E_SCHEMA;
             }
 
@@ -957,12 +858,10 @@ static text_json_status json_schema_validate_node(
                 const text_json_value* prop_val = text_json_object_get(instance, req_key, req_key_len);
                 if (!prop_val) {
                     if (err) {
-                        err->code = TEXT_JSON_E_SCHEMA;
-                        err->message = "Required property is missing";
-                        err->offset = 0;
-                        err->line = 0;
-                        err->col = 0;
-                    }
+                        *err = (text_json_error){
+                                                    .code = TEXT_JSON_E_SCHEMA,
+                                                    .message = "Required property is missing"
+                                                };}
                     return TEXT_JSON_E_SCHEMA;
                 }
             }
@@ -1004,23 +903,19 @@ TEXT_API text_json_schema* text_json_schema_compile(
 ) {
     if (!schema_doc) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Schema document must not be NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Schema document must not be NULL"
+                                    };}
         return NULL;
     }
 
     if (schema_doc->type != TEXT_JSON_OBJECT) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Schema document must be an object";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Schema document must be an object"
+                                    };}
         return NULL;
     }
 
@@ -1028,12 +923,10 @@ TEXT_API text_json_schema* text_json_schema_compile(
     text_json_schema* schema = (text_json_schema*)calloc(1, sizeof(text_json_schema));
     if (!schema) {
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory allocating schema";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory allocating schema"
+                                    };}
         return NULL;
     }
 
@@ -1042,12 +935,10 @@ TEXT_API text_json_schema* text_json_schema_compile(
     if (!schema->ctx) {
         free(schema);
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory creating schema context";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory creating schema context"
+                                    };}
         return NULL;
     }
 
@@ -1057,12 +948,10 @@ TEXT_API text_json_schema* text_json_schema_compile(
         json_context_free(schema->ctx);
         free(schema);
         if (err) {
-            err->code = TEXT_JSON_E_OOM;
-            err->message = "Out of memory allocating schema node";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_OOM,
+                                        .message = "Out of memory allocating schema node"
+                                    };}
         return NULL;
     }
 
@@ -1095,12 +984,10 @@ TEXT_API text_json_status text_json_schema_validate(
 ) {
     if (!schema || !instance) {
         if (err) {
-            err->code = TEXT_JSON_E_INVALID;
-            err->message = "Schema and instance must not be NULL";
-            err->offset = 0;
-            err->line = 0;
-            err->col = 0;
-        }
+            *err = (text_json_error){
+                                        .code = TEXT_JSON_E_INVALID,
+                                        .message = "Schema and instance must not be NULL"
+                                    };}
         return TEXT_JSON_E_INVALID;
     }
 
