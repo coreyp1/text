@@ -4159,6 +4159,317 @@ TEST(CsvMutation, RowAppendFieldDataCopied) {
     text_csv_free_table(table);
 }
 
+TEST(CsvMutation, RowInsertAtBeginning) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert at beginning (idx = 0)
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_insert(table, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Verify new row is at position 0
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "x");
+
+    // Verify original rows shifted
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_STREQ(field, "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertInMiddle) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert in middle (idx = 1)
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_insert(table, 1, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 4u);
+
+    // Verify rows are in correct order
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "x");
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_STREQ(field, "d");
+    field = text_csv_field(table, 3, 0, &len);
+    EXPECT_STREQ(field, "g");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertAtEnd) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Insert at end (idx = row_count, same as append)
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_insert(table, 2, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Verify new row is at the end
+    size_t len;
+    const char* field = text_csv_field(table, 2, 0, &len);
+    EXPECT_STREQ(field, "x");
+
+    // Verify original rows unchanged
+    field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertBeyondEnd) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Try to insert beyond end (idx > row_count, error)
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_insert(table, 2, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertFieldCountValidation) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to insert row with wrong field count
+    const char* new_row[] = {"x", "y"};
+    status = text_csv_row_insert(table, 0, new_row, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertRowShifting) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add multiple rows with distinct values
+    const char* row1[] = {"row0", "col1", "col2"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"row1", "col1", "col2"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"row2", "col1", "col2"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert at position 1
+    const char* new_row[] = {"inserted", "col1", "col2"};
+    status = text_csv_row_insert(table, 1, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 4u);
+
+    // Verify all rows shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "row0");
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "inserted");
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_STREQ(field, "row1");
+    field = text_csv_field(table, 3, 0, &len);
+    EXPECT_STREQ(field, "row2");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertCapacityGrowth) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Fill table beyond initial capacity (16 rows)
+    for (size_t i = 0; i < 10; i++) {
+        char field_data[32];
+        snprintf(field_data, sizeof(field_data), "row%zu", i);
+        const char* fields[] = {field_data};
+        text_csv_status status = text_csv_row_append(table, fields, nullptr, 1);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+    }
+
+    // Insert in middle to trigger capacity growth
+    const char* new_row[] = {"inserted"};
+    text_csv_status status = text_csv_row_insert(table, 5, new_row, nullptr, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 11u);
+    EXPECT_GE(table->row_capacity, 11u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertNullTable) {
+    const char* fields[] = {"a", "b"};
+    text_csv_status status = text_csv_row_insert(nullptr, 0, fields, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, RowInsertNullFields) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    text_csv_status status = text_csv_row_insert(table, 0, nullptr, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertEmptyTable) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Insert first row into empty table
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_insert(table, 0, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Verify row data
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertWithExplicitLengths) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"abc", "def", "ghi"};
+    size_t lengths1[] = {3, 3, 3};
+    text_csv_status status = text_csv_row_append(table, row1, lengths1, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* new_row[] = {"xyz", "uvw", "rst"};
+    size_t lengths2[] = {3, 3, 3};
+    status = text_csv_row_insert(table, 0, new_row, lengths2, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(field, "xyz", 3), 0);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertWithNullBytes) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert row with null bytes in field data
+    // First field has null bytes, second field is normal
+    const char field_data[] = {'x', '\0', 'y'};
+    const char* fields[] = {field_data, "normal"};
+    size_t lengths[] = {3, 6};
+    status = text_csv_row_insert(table, 0, fields, lengths, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(memcmp(field, field_data, 3), 0);
+    EXPECT_EQ(field[0], 'x');
+    EXPECT_EQ(field[1], '\0');
+    EXPECT_EQ(field[2], 'y');
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowInsertFieldDataCopied) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    char* original_data = strdup("test");
+    const char* fields[] = {original_data, "other"};
+    status = text_csv_row_insert(table, 0, fields, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Modify original data
+    original_data[0] = 'X';
+
+    // Verify field data is independent (copied, not referenced)
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "test");  // Should still be "test", not "Xest"
+
+    free(original_data);
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetValid) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);

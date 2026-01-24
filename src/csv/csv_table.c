@@ -866,6 +866,222 @@ TEXT_API text_csv_status text_csv_row_append(
     return TEXT_CSV_OK;
 }
 
+TEXT_API text_csv_status text_csv_row_insert(
+    text_csv_table* table,
+    size_t row_idx,
+    const char* const* fields,
+    const size_t* field_lengths,
+    size_t field_count
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+    if (!fields) {
+        return TEXT_CSV_E_INVALID;
+    }
+    if (field_count == 0) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Calculate data row count (excluding header if present)
+    size_t data_row_count = table->row_count;
+    if (table->has_header && table->row_count > 0) {
+        data_row_count = table->row_count - 1;
+    }
+
+    // Validate row_idx (must be <= data_row_count, allowing append)
+    if (row_idx > data_row_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Adjust row_idx for header if present (header is at index 0, data starts at 1)
+    // row_idx is 0-based for data rows only, so we add 1 if header exists
+    size_t adjusted_row_idx = row_idx;
+    if (table->has_header) {
+        adjusted_row_idx = row_idx + 1;
+    }
+
+    // For first data row: set column count (if not already set from header)
+    // For subsequent rows: validate field count matches
+    if (data_row_count == 0 && table->column_count == 0) {
+        // First data row sets column count (table has no headers or column_count not set)
+        table->column_count = field_count;
+    } else {
+        // Subsequent rows (or first data row when header exists) must match column count
+        if (field_count != table->column_count) {
+            return TEXT_CSV_E_INVALID;
+        }
+    }
+
+    // Check if inserting at end (equivalent to append)
+    bool is_append = (row_idx == data_row_count);
+
+    // Grow row capacity if needed
+    if (table->row_count >= table->row_capacity) {
+        size_t new_capacity = table->row_capacity * 2;
+        // Check for overflow
+        if (new_capacity < table->row_capacity) {
+            return TEXT_CSV_E_OOM;
+        }
+        csv_table_row* new_rows = (csv_table_row*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_row) * new_capacity, 8
+        );
+        if (!new_rows) {
+            return TEXT_CSV_E_OOM;
+        }
+        // Copy existing rows
+        memcpy(new_rows, table->rows, sizeof(csv_table_row) * table->row_count);
+        table->rows = new_rows;
+        table->row_capacity = new_capacity;
+    }
+
+    // If inserting at end, use append logic (no shifting needed)
+    if (is_append) {
+        // Use append logic - just add at the end
+        csv_table_row* new_row = &table->rows[table->row_count];
+
+        // Allocate field array from arena
+        csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * field_count, 8
+        );
+        if (!new_fields) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy each field data to arena
+        for (size_t i = 0; i < field_count; i++) {
+            csv_table_field* field = &new_fields[i];
+            const char* field_data = fields[i];
+
+            // Determine field length
+            size_t field_len;
+            if (field_lengths) {
+                field_len = field_lengths[i];
+            } else {
+                // Null-terminated string
+                if (field_data) {
+                    field_len = strlen(field_data);
+                } else {
+                    field_len = 0;
+                }
+            }
+
+            // Use global empty string constant for empty fields (saves arena allocation)
+            if (field_len == 0) {
+                field->data = csv_empty_field_string;
+                field->length = 0;
+                field->is_in_situ = false;  // Not in-situ, but points to global constant
+                continue;
+            }
+
+            // Allocate field data in arena for non-empty fields (always copy, never reference external)
+            // Check for overflow in field_len + 1
+            if (field_len > SIZE_MAX - 1) {
+                return TEXT_CSV_E_OOM;
+            }
+            char* arena_data = (char*)csv_arena_alloc_for_context(
+                table->ctx, field_len + 1, 1
+            );
+            if (!arena_data) {
+                return TEXT_CSV_E_OOM;
+            }
+
+            // Copy field data
+            memcpy(arena_data, field_data, field_len);
+            arena_data[field_len] = '\0';
+
+            // Set field structure
+            field->data = arena_data;
+            field->length = field_len;
+            field->is_in_situ = false;  // All mutations copy to arena
+        }
+
+        // Set row structure
+        new_row->fields = new_fields;
+        new_row->field_count = field_count;
+
+        // Update row count
+        table->row_count++;
+
+        return TEXT_CSV_OK;
+    }
+
+    // Otherwise, shift rows from adjusted_row_idx to row_count-1 one position right
+    // Shift in reverse order to avoid overwriting
+    for (size_t i = table->row_count; i > adjusted_row_idx; i--) {
+        table->rows[i] = table->rows[i - 1];
+    }
+
+    // Allocate new row structure from arena
+    csv_table_row* new_row = &table->rows[adjusted_row_idx];
+
+    // Allocate field array from arena
+    csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+        table->ctx, sizeof(csv_table_field) * field_count, 8
+    );
+    if (!new_fields) {
+        return TEXT_CSV_E_OOM;
+    }
+
+    // Copy each field data to arena
+    for (size_t i = 0; i < field_count; i++) {
+        csv_table_field* field = &new_fields[i];
+        const char* field_data = fields[i];
+
+        // Determine field length
+        size_t field_len;
+        if (field_lengths) {
+            field_len = field_lengths[i];
+        } else {
+            // Null-terminated string
+            if (field_data) {
+                field_len = strlen(field_data);
+            } else {
+                field_len = 0;
+            }
+        }
+
+        // Use global empty string constant for empty fields (saves arena allocation)
+        if (field_len == 0) {
+            field->data = csv_empty_field_string;
+            field->length = 0;
+            field->is_in_situ = false;  // Not in-situ, but points to global constant
+            continue;
+        }
+
+        // Allocate field data in arena for non-empty fields (always copy, never reference external)
+        // Check for overflow in field_len + 1
+        if (field_len > SIZE_MAX - 1) {
+            return TEXT_CSV_E_OOM;
+        }
+        char* arena_data = (char*)csv_arena_alloc_for_context(
+            table->ctx, field_len + 1, 1
+        );
+        if (!arena_data) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy field data
+        memcpy(arena_data, field_data, field_len);
+        arena_data[field_len] = '\0';
+
+        // Set field structure
+        field->data = arena_data;
+        field->length = field_len;
+        field->is_in_situ = false;  // All mutations copy to arena
+    }
+
+    // Set row structure
+    new_row->fields = new_fields;
+    new_row->field_count = field_count;
+
+    // Update row count
+    table->row_count++;
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_field_set(
     text_csv_table* table,
     size_t row,

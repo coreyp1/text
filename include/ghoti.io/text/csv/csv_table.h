@@ -150,6 +150,34 @@ TEXT_API text_csv_status text_csv_row_append(
 );
 
 /**
+ * @brief Insert a row at the specified index
+ *
+ * Inserts a new row with the specified field values at the given index.
+ * Existing rows at and after the insertion point are shifted right.
+ * The index can equal row_count, which is equivalent to appending.
+ *
+ * The first row added sets the column count for the table. Subsequent rows
+ * must have the same number of fields (strict validation).
+ *
+ * All field data is copied to the arena and does not reference external buffers.
+ * If field_lengths is NULL, all fields are assumed to be null-terminated strings.
+ *
+ * @param table Table (must not be NULL)
+ * @param row_idx Row index where to insert (0-based, must be <= row_count, adjusted for header if present)
+ * @param fields Array of field data pointers (must not be NULL)
+ * @param field_lengths Array of field lengths, or NULL if all fields are null-terminated
+ * @param field_count Number of fields (must be > 0)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_row_insert(
+    text_csv_table* table,
+    size_t row_idx,
+    const char* const* fields,
+    const size_t* field_lengths,
+    size_t field_count
+);
+
+/**
  * @brief Set the value of a field at specified row and column indices
  *
  * Sets the value of a field at the specified row and column indices.
