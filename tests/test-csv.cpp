@@ -4727,6 +4727,387 @@ TEST(CsvMutation, RowRemoveSingleRowTable) {
     text_csv_free_table(table);
 }
 
+TEST(CsvMutation, RowSetAtBeginning) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Replace first row
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_set(table, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row was replaced
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+    EXPECT_EQ(len, 1u);
+
+    // Verify other rows unchanged
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetInMiddle) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Replace middle row
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_set(table, 1, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row was replaced
+    size_t len;
+    const char* field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+
+    // Verify other rows unchanged
+    field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a");
+
+    field = text_csv_field(table, 2, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "g");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetAtEnd) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Replace last row
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_set(table, 2, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row was replaced
+    size_t len;
+    const char* field = text_csv_field(table, 2, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+
+    // Verify other rows unchanged
+    field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetBoundsCheck) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to set row at invalid index (beyond end)
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_set(table, 1, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetFieldCountValidation) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to set row with wrong field count
+    const char* new_row[] = {"x", "y"};
+    status = text_csv_row_set(table, 0, new_row, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify original row unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetWithHeaderRow) {
+    // Parse table with headers
+    const char* csv_data = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, &err);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Set first data row (index 0, which is actually row 1 internally)
+    const char* new_row[] = {"Charlie", "35"};
+    text_csv_status status = text_csv_row_set(table, 0, new_row, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row was replaced
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "Charlie");
+
+    // Verify header row unchanged (can access via internal structure)
+    EXPECT_STREQ(table->rows[0].fields[0].data, "name");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetNullParameters) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Test NULL table
+    const char* new_row[] = {"x", "y", "z"};
+    status = text_csv_row_set(nullptr, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Test NULL fields
+    status = text_csv_row_set(table, 0, nullptr, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetWithExplicitLengths) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"abc", "def", "ghi"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set row with explicit lengths
+    const char* new_row[] = {"xyz", "uvw", "rst"};
+    size_t lengths[] = {3, 3, 3};
+    status = text_csv_row_set(table, 0, new_row, lengths, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row was replaced
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "xyz");
+    EXPECT_EQ(len, 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetFieldDataCopied) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Create mutable buffer for new row
+    char buffer1[] = "x";
+    char buffer2[] = "y";
+    char buffer3[] = "z";
+    const char* new_row[] = {buffer1, buffer2, buffer3};
+
+    status = text_csv_row_set(table, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Modify original buffers
+    buffer1[0] = 'X';
+    buffer2[0] = 'Y';
+    buffer3[0] = 'Z';
+
+    // Verify field data is independent (copied, not referenced)
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");  // Should still be "x", not "X"
+
+    field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "y");
+
+    field = text_csv_field(table, 0, 2, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "z");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetAllFields) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Replace with new values for all fields
+    const char* new_row[] = {"one", "two", "three"};
+    status = text_csv_row_set(table, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all fields were replaced
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "one");
+
+    field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "two");
+
+    field = text_csv_field(table, 0, 2, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "three");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetWithNullFields) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set row with NULL fields (treated as empty when field_lengths is NULL)
+    const char* new_row[] = {"x", nullptr, "z"};
+    status = text_csv_row_set(table, 0, new_row, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify fields: first and third have values, second is empty
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+    EXPECT_EQ(len, 1u);
+
+    field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);  // Empty field
+
+    field = text_csv_field(table, 0, 2, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "z");
+    EXPECT_EQ(len, 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetWithNullFieldsExplicitLengths) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set row with NULL field and explicit length 0 (empty field)
+    const char* new_row[] = {"x", nullptr, "z"};
+    size_t lengths[] = {1, 0, 1};
+    status = text_csv_row_set(table, 0, new_row, lengths, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify fields
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+
+    field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);  // Empty field
+
+    field = text_csv_field(table, 0, 2, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "z");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowSetNullFieldWithNonZeroLength) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to set row with NULL field_data but non-zero length (should fail)
+    const char* new_row[] = {"x", nullptr, "z"};
+    size_t lengths[] = {1, 5, 1};  // Middle field has length 5 but data is NULL
+    status = text_csv_row_set(table, 0, new_row, lengths, 3);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify original row unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a");
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetValid) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);
