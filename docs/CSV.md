@@ -158,6 +158,146 @@ When header processing is enabled:
 - **Header lookup**: `text_csv_header_index()` — get column index by header name
 - Header row is excluded from row count but accessible via adjusted indices
 
+### 7.3 Table Mutation Operations
+
+The CSV module provides a comprehensive set of mutation operations for modifying CSV tables in memory. All mutation operations are **atomic** — they either complete successfully or leave the table unchanged.
+
+#### 7.3.1 Table Creation
+
+**Create Empty Table:**
+```c
+text_csv_table* table = text_csv_new_table();
+```
+
+Creates a new empty table with initialized context and arena. The table starts with a default row capacity of 16 rows. No columns are defined until the first row is added.
+
+**Create Table With Headers:**
+```c
+const char* headers[] = {"Name", "Age", "City"};
+text_csv_table* table = text_csv_new_table_with_headers(headers, NULL, 3);
+```
+
+Creates a new table with specified column headers. Headers are treated as the first row and are excluded from the row count. A header map is built for fast column name lookup. Duplicate header names are not allowed.
+
+#### 7.3.2 Row Operations
+
+**Append Row:**
+```c
+const char* fields[] = {"Alice", "30", "New York"};
+text_csv_row_append(table, fields, NULL, 3);
+```
+
+Adds a new row with the specified field values to the end of the table. The first row added sets the column count for the table. Subsequent rows must have the same number of fields (strict validation). All field data is copied to the arena.
+
+**Insert Row:**
+```c
+const char* fields[] = {"Bob", "25", "San Francisco"};
+text_csv_row_insert(table, 1, fields, NULL, 3);  // Insert at index 1
+```
+
+Inserts a new row at the specified index, shifting existing rows right. The index can equal `row_count`, which is equivalent to appending.
+
+**Remove Row:**
+```c
+text_csv_row_remove(table, 0);  // Remove first data row
+```
+
+Removes the row at the specified index, shifting remaining rows left. If the table has headers, the header row (index 0) cannot be removed.
+
+**Replace Row:**
+```c
+const char* fields[] = {"Charlie", "35", "Chicago"};
+text_csv_row_set(table, 0, fields, NULL, 3);  // Replace first data row
+```
+
+Replaces the row at the specified index with new field values. The field count must match the table's column count.
+
+**Clear Table:**
+```c
+text_csv_table_clear(table);
+```
+
+Removes all data rows from the table while preserving the table structure (headers if present, column count). This function automatically compacts the table to free memory from cleared rows.
+
+#### 7.3.3 Column Operations
+
+**Append Column:**
+```c
+text_csv_column_append(table, "Country", 0);  // Add "Country" column (null-terminated)
+```
+
+Adds a new column to the end of all rows. If the table has headers, the `header_name` parameter is required. All existing rows get an empty field added at the end.
+
+**Insert Column:**
+```c
+text_csv_column_insert(table, 1, "MiddleName", 0);  // Insert at index 1
+```
+
+Inserts a new column at the specified index, shifting existing columns right. The index can equal the column count, which is equivalent to appending. When headers are present, all header map entries after the insertion point are automatically reindexed.
+
+**Remove Column:**
+```c
+text_csv_column_remove(table, 0);  // Remove first column
+```
+
+Removes the column at the specified index from all rows, shifting remaining columns left. When headers are present, the header map entry is removed and remaining entries are reindexed.
+
+**Rename Column:**
+```c
+text_csv_column_rename(table, 0, "FullName", 0);  // Rename first column
+```
+
+Renames a column header. This function only works if the table has headers. The new header name must not duplicate an existing header name.
+
+#### 7.3.4 Field Operations
+
+**Set Field Value:**
+```c
+text_csv_field_set(table, 0, 1, "31", 0);  // Set row 0, column 1 to "31"
+```
+
+Sets the value of a field at specified row and column indices. The field data is copied to the arena. If the field was previously in-situ (referencing the input buffer), it will be copied to the arena. If `field_length` is 0 and `field_data` is not NULL, it is assumed to be a null-terminated string.
+
+#### 7.3.5 Utility Operations
+
+**Clone Table:**
+```c
+text_csv_table* clone = text_csv_clone(table);
+```
+
+Creates a deep copy of the table, allocating all memory from a new arena. The cloned table is completely independent of the original.
+
+**Compact Table:**
+```c
+text_csv_table_compact(table);
+```
+
+Moves all current table data to a new arena and frees the old arena. This releases memory from old allocations that may have been left behind due to repeated modifications. This function is automatically called by `text_csv_table_clear()`, but can also be called independently.
+
+#### 7.3.6 Performance Characteristics
+
+**Row Operations:**
+- **Append**: O(1) amortized (O(n) when capacity grows)
+- **Insert**: O(n) where n is the number of rows after insertion point
+- **Remove**: O(n) where n is the number of rows after removal point
+- **Set**: O(1) per field
+- **Clear**: O(1) (compaction is O(n) but amortized)
+
+**Column Operations:**
+- **Append**: O(n) where n is the number of rows
+- **Insert**: O(n×m) where n is the number of rows and m is the number of columns after insertion point
+- **Remove**: O(n×m) where n is the number of rows and m is the number of columns after removal point
+- **Rename**: O(1) (header map lookup is O(1) average case)
+
+**Field Operations:**
+- **Set**: O(1) per field
+
+**Utility Operations:**
+- **Clone**: O(n×m) where n is the number of rows and m is the average number of columns
+- **Compact**: O(n×m) where n is the number of rows and m is the average number of columns
+
+All mutation operations are atomic — they either complete successfully or leave the table unchanged. Memory allocations are performed before any state changes, ensuring no partial modifications.
+
 ---
 
 ## 8. Streaming Parser Events
