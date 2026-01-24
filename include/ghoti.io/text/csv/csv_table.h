@@ -178,6 +178,27 @@ TEXT_API text_csv_status text_csv_row_insert(
 );
 
 /**
+ * @brief Remove a row at the specified index
+ *
+ * Removes the row at the specified index, shifting remaining rows left.
+ * If the table has headers, the header row (index 0) cannot be removed
+ * and this function will return an error.
+ *
+ * The row index is 0-based for data rows only. If the table has headers,
+ * the header row is at index 0 and data rows start at index 1.
+ *
+ * Field data remains in the arena (no individual cleanup needed).
+ *
+ * @param table Table (must not be NULL)
+ * @param row_idx Row index to remove (0-based, adjusted for header if present)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_row_remove(
+    text_csv_table* table,
+    size_t row_idx
+);
+
+/**
  * @brief Set the value of a field at specified row and column indices
  *
  * Sets the value of a field at the specified row and column indices.

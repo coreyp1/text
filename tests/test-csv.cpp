@@ -4470,6 +4470,263 @@ TEST(CsvMutation, RowInsertFieldDataCopied) {
     text_csv_free_table(table);
 }
 
+// Row Remove Tests
+TEST(CsvMutation, RowRemoveFromBeginning) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Remove from beginning (idx = 0)
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Verify rows shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "d");  // Second row is now first
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "g");  // Third row is now second
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveFromMiddle) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Remove from middle (idx = 1)
+    status = text_csv_row_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Verify rows are in correct order
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");  // First row unchanged
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "g");  // Third row is now second
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveFromEnd) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Remove from end (idx = 2, last row)
+    status = text_csv_row_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Verify remaining rows unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveBoundsCheck) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to remove beyond end (idx >= row_count)
+    status = text_csv_row_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Try to remove from empty table
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);  // Should succeed, table is now empty
+
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Now table is empty, should fail
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveHeaderRow) {
+    // Parse table with headers
+    const char* csv_data = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, nullptr);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 2u);  // 2 data rows
+
+    // Header row is protected - it's not accessible via external API (row_idx is 0-based for data rows only)
+    // row_idx=0 refers to the first data row (Alice), not the header
+
+    // Can remove data rows
+    text_csv_status status = text_csv_row_remove(table, 0);  // Remove first data row (Alice)
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Verify correct row was removed
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "Bob");  // Bob is now the first data row
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add rows to table without headers
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Can remove first row (idx = 0) when no headers
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveRowShifting) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add multiple rows with distinct values
+    const char* row0[] = {"row0", "col1", "col2"};
+    text_csv_status status = text_csv_row_append(table, row0, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row1[] = {"row1", "col1", "col2"};
+    status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"row2", "col1", "col2"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"row3", "col1", "col2"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove middle row (idx = 1)
+    status = text_csv_row_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Verify all rows shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "row0");
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "row2");  // row2 moved to position 1
+    field = text_csv_field(table, 2, 0, &len);
+    EXPECT_STREQ(field, "row3");  // row3 moved to position 2
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveLastRow) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Remove last row (table becomes empty)
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Can still append after clearing
+    const char* row2[] = {"c", "d"};
+    status = text_csv_row_append(table, row2, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, RowRemoveNullTable) {
+    text_csv_status status = text_csv_row_remove(nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, RowRemoveSingleRowTable) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Remove the single row
+    status = text_csv_row_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetValid) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);

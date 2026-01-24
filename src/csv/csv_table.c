@@ -1082,6 +1082,53 @@ TEXT_API text_csv_status text_csv_row_insert(
     return TEXT_CSV_OK;
 }
 
+TEXT_API text_csv_status text_csv_row_remove(
+    text_csv_table* table,
+    size_t row_idx
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Calculate data row count (excluding header if present)
+    size_t data_row_count = table->row_count;
+    if (table->has_header && table->row_count > 0) {
+        data_row_count = table->row_count - 1;
+    }
+
+    // Validate row_idx (must be < data_row_count)
+    if (row_idx >= data_row_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Adjust row_idx for header if present (header is at index 0, data starts at 1)
+    // Note: Header row is protected because it's not accessible via external API
+    // (row_idx is 0-based for data rows only)
+    size_t adjusted_row_idx = row_idx;
+    if (table->has_header) {
+        adjusted_row_idx = row_idx + 1;
+    }
+
+    // Validate adjusted row_idx < row_count
+    if (adjusted_row_idx >= table->row_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Shift rows from adjusted_row_idx+1 to row_count-1 one position left
+    // Shift in forward order (left shift)
+    for (size_t i = adjusted_row_idx; i < table->row_count - 1; i++) {
+        table->rows[i] = table->rows[i + 1];
+    }
+
+    // Decrement row count
+    table->row_count--;
+
+    // Note: Field data remains in arena (no individual cleanup needed)
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_field_set(
     text_csv_table* table,
     size_t row,
