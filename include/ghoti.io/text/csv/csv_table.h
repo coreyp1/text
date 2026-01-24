@@ -149,6 +149,36 @@ TEXT_API text_csv_status text_csv_row_append(
     size_t field_count
 );
 
+/**
+ * @brief Set the value of a field at specified row and column indices
+ *
+ * Sets the value of a field at the specified row and column indices.
+ * The field data is copied to the arena and does not reference external buffers.
+ * If the field was previously in-situ (referencing the input buffer), it will
+ * be copied to the arena.
+ *
+ * If field_length is 0:
+ * - If field_data is not NULL, it is assumed to be a null-terminated string
+ *   and strlen() will be used to determine the length.
+ * - If field_data is NULL, the field is set to empty (length 0).
+ *
+ * This is consistent with the writer API which allows NULL for empty fields.
+ *
+ * @param table Table (must not be NULL)
+ * @param row Row index (0-based, adjusted for header if present)
+ * @param col Column index (0-based)
+ * @param field_data Field data (may be NULL if field_length is 0)
+ * @param field_length Field length in bytes (0 if null-terminated or empty)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_field_set(
+    text_csv_table* table,
+    size_t row,
+    size_t col,
+    const char* field_data,
+    size_t field_length
+);
+
 #ifdef __cplusplus
 }
 #endif

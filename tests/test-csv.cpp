@@ -3929,7 +3929,6 @@ TEST(TestCorpus, MilestoneDialectMatrix) {
 // CSV Mutation API Tests
 // ============================================================================
 
-// Task M1: Create Empty Table Function
 TEST(CsvMutation, NewTableEmpty) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);
@@ -3950,7 +3949,6 @@ TEST(CsvMutation, NewTableEmpty) {
     text_csv_free_table(table);
 }
 
-// Task M2: Row Append Function
 TEST(CsvMutation, RowAppendFirstRow) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);
@@ -4158,6 +4156,277 @@ TEST(CsvMutation, RowAppendFieldDataCopied) {
     EXPECT_STREQ(field, "test");  // Should still be "test", not "Xest"
 
     free(original_data);
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetValid) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set field at row 0, col 1
+    status = text_csv_field_set(table, 0, 1, "new_value", 9);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    size_t len;
+    const char* field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 9u);
+    EXPECT_STREQ(field, "new_value");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetBoundsCheckRowAndColumn) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to set field at invalid row index
+    status = text_csv_field_set(table, 1, 0, "value", 5);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Try to set field at invalid column index
+    status = text_csv_field_set(table, 0, 3, "value", 5);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetNullTerminated) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set field with null-terminated string (field_length = 0)
+    status = text_csv_field_set(table, 0, 0, "null_terminated", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 15u);  // strlen("null_terminated")
+    EXPECT_STREQ(field, "null_terminated");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetExplicitLength) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set field with explicit length
+    status = text_csv_field_set(table, 0, 1, "explicit", 8);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    size_t len;
+    const char* field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 8u);
+    EXPECT_STREQ(field, "explicit");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetNullBytes) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Test that null bytes in field data are preserved correctly.
+    // This is a single field containing 3 bytes: 'a', '\0', 'b' (not three separate strings).
+    const char field_data[] = {'a', '\0', 'b'};
+    size_t field_len = 3;
+
+    status = text_csv_field_set(table, 0, 0, field_data, field_len);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated with null bytes preserved
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 3u);
+    EXPECT_EQ(field[0], 'a');
+    EXPECT_EQ(field[1], '\0');
+    EXPECT_EQ(field[2], 'b');
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetInSituField) {
+    // Create a table from parsed CSV with in-situ mode enabled
+    const char* csv_data = "field1,field2,field3\n";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;
+    opts.validate_utf8 = false;
+
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, nullptr);
+    ASSERT_NE(table, nullptr);
+
+    // Verify we have a row
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // The fields should be in-situ (referencing the input buffer)
+    size_t len;
+    const char* original_field = text_csv_field(table, 0, 0, &len);
+    ASSERT_EQ(original_field, csv_data);
+
+    // Set the field (should copy to arena even if it was in-situ)
+    text_csv_status status = text_csv_field_set(table, 0, 0, "new_value", 9);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    const char* updated_field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(updated_field, nullptr);
+    EXPECT_EQ(len, 9u);
+    EXPECT_STREQ(updated_field, "new_value");
+
+    // Verify it's not the same pointer as the original (should be in arena now)
+    EXPECT_NE(updated_field, original_field);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetArenaField) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"original", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Field is already in arena (from append), set it to a new value
+    status = text_csv_field_set(table, 0, 0, "updated", 7);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 7u);
+    EXPECT_STREQ(field, "updated");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetNullTable) {
+    text_csv_status status = text_csv_field_set(nullptr, 0, 0, "value", 5);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, FieldSetNullFieldData) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // NULL field_data with non-zero length should fail
+    status = text_csv_field_set(table, 0, 0, nullptr, 5);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // NULL field_data with length 0 should succeed (empty field)
+    status = text_csv_field_set(table, 0, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field is empty
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);
+    EXPECT_STREQ(field, "");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetDataCopied) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Create mutable data
+    char* original_data = strdup("test_data");
+    status = text_csv_field_set(table, 0, 0, original_data, 9);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Modify original data
+    original_data[0] = 'X';
+
+    // Verify field data is independent (copied, not referenced)
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "test_data");  // Should still be "test_data", not "Xest_data"
+
+    free(original_data);
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetEmptyField) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, fields, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Set field to empty string
+    status = text_csv_field_set(table, 0, 1, "", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field is empty
+    size_t len;
+    const char* field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);
+    EXPECT_STREQ(field, "");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, FieldSetWithHeader) {
+    // Create a table with headers
+    const char* csv_data = "col1,col2,col3\nvalue1,value2,value3\n";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, nullptr);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 1u);  // One data row (header excluded)
+
+    // Set field in data row (row index 0 is first data row, header is at internal index 0)
+    text_csv_status status = text_csv_field_set(table, 0, 1, "updated", 7);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify field was updated
+    size_t len;
+    const char* field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 7u);
+    EXPECT_STREQ(field, "updated");
+
     text_csv_free_table(table);
 }
 
