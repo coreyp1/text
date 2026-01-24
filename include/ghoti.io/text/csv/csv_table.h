@@ -70,8 +70,11 @@ TEXT_API size_t text_csv_row_count(const text_csv_table* table);
 /**
  * @brief Get the number of columns in a specific row
  *
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function. Row indices are 0-based for data rows.
+ *
  * @param table Table (must not be NULL)
- * @param row Row index (0-based)
+ * @param row Row index (0-based, data rows only)
  * @return Number of columns in the row, or 0 if row index is invalid
  */
 TEXT_API size_t text_csv_col_count(const text_csv_table* table, size_t row);
@@ -84,8 +87,11 @@ TEXT_API size_t text_csv_col_count(const text_csv_table* table, size_t row);
  * input buffer (which must remain valid). Otherwise, the pointer references
  * arena-allocated memory.
  *
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function. Row indices are 0-based for data rows.
+ *
  * @param table Table (must not be NULL)
- * @param row Row index (0-based)
+ * @param row Row index (0-based, data rows only)
  * @param col Column index (0-based)
  * @param len Output parameter for field length (can be NULL)
  * @return Pointer to field data, or NULL if indices are invalid
@@ -162,8 +168,12 @@ TEXT_API text_csv_status text_csv_row_append(
  * All field data is copied to the arena and does not reference external buffers.
  * If field_lengths is NULL, all fields are assumed to be null-terminated strings.
  *
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function. Row indices are 0-based for data rows.
+ * The function internally adjusts the index to account for the header row.
+ *
  * @param table Table (must not be NULL)
- * @param row_idx Row index where to insert (0-based, must be <= row_count, adjusted for header if present)
+ * @param row_idx Row index where to insert (0-based, data rows only, must be <= row_count)
  * @param fields Array of field data pointers (must not be NULL)
  * @param field_lengths Array of field lengths, or NULL if all fields are null-terminated
  * @param field_count Number of fields (must be > 0)
@@ -181,16 +191,16 @@ TEXT_API text_csv_status text_csv_row_insert(
  * @brief Remove a row at the specified index
  *
  * Removes the row at the specified index, shifting remaining rows left.
- * If the table has headers, the header row (index 0) cannot be removed
- * and this function will return an error.
  *
- * The row index is 0-based for data rows only. If the table has headers,
- * the header row is at index 0 and data rows start at index 1.
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function and cannot be removed. Row indices
+ * are 0-based for data rows. The function internally adjusts the index to account
+ * for the header row.
  *
  * Field data remains in the arena (no individual cleanup needed).
  *
  * @param table Table (must not be NULL)
- * @param row_idx Row index to remove (0-based, adjusted for header if present)
+ * @param row_idx Row index to remove (0-based, data rows only)
  * @return TEXT_CSV_OK on success, error code on failure
  */
 TEXT_API text_csv_status text_csv_row_remove(
@@ -206,13 +216,14 @@ TEXT_API text_csv_status text_csv_row_remove(
  * All field data is copied to the arena and does not reference external buffers.
  * If field_lengths is NULL, all fields are assumed to be null-terminated strings.
  *
- * The row index is 0-based for data rows only. If the table has headers,
- * the header row is at index 0 and data rows start at index 1.
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function. Row indices are 0-based for data rows.
+ * The function internally adjusts the index to account for the header row.
  *
  * Existing field data remains in the arena (no individual cleanup needed).
  *
  * @param table Table (must not be NULL)
- * @param row_idx Row index to replace (0-based, adjusted for header if present)
+ * @param row_idx Row index to replace (0-based, data rows only)
  * @param fields Array of field data pointers (must not be NULL)
  * @param field_lengths Array of field lengths, or NULL if all fields are null-terminated
  * @param field_count Number of fields (must match table column count)
@@ -241,8 +252,12 @@ TEXT_API text_csv_status text_csv_row_set(
  *
  * This is consistent with the writer API which allows NULL for empty fields.
  *
+ * The row index refers to data rows only. If the table has headers, the header
+ * row is not accessible via this function. Row indices are 0-based for data rows.
+ * The function internally adjusts the index to account for the header row.
+ *
  * @param table Table (must not be NULL)
- * @param row Row index (0-based, adjusted for header if present)
+ * @param row Row index (0-based, data rows only)
  * @param col Column index (0-based)
  * @param field_data Field data (may be NULL if field_length is 0)
  * @param field_length Field length in bytes (0 if null-terminated or empty)
