@@ -1697,6 +1697,159 @@ TEXT_API text_csv_status text_csv_table_clear(text_csv_table* table) {
     return text_csv_table_compact(table);
 }
 
+TEXT_API text_csv_status text_csv_column_append(
+    text_csv_table* table,
+    const char* header_name,
+    size_t header_name_len
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // If table is empty: just update column count (no rows to modify)
+    if (table->row_count == 0) {
+        // Check for overflow when incrementing column_count
+        if (table->column_count == SIZE_MAX) {
+            return TEXT_CSV_E_OOM;
+        }
+        table->column_count++;
+        return TEXT_CSV_OK;
+    }
+
+    // Handle headers if present
+    size_t name_len = 0;
+    if (table->has_header && table->header_map) {
+        // Validate header_name is not NULL when table has headers
+        if (!header_name) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Calculate header name length if not provided
+        name_len = header_name_len;
+        if (name_len == 0) {
+            name_len = strlen(header_name);
+        }
+
+        // Check for duplicate header name in header map
+        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
+        csv_header_entry* entry = table->header_map[hash];
+        while (entry) {
+            if (entry->name_len == name_len &&
+                memcmp(entry->name, header_name, name_len) == 0) {
+                // Duplicate header name found
+                return TEXT_CSV_E_INVALID;
+            }
+            entry = entry->next;
+        }
+    }
+
+    // Update column count
+    if (table->column_count == SIZE_MAX) {
+        return TEXT_CSV_E_OOM;
+    }
+    size_t new_column_index = table->column_count;
+    table->column_count++;
+
+    // Determine start row index (skip header row if present)
+    size_t start_row_idx = 0;
+    if (table->has_header && table->row_count > 0) {
+        start_row_idx = 1;  // Skip header row at index 0
+    }
+
+    // For each data row, add a new empty field at the end
+    for (size_t row_idx = start_row_idx; row_idx < table->row_count; row_idx++) {
+        csv_table_row* row = &table->rows[row_idx];
+        size_t old_field_count = row->field_count;
+        size_t new_field_count = old_field_count + 1;
+
+        // Check for overflow
+        if (new_field_count < old_field_count) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Allocate new field array with one more field
+        csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * new_field_count, 8
+        );
+        if (!new_fields) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy existing fields
+        if (old_field_count > 0) {
+            memcpy(new_fields, row->fields, sizeof(csv_table_field) * old_field_count);
+        }
+
+        // Add new empty field at the end
+        csv_setup_empty_field(&new_fields[old_field_count]);
+
+        // Update row structure
+        row->fields = new_fields;
+        row->field_count = new_field_count;
+    }
+
+    // Handle header row if present
+    if (table->has_header && table->header_map && table->row_count > 0) {
+        // Add header field to header row (at end)
+        csv_table_row* header_row = &table->rows[0];
+        size_t old_header_field_count = header_row->field_count;
+        size_t new_header_field_count = old_header_field_count + 1;
+
+        // Check for overflow
+        if (new_header_field_count < old_header_field_count) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Allocate new field array for header row
+        csv_table_field* new_header_fields = (csv_table_field*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * new_header_field_count, 8
+        );
+        if (!new_header_fields) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy existing header fields
+        if (old_header_field_count > 0) {
+            memcpy(new_header_fields, header_row->fields, sizeof(csv_table_field) * old_header_field_count);
+        }
+
+        // Allocate and copy new header name to arena
+        csv_table_field* new_header_field = &new_header_fields[old_header_field_count];
+        if (name_len == 0) {
+            csv_setup_empty_field(new_header_field);
+        } else {
+            text_csv_status status = csv_allocate_and_copy_field(
+                table->ctx, header_name, name_len, new_header_field
+            );
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+        }
+
+        // Update header row structure
+        header_row->fields = new_header_fields;
+        header_row->field_count = new_header_field_count;
+
+        // Add entry to header map with correct index
+        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
+        csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_header_entry), 8
+        );
+        if (!new_entry) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        new_entry->name = new_header_field->data;
+        new_entry->name_len = new_header_field->length;
+        new_entry->index = new_column_index;
+        new_entry->next = table->header_map[hash];
+        table->header_map[hash] = new_entry;
+    }
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_header_index(
     const text_csv_table* table,
     const char* name,
@@ -1759,5 +1912,149 @@ TEXT_API text_csv_table* text_csv_new_table(void) {
         return NULL;
     }
 
+    return table;
+}
+
+TEXT_API text_csv_table* text_csv_new_table_with_headers(
+    const char* const* headers,
+    const size_t* header_lengths,
+    size_t header_count
+) {
+    // Validate inputs
+    if (!headers || header_count == 0) {
+        return NULL;
+    }
+
+    // Create context with arena
+    csv_context* ctx = csv_context_new();
+    if (!ctx) {
+        return NULL;
+    }
+
+    // Allocate table structure
+    text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
+    if (!table) {
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    // Initialize table structure
+    memset(table, 0, sizeof(text_csv_table));
+    table->ctx = ctx;
+    table->row_capacity = 16;
+    table->row_count = 0;
+    table->column_count = header_count;
+    table->has_header = false;  // Will be set to true after header row is created
+    table->header_map = NULL;
+    table->header_map_size = 0;
+
+    // Allocate initial rows array
+    table->rows = (csv_table_row*)csv_arena_alloc_for_context(
+        ctx, sizeof(csv_table_row) * table->row_capacity, 8
+    );
+    if (!table->rows) {
+        free(table);
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    // Allocate header row structure
+    csv_table_row* header_row = &table->rows[0];
+
+    // Allocate field array for header row
+    csv_table_field* header_fields = (csv_table_field*)csv_arena_alloc_for_context(
+        ctx, sizeof(csv_table_field) * header_count, 8
+    );
+    if (!header_fields) {
+        free(table);
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    // Copy each header name to arena
+    for (size_t i = 0; i < header_count; i++) {
+        csv_table_field* field = &header_fields[i];
+        const char* header_data = headers[i];
+
+        // Calculate header length
+        size_t header_len = csv_calculate_field_length(header_data, header_lengths, i);
+
+        // Use global empty string constant for empty headers
+        if (header_len == 0) {
+            csv_setup_empty_field(field);
+            continue;
+        }
+
+        // Allocate and copy header data to arena
+        text_csv_status status = csv_allocate_and_copy_field(
+            ctx, header_data, header_len, field
+        );
+        if (status != TEXT_CSV_OK) {
+            free(table);
+            csv_context_free(ctx);
+            return NULL;
+        }
+    }
+
+    // Set header row structure
+    header_row->fields = header_fields;
+    header_row->field_count = header_count;
+    table->row_count = 1;  // Header row is at index 0
+
+    // Build header map (hash table) for lookup
+    table->header_map_size = 16;
+    table->header_map = (csv_header_entry**)calloc(table->header_map_size, sizeof(csv_header_entry*));
+    if (!table->header_map) {
+        free(table);
+        csv_context_free(ctx);
+        return NULL;
+    }
+
+    // Add each header to the map
+    for (size_t i = 0; i < header_count; i++) {
+        csv_table_field* field = &header_fields[i];
+        size_t hash = csv_header_hash(field->data, field->length, table->header_map_size);
+
+        // Check for duplicates
+        csv_header_entry* entry = table->header_map[hash];
+        bool found_duplicate = false;
+        while (entry) {
+            if (entry->name_len == field->length &&
+                memcmp(entry->name, field->data, field->length) == 0) {
+                found_duplicate = true;
+                break;
+            }
+            entry = entry->next;
+        }
+
+        if (found_duplicate) {
+            // Duplicate header name - free resources and return NULL
+            free(table->header_map);
+            table->header_map = NULL;
+            free(table);
+            csv_context_free(ctx);
+            return NULL;
+        }
+
+        // Create header entry
+        csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+            ctx, sizeof(csv_header_entry), 8
+        );
+        if (!new_entry) {
+            free(table->header_map);
+            table->header_map = NULL;
+            free(table);
+            csv_context_free(ctx);
+            return NULL;
+        }
+
+        new_entry->name = field->data;
+        new_entry->name_len = field->length;
+        new_entry->index = i;
+        new_entry->next = table->header_map[hash];
+        table->header_map[hash] = new_entry;
+    }
+
+    table->has_header = true;
     return table;
 }

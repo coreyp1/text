@@ -133,6 +133,31 @@ TEXT_API text_csv_status text_csv_header_index(
 TEXT_API text_csv_table* text_csv_new_table(void);
 
 /**
+ * @brief Create a CSV table with specified column headers
+ *
+ * Creates a new table with the specified column headers. Headers are treated
+ * as the first row and are excluded from the row count. A header map is built
+ * for fast column name lookup.
+ *
+ * If header_lengths is NULL, all header names are assumed to be null-terminated
+ * strings. Otherwise, header_lengths[i] specifies the length of headers[i].
+ *
+ * Duplicate header names are not allowed and will result in an error.
+ *
+ * The table must be freed with text_csv_free_table() when no longer needed.
+ *
+ * @param headers Array of header name pointers (must not be NULL)
+ * @param header_lengths Array of header name lengths, or NULL if all are null-terminated
+ * @param header_count Number of headers (must be > 0)
+ * @return New table with headers, or NULL on allocation failure or duplicate header names
+ */
+TEXT_API text_csv_table* text_csv_new_table_with_headers(
+    const char* const* headers,
+    const size_t* header_lengths,
+    size_t header_count
+);
+
+/**
  * @brief Append a row to the end of the table
  *
  * Adds a new row with the specified field values to the end of the table.
@@ -313,6 +338,27 @@ TEXT_API text_csv_status text_csv_table_clear(text_csv_table* table);
  * @return TEXT_CSV_OK on success, error code on failure
  */
 TEXT_API text_csv_status text_csv_table_compact(text_csv_table* table);
+
+/**
+ * @brief Append a new column to all rows in the table
+ *
+ * Adds a new column to the end of all rows in the table. All existing rows
+ * get an empty field added at the end. If the table is empty, only the
+ * column count is updated (no rows to modify).
+ *
+ * If the table has no headers, the header_name parameter is ignored.
+ * Header map updates are deferred to Phase 4 (header support).
+ *
+ * @param table Table (must not be NULL)
+ * @param header_name Header name for the new column (ignored if table has no headers, can be NULL)
+ * @param header_name_len Length of header name, or 0 if null-terminated (ignored if table has no headers)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_append(
+    text_csv_table* table,
+    const char* header_name,
+    size_t header_name_len
+);
 
 #ifdef __cplusplus
 }
