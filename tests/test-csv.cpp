@@ -5649,7 +5649,7 @@ TEST(CsvMutation, CloneCopiesInSituFields) {
         for (size_t col = 0; col < table_row->field_count; col++) {
             EXPECT_FALSE(table_row->fields[col].is_in_situ)
                 << "Clone field at row " << row << ", col " << col << " should not be in-situ";
-            
+
             // Verify field data is NOT pointing to original input buffer
             if (original_in_situ_ptr && table_row->fields[col].data) {
                 EXPECT_NE(table_row->fields[col].data, original_in_situ_ptr)
@@ -5788,7 +5788,7 @@ static void test_mutation_round_trip(
     const char* test_name
 ) {
     text_csv_error err{};
-    
+
     // Parse original
     text_csv_table* original = text_csv_parse_table(csv_data, strlen(csv_data), parse_opts, &err);
     ASSERT_NE(original, nullptr) << test_name << ": Failed to parse original";
@@ -5842,7 +5842,7 @@ static void test_mutation_round_trip(
 TEST(CsvIntegration, RoundTripAppendRow) {
     const char* csv_data = "a,b,c\nd,e,f";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         const char* new_row[] = {"g", "h", "i"};
         text_csv_status status = text_csv_row_append(table, new_row, nullptr, 3);
@@ -5853,7 +5853,7 @@ TEST(CsvIntegration, RoundTripAppendRow) {
 TEST(CsvIntegration, RoundTripRemoveRow) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_row_remove(table, 1);  // Remove middle row
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5863,7 +5863,7 @@ TEST(CsvIntegration, RoundTripRemoveRow) {
 TEST(CsvIntegration, RoundTripInsertRow) {
     const char* csv_data = "a,b,c\nd,e,f";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         const char* new_row[] = {"x", "y", "z"};
         text_csv_status status = text_csv_row_insert(table, 1, new_row, nullptr, 3);
@@ -5874,7 +5874,7 @@ TEST(CsvIntegration, RoundTripInsertRow) {
 TEST(CsvIntegration, RoundTripSetRow) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         const char* new_row[] = {"x", "y", "z"};
         text_csv_status status = text_csv_row_set(table, 1, new_row, nullptr, 3);
@@ -5885,7 +5885,7 @@ TEST(CsvIntegration, RoundTripSetRow) {
 TEST(CsvIntegration, RoundTripSetField) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_field_set(table, 1, 1, "modified", 8);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5895,7 +5895,7 @@ TEST(CsvIntegration, RoundTripSetField) {
 TEST(CsvIntegration, RoundTripAddColumn) {
     const char* csv_data = "a,b,c\nd,e,f";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_column_append(table, nullptr, 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5906,7 +5906,7 @@ TEST(CsvIntegration, RoundTripAddColumnWithHeader) {
     const char* csv_data = "name,age\nAlice,30\nBob,25";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.treat_first_row_as_header = true;
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_column_append(table, "city", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5916,7 +5916,7 @@ TEST(CsvIntegration, RoundTripAddColumnWithHeader) {
 TEST(CsvIntegration, RoundTripInsertColumn) {
     const char* csv_data = "a,b,c\nd,e,f";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_column_insert(table, 1, nullptr, 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5926,7 +5926,7 @@ TEST(CsvIntegration, RoundTripInsertColumn) {
 TEST(CsvIntegration, RoundTripRemoveColumn) {
     const char* csv_data = "a,b,c\nd,e,f";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_column_remove(table, 1);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5937,7 +5937,7 @@ TEST(CsvIntegration, RoundTripRenameColumn) {
     const char* csv_data = "name,age\nAlice,30\nBob,25";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.treat_first_row_as_header = true;
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         text_csv_status status = text_csv_column_rename(table, 0, "full_name", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5947,17 +5947,17 @@ TEST(CsvIntegration, RoundTripRenameColumn) {
 TEST(CsvIntegration, RoundTripMultipleMutations) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         // Multiple mutations: append row, remove row, set field
         // Note: Removed column_append as it changes column count and makes round-trip comparison complex
         const char* new_row[] = {"j", "k", "l"};
         text_csv_status status = text_csv_row_append(table, new_row, nullptr, 3);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         status = text_csv_row_remove(table, 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         status = text_csv_field_set(table, 0, 0, "modified", 8);
         EXPECT_EQ(status, TEXT_CSV_OK);
     }, "RoundTripMultipleMutations");
@@ -5966,13 +5966,13 @@ TEST(CsvIntegration, RoundTripMultipleMutations) {
 TEST(CsvIntegration, RoundTripColumnAndRowOperations) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         // Mix column and row operations
         // First add a column, then add a row with matching column count
         text_csv_status status = text_csv_column_append(table, nullptr, 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         const char* new_row[] = {"x", "y", "z", "w"};
         status = text_csv_row_insert(table, 1, new_row, nullptr, 4);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -5983,15 +5983,15 @@ TEST(CsvIntegration, RoundTripWithHeaders) {
     const char* csv_data = "name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,SF";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.treat_first_row_as_header = true;
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         // Mutations with headers
         text_csv_status status = text_csv_column_append(table, "country", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         status = text_csv_column_rename(table, 0, "full_name", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         const char* new_row[] = {"David", "40", "Boston", "USA"};
         status = text_csv_row_append(table, new_row, nullptr, 4);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -6002,56 +6002,56 @@ TEST(CsvIntegration, CloneMutateIndependence) {
     const char* csv_data = "a,b,c\nd,e,f\ng,h,i";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     text_csv_error err{};
-    
+
     // Parse original
     text_csv_table* original = text_csv_parse_table(csv_data, strlen(csv_data), &parse_opts, &err);
     ASSERT_NE(original, nullptr);
     EXPECT_EQ(err.code, TEXT_CSV_OK);
-    
+
     // Clone original
     text_csv_table* clone = text_csv_clone(original);
     ASSERT_NE(clone, nullptr);
-    
+
     // Mutate original
     const char* new_row[] = {"x", "y", "z"};
     text_csv_status status = text_csv_row_append(original, new_row, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     status = text_csv_field_set(original, 0, 0, "modified", 8);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     // Note: Removed column_append to avoid column count mismatch issues
     // Verify clone is unchanged
     EXPECT_EQ(text_csv_row_count(clone), 3u);  // Clone still has 3 rows
     EXPECT_EQ(text_csv_row_count(original), 4u);  // Original now has 4 rows
-    
+
     size_t len;
     const char* field = text_csv_field(clone, 0, 0, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "a");  // Clone still has original value
-    
+
     field = text_csv_field(original, 0, 0, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "modified");  // Original has modified value
-    
+
     // Write both and verify they produce different output
     text_csv_sink sink1, sink2;
     status = text_csv_sink_buffer(&sink1);
     ASSERT_EQ(status, TEXT_CSV_OK);
     status = text_csv_sink_buffer(&sink2);
     ASSERT_EQ(status, TEXT_CSV_OK);
-    
+
     text_csv_write_options write_opts = text_csv_write_options_default();
     status = text_csv_write_table(&sink1, &write_opts, original);
     EXPECT_EQ(status, TEXT_CSV_OK);
     status = text_csv_write_table(&sink2, &write_opts, clone);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     const char* output1 = text_csv_sink_buffer_data(&sink1);
     size_t output1_len = text_csv_sink_buffer_size(&sink1);
     const char* output2 = text_csv_sink_buffer_data(&sink2);
     size_t output2_len = text_csv_sink_buffer_size(&sink2);
-    
+
     // Outputs should be different
     EXPECT_NE(output1_len, output2_len) << "Clone and original should produce different output";
     if (output1_len == output2_len) {
@@ -6059,7 +6059,7 @@ TEST(CsvIntegration, CloneMutateIndependence) {
         EXPECT_NE(memcmp(output1, output2, output1_len), 0)
             << "Clone and original should produce different output content";
     }
-    
+
     text_csv_sink_buffer_free(&sink1);
     text_csv_sink_buffer_free(&sink2);
     text_csv_free_table(original);
@@ -6073,25 +6073,25 @@ TEST(CsvIntegration, RoundTripWithTSVDialect) {
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.delimiter = '\t';
     text_csv_error err{};
-    
+
     // Parse original
     text_csv_table* original = text_csv_parse_table(tsv_data, strlen(tsv_data), &parse_opts, &err);
     ASSERT_NE(original, nullptr) << "Failed to parse TSV";
     EXPECT_EQ(err.code, TEXT_CSV_OK);
     EXPECT_EQ(text_csv_row_count(original), 2u);
-    
+
     // Mutate
     const char* new_row[] = {"g", "h", "i"};
     text_csv_status status = text_csv_row_append(original, new_row, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
     EXPECT_EQ(text_csv_row_count(original), 3u);
-    
+
     // Verify mutation worked
     size_t len;
     const char* field = text_csv_field(original, 2, 0, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "g");
-    
+
     text_csv_free_table(original);
     text_csv_error_free(&err);
 }
@@ -6102,29 +6102,29 @@ TEST(CsvIntegration, RoundTripWithSemicolonDialect) {
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.delimiter = ';';
     text_csv_error err{};
-    
+
     // Parse original
     text_csv_table* original = text_csv_parse_table(csv_data, strlen(csv_data), &parse_opts, &err);
     ASSERT_NE(original, nullptr) << "Failed to parse semicolon-delimited CSV";
     EXPECT_EQ(err.code, TEXT_CSV_OK);
     EXPECT_EQ(text_csv_row_count(original), 2u);
-    
+
     // Mutate
     const char* new_row[] = {"g", "h", "i"};
     text_csv_status status = text_csv_row_append(original, new_row, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
     EXPECT_EQ(text_csv_row_count(original), 3u);
-    
+
     // Verify mutation worked
     size_t len;
     const char* field = text_csv_field(original, 2, 0, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "g");
-    
+
     field = text_csv_field(original, 2, 1, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "h");
-    
+
     text_csv_free_table(original);
     text_csv_error_free(&err);
 }
@@ -6133,36 +6133,36 @@ TEST(CsvIntegration, RoundTripComplexSequence) {
     const char* csv_data = "col1,col2,col3\nval1,val2,val3\nval4,val5,val6";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     parse_opts.dialect.treat_first_row_as_header = true;
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         // Complex sequence of mutations
         text_csv_status status;
-        
+
         // Add column
         status = text_csv_column_append(table, "col4", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Insert column
         status = text_csv_column_insert(table, 1, "new_col", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Rename column
         status = text_csv_column_rename(table, 0, "first_col", 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Add row
         const char* new_row[] = {"val7", "new_val", "val8", "val9", "val10"};
         status = text_csv_row_append(table, new_row, nullptr, 5);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Remove row
         status = text_csv_row_remove(table, 0);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Set field
         status = text_csv_field_set(table, 0, 2, "updated", 7);
         EXPECT_EQ(status, TEXT_CSV_OK);
-        
+
         // Remove column
         status = text_csv_column_remove(table, 1);
         EXPECT_EQ(status, TEXT_CSV_OK);
@@ -6173,42 +6173,42 @@ TEST(CsvIntegration, RoundTripEmptyFields) {
     // Test mutation on table with empty fields - create table manually to ensure consistent columns
     text_csv_table* original = text_csv_new_table();
     ASSERT_NE(original, nullptr);
-    
+
     const char* row1[] = {"a", "", "c"};
     text_csv_status status = text_csv_row_append(original, row1, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     const char* row2[] = {"", "b", ""};
     status = text_csv_row_append(original, row2, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     const char* row3[] = {"", "", ""};
     status = text_csv_row_append(original, row3, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
-    
+
     EXPECT_EQ(text_csv_row_count(original), 3u);
-    
+
     // Verify original has empty fields
     size_t len;
     const char* field = text_csv_field(original, 0, 1, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_EQ(len, 0u) << "Expected empty field at row 0, col 1";
-    
+
     // Mutate - add row with empty fields
     const char* new_row[] = {"", "x", ""};
     status = text_csv_row_append(original, new_row, nullptr, 3);
     EXPECT_EQ(status, TEXT_CSV_OK);
     EXPECT_EQ(text_csv_row_count(original), 4u);
-    
+
     // Verify mutation worked - check the last row
     field = text_csv_field(original, 3, 1, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_STREQ(field, "x");
-    
+
     field = text_csv_field(original, 3, 0, &len);
     ASSERT_NE(field, nullptr);
     EXPECT_EQ(len, 0u) << "Expected empty field at row 3, col 0";
-    
+
     text_csv_free_table(original);
 }
 
@@ -6217,7 +6217,7 @@ TEST(CsvIntegration, RoundTripQuotedFields) {
     const char* csv_data = "\"a,b\",\"c\"\"d\",\"e\nf\"";
     text_csv_parse_options parse_opts = text_csv_parse_options_default();
     text_csv_error err{};
-    
+
     // First verify it parses correctly
     text_csv_table* test_table = text_csv_parse_table(csv_data, strlen(csv_data), &parse_opts, &err);
     if (!test_table) {
@@ -6227,7 +6227,7 @@ TEST(CsvIntegration, RoundTripQuotedFields) {
     }
     text_csv_free_table(test_table);
     text_csv_error_free(&err);
-    
+
     test_mutation_round_trip(csv_data, &parse_opts, [](text_csv_table* table) {
         // Add row with fields that need quoting
         const char* new_row[] = {"quoted,field", "normal", "with\nnewline"};
