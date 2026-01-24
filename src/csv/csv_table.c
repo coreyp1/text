@@ -2674,6 +2674,158 @@ TEXT_API text_csv_status text_csv_column_remove(
     return TEXT_CSV_OK;
 }
 
+TEXT_API text_csv_status text_csv_column_rename(
+    text_csv_table* table,
+    size_t col_idx,
+    const char* new_name,
+    size_t new_name_length
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    if (!new_name) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Check table has headers (return error if not)
+    if (!table->has_header || !table->header_map) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Validate col_idx (must be < column count)
+    if (col_idx >= table->column_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Cannot rename in empty table
+    if (table->column_count == 0 || table->row_count == 0) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Calculate new_name length if not provided
+    size_t name_len = new_name_length;
+    if (name_len == 0) {
+        name_len = strlen(new_name);
+    }
+
+    // Phase 1: Check for Duplicate Header Name
+    // Check if new_name already exists in header map (excluding the column being renamed)
+    size_t hash = csv_header_hash(new_name, name_len, table->header_map_size);
+    csv_header_entry* entry = table->header_map[hash];
+    while (entry) {
+        if (entry->index != col_idx &&  // Exclude the column being renamed
+            entry->name_len == name_len &&
+            memcmp(entry->name, new_name, name_len) == 0) {
+            // Duplicate header name found
+            return TEXT_CSV_E_INVALID;
+        }
+        entry = entry->next;
+    }
+
+    // Phase 2: Find Old Header Map Entry
+    // Find the entry with index == col_idx
+    csv_header_entry* entry_to_remove = NULL;
+    csv_header_entry** prev_ptr = NULL;
+
+    // Search all hash buckets to find the entry with matching index
+    for (size_t i = 0; i < table->header_map_size; i++) {
+        csv_header_entry** chain = &table->header_map[i];
+        csv_header_entry* search_entry = *chain;
+        csv_header_entry* prev = NULL;
+
+        while (search_entry) {
+            if (search_entry->index == col_idx) {
+                entry_to_remove = search_entry;
+                prev_ptr = prev ? &prev->next : chain;
+                break;
+            }
+            prev = search_entry;
+            search_entry = search_entry->next;
+        }
+
+        if (entry_to_remove) {
+            break;
+        }
+    }
+
+    // If entry not found, this is an error (should not happen if table is consistent)
+    if (!entry_to_remove) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Phase 3: Pre-allocate New Name String
+    // Allocate new name string in arena (before any state changes)
+    char* new_name_data = NULL;
+    if (name_len == 0) {
+        // Empty name - use global empty string constant
+        new_name_data = (char*)csv_empty_field_string;
+    } else {
+        // Check for overflow in name_len + 1
+        if (name_len > SIZE_MAX - 1) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Allocate name data in arena
+        new_name_data = (char*)csv_arena_alloc_for_context(
+            table->ctx, name_len + 1, 1
+        );
+        if (!new_name_data) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy name data
+        memcpy(new_name_data, new_name, name_len);
+        new_name_data[name_len] = '\0';
+    }
+
+    // Phase 4: Pre-allocate New Header Map Entry
+    // Allocate new header entry in arena (before any state changes)
+    csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+        table->ctx, sizeof(csv_header_entry), 8
+    );
+    if (!new_entry) {
+        // Note: new_name_data remains in arena but won't be referenced
+        // This is acceptable - arena cleanup will handle it
+        return TEXT_CSV_E_OOM;
+    }
+
+    // Phase 5: Update Header Field in Header Row
+    // Update the header field at col_idx in the header row
+    csv_table_row* header_row = &table->rows[0];
+    if (col_idx >= header_row->field_count) {
+        // This should not happen if table is consistent, but check anyway
+        return TEXT_CSV_E_INVALID;
+    }
+
+    csv_table_field* header_field = &header_row->fields[col_idx];
+    if (name_len == 0) {
+        csv_setup_empty_field(header_field);
+    } else {
+        header_field->data = new_name_data;
+        header_field->length = name_len;
+        header_field->is_in_situ = false;  // Always in arena after rename
+    }
+
+    // Phase 6: Remove Old Entry from Header Map
+    // Remove old entry from hash chain
+    *prev_ptr = entry_to_remove->next;
+
+    // Phase 7: Add New Entry to Header Map
+    // Initialize new entry
+    new_entry->name = new_name_data;
+    new_entry->name_len = name_len;
+    new_entry->index = col_idx;  // Same index as before
+    new_entry->next = table->header_map[hash];
+    table->header_map[hash] = new_entry;
+
+    // Note: Old entry structure remains in arena (no individual cleanup needed)
+    // Old name string also remains in arena (no individual cleanup needed)
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_header_index(
     const text_csv_table* table,
     const char* name,

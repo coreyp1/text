@@ -471,6 +471,41 @@ TEXT_API text_csv_status text_csv_column_remove(
     size_t col_idx
 );
 
+/**
+ * @brief Rename a column header
+ *
+ * Renames the column header at the specified index. This function only works
+ * if the table has headers (returns error otherwise).
+ *
+ * The new header name must not duplicate an existing header name. If the new
+ * name already exists in the header map, the function returns an error.
+ *
+ * The header field in the header row is updated with the new name, and the
+ * header map is updated accordingly (old entry removed, new entry added with
+ * the same index).
+ *
+ * If new_name_length is 0, the new_name is assumed to be a null-terminated
+ * string and strlen() will be used to determine the length.
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations (new name string, new header
+ * entry) are performed before any state changes. If any allocation fails, the
+ * table state is unchanged.
+ *
+ * @param table Table (must not be NULL)
+ * @param col_idx Column index to rename (0-based, must be < column count)
+ * @param new_name New header name (must not be NULL)
+ * @param new_name_length Length of new header name, or 0 if null-terminated
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_rename(
+    text_csv_table* table,
+    size_t col_idx,
+    const char* new_name,
+    size_t new_name_length
+);
+
 #ifdef __cplusplus
 }
 #endif

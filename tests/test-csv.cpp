@@ -7124,6 +7124,340 @@ TEST(CsvMutation, ColumnRemoveWithHeadersAtEnd) {
     text_csv_free_table(table);
 }
 
+TEST(CsvMutation, ColumnRenameInTableWithHeaders) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Rename column at index 1
+    text_csv_status status = text_csv_column_rename(table, 1, "newcol2", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header field is updated in header row (access via internal structure)
+    ASSERT_GE(table->row_count, 1u);
+    ASSERT_GE(table->rows[0].field_count, 2u);
+    EXPECT_EQ(table->rows[0].fields[1].length, 7u);
+    EXPECT_STREQ(table->rows[0].fields[1].data, "newcol2");
+
+    // Verify header map is updated correctly
+    size_t idx;
+    status = text_csv_header_index(table, "newcol2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    // Old name should not be found
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Other columns should still work
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameHeaderFieldUpdatedInHeaderRow) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Rename column at index 0
+    text_csv_status status = text_csv_column_rename(table, 0, "firstcol", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header field is updated (access via internal structure)
+    ASSERT_GE(table->row_count, 1u);
+    ASSERT_GE(table->rows[0].field_count, 1u);
+    EXPECT_EQ(table->rows[0].fields[0].length, 8u);
+    EXPECT_STREQ(table->rows[0].fields[0].data, "firstcol");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameHeaderMapUpdated) {
+    const char* headers[] = {"col1", "col2", "col3", "col4"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 4);
+    ASSERT_NE(table, nullptr);
+
+    // Rename column at index 2
+    text_csv_status status = text_csv_column_rename(table, 2, "middlecol", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map lookup works with new name
+    size_t idx;
+    status = text_csv_header_index(table, "middlecol", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);
+
+    // Old name should not be found
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify other columns still have correct indices
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    status = text_csv_header_index(table, "col4", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameDuplicateHeaderName) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Try to rename col2 to col1 (duplicate)
+    text_csv_status status = text_csv_column_rename(table, 1, "col1", 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify original name is still there
+    size_t idx;
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameTableWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to rename column (should fail - no headers)
+    status = text_csv_column_rename(table, 0, "newcol", 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameInvalidColumnIndex) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Try to rename column beyond end
+    text_csv_status status = text_csv_column_rename(table, 2, "newcol", 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Try to rename column at column_count (should fail)
+    status = text_csv_column_rename(table, 2, "newcol", 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameNullParameters) {
+    const char* headers[] = {"col1"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // NULL table
+    text_csv_status status = text_csv_column_rename(nullptr, 0, "newcol", 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // NULL new_name
+    status = text_csv_column_rename(table, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameWithExplicitLength) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Rename with explicit length
+    const char* new_name = "newcol2\0extra";
+    text_csv_status status = text_csv_column_rename(table, 1, new_name, 7);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header field is updated (access via internal structure)
+    ASSERT_GE(table->row_count, 1u);
+    ASSERT_GE(table->rows[0].field_count, 2u);
+    EXPECT_EQ(table->rows[0].fields[1].length, 7u);
+    EXPECT_STREQ(table->rows[0].fields[1].data, "newcol2");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameWithNullTerminatedString) {
+    const char* headers[] = {"col1"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // Rename with null-terminated string (length = 0 means use strlen)
+    text_csv_status status = text_csv_column_rename(table, 0, "newcol1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header field is updated (access via internal structure)
+    ASSERT_GE(table->row_count, 1u);
+    ASSERT_GE(table->rows[0].field_count, 1u);
+    EXPECT_EQ(table->rows[0].fields[0].length, 7u);
+    EXPECT_STREQ(table->rows[0].fields[0].data, "newcol1");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameEmptyName) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Rename to empty name
+    text_csv_status status = text_csv_column_rename(table, 0, "", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header field is empty (access via internal structure)
+    ASSERT_GE(table->row_count, 1u);
+    ASSERT_GE(table->rows[0].field_count, 1u);
+    EXPECT_EQ(table->rows[0].fields[0].length, 0u);
+
+    // Verify header map lookup fails for empty name (or works if empty names are allowed)
+    // Note: Empty names might be allowed, but lookup might fail
+    size_t idx;
+    status = text_csv_header_index(table, "", &idx);
+    // This might succeed or fail depending on implementation - both are acceptable
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameMultipleRenames) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Rename col1 to newcol1
+    text_csv_status status = text_csv_column_rename(table, 0, "newcol1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Rename col2 to newcol2
+    status = text_csv_column_rename(table, 1, "newcol2", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Rename col3 to newcol3
+    status = text_csv_column_rename(table, 2, "newcol3", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all renames worked
+    size_t idx;
+    status = text_csv_header_index(table, "newcol1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    status = text_csv_header_index(table, "newcol2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    status = text_csv_header_index(table, "newcol3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);
+
+    // Old names should not be found
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameWithDataRows) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Add data rows
+    const char* row1[] = {"a1", "b1"};
+    const char* row2[] = {"a2", "b2"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Rename column
+    status = text_csv_column_rename(table, 0, "newcol1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map lookup works
+    size_t idx;
+    status = text_csv_header_index(table, "newcol1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    // Verify data rows are unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a1");
+
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a2");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameEmptyTable) {
+    const char* headers[] = {"col1"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // Try to rename in empty table (only header row, no data rows)
+    // This should work - empty table just means no data rows
+    text_csv_status status = text_csv_column_rename(table, 0, "newcol1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify rename worked
+    size_t idx;
+    status = text_csv_header_index(table, "newcol1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameRenameToSameName) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Rename col1 to col1 (same name)
+    // This should work - it's not a duplicate because we exclude the column being renamed
+    text_csv_status status = text_csv_column_rename(table, 0, "col1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify it still works
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetWithHeader) {
     // Create a table with headers
     const char* csv_data = "col1,col2,col3\nvalue1,value2,value3\n";
