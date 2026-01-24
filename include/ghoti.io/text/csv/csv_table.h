@@ -167,6 +167,11 @@ TEXT_API text_csv_table* text_csv_new_table_with_headers(
  * All field data is copied to the arena and does not reference external buffers.
  * If field_lengths is NULL, all fields are assumed to be null-terminated strings.
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations are performed before any
+ * state changes, ensuring no partial state modifications.
+ *
  * @param table Table (must not be NULL)
  * @param fields Array of field data pointers (must not be NULL)
  * @param field_lengths Array of field lengths, or NULL if all fields are null-terminated
@@ -197,6 +202,11 @@ TEXT_API text_csv_status text_csv_row_append(
  * row is not accessible via this function. Row indices are 0-based for data rows.
  * The function internally adjusts the index to account for the header row.
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations are performed before any
+ * state changes (including row shifting), ensuring no partial state modifications.
+ *
  * @param table Table (must not be NULL)
  * @param row_idx Row index where to insert (0-based, data rows only, must be <= row_count)
  * @param fields Array of field data pointers (must not be NULL)
@@ -224,6 +234,11 @@ TEXT_API text_csv_status text_csv_row_insert(
  *
  * Field data remains in the arena (no individual cleanup needed).
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. This is a simple operation with no memory allocations
+ * that can fail, ensuring atomicity.
+ *
  * @param table Table (must not be NULL)
  * @param row_idx Row index to remove (0-based, data rows only)
  * @return TEXT_CSV_OK on success, error code on failure
@@ -246,6 +261,12 @@ TEXT_API text_csv_status text_csv_row_remove(
  * The function internally adjusts the index to account for the header row.
  *
  * Existing field data remains in the arena (no individual cleanup needed).
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. Uses a two-phase approach: all field data is
+ * bulk-allocated in one contiguous block before any field structures are updated,
+ * ensuring no partial state modifications.
  *
  * @param table Table (must not be NULL)
  * @param row_idx Row index to replace (0-based, data rows only)
@@ -281,6 +302,11 @@ TEXT_API text_csv_status text_csv_row_set(
  * row is not accessible via this function. Row indices are 0-based for data rows.
  * The function internally adjusts the index to account for the header row.
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. Since only a single field is modified, the operation
+ * is inherently atomic - if allocation fails, the field structure is not updated.
+ *
  * @param table Table (must not be NULL)
  * @param row Row index (0-based, data rows only)
  * @param col Column index (0-based)
@@ -309,6 +335,11 @@ TEXT_API text_csv_status text_csv_field_set(
  *
  * This function is useful for reusing a table structure with new data.
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. If compaction fails, the original row count is
+ * restored, ensuring the table state is never partially modified.
+ *
  * @param table Table (must not be NULL)
  * @return TEXT_CSV_OK on success, error code on failure
  */
@@ -334,6 +365,13 @@ TEXT_API text_csv_status text_csv_table_clear(text_csv_table* table);
  * - All field data is copied (including in-situ fields, which are now in arena)
  * - Header map entries are copied (if present)
  *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All structures are pre-allocated in the new arena
+ * before any data is copied, and the context switch only occurs after all
+ * allocations and copies succeed. If any step fails, the new context is freed
+ * and the old context remains unchanged.
+ *
  * @param table Table (must not be NULL)
  * @return TEXT_CSV_OK on success, error code on failure
  */
@@ -348,6 +386,12 @@ TEXT_API text_csv_status text_csv_table_compact(text_csv_table* table);
  *
  * If the table has no headers, the header_name parameter is ignored.
  * Header map updates are deferred to Phase 4 (header support).
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All new field arrays are pre-allocated before any
+ * row structures are updated, and the column count is only updated in the final
+ * atomic state update phase. If any allocation fails, no state has been modified.
  *
  * @param table Table (must not be NULL)
  * @param header_name Header name for the new column (ignored if table has no headers, can be NULL)
@@ -375,6 +419,13 @@ TEXT_API text_csv_status text_csv_column_append(
  * - All header map entries with index >= col_idx are reindexed (incremented by 1)
  * - A new header map entry is added with index = col_idx
  * - Duplicate header names are not allowed (returns error)
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All new field arrays and header map entries are
+ * pre-allocated before any row structures or header map entries are updated.
+ * Header map reindexing occurs after all allocations succeed but before the
+ * final atomic state update. If any allocation fails, no state has been modified.
  *
  * @param table Table (must not be NULL)
  * @param col_idx Column index where to insert (0-based, must be <= column count)
