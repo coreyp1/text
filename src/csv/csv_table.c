@@ -1384,10 +1384,7 @@ TEXT_API text_csv_status text_csv_table_compact(text_csv_table* table) {
     // Rows array (aligned to 8 bytes)
     size_t rows_array_size = sizeof(csv_table_row) * table->row_capacity;
     size_t rows_array_aligned = (rows_array_size + 7) & ~7;  // Align to 8
-    if (total_size > SIZE_MAX - rows_array_aligned) {
-        return TEXT_CSV_E_OOM;  // Overflow
-    }
-    total_size += rows_array_aligned;
+    total_size = rows_array_aligned;
 
     // Calculate size for all rows and fields
     for (size_t row_idx = 0; row_idx < table->row_count; row_idx++) {
