@@ -360,6 +360,35 @@ TEXT_API text_csv_status text_csv_column_append(
     size_t header_name_len
 );
 
+/**
+ * @brief Insert a new column at the specified index
+ *
+ * Inserts a new column at the specified index, shifting existing columns right.
+ * The index can equal the column count, which is equivalent to appending.
+ * All existing rows get an empty field inserted at the specified position.
+ *
+ * If the table has headers, the header_name parameter is required (not NULL).
+ * If the table has no headers, the header_name parameter is ignored.
+ *
+ * When headers are present:
+ * - The header field is inserted in the header row at the specified index
+ * - All header map entries with index >= col_idx are reindexed (incremented by 1)
+ * - A new header map entry is added with index = col_idx
+ * - Duplicate header names are not allowed (returns error)
+ *
+ * @param table Table (must not be NULL)
+ * @param col_idx Column index where to insert (0-based, must be <= column count)
+ * @param header_name Header name for the new column (required if table has headers, ignored otherwise)
+ * @param header_name_len Length of header name, or 0 if null-terminated (ignored if table has no headers)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_insert(
+    text_csv_table* table,
+    size_t col_idx,
+    const char* header_name,
+    size_t header_name_len
+);
+
 #ifdef __cplusplus
 }
 #endif

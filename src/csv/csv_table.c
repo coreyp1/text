@@ -1850,6 +1850,192 @@ TEXT_API text_csv_status text_csv_column_append(
     return TEXT_CSV_OK;
 }
 
+TEXT_API text_csv_status text_csv_column_insert(
+    text_csv_table* table,
+    size_t col_idx,
+    const char* header_name,
+    size_t header_name_len
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Validate col_idx (must be <= column count)
+    if (col_idx > table->column_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // If inserting at end (col_idx == column_count), use append logic
+    if (col_idx == table->column_count) {
+        return text_csv_column_append(table, header_name, header_name_len);
+    }
+
+    // Handle headers if present
+    size_t name_len = 0;
+    if (table->has_header && table->header_map) {
+        // Validate header_name is not NULL when table has headers
+        if (!header_name) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Calculate header name length if not provided
+        name_len = header_name_len;
+        if (name_len == 0) {
+            name_len = strlen(header_name);
+        }
+
+        // Check for duplicate header name in header map
+        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
+        csv_header_entry* entry = table->header_map[hash];
+        while (entry) {
+            if (entry->name_len == name_len &&
+                memcmp(entry->name, header_name, name_len) == 0) {
+                // Duplicate header name found
+                return TEXT_CSV_E_INVALID;
+            }
+            entry = entry->next;
+        }
+    }
+
+    // Update column count
+    if (table->column_count == SIZE_MAX) {
+        return TEXT_CSV_E_OOM;
+    }
+    table->column_count++;
+
+    // Determine start row index (skip header row if present)
+    size_t start_row_idx = 0;
+    if (table->has_header && table->row_count > 0) {
+        start_row_idx = 1;  // Skip header row at index 0
+    }
+
+    // For each data row, insert a new empty field at col_idx
+    for (size_t row_idx = start_row_idx; row_idx < table->row_count; row_idx++) {
+        csv_table_row* row = &table->rows[row_idx];
+        size_t old_field_count = row->field_count;
+        size_t new_field_count = old_field_count + 1;
+
+        // Check for overflow
+        if (new_field_count < old_field_count) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Validate col_idx is within bounds for this row
+        if (col_idx > old_field_count) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Allocate new field array with one more field
+        csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * new_field_count, 8
+        );
+        if (!new_fields) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy fields before insertion point
+        if (col_idx > 0) {
+            memcpy(new_fields, row->fields, sizeof(csv_table_field) * col_idx);
+        }
+
+        // Add new empty field at insertion point
+        csv_setup_empty_field(&new_fields[col_idx]);
+
+        // Copy fields after insertion point (shift right)
+        if (col_idx < old_field_count) {
+            memcpy(new_fields + col_idx + 1, row->fields + col_idx,
+                   sizeof(csv_table_field) * (old_field_count - col_idx));
+        }
+
+        // Update row structure
+        row->fields = new_fields;
+        row->field_count = new_field_count;
+    }
+
+    // Handle header row if present
+    if (table->has_header && table->header_map && table->row_count > 0) {
+        // Insert header field in header row at col_idx
+        csv_table_row* header_row = &table->rows[0];
+        size_t old_header_field_count = header_row->field_count;
+        size_t new_header_field_count = old_header_field_count + 1;
+
+        // Check for overflow
+        if (new_header_field_count < old_header_field_count) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Validate col_idx is within bounds for header row
+        if (col_idx > old_header_field_count) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Allocate new field array for header row
+        csv_table_field* new_header_fields = (csv_table_field*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * new_header_field_count, 8
+        );
+        if (!new_header_fields) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        // Copy header fields before insertion point
+        if (col_idx > 0) {
+            memcpy(new_header_fields, header_row->fields, sizeof(csv_table_field) * col_idx);
+        }
+
+        // Allocate and copy new header name to arena
+        csv_table_field* new_header_field = &new_header_fields[col_idx];
+        if (name_len == 0) {
+            csv_setup_empty_field(new_header_field);
+        } else {
+            text_csv_status status = csv_allocate_and_copy_field(
+                table->ctx, header_name, name_len, new_header_field
+            );
+            if (status != TEXT_CSV_OK) {
+                return status;
+            }
+        }
+
+        // Copy header fields after insertion point (shift right)
+        if (col_idx < old_header_field_count) {
+            memcpy(new_header_fields + col_idx + 1, header_row->fields + col_idx,
+                   sizeof(csv_table_field) * (old_header_field_count - col_idx));
+        }
+
+        // Update header row structure
+        header_row->fields = new_header_fields;
+        header_row->field_count = new_header_field_count;
+
+        // Reindex all header map entries with index >= col_idx (increment by 1)
+        for (size_t i = 0; i < table->header_map_size; i++) {
+            csv_header_entry* entry = table->header_map[i];
+            while (entry) {
+                if (entry->index >= col_idx) {
+                    entry->index++;
+                }
+                entry = entry->next;
+            }
+        }
+
+        // Add new entry to header map with index = col_idx
+        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
+        csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_header_entry), 8
+        );
+        if (!new_entry) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        new_entry->name = new_header_field->data;
+        new_entry->name_len = new_header_field->length;
+        new_entry->index = col_idx;
+        new_entry->next = table->header_map[hash];
+        table->header_map[hash] = new_entry;
+    }
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_header_index(
     const text_csv_table* table,
     const char* name,

@@ -6178,6 +6178,481 @@ TEST(CsvMutation, ColumnAppendToEmptyTableWithHeaders) {
     text_csv_free_table(table);
 }
 
+// ============================================================================
+// Column Insert Tests
+// ============================================================================
+
+TEST(CsvMutation, ColumnInsertAtBeginningWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    const char* row2[] = {"d", "e", "f"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert column at beginning (col_idx = 0)
+    status = text_csv_column_insert(table, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows now have 4 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 4u);
+    EXPECT_EQ(text_csv_col_count(table, 1), 4u);
+
+    // Verify existing fields shifted right
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(len, 0u);  // New empty field
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 3, &len);
+    EXPECT_STREQ(field, "c");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertInMiddleWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert column in middle (col_idx = 1)
+    status = text_csv_column_insert(table, 1, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row has 4 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 4u);
+
+    // Verify fields shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(len, 0u);  // New empty field
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 3, &len);
+    EXPECT_STREQ(field, "c");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertAtEndWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert column at end (col_idx = column_count, same as append)
+    status = text_csv_column_insert(table, 2, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row has 3 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify existing fields unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(len, 0u);  // New empty field
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertBeyondEnd) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to insert beyond end (col_idx > column_count)
+    status = text_csv_column_insert(table, 3, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify table unchanged
+    EXPECT_EQ(text_csv_col_count(table, 0), 2u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertAllRowsGetNewField) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add multiple rows
+    const char* row1[] = {"a1", "b1"};
+    const char* row2[] = {"a2", "b2"};
+    const char* row3[] = {"a3", "b3"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row3, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert column in middle
+    status = text_csv_column_insert(table, 1, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows have 3 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+    EXPECT_EQ(text_csv_col_count(table, 1), 3u);
+    EXPECT_EQ(text_csv_col_count(table, 2), 3u);
+
+    // Verify new column is empty for all rows
+    size_t len;
+    const char* field = text_csv_field(table, 0, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);
+    field = text_csv_field(table, 1, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);
+    field = text_csv_field(table, 2, 1, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(len, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertColumnShifting) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add row with 4 columns
+    const char* row1[] = {"a", "b", "c", "d"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert at index 2
+    status = text_csv_column_insert(table, 2, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify fields shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(len, 0u);  // New empty field
+    field = text_csv_field(table, 0, 3, &len);
+    EXPECT_STREQ(field, "c");
+    field = text_csv_field(table, 0, 4, &len);
+    EXPECT_STREQ(field, "d");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertWithEmptyTable) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Insert column in empty table
+    text_csv_status status = text_csv_column_insert(table, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Column count should be updated
+    EXPECT_EQ(table->column_count, 1u);
+    // But no rows to modify
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertInTableWithHeaders) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Add a data row
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert column at index 1
+    status = text_csv_column_insert(table, 1, "newcol", 6);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header row has 4 columns
+    EXPECT_EQ(table->rows[0].field_count, 4u);
+
+    // Verify header map is updated
+    size_t idx;
+    status = text_csv_header_index(table, "newcol", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    // Verify existing headers are reindexed
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);  // Still at 0
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);  // Shifted from 1 to 2
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 3u);  // Shifted from 2 to 3
+
+    // Verify data row has 4 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 4u);
+
+    // Verify fields shifted correctly in data row
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(len, 0u);  // New empty field
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 3, &len);
+    EXPECT_STREQ(field, "c");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertHeaderNameInsertedInHeaderRow) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Insert column at beginning
+    text_csv_status status = text_csv_column_insert(table, 0, "newcol", 6);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map has the new header at index 0
+    size_t idx;
+    status = text_csv_header_index(table, "newcol", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    // Verify existing headers are reindexed
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);  // Shifted from 0 to 1
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);  // Shifted from 1 to 2
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertHeaderMapEntriesReindexed) {
+    const char* headers[] = {"col1", "col2", "col3", "col4"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 4);
+    ASSERT_NE(table, nullptr);
+
+    // Insert column at index 2
+    text_csv_status status = text_csv_column_insert(table, 2, "newcol", 6);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map entries are reindexed correctly
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);  // Unchanged
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);  // Unchanged
+
+    status = text_csv_header_index(table, "newcol", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);  // New column at index 2
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 3u);  // Shifted from 2 to 3
+
+    status = text_csv_header_index(table, "col4", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 4u);  // Shifted from 3 to 4
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertDuplicateHeaderName) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Try to insert column with duplicate header name
+    text_csv_status status = text_csv_column_insert(table, 1, "col1", 4);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should fail
+
+    // Verify table unchanged
+    EXPECT_EQ(table->column_count, 2u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertNullHeaderNameWhenHasHeaders) {
+    const char* headers[] = {"col1"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // Try to insert column with NULL header name
+    text_csv_status status = text_csv_column_insert(table, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should fail
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertHeaderNameIgnoredWhenNoHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // header_name parameter should be ignored (no error)
+    status = text_csv_column_insert(table, 1, "some_header", 11);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify column was inserted
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertHeaderMapLookupWorksAfterInsert) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Insert column
+    text_csv_status status = text_csv_column_insert(table, 1, "newcol", 6);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map lookup works for all headers
+    size_t idx;
+    EXPECT_EQ(text_csv_header_index(table, "col1", &idx), TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+    EXPECT_EQ(text_csv_header_index(table, "newcol", &idx), TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+    EXPECT_EQ(text_csv_header_index(table, "col2", &idx), TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertNullTable) {
+    text_csv_status status = text_csv_column_insert(nullptr, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, ColumnInsertAtEndEquivalentToAppend) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert at end (col_idx == column_count)
+    status = text_csv_column_insert(table, 2, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Should be equivalent to append
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(len, 0u);  // New empty field at end
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertMultipleColumns) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Insert multiple columns
+    status = text_csv_column_insert(table, 0, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_column_insert(table, 1, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_column_insert(table, 3, nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row has 4 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 4u);
+
+    // After inserting at 0, then at 1, then at 3:
+    // - Original "a" is now at index 2 (shifted right by 2 insertions before it)
+    size_t len;
+    const char* field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "a");
+
+    // Verify new columns are empty
+    field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(len, 0u);
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(len, 0u);
+    field = text_csv_field(table, 0, 3, &len);
+    EXPECT_EQ(len, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertWithHeadersAtEnd) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Insert column at end (should work like append)
+    text_csv_status status = text_csv_column_insert(table, 2, "col3", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map
+    size_t idx;
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);
+
+    // Verify existing headers unchanged
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetWithHeader) {
     // Create a table with headers
     const char* csv_data = "col1,col2,col3\nvalue1,value2,value3\n";
