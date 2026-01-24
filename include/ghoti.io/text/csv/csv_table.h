@@ -506,6 +506,26 @@ TEXT_API text_csv_status text_csv_column_rename(
     size_t new_name_length
 );
 
+/**
+ * @brief Create a deep copy of a CSV table
+ *
+ * Creates a complete independent copy of the source table, allocating all
+ * memory from a new arena. The cloned table is completely independent of
+ * the original - modifications to one table do not affect the other.
+ *
+ * All field data is copied to the new arena, including fields that were
+ * originally in-situ (referencing the input buffer). This ensures the
+ * cloned table is fully independent and does not reference any external
+ * buffers.
+ *
+ * The cloned table must be freed separately with text_csv_free_table()
+ * when no longer needed.
+ *
+ * @param source Source table to clone (must not be NULL)
+ * @return New cloned table, or NULL on allocation failure
+ */
+TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source);
+
 #ifdef __cplusplus
 }
 #endif
