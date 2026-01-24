@@ -5108,6 +5108,345 @@ TEST(CsvMutation, RowSetNullFieldWithNonZeroLength) {
     text_csv_free_table(table);
 }
 
+TEST(CsvMutation, TableClearWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Clear table
+    status = text_csv_table_clear(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows cleared
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Verify table structure preserved
+    EXPECT_EQ(table->column_count, 3u);  // Column count preserved
+    EXPECT_GE(table->row_capacity, 2u);  // Row capacity preserved
+    EXPECT_EQ(table->has_header, false);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableClearWithHeaders) {
+    // Parse table with headers
+    const char* csv_data = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, &err);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(table->has_header, true);
+    EXPECT_NE(table->header_map, nullptr);
+
+    // Clear table
+    text_csv_status status = text_csv_table_clear(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify data rows cleared, header row kept
+    EXPECT_EQ(text_csv_row_count(table), 0u);  // No data rows (header excluded from count)
+    EXPECT_EQ(table->row_count, 1u);  // Internal count includes header
+
+    // Verify table structure preserved
+    EXPECT_EQ(table->column_count, 2u);  // Column count preserved
+    EXPECT_GE(table->row_capacity, 3u);  // Row capacity preserved
+    EXPECT_EQ(table->has_header, true);  // Header flag preserved
+    EXPECT_NE(table->header_map, nullptr);  // Header map preserved
+
+    // Verify header row is still accessible
+    EXPECT_STREQ(table->rows[0].fields[0].data, "name");
+    EXPECT_STREQ(table->rows[0].fields[1].data, "age");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableClearEmptyTable) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Clear empty table (no-op)
+    text_csv_status status = text_csv_table_clear(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify still empty
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableClearTableStructurePreserved) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add rows to establish structure
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Store structure values
+    size_t column_count = table->column_count;
+    size_t row_capacity = table->row_capacity;
+
+    // Clear table
+    status = text_csv_table_clear(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify structure preserved
+    EXPECT_EQ(table->column_count, column_count);
+    EXPECT_EQ(table->row_capacity, row_capacity);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableClearCanAppendAfterClearing) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add initial rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Clear table
+    status = text_csv_table_clear(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 0u);
+
+    // Append new rows after clearing
+    const char* new_row1[] = {"x", "y", "z"};
+    status = text_csv_row_append(table, new_row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* new_row2[] = {"u", "v", "w"};
+    status = text_csv_row_append(table, new_row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Verify new rows
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "x");
+
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "u");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableClearNullTable) {
+    // Test NULL table parameter
+    text_csv_status status = text_csv_table_clear(nullptr);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, TableCompactPreservesAllRows) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add multiple rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row2[] = {"d", "e", "f"};
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    const char* row3[] = {"g", "h", "i"};
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Compact table (should preserve all rows)
+    status = text_csv_table_compact(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows are still present
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+
+    // Verify row data is preserved
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "a");
+
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "d");
+
+    field = text_csv_field(table, 2, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "g");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableCompactPreservesHeaders) {
+    // Parse table with headers
+    const char* csv_data = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, &err);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(table->has_header, true);
+
+    // Compact table (should preserve all rows including header)
+    text_csv_status status = text_csv_table_compact(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows are still present
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(table->row_count, 3u);  // Internal count includes header
+
+    // Verify header row is preserved
+    EXPECT_STREQ(table->rows[0].fields[0].data, "name");
+    EXPECT_STREQ(table->rows[0].fields[1].data, "age");
+
+    // Verify data rows are preserved
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "Alice");
+
+    field = text_csv_field(table, 1, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "Bob");
+
+    // Verify header map still works
+    size_t idx;
+    status = text_csv_header_index(table, "name", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableCompactReclaimsMemory) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add and remove rows to create fragmentation
+    for (size_t i = 0; i < 10; i++) {
+        char field_data[32];
+        snprintf(field_data, sizeof(field_data), "row%zu", i);
+        const char* fields[] = {field_data};
+        text_csv_status status = text_csv_row_append(table, fields, nullptr, 1);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+    }
+
+    EXPECT_EQ(text_csv_row_count(table), 10u);
+
+    // Remove some rows (creates gaps in arena)
+    for (size_t i = 9; i >= 5; i--) {
+        text_csv_status status = text_csv_row_remove(table, i);
+        EXPECT_EQ(status, TEXT_CSV_OK);
+    }
+
+    EXPECT_EQ(text_csv_row_count(table), 5u);
+
+    // Compact should preserve remaining rows
+    text_csv_status status = text_csv_table_compact(table);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify remaining rows are preserved
+    EXPECT_EQ(text_csv_row_count(table), 5u);
+
+    // Verify row data
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "row0");
+
+    field = text_csv_field(table, 4, 0, &len);
+    ASSERT_NE(field, nullptr);
+    EXPECT_STREQ(field, "row4");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, TableCompactNullTable) {
+    // Test NULL table parameter
+    text_csv_status status = text_csv_table_compact(nullptr);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, TableCompactPreservesInSituFields) {
+    // Parse table with in-situ mode enabled
+    const char* csv_data = "name,age\nAlice,30\nBob,25";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.in_situ_mode = true;  // Enable in-situ mode
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(csv_data, strlen(csv_data), &opts, &err);
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_OK);
+
+    // Verify some fields are in-situ (they reference the input buffer)
+    // Note: Not all fields may be in-situ (depends on parsing), but some should be
+    bool found_in_situ = false;
+    for (size_t row = 0; row < table->row_count && !found_in_situ; row++) {
+        csv_table_row* table_row = &table->rows[row];
+        for (size_t col = 0; col < table_row->field_count; col++) {
+            if (table_row->fields[col].is_in_situ) {
+                found_in_situ = true;
+                // Store the original pointer
+                const char* original_ptr = table_row->fields[col].data;
+                size_t original_len = table_row->fields[col].length;
+
+                // Compact table
+                text_csv_status status = text_csv_table_compact(table);
+                EXPECT_EQ(status, TEXT_CSV_OK);
+
+                // Verify in-situ field still points to input buffer (not copied)
+                EXPECT_EQ(table_row->fields[col].data, original_ptr);
+                EXPECT_EQ(table_row->fields[col].length, original_len);
+                EXPECT_EQ(table_row->fields[col].is_in_situ, true);
+
+                break;
+            }
+        }
+    }
+
+    // Verify table still works correctly
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetValid) {
     text_csv_table* table = text_csv_new_table();
     ASSERT_NE(table, nullptr);

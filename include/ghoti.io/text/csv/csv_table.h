@@ -271,6 +271,49 @@ TEXT_API text_csv_status text_csv_field_set(
     size_t field_length
 );
 
+/**
+ * @brief Clear all data rows from the table
+ *
+ * Removes all data rows from the table while preserving the table structure.
+ * If the table has headers, the header row is preserved. The column count,
+ * row capacity, and header map (if present) are all preserved.
+ *
+ * This function automatically compacts the table by moving preserved data
+ * (headers if present) to a new arena and freeing the old arena, which
+ * releases memory from cleared data rows.
+ *
+ * This function is useful for reusing a table structure with new data.
+ *
+ * @param table Table (must not be NULL)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_table_clear(text_csv_table* table);
+
+/**
+ * @brief Compact the table by moving data to a new arena
+ *
+ * Allocates a new arena and moves all current table data to the new arena,
+ * then frees the old arena. This releases memory from old allocations that
+ * may have been left behind due to repeated modifications (e.g., row/column
+ * insertions, deletions, or field updates).
+ *
+ * This function preserves all current rows and data - it does not remove any
+ * data, only reorganizes it into a fresh arena to reclaim wasted memory.
+ *
+ * This function is automatically called by `text_csv_table_clear()`, but can
+ * also be called independently to reclaim memory without clearing any data.
+ *
+ * All rows are copied to the new arena:
+ * - All row structures are copied
+ * - All field arrays are copied
+ * - All field data is copied (including in-situ fields, which are now in arena)
+ * - Header map entries are copied (if present)
+ *
+ * @param table Table (must not be NULL)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_table_compact(text_csv_table* table);
+
 #ifdef __cplusplus
 }
 #endif
