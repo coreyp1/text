@@ -2551,6 +2551,129 @@ TEXT_API text_csv_status text_csv_column_insert(
     return TEXT_CSV_OK;
 }
 
+TEXT_API text_csv_status text_csv_column_remove(
+    text_csv_table* table,
+    size_t col_idx
+) {
+    // Validate inputs
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Validate col_idx (must be < column count)
+    if (col_idx >= table->column_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Cannot remove from empty table
+    if (table->column_count == 0) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Determine start row index (skip header row if present)
+    size_t start_row_idx = 0;
+    if (table->has_header && table->row_count > 0) {
+        start_row_idx = 1;  // Skip header row at index 0
+    }
+
+    // Phase 1: Remove Header Map Entry (if needed)
+    // Find and remove the header map entry for col_idx
+    if (table->has_header && table->header_map && table->row_count > 0) {
+        // Find the entry with index == col_idx
+        csv_header_entry* entry_to_remove = NULL;
+        csv_header_entry** prev_ptr = NULL;
+
+        // Search all hash buckets to find the entry with matching index
+        for (size_t i = 0; i < table->header_map_size; i++) {
+            csv_header_entry** chain = &table->header_map[i];
+            csv_header_entry* entry = *chain;
+            csv_header_entry* prev = NULL;
+
+            while (entry) {
+                if (entry->index == col_idx) {
+                    entry_to_remove = entry;
+                    prev_ptr = prev ? &prev->next : chain;
+                    break;
+                }
+                prev = entry;
+                entry = entry->next;
+            }
+
+            if (entry_to_remove) {
+                break;
+            }
+        }
+
+        // Remove entry from hash chain if found
+        if (entry_to_remove) {
+            // Update the chain pointer to skip the entry
+            *prev_ptr = entry_to_remove->next;
+        }
+
+        // Phase 2: Reindex Header Map Entries
+        // Reindex all header map entries with index > col_idx (decrement by 1)
+        for (size_t i = 0; i < table->header_map_size; i++) {
+            csv_header_entry* entry = table->header_map[i];
+            while (entry) {
+                if (entry->index > col_idx) {
+                    entry->index--;
+                }
+                entry = entry->next;
+            }
+        }
+    }
+
+    // Phase 3: Shift Fields in All Rows
+    // For each row, shift fields from col_idx+1 to field_count-1 left by one position
+    for (size_t row_idx = start_row_idx; row_idx < table->row_count; row_idx++) {
+        csv_table_row* row = &table->rows[row_idx];
+
+        // Validate col_idx is within bounds for this row
+        if (col_idx >= row->field_count) {
+            // This should not happen if column_count is consistent, but check anyway
+            continue;
+        }
+
+        // Shift fields left: move fields from col_idx+1 to end one position left
+        if (col_idx + 1 < row->field_count) {
+            memmove(
+                row->fields + col_idx,
+                row->fields + col_idx + 1,
+                sizeof(csv_table_field) * (row->field_count - col_idx - 1)
+            );
+        }
+
+        // Decrement field count
+        row->field_count--;
+    }
+
+    // Phase 4: Shift Header Row Fields (if present)
+    if (table->has_header && table->row_count > 0) {
+        csv_table_row* header_row = &table->rows[0];
+
+        // Validate col_idx is within bounds for header row
+        if (col_idx < header_row->field_count) {
+            // Shift header fields left
+            if (col_idx + 1 < header_row->field_count) {
+                memmove(
+                    header_row->fields + col_idx,
+                    header_row->fields + col_idx + 1,
+                    sizeof(csv_table_field) * (header_row->field_count - col_idx - 1)
+                );
+            }
+
+            // Decrement header row field count
+            header_row->field_count--;
+        }
+    }
+
+    // Phase 5: Atomic State Update
+    // Decrement column count
+    table->column_count--;
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_status text_csv_header_index(
     const text_csv_table* table,
     const char* name,

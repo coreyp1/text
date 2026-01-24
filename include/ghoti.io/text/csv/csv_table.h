@@ -440,6 +440,37 @@ TEXT_API text_csv_status text_csv_column_insert(
     size_t header_name_len
 );
 
+/**
+ * @brief Remove a column at the specified index from all rows
+ *
+ * Removes the column at the specified index from all rows in the table, shifting
+ * remaining columns left. The column index must be valid (must be < column count).
+ *
+ * When the table has headers:
+ * - The header field is removed from the header row
+ * - The header map entry for the removed column is removed from the hash table
+ * - All header map entries with index > col_idx are reindexed (decremented by 1)
+ *
+ * When the table has no headers, only the column removal is performed.
+ *
+ * Field data remains in the arena (no individual cleanup needed).
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. This operation involves shifting fields in all rows
+ * and updating the header map, but no memory allocations that can fail, ensuring
+ * atomicity. Header map entry removal and reindexing occur before the final
+ * atomic state update.
+ *
+ * @param table Table (must not be NULL)
+ * @param col_idx Column index to remove (0-based, must be < column count)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_remove(
+    text_csv_table* table,
+    size_t col_idx
+);
+
 #ifdef __cplusplus
 }
 #endif

@@ -6653,6 +6653,477 @@ TEST(CsvMutation, ColumnInsertWithHeadersAtEnd) {
     text_csv_free_table(table);
 }
 
+// ============================================================================
+// Column Remove Tests
+// ============================================================================
+
+TEST(CsvMutation, ColumnRemoveFromBeginningWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    const char* row2[] = {"d", "e", "f"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at beginning (col_idx = 0)
+    status = text_csv_column_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows now have 2 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 2u);
+    EXPECT_EQ(text_csv_col_count(table, 1), 2u);
+
+    // Verify fields shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "b");  // Was at index 1, now at 0
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "c");  // Was at index 2, now at 1
+
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "e");  // Was at index 1, now at 0
+    field = text_csv_field(table, 1, 1, &len);
+    EXPECT_STREQ(field, "f");  // Was at index 2, now at 1
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveFromMiddleWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c", "d"};
+    const char* row2[] = {"e", "f", "g", "h"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column in middle (col_idx = 2)
+    status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows now have 3 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+    EXPECT_EQ(text_csv_col_count(table, 1), 3u);
+
+    // Verify fields shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "b");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "d");  // Was at index 3, now at 2
+
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "e");
+    field = text_csv_field(table, 1, 1, &len);
+    EXPECT_STREQ(field, "f");
+    field = text_csv_field(table, 1, 2, &len);
+    EXPECT_STREQ(field, "h");  // Was at index 3, now at 2
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveFromEndWithoutHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    const char* row2[] = {"d", "e", "f"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at end (col_idx = 2, last column)
+    status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows now have 2 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 2u);
+    EXPECT_EQ(text_csv_col_count(table, 1), 2u);
+
+    // Verify existing fields unchanged
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "b");
+
+    field = text_csv_field(table, 1, 0, &len);
+    EXPECT_STREQ(field, "d");
+    field = text_csv_field(table, 1, 1, &len);
+    EXPECT_STREQ(field, "e");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveBoundsCheck) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* row1[] = {"a", "b"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Try to remove column beyond end (col_idx >= column_count)
+    status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Try to remove column at column_count (should fail)
+    status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveAllRowsHaveColumnRemoved) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add multiple rows
+    const char* row1[] = {"a1", "b1", "c1"};
+    const char* row2[] = {"a2", "b2", "c2"};
+    const char* row3[] = {"a3", "b3", "c3"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row2, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    status = text_csv_row_append(table, row3, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at index 1
+    status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify all rows have 2 columns
+    for (size_t i = 0; i < 3; i++) {
+        EXPECT_EQ(text_csv_col_count(table, i), 2u);
+    }
+
+    // Verify column shifting
+    size_t len;
+    for (size_t i = 0; i < 3; i++) {
+        const char* field = text_csv_field(table, i, 0, &len);
+        EXPECT_STREQ(field, (i == 0 ? "a1" : (i == 1 ? "a2" : "a3")));
+        field = text_csv_field(table, i, 1, &len);
+        EXPECT_STREQ(field, (i == 0 ? "c1" : (i == 1 ? "c2" : "c3")));
+    }
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveColumnShifting) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add row with 4 columns
+    const char* row1[] = {"a", "b", "c", "d"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at index 1
+    status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify fields shifted correctly
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "c");  // Was at index 2, now at 1
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "d");  // Was at index 3, now at 2
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveWithEmptyTable) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Try to remove column from empty table
+    text_csv_status status = text_csv_column_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveLastColumn) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add row with single column
+    const char* row1[] = {"a"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove the only column
+    status = text_csv_column_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify row is now empty (0 columns)
+    EXPECT_EQ(text_csv_col_count(table, 0), 0u);
+    EXPECT_EQ(table->column_count, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveInTableWithHeaders) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Add a data row
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at index 1
+    status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header row has 2 columns
+    EXPECT_EQ(table->rows[0].field_count, 2u);
+
+    // Verify header map entry is removed
+    size_t idx;
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should not be found
+
+    // Verify remaining headers are reindexed
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);  // Unchanged
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);  // Shifted from 2 to 1
+
+    // Verify data row has 2 columns
+    EXPECT_EQ(text_csv_col_count(table, 0), 2u);
+
+    // Verify fields shifted correctly in data row
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "c");  // Was at index 2, now at 1
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveHeaderFieldRemovedFromHeaderRow) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Remove column at index 0
+    text_csv_status status = text_csv_column_remove(table, 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header row has 2 columns
+    EXPECT_EQ(table->rows[0].field_count, 2u);
+
+    // Verify header map has correct entries
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should not be found
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);  // Shifted from 1 to 0
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);  // Shifted from 2 to 1
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveHeaderMapEntryRemoved) {
+    const char* headers[] = {"col1", "col2", "col3", "col4"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 4);
+    ASSERT_NE(table, nullptr);
+
+    // Remove column at index 2
+    text_csv_status status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map entry for col3 is removed
+    size_t idx;
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should not be found
+
+    // Verify other entries still exist
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    status = text_csv_header_index(table, "col4", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);  // Shifted from 3 to 2
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveHeaderMapEntriesReindexed) {
+    const char* headers[] = {"col1", "col2", "col3", "col4", "col5"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 5);
+    ASSERT_NE(table, nullptr);
+
+    // Remove column at index 2
+    text_csv_status status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map entries are reindexed correctly
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);  // Unchanged
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);  // Unchanged
+
+    // col3 should be removed
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    status = text_csv_header_index(table, "col4", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 2u);  // Shifted from 3 to 2
+
+    status = text_csv_header_index(table, "col5", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 3u);  // Shifted from 4 to 3
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveHeaderMapLookupFailsForRemovedColumn) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Remove column at index 1 (col2)
+    text_csv_status status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map lookup fails for removed column
+    size_t idx;
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    // Verify other columns still work
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveWorksWithNoHeaders) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add some rows
+    const char* row1[] = {"a", "b", "c"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 3);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column (should work without headers)
+    status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify column was removed
+    EXPECT_EQ(text_csv_col_count(table, 0), 2u);
+
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "c");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveNullTable) {
+    text_csv_status status = text_csv_column_remove(nullptr, 0);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, ColumnRemoveMultipleColumns) {
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row with 5 columns
+    const char* row1[] = {"a", "b", "c", "d", "e"};
+    text_csv_status status = text_csv_row_append(table, row1, nullptr, 5);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Remove column at index 2
+    status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_col_count(table, 0), 4u);
+
+    // Remove column at index 1 (was originally at 2, now shifted)
+    status = text_csv_column_remove(table, 1);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify remaining fields
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_STREQ(field, "a");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_STREQ(field, "d");  // Was at index 3
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_STREQ(field, "e");  // Was at index 4
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRemoveWithHeadersAtEnd) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Remove last column
+    text_csv_status status = text_csv_column_remove(table, 2);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
+    // Verify header map
+    size_t idx;
+    status = text_csv_header_index(table, "col3", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should not be found
+
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(idx, 1u);
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetWithHeader) {
     // Create a table with headers
     const char* csv_data = "col1,col2,col3\nvalue1,value2,value3\n";
