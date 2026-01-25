@@ -598,28 +598,14 @@ static text_csv_status csv_table_event_callback(
 static text_csv_table* csv_create_empty_table(text_csv_error* err) {
     csv_context* ctx = csv_context_new();
     if (!ctx) {
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to create context",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to create context");
         return NULL;
     }
 
     text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
     if (!table) {
         csv_context_free(ctx);
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to allocate table",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to allocate table");
         return NULL;
     }
 
@@ -632,14 +618,7 @@ static text_csv_table* csv_create_empty_table(text_csv_error* err) {
     if (!table->rows) {
         free(table);
         csv_context_free(ctx);
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to allocate rows",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to allocate rows");
         return NULL;
     }
 
@@ -668,14 +647,7 @@ static text_csv_status csv_table_parse_internal(
     // Create streaming parser
     text_csv_stream* stream = text_csv_stream_new(opts, csv_table_event_callback, &parse_ctx);
     if (!stream) {
-        if (err) {
-            *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_OOM,
-                                        .message = "Failed to create stream parser",
-                                        .line = 1,
-                                        .column = 1
-                                    };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to create stream parser");
         return TEXT_CSV_E_OOM;
     }
 
@@ -705,14 +677,7 @@ TEXT_API text_csv_table* text_csv_parse_table(
     text_csv_error* err
 ) {
     if (!data) {
-        if (err) {
-            *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_INVALID,
-                                        .message = "Input data must not be NULL",
-                                        .line = 1,
-                                        .column = 1
-                                    };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_INVALID, "Input data must not be NULL");
         return NULL;
     }
 
@@ -730,28 +695,14 @@ TEXT_API text_csv_table* text_csv_parse_table(
     // Create context and allocate table structure
     csv_context* ctx = csv_context_new();
     if (!ctx) {
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to create context",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to create context");
         return NULL;
     }
 
     text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
     if (!table) {
         csv_context_free(ctx);
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to allocate table",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to allocate table");
         return NULL;
     }
 
@@ -764,14 +715,7 @@ TEXT_API text_csv_table* text_csv_parse_table(
     if (!table->rows) {
         free(table);
         csv_context_free(ctx);
-        if (err) {
-            *err = (text_csv_error){
-                .code = TEXT_CSV_E_OOM,
-                .message = "Failed to allocate rows",
-                .line = 1,
-                .column = 1
-            };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_OOM, "Failed to allocate rows");
         return NULL;
     }
 
@@ -783,14 +727,7 @@ TEXT_API text_csv_table* text_csv_parse_table(
         bool was_stripped = false;
         text_csv_status status = csv_strip_bom(&input, &input_len, &pos, true, &was_stripped);
         if (status != TEXT_CSV_OK) {
-            if (err) {
-                *err = (text_csv_error){
-                    .code = status,
-                    .message = "Overflow in BOM stripping",
-                    .line = 1,
-                    .column = 1
-                };
-            }
+            CSV_SET_ERROR(err, status, "Overflow in BOM stripping");
             free(table);
             csv_context_free(ctx);
             return NULL;
@@ -854,14 +791,9 @@ TEXT_API text_csv_table* text_csv_parse_table(
                     free(table->header_map);
                     table->header_map = NULL;
                     text_csv_free_table(table);
+                    CSV_SET_ERROR(err, TEXT_CSV_E_INVALID, "Duplicate column name in header");
                     if (err) {
-                        *err = (text_csv_error){
-                            .code = TEXT_CSV_E_INVALID,
-                            .message = "Duplicate column name in header",
-                            .line = 1,
-                            .column = 1,
-                            .col_index = i
-                        };
+                        err->col_index = i;
                     }
                     return NULL;
                 case TEXT_CSV_DUPCOL_FIRST_WINS:

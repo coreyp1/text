@@ -171,14 +171,7 @@ TEXT_API text_csv_status text_csv_stream_feed(
     text_csv_error* err
 ) {
     if (!stream) {
-        if (err) {
-            *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_INVALID,
-                                        .message = "Stream must not be NULL",
-                                        .line = 1,
-                                        .column = 1
-                                    };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_INVALID, "Stream must not be NULL");
         return TEXT_CSV_E_INVALID;
     }
 
@@ -283,14 +276,7 @@ TEXT_API text_csv_status text_csv_stream_finish(
     text_csv_error* err
 ) {
     if (!stream) {
-        if (err) {
-            *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_INVALID,
-                                        .message = "Stream must not be NULL",
-                                        .line = 1,
-                                        .column = 1
-                                    };
-        }
+        CSV_SET_ERROR(err, TEXT_CSV_E_INVALID, "Stream must not be NULL");
         return TEXT_CSV_E_INVALID;
     }
 

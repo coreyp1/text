@@ -130,6 +130,29 @@ TEXT_INTERNAL_API text_csv_status csv_strip_bom(
 typedef struct csv_arena csv_arena;
 
 /**
+ * @brief Set error structure with common defaults
+ *
+ * Macro to standardize error initialization. Sets code, message, line, and column.
+ * Defaults line and column to 1. All other fields are zero-initialized.
+ * Additional fields can be set after the macro call if needed.
+ *
+ * @param err Error structure pointer (can be NULL, in which case this is a no-op)
+ * @param err_code Error code (text_csv_status)
+ * @param err_msg Error message (const char*)
+ */
+#define CSV_SET_ERROR(err, err_code, err_msg) \
+    do { \
+        if (err) { \
+            *(err) = (text_csv_error){ \
+                .code = (err_code), \
+                .message = (err_msg), \
+                .line = 1, \
+                .column = 1 \
+            }; \
+        } \
+    } while (0)
+
+/**
  * @brief CSV context structure
  *
  * Holds the arena allocator and other context information
