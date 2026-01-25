@@ -85,8 +85,8 @@ The dialect defines the exact format rules for parsing and writing CSV:
 - **`comment_prefix`**: Comment prefix string — **Default: `"#"`**
 - **`treat_first_row_as_header`**: Treat first row as header — **Default: `false`**
 - **`header_dup_mode`**: Duplicate column name handling:
-  - `TEXT_CSV_DUPCOL_ERROR`: Fail parse on duplicate column name — **Default**
-  - `TEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence
+  - `TEXT_CSV_DUPCOL_ERROR`: Fail parse on duplicate column name
+  - `TEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence — **Default**
   - `TEXT_CSV_DUPCOL_LAST_WINS`: Use last occurrence
   - `TEXT_CSV_DUPCOL_COLLECT`: Store all indices for duplicate columns
 

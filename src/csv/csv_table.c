@@ -306,6 +306,49 @@ static size_t csv_header_hash(const char* name, size_t name_len, size_t map_size
     return hash % map_size;
 }
 
+/**
+ * @brief Check if a header name already exists in the header map
+ *
+ * Checks for duplicate header names when uniqueness is required.
+ * Optionally excludes a specific column index from the check (useful for rename operations).
+ *
+ * @param table Table with header map
+ * @param name Header name to check
+ * @param name_len Length of header name
+ * @param exclude_index Column index to exclude from check (SIZE_MAX to exclude none)
+ * @return TEXT_CSV_E_INVALID if duplicate found and uniqueness required, TEXT_CSV_OK otherwise
+ */
+static text_csv_status csv_check_header_uniqueness(
+    const text_csv_table* table,
+    const char* name,
+    size_t name_len,
+    size_t exclude_index
+) {
+    // Only check if uniqueness is required
+    if (!table->require_unique_headers) {
+        return TEXT_CSV_OK;
+    }
+
+    // Table must have headers
+    if (!table->has_header || !table->header_map) {
+        return TEXT_CSV_OK;
+    }
+
+    size_t hash = csv_header_hash(name, name_len, table->header_map_size);
+    csv_header_entry* entry = table->header_map[hash];
+    while (entry) {
+        if (entry->index != exclude_index &&  // Exclude specified index if provided
+            entry->name_len == name_len &&
+            memcmp(entry->name, name, name_len) == 0) {
+            // Duplicate header name found and uniqueness is required
+            return TEXT_CSV_E_INVALID;
+        }
+        entry = entry->next;
+    }
+
+    return TEXT_CSV_OK;
+}
+
 // Parse context for table building
 typedef struct {
     text_csv_table* table;
@@ -2483,16 +2526,12 @@ TEXT_API text_csv_status text_csv_column_append(
             name_len = strlen(header_name);
         }
 
-        // Check for duplicate header name in header map
-        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
-        csv_header_entry* entry = table->header_map[hash];
-        while (entry) {
-            if (entry->name_len == name_len &&
-                memcmp(entry->name, header_name, name_len) == 0) {
-                // Duplicate header name found
-                return TEXT_CSV_E_INVALID;
-            }
-            entry = entry->next;
+        // Check for duplicate header name if uniqueness is required
+        text_csv_status uniqueness_status = csv_check_header_uniqueness(
+            table, header_name, name_len, SIZE_MAX  // Don't exclude any column
+        );
+        if (uniqueness_status != TEXT_CSV_OK) {
+            return uniqueness_status;
         }
     }
 
@@ -2739,16 +2778,12 @@ TEXT_API text_csv_status text_csv_column_insert(
             name_len = strlen(header_name);
         }
 
-        // Check for duplicate header name in header map
-        size_t hash = csv_header_hash(header_name, name_len, table->header_map_size);
-        csv_header_entry* entry = table->header_map[hash];
-        while (entry) {
-            if (entry->name_len == name_len &&
-                memcmp(entry->name, header_name, name_len) == 0) {
-                // Duplicate header name found
-                return TEXT_CSV_E_INVALID;
-            }
-            entry = entry->next;
+        // Check for duplicate header name if uniqueness is required
+        text_csv_status uniqueness_status = csv_check_header_uniqueness(
+            table, header_name, name_len, SIZE_MAX  // Don't exclude any column
+        );
+        if (uniqueness_status != TEXT_CSV_OK) {
+            return uniqueness_status;
         }
     }
 
@@ -3159,21 +3194,19 @@ TEXT_API text_csv_status text_csv_column_rename(
         name_len = strlen(new_name);
     }
 
-    // Phase 1: Check for Duplicate Header Name
-    // Check if new_name already exists in header map (excluding the column being renamed)
+    // Calculate hash for new name (needed for later insertion)
     size_t hash = csv_header_hash(new_name, name_len, table->header_map_size);
-    csv_header_entry* entry = table->header_map[hash];
-    while (entry) {
-        if (entry->index != col_idx &&  // Exclude the column being renamed
-            entry->name_len == name_len &&
-            memcmp(entry->name, new_name, name_len) == 0) {
-            // Duplicate header name found
-            return TEXT_CSV_E_INVALID;
-        }
-        entry = entry->next;
+
+    // Check for duplicate header name if uniqueness is required
+    // Exclude the column being renamed from the check
+    text_csv_status uniqueness_status = csv_check_header_uniqueness(
+        table, new_name, name_len, col_idx  // Exclude the column being renamed
+    );
+    if (uniqueness_status != TEXT_CSV_OK) {
+        return uniqueness_status;
     }
 
-    // Phase 2: Find Old Header Map Entry
+    // Phase 1: Find Old Header Map Entry
     // Find the entry with index == col_idx
     csv_header_entry* entry_to_remove = NULL;
     csv_header_entry** prev_ptr = NULL;
@@ -3301,6 +3334,120 @@ TEXT_API text_csv_status text_csv_header_index(
     }
 
     return TEXT_CSV_E_INVALID;
+}
+
+TEXT_API text_csv_status text_csv_header_index_next(
+    const text_csv_table* table,
+    const char* name,
+    size_t current_idx,
+    size_t* out_idx
+) {
+    if (!table || !name || !out_idx) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    if (!table->has_header || !table->header_map) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Validate current_idx is within valid column range
+    if (current_idx >= table->column_count) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    size_t name_len = strlen(name);
+    size_t hash = csv_header_hash(name, name_len, table->header_map_size);
+
+    // Search through all entries in the hash bucket
+    csv_header_entry* entry = table->header_map[hash];
+    bool found_current = false;
+    size_t min_next_idx = SIZE_MAX;
+
+    while (entry) {
+        if (entry->name_len == name_len && memcmp(entry->name, name, name_len) == 0) {
+            // Verify that current_idx exists for this header name
+            if (entry->index == current_idx) {
+                found_current = true;
+            }
+            // Find the smallest index greater than current_idx
+            if (entry->index > current_idx) {
+                if (entry->index < min_next_idx) {
+                    min_next_idx = entry->index;
+                }
+            }
+        }
+        entry = entry->next;
+    }
+
+    // If current_idx doesn't match any entry with this name, return error
+    if (!found_current) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // If we found a next index, return it
+    if (min_next_idx != SIZE_MAX && min_next_idx > current_idx) {
+        *out_idx = min_next_idx;
+        return TEXT_CSV_OK;
+    }
+
+    // No more matches found
+    return TEXT_CSV_E_INVALID;
+}
+
+TEXT_API text_csv_status text_csv_set_require_unique_headers(
+    text_csv_table* table,
+    bool require
+) {
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    table->require_unique_headers = require;
+    return TEXT_CSV_OK;
+}
+
+TEXT_API bool text_csv_can_have_unique_headers(const text_csv_table* table) {
+    // Handle NULL table gracefully (return false)
+    if (!table) {
+        return false;
+    }
+
+    // Check if table has headers
+    if (!table->has_header || table->row_count == 0) {
+        return false;
+    }
+
+    // Get the header row (first row when has_header is true)
+    csv_table_row* header_row = &table->rows[0];
+    if (!header_row || header_row->field_count == 0) {
+        return false;
+    }
+
+    // Check for duplicate header names by comparing all fields in the header row
+    // For each field, check if there's another field with the same name
+    for (size_t i = 0; i < header_row->field_count; i++) {
+        csv_table_field* field = &header_row->fields[i];
+        const char* name = field->data;
+        size_t name_len = field->length;
+
+        // Count occurrences of this name in the header row
+        size_t count = 0;
+        for (size_t j = 0; j < header_row->field_count; j++) {
+            csv_table_field* check_field = &header_row->fields[j];
+            if (check_field->length == name_len &&
+                memcmp(check_field->data, name, name_len) == 0) {
+                count++;
+            }
+        }
+
+        // If we found more than one occurrence, headers are not unique
+        if (count > 1) {
+            return false;
+        }
+    }
+
+    // All header names are unique
+    return true;
 }
 
 TEXT_API text_csv_table* text_csv_new_table(void) {

@@ -79,8 +79,8 @@ typedef enum {
  * @brief Duplicate column name handling mode
  */
 typedef enum {
-  TEXT_CSV_DUPCOL_ERROR,      ///< Fail parse on duplicate column name (default)
-  TEXT_CSV_DUPCOL_FIRST_WINS, ///< Use first occurrence of duplicate column
+  TEXT_CSV_DUPCOL_ERROR,      ///< Fail parse on duplicate column name
+  TEXT_CSV_DUPCOL_FIRST_WINS, ///< Use first occurrence of duplicate column (default)
   TEXT_CSV_DUPCOL_LAST_WINS,  ///< Use last occurrence of duplicate column
   TEXT_CSV_DUPCOL_COLLECT     ///< Store all indices for duplicate columns
 } text_csv_dupcol_mode;
@@ -105,7 +105,7 @@ typedef struct {
   bool allow_comments;               ///< Allow comment lines (default false)
   const char* comment_prefix;        ///< Comment prefix string (default "#")
   bool treat_first_row_as_header;    ///< Treat first row as header (default false)
-  text_csv_dupcol_mode header_dup_mode; ///< Duplicate column name handling (default ERROR)
+  text_csv_dupcol_mode header_dup_mode; ///< Duplicate column name handling (default FIRST_WINS)
 } text_csv_dialect;
 
 /**

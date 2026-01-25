@@ -23,7 +23,7 @@ TEXT_API text_csv_dialect text_csv_dialect_default(void) {
     d.allow_comments = false;
     d.comment_prefix = "#";
     d.treat_first_row_as_header = false;
-    d.header_dup_mode = TEXT_CSV_DUPCOL_ERROR;
+    d.header_dup_mode = TEXT_CSV_DUPCOL_FIRST_WINS;
     return d;
 }
 

@@ -314,6 +314,7 @@ struct text_csv_table {
     csv_header_entry** header_map;  ///< Hash table for header lookup
     size_t header_map_size;         ///< Size of hash table
     bool has_header;                ///< Whether header was processed
+    bool require_unique_headers;    ///< Whether to enforce unique headers for mutation operations (default: false)
 };
 
 #ifdef __cplusplus

@@ -120,6 +120,36 @@ TEXT_API text_csv_status text_csv_header_index(
 );
 
 /**
+ * @brief Get the next column index for a header name after a given index
+ *
+ * Finds the next column with the same header name after the specified index.
+ * This function is useful for iterating through all columns with duplicate header names.
+ *
+ * The function searches for the next entry in the header map that:
+ * - Has the same name as the specified header name
+ * - Has an index greater than `current_idx`
+ *
+ * To iterate through all columns with a given header name:
+ * 1. Call `text_csv_header_index()` to get the first match
+ * 2. Repeatedly call `text_csv_header_index_next()` with the previous index
+ *    until it returns `TEXT_CSV_E_INVALID` (no more matches)
+ *
+ * Only works if the table was parsed with header processing enabled.
+ *
+ * @param table Table (must not be NULL)
+ * @param name Column name to look up
+ * @param current_idx Current column index (must be a valid index for this header name)
+ * @param out_idx Output parameter for the next column index (must not be NULL)
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if no more matches found or parameters are invalid
+ */
+TEXT_API text_csv_status text_csv_header_index_next(
+    const text_csv_table* table,
+    const char* name,
+    size_t current_idx,
+    size_t* out_idx
+);
+
+/**
  * @brief Create an empty CSV table
  *
  * Creates a new empty table with initialized context and arena.
@@ -505,6 +535,43 @@ TEXT_API text_csv_status text_csv_column_rename(
     const char* new_name,
     size_t new_name_length
 );
+
+/**
+ * @brief Set whether unique headers are required for mutation operations
+ *
+ * Controls whether mutation operations (column append, insert, rename) enforce
+ * uniqueness of header names. When set to `true`, these operations will fail
+ * if they would create duplicate header names. When set to `false` (the default),
+ * duplicate header names are allowed.
+ *
+ * This flag only affects mutation operations. Parsing behavior is controlled
+ * by the `header_dup_mode` in the parse options dialect.
+ *
+ * @param table Table (must not be NULL)
+ * @param require Whether to require unique headers (true) or allow duplicates (false)
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if table is NULL
+ */
+TEXT_API text_csv_status text_csv_set_require_unique_headers(
+    text_csv_table* table,
+    bool require
+);
+
+/**
+ * @brief Check if table can have unique headers
+ *
+ * Returns `true` if the table has headers and all header names are currently unique.
+ * Returns `false` if:
+ * - The table does not have headers
+ * - The table has headers but contains duplicate header names
+ * - The table is NULL
+ *
+ * This function is useful for checking if a table is in a state where unique headers
+ * can be enforced (i.e., before enabling `require_unique_headers`).
+ *
+ * @param table Table (must not be NULL)
+ * @return `true` if headers exist and are unique, `false` otherwise
+ */
+TEXT_API bool text_csv_can_have_unique_headers(const text_csv_table* table);
 
 /**
  * @brief Create a deep copy of a CSV table

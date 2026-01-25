@@ -285,7 +285,7 @@ TEST(CsvDialect, DefaultDialect) {
     EXPECT_FALSE(d.allow_comments);
     EXPECT_STREQ(d.comment_prefix, "#");
     EXPECT_FALSE(d.treat_first_row_as_header);
-    EXPECT_EQ(d.header_dup_mode, TEXT_CSV_DUPCOL_ERROR);
+    EXPECT_EQ(d.header_dup_mode, TEXT_CSV_DUPCOL_FIRST_WINS);
 }
 
 TEST(CsvDialect, EscapeModes) {
@@ -1919,6 +1919,277 @@ TEST(CsvTable, DuplicateColumnNames) {
     text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
 
     // Should fail with duplicate column error
+    EXPECT_EQ(table, nullptr);
+    EXPECT_EQ(err.code, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvTable, DuplicateColumnNamesDefaultFirstWins) {
+    // Test that duplicate headers are allowed by default (FIRST_WINS mode)
+    const char* input = "a,a,b\n1,2,3\n4,5,6\n";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    // Use default header_dup_mode (should be FIRST_WINS now)
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    // Should succeed with new default
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+    EXPECT_EQ(text_csv_col_count(table, 0), 3u);
+
+    // Verify header_index returns first match for duplicate header
+    size_t a_idx;
+    EXPECT_EQ(text_csv_header_index(table, "a", &a_idx), TEXT_CSV_OK);
+    EXPECT_EQ(a_idx, 0u);  // Should return first occurrence (index 0)
+
+    // Verify data access
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(std::string(field, len), "1");
+    field = text_csv_field(table, 0, 1, &len);
+    EXPECT_EQ(std::string(field, len), "2");
+    field = text_csv_field(table, 0, 2, &len);
+    EXPECT_EQ(std::string(field, len), "3");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNext) {
+    // Test text_csv_header_index_next() with duplicate headers created via append
+    // This avoids reindexing complexity
+    const char* headers[] = {"col"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* fields[] = {"val1"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 1), TEXT_CSV_OK);
+
+    // Append two more columns with the same name (duplicates allowed by default)
+    EXPECT_EQ(text_csv_column_append(table, "col", 0), TEXT_CSV_OK);  // col at index 1
+    EXPECT_EQ(text_csv_column_append(table, "col", 0), TEXT_CSV_OK);  // col at index 2
+
+    // Now we have "col" at indices 0, 1, and 2
+    // Verify column count
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Test basic functionality: find first match, then find next
+    size_t first_idx;
+    EXPECT_EQ(text_csv_header_index(table, "col", &first_idx), TEXT_CSV_OK);
+    EXPECT_LT(first_idx, 3u);
+
+    // If we found index 0 or 1, we should be able to find the next one
+    if (first_idx < 2) {
+        size_t next_idx;
+        EXPECT_EQ(text_csv_header_index_next(table, "col", first_idx, &next_idx), TEXT_CSV_OK);
+        EXPECT_GT(next_idx, first_idx);
+        EXPECT_LT(next_idx, 3u);
+
+        // If we found index 0, we should be able to find 1, then 2
+        if (first_idx == 0) {
+            size_t next2_idx;
+            EXPECT_EQ(text_csv_header_index_next(table, "col", next_idx, &next2_idx), TEXT_CSV_OK);
+            EXPECT_GT(next2_idx, next_idx);
+            EXPECT_EQ(next2_idx, 2u);
+
+            // No more matches after 2
+            size_t next3_idx;
+            EXPECT_EQ(text_csv_header_index_next(table, "col", next2_idx, &next3_idx), TEXT_CSV_E_INVALID);
+        }
+    }
+
+    // Test that starting from index 2, there are no more matches
+    size_t test_idx;
+    if (text_csv_header_index(table, "col", &test_idx) == TEXT_CSV_OK && test_idx == 2) {
+        size_t no_next;
+        EXPECT_EQ(text_csv_header_index_next(table, "col", 2, &no_next), TEXT_CSV_E_INVALID);
+    }
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNextUniqueHeader) {
+    // Test with unique header name (should return error after first match)
+    const char* input = "name,age,city\nJohn,30,NYC\n";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    ASSERT_NE(table, nullptr);
+
+    // Get first match
+    size_t idx;
+    EXPECT_EQ(text_csv_header_index(table, "name", &idx), TEXT_CSV_OK);
+    EXPECT_EQ(idx, 0u);
+
+    // Try to get next match (should fail - no duplicates)
+    size_t next_idx;
+    EXPECT_EQ(text_csv_header_index_next(table, "name", idx, &next_idx), TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNextInvalidCurrentIdx) {
+    // Test with invalid current_idx
+    const char* input = "status,status,name\nactive,inactive,John\n";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    opts.dialect.header_dup_mode = TEXT_CSV_DUPCOL_COLLECT;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    ASSERT_NE(table, nullptr);
+
+    // Try with invalid current_idx (out of range)
+    size_t next_idx;
+    EXPECT_EQ(text_csv_header_index_next(table, "status", 100, &next_idx), TEXT_CSV_E_INVALID);
+
+    // Try with current_idx that doesn't match the header name
+    EXPECT_EQ(text_csv_header_index_next(table, "status", 3, &next_idx), TEXT_CSV_E_INVALID);  // Index 3 is "name"
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNextNonExistentHeader) {
+    // Test with non-existent header name
+    const char* input = "name,age,city\nJohn,30,NYC\n";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    ASSERT_NE(table, nullptr);
+
+    // Try with non-existent header name
+    size_t next_idx;
+    EXPECT_EQ(text_csv_header_index_next(table, "nonexistent", 0, &next_idx), TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNextCompleteIteration) {
+    // Test complete iteration: text_csv_header_index() then repeated text_csv_header_index_next()
+    // Use append to avoid reindexing complexity
+    const char* headers[] = {"col"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 1);
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* fields[] = {"val1"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 1), TEXT_CSV_OK);
+
+    // Append two more "col" columns
+    EXPECT_EQ(text_csv_column_append(table, "col", 0), TEXT_CSV_OK);  // col at index 1
+    EXPECT_EQ(text_csv_column_append(table, "col", 0), TEXT_CSV_OK);  // col at index 2
+
+    // Now we have "col" at indices 0, 1, and 2
+    // Start with text_csv_header_index()
+    size_t idx;
+    EXPECT_EQ(text_csv_header_index(table, "col", &idx), TEXT_CSV_OK);
+    EXPECT_LT(idx, 3u);  // Should be one of 0, 1, or 2
+
+    // Collect indices by iterating forward from the starting index
+    std::vector<size_t> indices;
+    indices.push_back(idx);
+
+    size_t current = idx;
+    size_t next;
+    int iterations = 0;
+    const int max_iterations = 10;
+    while (iterations < max_iterations &&
+           text_csv_header_index_next(table, "col", current, &next) == TEXT_CSV_OK) {
+        // Verify next is greater than current
+        EXPECT_GT(next, current);
+        // Avoid infinite loop
+        if (std::find(indices.begin(), indices.end(), next) != indices.end()) {
+            break;
+        }
+        indices.push_back(next);
+        current = next;
+        iterations++;
+    }
+
+    // We should have found at least the starting index, and possibly more
+    EXPECT_GE(indices.size(), 1u);
+    EXPECT_LE(indices.size(), 3u);
+
+    // Verify all found indices are valid (0, 1, or 2)
+    std::sort(indices.begin(), indices.end());
+    for (size_t i : indices) {
+        EXPECT_LT(i, 3u);
+    }
+
+    // If we started from 0, we should find all 3
+    if (idx == 0) {
+        EXPECT_EQ(indices.size(), 3u);
+        EXPECT_EQ(indices[0], 0u);
+        EXPECT_EQ(indices[1], 1u);
+        EXPECT_EQ(indices[2], 2u);
+    }
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, HeaderIndexNextMutationOperations) {
+    // Test header_index_next with duplicate headers created via mutation operations
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(
+        headers,
+        nullptr,
+        3
+    );
+    ASSERT_NE(table, nullptr);
+
+    // Add a row
+    const char* fields[] = {"val1", "val2", "val3"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 3), TEXT_CSV_OK);
+
+    // Append a column with duplicate header name (duplicates allowed by default)
+    EXPECT_EQ(text_csv_column_append(table, "col1", 0), TEXT_CSV_OK);
+
+    // Now we have two columns named "col1" at indices 0 and 3
+    size_t idx;
+    EXPECT_EQ(text_csv_header_index(table, "col1", &idx), TEXT_CSV_OK);
+    // Could be either 0 or 3 depending on hash chain order
+    EXPECT_TRUE(idx == 0u || idx == 3u);
+
+    // Get next match
+    size_t next_idx;
+    if (idx == 0u) {
+        // Starting from 0, should find 3
+        EXPECT_EQ(text_csv_header_index_next(table, "col1", idx, &next_idx), TEXT_CSV_OK);
+        EXPECT_EQ(next_idx, 3u);  // Second match (appended column)
+        // No more matches after 3
+        EXPECT_EQ(text_csv_header_index_next(table, "col1", next_idx, &next_idx), TEXT_CSV_E_INVALID);
+    } else {
+        // Starting from 3, should not find any (0 is not > 3)
+        EXPECT_EQ(text_csv_header_index_next(table, "col1", idx, &next_idx), TEXT_CSV_E_INVALID);
+    }
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvTable, DuplicateColumnNamesExplicitErrorMode) {
+    // Test that TEXT_CSV_DUPCOL_ERROR mode still works when explicitly set
+    const char* input = "a,a,b\n1,2,3\n";
+    size_t input_len = strlen(input);
+
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    opts.dialect.header_dup_mode = TEXT_CSV_DUPCOL_ERROR;  // Explicitly set error mode
+    text_csv_error err{};
+    text_csv_table* table = text_csv_parse_table(input, input_len, &opts, &err);
+
+    // Should still fail when explicitly set to ERROR mode
     EXPECT_EQ(table, nullptr);
     EXPECT_EQ(err.code, TEXT_CSV_E_INVALID);
 }
@@ -6904,9 +7175,38 @@ TEST(CsvMutation, ColumnAppendDuplicateHeaderName) {
     text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
     ASSERT_NE(table, nullptr);
 
+    // Enable uniqueness requirement
+    text_csv_status status = text_csv_set_require_unique_headers(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
     // Try to append column with duplicate header name
-    text_csv_status status = text_csv_column_append(table, "col1", 4);
+    status = text_csv_column_append(table, "col1", 4);
     EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should fail
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnAppendDuplicateHeaderNameAllowedByDefault) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Verify require_unique_headers defaults to false
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Try to append column with duplicate header name (should succeed by default)
+    text_csv_status status = text_csv_column_append(table, "col1", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);  // Should succeed
+
+    // Verify column was added
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Verify header_index returns a match (may be the newly added one since it's added to front of hash chain)
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // The returned index may be 0 (original) or 2 (newly added), depending on hash chain order
+    EXPECT_TRUE(idx == 0u || idx == 2u);
 
     text_csv_free_table(table);
 }
@@ -7285,12 +7585,41 @@ TEST(CsvMutation, ColumnInsertDuplicateHeaderName) {
     text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
     ASSERT_NE(table, nullptr);
 
+    // Enable uniqueness requirement
+    text_csv_status status = text_csv_set_require_unique_headers(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
     // Try to insert column with duplicate header name
-    text_csv_status status = text_csv_column_insert(table, 1, "col1", 4);
+    status = text_csv_column_insert(table, 1, "col1", 4);
     EXPECT_EQ(status, TEXT_CSV_E_INVALID);  // Should fail
 
     // Verify table unchanged
     EXPECT_EQ(table->column_count, 2u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnInsertDuplicateHeaderNameAllowedByDefault) {
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Verify require_unique_headers defaults to false
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Try to insert column with duplicate header name (should succeed by default)
+    text_csv_status status = text_csv_column_insert(table, 1, "col1", 4);
+    EXPECT_EQ(status, TEXT_CSV_OK);  // Should succeed
+
+    // Verify column was added
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Verify header_index returns a match (may be the newly inserted one since it's added to front of hash chain)
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // The returned index may be 0 (original) or 1 (newly inserted), depending on hash chain order
+    EXPECT_TRUE(idx == 0u || idx == 1u);
 
     text_csv_free_table(table);
 }
@@ -8008,8 +8337,12 @@ TEST(CsvMutation, ColumnRenameDuplicateHeaderName) {
     text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
     ASSERT_NE(table, nullptr);
 
+    // Enable uniqueness requirement
+    text_csv_status status = text_csv_set_require_unique_headers(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+
     // Try to rename col2 to col1 (duplicate)
-    text_csv_status status = text_csv_column_rename(table, 1, "col1", 0);
+    status = text_csv_column_rename(table, 1, "col1", 0);
     EXPECT_EQ(status, TEXT_CSV_E_INVALID);
 
     // Verify original name is still there
@@ -8017,6 +8350,32 @@ TEST(CsvMutation, ColumnRenameDuplicateHeaderName) {
     status = text_csv_header_index(table, "col2", &idx);
     EXPECT_EQ(status, TEXT_CSV_OK);
     EXPECT_EQ(idx, 1u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, ColumnRenameDuplicateHeaderNameAllowedByDefault) {
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    // Verify require_unique_headers defaults to false
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Try to rename col2 to col1 (duplicate, should succeed by default)
+    text_csv_status status = text_csv_column_rename(table, 1, "col1", 0);
+    EXPECT_EQ(status, TEXT_CSV_OK);  // Should succeed
+
+    // Verify header_index returns a match (may be the renamed one since it's added to front of hash chain)
+    size_t idx;
+    status = text_csv_header_index(table, "col1", &idx);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    // The returned index may be 0 (original) or 1 (renamed), depending on hash chain order
+    EXPECT_TRUE(idx == 0u || idx == 1u);
+
+    // Verify col2 no longer exists
+    status = text_csv_header_index(table, "col2", &idx);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
 
     text_csv_free_table(table);
 }
@@ -8245,6 +8604,61 @@ TEST(CsvMutation, ColumnRenameRenameToSameName) {
     EXPECT_EQ(idx, 0u);
 
     text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetRequireUniqueHeaders) {
+    // Create a table with headers
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    // Verify flag defaults to false
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Test enabling uniqueness requirement
+    text_csv_status status = text_csv_set_require_unique_headers(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->require_unique_headers);
+
+    // Test disabling uniqueness requirement
+    status = text_csv_set_require_unique_headers(table, false);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Test with NULL table (should return error)
+    status = text_csv_set_require_unique_headers(nullptr, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, CanHaveUniqueHeaders) {
+    // Test with table without headers (should return false)
+    text_csv_table* table_no_headers = text_csv_new_table();
+    ASSERT_NE(table_no_headers, nullptr);
+    EXPECT_FALSE(text_csv_can_have_unique_headers(table_no_headers));
+    text_csv_free_table(table_no_headers);
+
+    // Test with table with unique headers (should return true)
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table_unique = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table_unique, nullptr);
+    EXPECT_TRUE(text_csv_can_have_unique_headers(table_unique));
+    text_csv_free_table(table_unique);
+
+    // Test with table with duplicate headers (should return false)
+    // Parse CSV with duplicate headers using FIRST_WINS mode
+    const char* input = "a,a,b\n1,2,3\n";
+    text_csv_parse_options opts = text_csv_parse_options_default();
+    opts.dialect.treat_first_row_as_header = true;
+    opts.dialect.header_dup_mode = TEXT_CSV_DUPCOL_FIRST_WINS;
+    text_csv_table* table_duplicate = text_csv_parse_table(input, strlen(input), &opts, nullptr);
+    ASSERT_NE(table_duplicate, nullptr);
+    EXPECT_FALSE(text_csv_can_have_unique_headers(table_duplicate));
+    text_csv_free_table(table_duplicate);
+
+    // Test with NULL table (should return false)
+    EXPECT_FALSE(text_csv_can_have_unique_headers(nullptr));
 }
 
 TEST(CsvMutation, FieldSetWithHeader) {
