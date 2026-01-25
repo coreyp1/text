@@ -514,24 +514,23 @@ static text_csv_status csv_table_event_callback(
 
             // Handle field data - check if we can use in-situ mode
             bool can_use_in_situ = false;
-            if (ctx->opts->in_situ_mode && !ctx->opts->validate_utf8) {
+            if (ctx->opts->in_situ_mode && !ctx->opts->validate_utf8 &&
+                table->ctx->input_buffer && event->data) {
                 // Check if field data points to the original input buffer
                 // This means the field wasn't transformed (no unescaping needed) and wasn't buffered
-                if (table->ctx->input_buffer && event->data) {
-                    const char* input_start = table->ctx->input_buffer;
-                    size_t input_buffer_len = table->ctx->input_buffer_len;
-                    const char* field_start = event->data;
-                    size_t field_len = event->data_len;
+                const char* input_start = table->ctx->input_buffer;
+                size_t input_buffer_len = table->ctx->input_buffer_len;
+                const char* field_start = event->data;
+                size_t field_len = event->data_len;
 
-                    // Check for pointer arithmetic overflow safety
-                    // Use subtraction to check bounds instead of addition to avoid overflow
-                    if (field_start >= input_start) {
-                        size_t offset_from_start = (size_t)(field_start - input_start);
-                        // Check that field fits within buffer and doesn't overflow
-                        if (offset_from_start <= input_buffer_len &&
-                            field_len <= input_buffer_len - offset_from_start) {
-                            can_use_in_situ = true;
-                        }
+                // Check for pointer arithmetic overflow safety
+                // Use subtraction to check bounds instead of addition to avoid overflow
+                if (field_start >= input_start) {
+                    size_t offset_from_start = (size_t)(field_start - input_start);
+                    // Check that field fits within buffer and doesn't overflow
+                    if (offset_from_start <= input_buffer_len &&
+                        field_len <= input_buffer_len - offset_from_start) {
+                        can_use_in_situ = true;
                     }
                 }
             }
@@ -542,29 +541,32 @@ static text_csv_status csv_table_event_callback(
                 field->data = event->data;
                 field->length = event->data_len;
                 field->is_in_situ = true;
-            } else {
-                // Need to copy (for escaping/unescaping, UTF-8 validation, or when field was transformed)
-                // Check for integer overflow in allocation size
-                if (event->data_len > SIZE_MAX - 1) {
-                    ctx->status = TEXT_CSV_E_OOM;
-                    return TEXT_CSV_E_OOM;
-                }
-                char* field_data = (char*)csv_arena_alloc_for_context(
-                    table->ctx, event->data_len + 1, 1
-                );
-                if (!field_data) {
-                    ctx->status = TEXT_CSV_E_OOM;
-                    return TEXT_CSV_E_OOM;
-                }
-                // event->data is checked to be non-NULL above, and event->data_len is checked for overflow
-                if (event->data) {
-                    memcpy(field_data, event->data, event->data_len);
-                }
-                field_data[event->data_len] = '\0';
-                field->data = field_data;
-                field->length = event->data_len;
-                field->is_in_situ = false;
+                ctx->current_field_index++;
+                ctx->current_row->field_count = ctx->current_field_index;
+                return TEXT_CSV_OK;
             }
+
+            // Need to copy (for escaping/unescaping, UTF-8 validation, or when field was transformed)
+            // Check for integer overflow in allocation size
+            if (event->data_len > SIZE_MAX - 1) {
+                ctx->status = TEXT_CSV_E_OOM;
+                return TEXT_CSV_E_OOM;
+            }
+            char* field_data = (char*)csv_arena_alloc_for_context(
+                table->ctx, event->data_len + 1, 1
+            );
+            if (!field_data) {
+                ctx->status = TEXT_CSV_E_OOM;
+                return TEXT_CSV_E_OOM;
+            }
+            // event->data is checked to be non-NULL above, and event->data_len is checked for overflow
+            if (event->data) {
+                memcpy(field_data, event->data, event->data_len);
+            }
+            field_data[event->data_len] = '\0';
+            field->data = field_data;
+            field->length = event->data_len;
+            field->is_in_situ = false;
 
             ctx->current_field_index++;
             ctx->current_row->field_count = ctx->current_field_index;
@@ -590,6 +592,58 @@ static text_csv_status csv_table_event_callback(
     }
 
     return TEXT_CSV_OK;
+}
+
+// Helper function to create an empty table
+static text_csv_table* csv_create_empty_table(text_csv_error* err) {
+    csv_context* ctx = csv_context_new();
+    if (!ctx) {
+        if (err) {
+            *err = (text_csv_error){
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to create context",
+                .line = 1,
+                .column = 1
+            };
+        }
+        return NULL;
+    }
+
+    text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
+    if (!table) {
+        csv_context_free(ctx);
+        if (err) {
+            *err = (text_csv_error){
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to allocate table",
+                .line = 1,
+                .column = 1
+            };
+        }
+        return NULL;
+    }
+
+    memset(table, 0, sizeof(text_csv_table));
+    table->ctx = ctx;
+    table->row_capacity = 16;
+    table->rows = (csv_table_row*)csv_arena_alloc_for_context(
+        ctx, sizeof(csv_table_row) * table->row_capacity, 8
+    );
+    if (!table->rows) {
+        free(table);
+        csv_context_free(ctx);
+        if (err) {
+            *err = (text_csv_error){
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to allocate rows",
+                .line = 1,
+                .column = 1
+            };
+        }
+        return NULL;
+    }
+
+    return table;
 }
 
 // Parse CSV using streaming parser and build table
@@ -664,61 +718,7 @@ TEXT_API text_csv_table* text_csv_parse_table(
 
     // Empty input is valid - return empty table
     if (len == 0) {
-        // Create empty table
-        text_csv_parse_options default_opts;
-        if (!opts) {
-            default_opts = text_csv_parse_options_default();
-            opts = &default_opts;
-        }
-
-        csv_context* ctx = csv_context_new();
-        if (!ctx) {
-            if (err) {
-                *err = (text_csv_error){
-                                            .code = TEXT_CSV_E_OOM,
-                                            .message = "Failed to create context",
-                                            .line = 1,
-                                            .column = 1
-                                        };
-            }
-            return NULL;
-        }
-
-        text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
-        if (!table) {
-            csv_context_free(ctx);
-            if (err) {
-                *err = (text_csv_error){
-                                            .code = TEXT_CSV_E_OOM,
-                                            .message = "Failed to allocate table",
-                                            .line = 1,
-                                            .column = 1
-                                        };
-            }
-            return NULL;
-        }
-
-        memset(table, 0, sizeof(text_csv_table));
-        table->ctx = ctx;
-        table->row_capacity = 16;
-        table->rows = (csv_table_row*)csv_arena_alloc_for_context(
-            ctx, sizeof(csv_table_row) * table->row_capacity, 8
-        );
-        if (!table->rows) {
-            free(table);
-            csv_context_free(ctx);
-            if (err) {
-                *err = (text_csv_error){
-                                            .code = TEXT_CSV_E_OOM,
-                                            .message = "Failed to allocate rows",
-                                            .line = 1,
-                                            .column = 1
-                                        };
-            }
-            return NULL;
-        }
-
-        return table;
+        return csv_create_empty_table(err);
     }
 
     text_csv_parse_options default_opts;
@@ -727,31 +727,30 @@ TEXT_API text_csv_table* text_csv_parse_table(
         opts = &default_opts;
     }
 
-    // Create context
+    // Create context and allocate table structure
     csv_context* ctx = csv_context_new();
     if (!ctx) {
         if (err) {
             *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_OOM,
-                                        .message = "Failed to create context",
-                                        .line = 1,
-                                        .column = 1
-                                    };
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to create context",
+                .line = 1,
+                .column = 1
+            };
         }
         return NULL;
     }
 
-    // Allocate table structure
     text_csv_table* table = (text_csv_table*)malloc(sizeof(text_csv_table));
     if (!table) {
         csv_context_free(ctx);
         if (err) {
             *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_OOM,
-                                        .message = "Failed to allocate table",
-                                        .line = 1,
-                                        .column = 1
-                                    };
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to allocate table",
+                .line = 1,
+                .column = 1
+            };
         }
         return NULL;
     }
@@ -767,11 +766,11 @@ TEXT_API text_csv_table* text_csv_parse_table(
         csv_context_free(ctx);
         if (err) {
             *err = (text_csv_error){
-                                        .code = TEXT_CSV_E_OOM,
-                                        .message = "Failed to allocate rows",
-                                        .line = 1,
-                                        .column = 1
-                                    };
+                .code = TEXT_CSV_E_OOM,
+                .message = "Failed to allocate rows",
+                .line = 1,
+                .column = 1
+            };
         }
         return NULL;
     }
@@ -786,11 +785,11 @@ TEXT_API text_csv_table* text_csv_parse_table(
         if (status != TEXT_CSV_OK) {
             if (err) {
                 *err = (text_csv_error){
-                                            .code = status,
-                                            .message = "Overflow in BOM stripping",
-                                            .line = 1,
-                                            .column = 1
-                                        };
+                    .code = status,
+                    .message = "Overflow in BOM stripping",
+                    .line = 1,
+                    .column = 1
+                };
             }
             free(table);
             csv_context_free(ctx);
@@ -818,74 +817,79 @@ TEXT_API text_csv_table* text_csv_parse_table(
     }
 
     // Process header if enabled
-    if (opts->dialect.treat_first_row_as_header && table->row_count > 0) {
-        // Build header map from first row
-        table->header_map_size = 16;
-        table->header_map = (csv_header_entry**)calloc(table->header_map_size, sizeof(csv_header_entry*));
-        if (table->header_map) {
-            csv_table_row* header_row = &table->rows[0];
-            // Column count already set above, but ensure it's correct
-            table->column_count = header_row->field_count;
-            for (size_t i = 0; i < header_row->field_count; i++) {
-                csv_table_field* field = &header_row->fields[i];
-                size_t hash = csv_header_hash(field->data, field->length, table->header_map_size);
+    if (!opts->dialect.treat_first_row_as_header || table->row_count == 0) {
+        return table;
+    }
 
-                // Check for duplicates
-                csv_header_entry* entry = table->header_map[hash];
-                bool found_duplicate = false;
-                while (entry) {
-                    if (entry->name_len == field->length &&
-                        memcmp(entry->name, field->data, field->length) == 0) {
-                        found_duplicate = true;
-                        break;
-                    }
-                    entry = entry->next;
-                }
+    // Build header map from first row
+    table->header_map_size = 16;
+    table->header_map = (csv_header_entry**)calloc(table->header_map_size, sizeof(csv_header_entry*));
+    if (!table->header_map) {
+        text_csv_free_table(table);
+        return NULL;
+    }
 
-                if (found_duplicate) {
-                    switch (opts->dialect.header_dup_mode) {
-                        case TEXT_CSV_DUPCOL_ERROR:
-                            free(table->header_map);
-                            table->header_map = NULL;
-                            text_csv_free_table(table);
-                            if (err) {
-                                *err = (text_csv_error){
-                                                            .code = TEXT_CSV_E_INVALID,
-                                                            .message = "Duplicate column name in header",
-                                                            .line = 1,
-                                                            .column = 1,
-                                                            .col_index = i
-                                                        };
-                            }
-                            return NULL;
-                        case TEXT_CSV_DUPCOL_FIRST_WINS:
-                            // Skip this duplicate
-                            continue;
-                        case TEXT_CSV_DUPCOL_LAST_WINS:
-                            // Remove old entry, add new one
-                            // Simplified: just add new entry
-                            break;
-                        case TEXT_CSV_DUPCOL_COLLECT:
-                            // Store multiple indices (simplified: just add)
-                            break;
-                    }
-                }
+    csv_table_row* header_row = &table->rows[0];
+    // Column count already set above, but ensure it's correct
+    table->column_count = header_row->field_count;
+    for (size_t i = 0; i < header_row->field_count; i++) {
+        csv_table_field* field = &header_row->fields[i];
+        size_t hash = csv_header_hash(field->data, field->length, table->header_map_size);
 
-                // Create header entry
-                csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
-                    ctx, sizeof(csv_header_entry), 8
-                );
-                if (new_entry) {
-                    new_entry->name = field->data;
-                    new_entry->name_len = field->length;
-                    new_entry->index = i;
-                    new_entry->next = table->header_map[hash];
-                    table->header_map[hash] = new_entry;
-                }
+        // Check for duplicates
+        csv_header_entry* entry = table->header_map[hash];
+        bool found_duplicate = false;
+        while (entry) {
+            if (entry->name_len == field->length &&
+                memcmp(entry->name, field->data, field->length) == 0) {
+                found_duplicate = true;
+                break;
             }
-            table->has_header = true;
+            entry = entry->next;
+        }
+
+        if (found_duplicate) {
+            switch (opts->dialect.header_dup_mode) {
+                case TEXT_CSV_DUPCOL_ERROR:
+                    free(table->header_map);
+                    table->header_map = NULL;
+                    text_csv_free_table(table);
+                    if (err) {
+                        *err = (text_csv_error){
+                            .code = TEXT_CSV_E_INVALID,
+                            .message = "Duplicate column name in header",
+                            .line = 1,
+                            .column = 1,
+                            .col_index = i
+                        };
+                    }
+                    return NULL;
+                case TEXT_CSV_DUPCOL_FIRST_WINS:
+                    // Skip this duplicate
+                    continue;
+                case TEXT_CSV_DUPCOL_LAST_WINS:
+                    // Remove old entry, add new one
+                    // Simplified: just add new entry
+                    break;
+                case TEXT_CSV_DUPCOL_COLLECT:
+                    // Store multiple indices (simplified: just add)
+                    break;
+            }
+        }
+
+        // Create header entry
+        csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+            ctx, sizeof(csv_header_entry), 8
+        );
+        if (new_entry) {
+            new_entry->name = field->data;
+            new_entry->name_len = field->length;
+            new_entry->index = i;
+            new_entry->next = table->header_map[hash];
+            table->header_map[hash] = new_entry;
         }
     }
+    table->has_header = true;
 
     return table;
 }
@@ -3064,51 +3068,55 @@ static text_csv_status csv_determine_header_value(
         return TEXT_CSV_E_INVALID;
     }
 
+    // Early return: No headers case - all outputs remain NULL/0
+    if (!table->has_header || !table->header_map) {
+        *header_value_out = NULL;
+        *header_value_len_out = 0;
+        *header_map_name_out = NULL;
+        *header_map_name_len_out = 0;
+        *name_len_out = 0;
+        return TEXT_CSV_OK;
+    }
+
+    // Table has headers - determine header value
     const char* header_value = NULL;
     size_t header_value_len = 0;
     const char* header_map_name = NULL;
     size_t header_map_name_len = 0;
     size_t name_len = 0;
 
-    if (table->has_header && table->header_map) {
-        if (is_empty_column) {
-            // Empty column: use header_name
-            if (!header_name) {
-                return TEXT_CSV_E_INVALID;
-            }
-            header_value = header_name;
-            header_value_len = header_name_len;
-            if (header_value_len == 0 && header_value) {
-                header_value_len = strlen(header_value);
-            }
-            header_map_name = header_name;
-            header_map_name_len = header_value_len;
-            name_len = header_value_len;
-        } else {
-            // Use values[0] for both header field and header map entry
-            header_value = values[0];
-            if (value_lengths && value_lengths[0] > 0) {
-                header_value_len = value_lengths[0];
-            } else if (header_value) {
-                header_value_len = strlen(header_value);
-            }
-            header_map_name = values[0];
-            header_map_name_len = header_value_len;
-            name_len = header_value_len;
+    if (is_empty_column) {
+        // Empty column: use header_name
+        if (!header_name) {
+            return TEXT_CSV_E_INVALID;
         }
-
-        // Check for duplicate header name if uniqueness is required
-        text_csv_status uniqueness_status = csv_check_header_uniqueness(
-            table, header_map_name, header_map_name_len, SIZE_MAX  // Don't exclude any column
-        );
-        if (uniqueness_status != TEXT_CSV_OK) {
-            return uniqueness_status;
+        header_value = header_name;
+        header_value_len = header_name_len;
+        if (header_value_len == 0 && header_value) {
+            header_value_len = strlen(header_value);
         }
-    } else if (!is_empty_column) {
-        // No headers: still need to validate header_name is not required
-        // (header_name is ignored when table has no headers)
+        header_map_name = header_name;
+        header_map_name_len = header_value_len;
+        name_len = header_value_len;
     } else {
-        // Empty column, no headers: header_name is ignored
+        // Use values[0] for both header field and header map entry
+        header_value = values[0];
+        if (value_lengths && value_lengths[0] > 0) {
+            header_value_len = value_lengths[0];
+        } else if (header_value) {
+            header_value_len = strlen(header_value);
+        }
+        header_map_name = values[0];
+        header_map_name_len = header_value_len;
+        name_len = header_value_len;
+    }
+
+    // Check for duplicate header name if uniqueness is required
+    text_csv_status uniqueness_status = csv_check_header_uniqueness(
+        table, header_map_name, header_map_name_len, SIZE_MAX  // Don't exclude any column
+    );
+    if (uniqueness_status != TEXT_CSV_OK) {
+        return uniqueness_status;
     }
 
     *header_value_out = header_value;
