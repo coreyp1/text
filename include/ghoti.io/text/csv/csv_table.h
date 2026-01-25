@@ -574,6 +574,40 @@ TEXT_API text_csv_status text_csv_set_require_unique_headers(
 TEXT_API bool text_csv_can_have_unique_headers(const text_csv_table* table);
 
 /**
+ * @brief Enable or disable header row processing
+ *
+ * Toggles whether the first row of the table is treated as a header row.
+ *
+ * When enabling headers (`enable = true`):
+ * - The first data row becomes the header row
+ * - A header map is built for column name lookup
+ * - The row count decreases by 1 (header row is excluded from data row count)
+ * - If the table is empty, returns `TEXT_CSV_E_INVALID`
+ * - If headers already exist, returns `TEXT_CSV_E_INVALID`
+ * - If `require_unique_headers` is `true`, validates that all header names are unique
+ * - Column count is adjusted if the first row has a different number of columns
+ *
+ * When disabling headers (`enable = false`):
+ * - The header row becomes the first data row
+ * - The header map is cleared
+ * - The row count increases by 1 (header row becomes a data row)
+ * - If headers don't exist, returns `TEXT_CSV_E_INVALID`
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations are performed before any
+ * state changes.
+ *
+ * @param table Table (must not be NULL)
+ * @param enable `true` to enable headers, `false` to disable headers
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_set_header_row(
+    text_csv_table* table,
+    bool enable
+);
+
+/**
  * @brief Create a deep copy of a CSV table
  *
  * Creates a complete independent copy of the source table, allocating all

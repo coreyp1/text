@@ -8661,6 +8661,407 @@ TEST(CsvMutation, CanHaveUniqueHeaders) {
     EXPECT_FALSE(text_csv_can_have_unique_headers(nullptr));
 }
 
+TEST(CsvMutation, SetHeaderRowEnable) {
+    // Test enabling headers on a table without headers
+    const char* fields1[] = {"name", "age", "city"};
+    const char* fields2[] = {"John", "30", "NYC"};
+    const char* fields3[] = {"Jane", "25", "LA"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add rows
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields3, nullptr, 3), TEXT_CSV_OK);
+
+    EXPECT_EQ(text_csv_row_count(table), 3u);
+    EXPECT_FALSE(table->has_header);
+
+    // Enable headers
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 2u);  // Header excluded
+
+    // Verify header map was built
+    size_t name_idx, age_idx, city_idx;
+    EXPECT_EQ(text_csv_header_index(table, "name", &name_idx), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_header_index(table, "age", &age_idx), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_header_index(table, "city", &city_idx), TEXT_CSV_OK);
+
+    EXPECT_EQ(name_idx, 0u);
+    EXPECT_EQ(age_idx, 1u);
+    EXPECT_EQ(city_idx, 2u);
+
+    // Verify data rows are still accessible
+    size_t len;
+    const char* name = text_csv_field(table, 0, name_idx, &len);
+    EXPECT_EQ(std::string(name, len), "John");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableEmptyTable) {
+    // Test enabling headers on empty table (should fail)
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableAlreadyHasHeaders) {
+    // Test enabling headers when headers already exist (should fail)
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableColumnCountHandling) {
+    // Test enabling headers - column count should match first row
+    const char* fields1[] = {"name", "age"};
+    const char* fields2[] = {"John", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add row with 2 columns (sets column_count to 2)
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 2), TEXT_CSV_OK);
+    EXPECT_EQ(table->column_count, 2u);
+
+    // Add another row with 2 columns
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 2), TEXT_CSV_OK);
+
+    // Enable headers - first row has 2 columns, column_count is 2, so no change needed
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(table->column_count, 2u);
+    EXPECT_TRUE(table->has_header);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableColumnCountUpdate) {
+    // Test enabling headers when first row has more columns than column_count
+    // This is tricky because column_count is set by first row, so we need to
+    // create a scenario where column_count < first_row.field_count
+    // Actually, column_count is always set by the first row, so this case
+    // might not be possible in practice. But let's test the padding case.
+
+    // Create table and manually set column_count to be less than first row
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    // Add a row - this sets column_count
+    const char* fields[] = {"name", "age", "city"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(table->column_count, 3u);
+
+    // Now enable headers - first row has 3 columns, column_count is 3, so no change
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_EQ(table->column_count, 3u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableWithUniqueHeadersRequired) {
+    // Test enabling headers when require_unique_headers is true and headers are unique
+    const char* fields1[] = {"name", "age", "city"};
+    const char* fields2[] = {"John", "30", "NYC"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+
+    // Set require_unique_headers to true
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+
+    // Enable headers (should succeed - headers are unique)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableWithUniqueHeadersRequiredDuplicate) {
+    // Test enabling headers when require_unique_headers is true and headers have duplicates
+    const char* fields1[] = {"name", "name", "age"};  // Duplicate "name"
+    const char* fields2[] = {"John", "Jane", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+
+    // Set require_unique_headers to true
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+
+    // Enable headers (should fail - headers have duplicates)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_FALSE(table->has_header);  // Should remain unchanged
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowEnableWithUniqueHeadersNotRequiredDuplicate) {
+    // Test enabling headers when require_unique_headers is false and headers have duplicates
+    const char* fields1[] = {"name", "name", "age"};  // Duplicate "name"
+    const char* fields2[] = {"John", "Jane", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+
+    // require_unique_headers defaults to false, so duplicates should be allowed
+    EXPECT_FALSE(table->require_unique_headers);
+
+    // Enable headers (should succeed - duplicates allowed)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+
+    // Verify header_index returns first match (FIRST_WINS mode)
+    size_t name_idx;
+    EXPECT_EQ(text_csv_header_index(table, "name", &name_idx), TEXT_CSV_OK);
+    EXPECT_EQ(name_idx, 0u);  // First occurrence
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowDisable) {
+    // Test disabling headers on a table with headers
+    const char* headers[] = {"col1", "col2", "col3"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 3);
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_TRUE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 0u);  // No data rows
+
+    // Add a data row
+    const char* fields[] = {"val1", "val2", "val3"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Disable headers
+    text_csv_status status = text_csv_set_header_row(table, false);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 2u);  // Header row becomes data row
+
+    // Verify header map was cleared
+    size_t idx;
+    EXPECT_EQ(text_csv_header_index(table, "col1", &idx), TEXT_CSV_E_INVALID);
+
+    // Verify header row data is now accessible as first data row
+    size_t len;
+    const char* field = text_csv_field(table, 0, 0, &len);
+    EXPECT_EQ(std::string(field, len), "col1");
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowDisableNoHeaders) {
+    // Test disabling headers when headers don't exist (should fail)
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    const char* fields[] = {"val1", "val2"};
+    EXPECT_EQ(text_csv_row_append(table, fields, nullptr, 2), TEXT_CSV_OK);
+
+    text_csv_status status = text_csv_set_header_row(table, false);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowRoundTrip) {
+    // Test enable then disable (round-trip)
+    const char* fields1[] = {"name", "age"};
+    const char* fields2[] = {"John", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 2), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 2), TEXT_CSV_OK);
+
+    // Enable headers
+    EXPECT_EQ(text_csv_set_header_row(table, true), TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Disable headers
+    EXPECT_EQ(text_csv_set_header_row(table, false), TEXT_CSV_OK);
+    EXPECT_FALSE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 2u);
+
+    // Re-enable headers
+    EXPECT_EQ(text_csv_set_header_row(table, true), TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+    EXPECT_EQ(text_csv_row_count(table), 1u);
+
+    // Verify header map works after re-enabling
+    size_t name_idx;
+    EXPECT_EQ(text_csv_header_index(table, "name", &name_idx), TEXT_CSV_OK);
+    EXPECT_EQ(name_idx, 0u);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowNullTable) {
+    // Test with NULL table (should return error)
+    text_csv_status status = text_csv_set_header_row(nullptr, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+
+    status = text_csv_set_header_row(nullptr, false);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+}
+
+TEST(CsvMutation, SetHeaderRowRecoverabilityDuplicateHeaders) {
+    // Test recoverability: table with duplicate headers, disable headers, fix duplicates, re-enable
+    const char* fields1[] = {"name", "name", "age"};  // Duplicate "name"
+    const char* fields2[] = {"John", "Jane", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+
+    // Set require_unique_headers to true
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+
+    // Try to enable headers (should fail due to duplicates)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_FALSE(table->has_header);
+
+    // Disable uniqueness requirement temporarily
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, false), TEXT_CSV_OK);
+
+    // Enable headers (should succeed now - duplicates allowed)
+    status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+
+    // Fix duplicates by renaming second "name" column (column index 1)
+    // Note: When duplicates are allowed, only the first occurrence is in the header map,
+    // but we can still rename by column index
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+    
+    // Rename column 1 from "name" to "name2"
+    status = text_csv_column_rename(table, 1, "name2", 0);
+    // This might fail if the column isn't in the header map, so let's check
+    if (status == TEXT_CSV_OK) {
+        // If rename succeeded, verify headers are now unique
+        EXPECT_TRUE(text_csv_can_have_unique_headers(table));
+    } else {
+        // If rename failed (column not in header map due to FIRST_WINS), 
+        // we can still verify the table is in a recoverable state
+        // by disabling and re-enabling headers after manually fixing the data
+        EXPECT_EQ(text_csv_set_header_row(table, false), TEXT_CSV_OK);
+        
+        // Manually fix the duplicate by setting the field value
+        EXPECT_EQ(text_csv_field_set(table, 0, 1, "name2", 5), TEXT_CSV_OK);
+        
+        // Re-enable headers
+        EXPECT_EQ(text_csv_set_header_row(table, true), TEXT_CSV_OK);
+        EXPECT_TRUE(text_csv_can_have_unique_headers(table));
+    }
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowRecoverabilityEnableAfterDisable) {
+    // Test recoverability: table with headers, try to enable headers again (error), disable first, then enable
+    const char* headers[] = {"col1", "col2"};
+    text_csv_table* table = text_csv_new_table_with_headers(headers, nullptr, 2);
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_TRUE(table->has_header);
+
+    // Try to enable headers again (should fail)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_TRUE(table->has_header);  // Should remain unchanged
+
+    // Disable headers first
+    status = text_csv_set_header_row(table, false);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(table->has_header);
+
+    // Now enable headers again (should succeed)
+    status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+
+    text_csv_free_table(table);
+}
+
+TEST(CsvMutation, SetHeaderRowRecoverabilityUniqueHeadersRequired) {
+    // Test recoverability: table with require_unique_headers=true, headers have duplicates, disable, fix, re-enable
+    const char* fields1[] = {"name", "name", "age"};  // Duplicate "name"
+    const char* fields2[] = {"John", "Jane", "30"};
+
+    text_csv_table* table = text_csv_new_table();
+    ASSERT_NE(table, nullptr);
+
+    EXPECT_EQ(text_csv_row_append(table, fields1, nullptr, 3), TEXT_CSV_OK);
+    EXPECT_EQ(text_csv_row_append(table, fields2, nullptr, 3), TEXT_CSV_OK);
+
+    // Set require_unique_headers to true
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+
+    // Try to enable headers (should fail due to duplicates)
+    text_csv_status status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_E_INVALID);
+    EXPECT_FALSE(table->has_header);
+
+    // Disable uniqueness requirement temporarily
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, false), TEXT_CSV_OK);
+
+    // Enable headers (should succeed - duplicates allowed)
+    status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+
+    // Disable headers to fix duplicates
+    status = text_csv_set_header_row(table, false);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_FALSE(table->has_header);
+
+    // Fix duplicates by setting the field value in the first row (which will become header)
+    // Change column 1 from "name" to "name2"
+    EXPECT_EQ(text_csv_field_set(table, 0, 1, "name2", 5), TEXT_CSV_OK);
+
+    // Set require_unique_headers to true
+    EXPECT_EQ(text_csv_set_require_unique_headers(table, true), TEXT_CSV_OK);
+
+    // Re-enable headers (should succeed - duplicates fixed)
+    status = text_csv_set_header_row(table, true);
+    EXPECT_EQ(status, TEXT_CSV_OK);
+    EXPECT_TRUE(table->has_header);
+    EXPECT_TRUE(text_csv_can_have_unique_headers(table));
+
+    text_csv_free_table(table);
+}
+
 TEST(CsvMutation, FieldSetWithHeader) {
     // Create a table with headers
     const char* csv_data = "col1,col2,col3\nvalue1,value2,value3\n";

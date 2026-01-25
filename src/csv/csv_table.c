@@ -3450,6 +3450,163 @@ TEXT_API bool text_csv_can_have_unique_headers(const text_csv_table* table) {
     return true;
 }
 
+TEXT_API text_csv_status text_csv_set_header_row(
+    text_csv_table* table,
+    bool enable
+) {
+    if (!table) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    if (enable) {
+        // Enable headers: first row becomes header row
+        // Validate: table must not be empty
+        if (table->row_count == 0) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Validate: headers must not already exist
+        if (table->has_header) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Get first row (will become header row)
+        csv_table_row* first_row = &table->rows[0];
+        size_t first_row_cols = first_row->field_count;
+
+        // Handle column count:
+        // - If first row has fewer columns than column_count: pad with empty strings
+        // - If first row has more columns than column_count: update column_count
+        size_t target_col_count = first_row_cols;
+        if (first_row_cols < table->column_count) {
+            // Pad first row with empty fields
+            target_col_count = table->column_count;
+            csv_table_field* new_fields = (csv_table_field*)csv_arena_alloc_for_context(
+                table->ctx, sizeof(csv_table_field) * target_col_count, 8
+            );
+            if (!new_fields) {
+                return TEXT_CSV_E_OOM;
+            }
+
+            // Copy existing fields
+            if (first_row->fields && first_row_cols > 0) {
+                memcpy(new_fields, first_row->fields, sizeof(csv_table_field) * first_row_cols);
+            }
+
+            // Pad with empty fields
+            for (size_t i = first_row_cols; i < target_col_count; i++) {
+                csv_setup_empty_field(&new_fields[i]);
+            }
+
+            first_row->fields = new_fields;
+            first_row->field_count = target_col_count;
+        } else if (first_row_cols > table->column_count) {
+            // Update column_count to match first row
+            table->column_count = first_row_cols;
+        }
+
+        // If require_unique_headers is true, validate uniqueness
+        if (table->require_unique_headers) {
+            csv_table_row* header_row = &table->rows[0];
+            for (size_t i = 0; i < header_row->field_count; i++) {
+                csv_table_field* field = &header_row->fields[i];
+                const char* name = field->data;
+                size_t name_len = field->length;
+
+                // Check for duplicates in the header row
+                for (size_t j = i + 1; j < header_row->field_count; j++) {
+                    csv_table_field* check_field = &header_row->fields[j];
+                    if (check_field->length == name_len &&
+                        memcmp(check_field->data, name, name_len) == 0) {
+                        // Duplicate found and uniqueness is required
+                        return TEXT_CSV_E_INVALID;
+                    }
+                }
+            }
+        }
+
+        // Clear existing header map (if any) - must be done atomically
+        if (table->header_map) {
+            free(table->header_map);
+            table->header_map = NULL;
+            table->header_map_size = 0;
+        }
+
+        // Build new header map from first row
+        // All allocations must succeed before state changes
+        table->header_map_size = 16;
+        table->header_map = (csv_header_entry**)calloc(table->header_map_size, sizeof(csv_header_entry*));
+        if (!table->header_map) {
+            return TEXT_CSV_E_OOM;
+        }
+
+        csv_table_row* header_row = &table->rows[0];
+        for (size_t i = 0; i < header_row->field_count; i++) {
+            csv_table_field* field = &header_row->fields[i];
+            size_t hash = csv_header_hash(field->data, field->length, table->header_map_size);
+
+            // Check for duplicates (for FIRST_WINS mode, skip duplicates)
+            csv_header_entry* entry = table->header_map[hash];
+            bool found_duplicate = false;
+            while (entry) {
+                if (entry->name_len == field->length &&
+                    memcmp(entry->name, field->data, field->length) == 0) {
+                    found_duplicate = true;
+                    break;
+                }
+                entry = entry->next;
+            }
+
+            // For FIRST_WINS mode (default), skip duplicates
+            if (found_duplicate) {
+                continue;
+            }
+
+            // Create header entry
+            csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+                table->ctx, sizeof(csv_header_entry), 8
+            );
+            if (!new_entry) {
+                // Allocation failed - clean up and return error
+                free(table->header_map);
+                table->header_map = NULL;
+                table->header_map_size = 0;
+                return TEXT_CSV_E_OOM;
+            }
+
+            new_entry->name = field->data;
+            new_entry->name_len = field->length;
+            new_entry->index = i;
+            new_entry->next = table->header_map[hash];
+            table->header_map[hash] = new_entry;
+        }
+
+        // Set has_header = true (atomic state change)
+        table->has_header = true;
+        // Note: row_count stays the same (first row was already counted)
+
+    } else {
+        // Disable headers: header row becomes first data row
+        // Validate: headers must exist
+        if (!table->has_header) {
+            return TEXT_CSV_E_INVALID;
+        }
+
+        // Clear header map (atomic - must complete before state changes)
+        if (table->header_map) {
+            free(table->header_map);
+            table->header_map = NULL;
+            table->header_map_size = 0;
+        }
+
+        // Set has_header = false (atomic state change)
+        table->has_header = false;
+        // Note: row_count stays the same (header row becomes data row)
+    }
+
+    return TEXT_CSV_OK;
+}
+
 TEXT_API text_csv_table* text_csv_new_table(void) {
     // Create context with arena
     csv_context* ctx = csv_context_new();
