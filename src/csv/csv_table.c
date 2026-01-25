@@ -2199,14 +2199,54 @@ TEXT_API text_csv_status text_csv_table_clear(text_csv_table* table) {
     return TEXT_CSV_OK;
 }
 
-TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
-    // Validate inputs
-    if (!source) {
-        return NULL;
+// ============================================================================
+// Clone helper structures and functions
+// ============================================================================
+
+/**
+ * @brief Structure to hold pre-allocated clone structures
+ */
+typedef struct {
+    csv_context* new_ctx;               ///< New context with arena
+    text_csv_table* new_table;          ///< New table structure
+    csv_table_row* new_rows;            ///< New rows array
+    csv_table_field** new_field_arrays; ///< Array of field array pointers
+    char*** new_field_data_ptrs;        ///< Array of field data pointer arrays
+} csv_clone_structures;
+
+/**
+ * @brief Structure to hold pre-allocated header map structures
+ */
+typedef struct {
+    csv_header_entry** new_header_map; ///< New header map array
+    csv_header_entry** new_entry_ptrs; ///< Temporary array to store all new entries
+    char** new_name_ptrs;               ///< Temporary array to store all name strings
+    size_t total_header_entries;       ///< Total number of header entries
+} csv_clone_header_map;
+
+/**
+ * @brief Calculate total size needed for cloning a table
+ *
+ * Calculates the total size needed to clone a table, including:
+ * - Table structure
+ * - Rows array
+ * - Field arrays for all rows
+ * - Field data for ALL non-empty fields (including in-situ ones)
+ * - Header map entries and names (including in-situ ones)
+ * - Overhead for alignment and safety margin
+ *
+ * @param source Source table to clone (must not be NULL)
+ * @param total_size_out Output parameter for calculated size
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_OOM on overflow
+ */
+static text_csv_status csv_clone_calculate_size(
+    const text_csv_table* source,
+    size_t* total_size_out
+) {
+    if (!source || !total_size_out) {
+        return TEXT_CSV_E_INVALID;
     }
 
-    // Calculate total size needed for clone
-    // This allows us to pre-allocate a single block if possible
     size_t total_size = 0;
 
     // Table structure (aligned to 8 bytes)
@@ -2218,7 +2258,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
     size_t rows_array_size = sizeof(csv_table_row) * source->row_capacity;
     size_t rows_array_aligned = (rows_array_size + 7) & ~7;  // Align to 8
     if (total_size > SIZE_MAX - rows_array_aligned) {
-        return NULL;
+        return TEXT_CSV_E_OOM;
     }
     total_size += rows_array_aligned;
 
@@ -2234,7 +2274,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
         size_t field_array_size = sizeof(csv_table_field) * old_row->field_count;
         size_t field_array_aligned = (field_array_size + 7) & ~7;
         if (total_size > SIZE_MAX - field_array_aligned) {
-            return NULL;
+            return TEXT_CSV_E_OOM;
         }
         total_size += field_array_aligned;
 
@@ -2251,7 +2291,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
             // Note: We copy in-situ fields too (unlike compact which preserves them)
             size_t field_data_size = old_field->length + 1;
             if (total_size > SIZE_MAX - field_data_size) {
-                return NULL;
+                return TEXT_CSV_E_OOM;
             }
             total_size += field_data_size;
         }
@@ -2266,7 +2306,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                 size_t entry_size = sizeof(csv_header_entry);
                 size_t entry_aligned = (entry_size + 7) & ~7;
                 if (total_size > SIZE_MAX - entry_aligned) {
-                    return NULL;
+                    return TEXT_CSV_E_OOM;
                 }
                 total_size += entry_aligned;
 
@@ -2274,7 +2314,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                 if (entry->name_len > 0) {
                     size_t name_size = entry->name_len + 1;
                     if (total_size > SIZE_MAX - name_size) {
-                        return NULL;
+                        return TEXT_CSV_E_OOM;
                     }
                     total_size += name_size;
                 }
@@ -2290,21 +2330,53 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
         overhead = 1024;
     }
     if (total_size > SIZE_MAX - overhead) {
-        return NULL;
+        return TEXT_CSV_E_OOM;
     }
     total_size += overhead;
 
-    // Create new context/arena with calculated block size
-    csv_context* new_ctx = csv_context_new_with_block_size(total_size);
-    if (!new_ctx) {
-        return NULL;
+    *total_size_out = total_size;
+    return TEXT_CSV_OK;
+}
+
+/**
+ * @brief Pre-allocate all structures in new arena for cloning
+ *
+ * Pre-allocates table structure, rows array, field arrays, field data blocks,
+ * and header map structures in the new arena. All allocations happen before
+ * any state changes to preserve atomicity.
+ *
+ * @param source Source table to clone (must not be NULL)
+ * @param new_ctx New context with arena (must not be NULL)
+ * @param structures_out Output structure with pre-allocated pointers
+ * @param header_map_out Output structure with pre-allocated header map pointers
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+static text_csv_status csv_clone_preallocate_structures(
+    const text_csv_table* source,
+    csv_context* new_ctx,
+    csv_clone_structures* structures_out,
+    csv_clone_header_map* header_map_out
+) {
+    if (!source || !new_ctx || !structures_out || !header_map_out) {
+        return TEXT_CSV_E_INVALID;
     }
 
-    // Allocate new table structure (not in arena, use malloc)
-    text_csv_table* new_table = (text_csv_table*)malloc(sizeof(text_csv_table));
+    // Initialize output structures
+    structures_out->new_ctx = new_ctx;
+    structures_out->new_table = NULL;
+    structures_out->new_rows = NULL;
+    structures_out->new_field_arrays = NULL;
+    structures_out->new_field_data_ptrs = NULL;
+
+    header_map_out->new_header_map = NULL;
+    header_map_out->new_entry_ptrs = NULL;
+    header_map_out->new_name_ptrs = NULL;
+    header_map_out->total_header_entries = 0;
+
+    // Allocate new table structure (not in arena, use calloc to ensure zero-initialization)
+    text_csv_table* new_table = (text_csv_table*)calloc(1, sizeof(text_csv_table));
     if (!new_table) {
-        csv_context_free(new_ctx);
-        return NULL;
+        return TEXT_CSV_E_OOM;
     }
 
     // Initialize table structure
@@ -2315,6 +2387,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
     new_table->has_header = source->has_header;
     new_table->header_map = NULL;
     new_table->header_map_size = source->header_map_size;
+    structures_out->new_table = new_table;
 
     // Allocate new rows array in new arena
     csv_table_row* new_rows = (csv_table_row*)csv_arena_alloc_for_context(
@@ -2322,29 +2395,30 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
     );
     if (!new_rows) {
         free(new_table);
-        csv_context_free(new_ctx);
-        return NULL;
+        return TEXT_CSV_E_OOM;
     }
 
     // Initialize new rows array (zero out unused entries)
     memset(new_rows, 0, sizeof(csv_table_row) * source->row_capacity);
     new_table->rows = new_rows;
+    structures_out->new_rows = new_rows;
 
     // Pre-allocate all field arrays and field data
     // Store pointers in temporary arrays
     csv_table_field** new_field_arrays = NULL;
     char*** new_field_data_ptrs = NULL;  // Array of arrays of char* pointers
     if (source->row_count > 0) {
-        new_field_arrays = (csv_table_field**)malloc(sizeof(csv_table_field*) * source->row_count);
-        new_field_data_ptrs = (char***)malloc(sizeof(char**) * source->row_count);
+        new_field_arrays = (csv_table_field**)calloc(source->row_count, sizeof(csv_table_field*));
+        new_field_data_ptrs = (char***)calloc(source->row_count, sizeof(char**));
         if (!new_field_arrays || !new_field_data_ptrs) {
             free(new_field_arrays);
             free(new_field_data_ptrs);
             free(new_table);
-            csv_context_free(new_ctx);
-            return NULL;
+            return TEXT_CSV_E_OOM;
         }
     }
+    structures_out->new_field_arrays = new_field_arrays;
+    structures_out->new_field_data_ptrs = new_field_data_ptrs;
 
     // Pre-allocate all field arrays and field data blocks
     for (size_t row_idx = 0; row_idx < source->row_count; row_idx++) {
@@ -2369,8 +2443,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
             free(new_field_arrays);
             free(new_field_data_ptrs);
             free(new_table);
-            csv_context_free(new_ctx);
-            return NULL;
+            return TEXT_CSV_E_OOM;
         }
         new_field_arrays[row_idx] = new_fields;
 
@@ -2385,7 +2458,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
         }
 
         if (non_empty_count > 0) {
-            field_data_ptrs = (char**)malloc(sizeof(char*) * old_row->field_count);
+            field_data_ptrs = (char**)calloc(old_row->field_count, sizeof(char*));
             if (!field_data_ptrs) {
                 for (size_t j = 0; j < row_idx; j++) {
                     free(new_field_data_ptrs[j]);
@@ -2393,8 +2466,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                 free(new_field_arrays);
                 free(new_field_data_ptrs);
                 free(new_table);
-                csv_context_free(new_ctx);
-                return NULL;
+                return TEXT_CSV_E_OOM;
             }
 
             // Pre-allocate all field data blocks
@@ -2415,8 +2487,7 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                     free(new_field_arrays);
                     free(new_field_data_ptrs);
                     free(new_table);
-                    csv_context_free(new_ctx);
-                    return NULL;
+                    return TEXT_CSV_E_OOM;
                 }
 
                 char* field_data = (char*)csv_arena_alloc_for_context(
@@ -2431,14 +2502,158 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                     free(new_field_arrays);
                     free(new_field_data_ptrs);
                     free(new_table);
-                    csv_context_free(new_ctx);
-                    return NULL;
+                    return TEXT_CSV_E_OOM;
                 }
                 field_data_ptrs[i] = field_data;
             }
         }
         new_field_data_ptrs[row_idx] = field_data_ptrs;
     }
+
+    // Pre-allocate Header Map Structures
+    if (source->has_header && source->header_map) {
+        // Count total header map entries
+        size_t total_header_entries = 0;
+        for (size_t i = 0; i < source->header_map_size; i++) {
+            csv_header_entry* entry = source->header_map[i];
+            while (entry) {
+                total_header_entries++;
+                entry = entry->next;
+            }
+        }
+        header_map_out->total_header_entries = total_header_entries;
+
+        // Allocate new header map array (malloc'd, not in arena)
+        csv_header_entry** new_header_map = (csv_header_entry**)calloc(
+            source->header_map_size, sizeof(csv_header_entry*)
+        );
+        if (!new_header_map) {
+            // Free temporary arrays
+            for (size_t j = 0; j < source->row_count; j++) {
+                free(new_field_data_ptrs[j]);
+            }
+            free(new_field_arrays);
+            free(new_field_data_ptrs);
+            free(new_table);
+            return TEXT_CSV_E_OOM;
+        }
+        header_map_out->new_header_map = new_header_map;
+
+        if (total_header_entries > 0) {
+            csv_header_entry** new_entry_ptrs = (csv_header_entry**)malloc(sizeof(csv_header_entry*) * total_header_entries);
+            char** new_name_ptrs = (char**)malloc(sizeof(char*) * total_header_entries);
+            if (!new_entry_ptrs || !new_name_ptrs) {
+                free(new_header_map);
+                free(new_entry_ptrs);
+                free(new_name_ptrs);
+                // Free temporary arrays
+                for (size_t j = 0; j < source->row_count; j++) {
+                    free(new_field_data_ptrs[j]);
+                }
+                free(new_field_arrays);
+                free(new_field_data_ptrs);
+                free(new_table);
+                return TEXT_CSV_E_OOM;
+            }
+            header_map_out->new_entry_ptrs = new_entry_ptrs;
+            header_map_out->new_name_ptrs = new_name_ptrs;
+
+            // Pre-allocate all header map entries and name strings
+            size_t entry_idx = 0;
+            for (size_t i = 0; i < source->header_map_size; i++) {
+                csv_header_entry* old_entry = source->header_map[i];
+
+                while (old_entry) {
+                    // Allocate new entry in new arena
+                    csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
+                        new_ctx, sizeof(csv_header_entry), 8
+                    );
+                    if (!new_entry) {
+                        // Free temporary arrays
+                        free(new_header_map);
+                        free(new_entry_ptrs);
+                        free(new_name_ptrs);
+                        for (size_t j = 0; j < source->row_count; j++) {
+                            free(new_field_data_ptrs[j]);
+                        }
+                        free(new_field_arrays);
+                        free(new_field_data_ptrs);
+                        free(new_table);
+                        return TEXT_CSV_E_OOM;
+                    }
+                    new_entry_ptrs[entry_idx] = new_entry;
+                    new_name_ptrs[entry_idx] = NULL;
+
+                    // Pre-allocate name string if needed
+                    if (old_entry->name_len == 0) {
+                        // Empty name - will use csv_empty_field_string
+                    } else {
+                        // Copy name to new arena (including in-situ names)
+                        // Check for overflow
+                        if (old_entry->name_len > SIZE_MAX - 1) {
+                            free(new_header_map);
+                            free(new_entry_ptrs);
+                            free(new_name_ptrs);
+                            for (size_t j = 0; j < source->row_count; j++) {
+                                free(new_field_data_ptrs[j]);
+                            }
+                            free(new_field_arrays);
+                            free(new_field_data_ptrs);
+                            free(new_table);
+                            return TEXT_CSV_E_OOM;
+                        }
+                        char* name_data = (char*)csv_arena_alloc_for_context(
+                            new_ctx, old_entry->name_len + 1, 1
+                        );
+                        if (!name_data) {
+                            free(new_header_map);
+                            free(new_entry_ptrs);
+                            free(new_name_ptrs);
+                            for (size_t j = 0; j < source->row_count; j++) {
+                                free(new_field_data_ptrs[j]);
+                            }
+                            free(new_field_arrays);
+                            free(new_field_data_ptrs);
+                            free(new_table);
+                            return TEXT_CSV_E_OOM;
+                        }
+                        new_name_ptrs[entry_idx] = name_data;
+                    }
+
+                    entry_idx++;
+                    old_entry = old_entry->next;
+                }
+            }
+        }
+    }
+
+    return TEXT_CSV_OK;
+}
+
+/**
+ * @brief Copy all data to pre-allocated structures for cloning
+ *
+ * Copies all row data, field data, and header map data to the pre-allocated
+ * structures. No allocations are performed - all memory is already allocated.
+ *
+ * @param source Source table to clone (must not be NULL)
+ * @param structures Pre-allocated structures (must not be NULL)
+ * @param header_map Pre-allocated header map structures (must not be NULL)
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+static text_csv_status csv_clone_copy_data(
+    const text_csv_table* source,
+    csv_clone_structures* structures,
+    csv_clone_header_map* header_map
+) {
+    if (!source || !structures || !header_map) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    text_csv_table* new_table = structures->new_table;
+    csv_table_row* new_rows = structures->new_rows;
+    csv_table_field** new_field_arrays = structures->new_field_arrays;
+    char*** new_field_data_ptrs = structures->new_field_data_ptrs;
 
     // Copy All Data (no allocations, just memory operations)
     for (size_t row_idx = 0; row_idx < source->row_count; row_idx++) {
@@ -2468,6 +2683,11 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
                 new_field->is_in_situ = false;
             } else {
                 // Copy field data to pre-allocated block (including in-situ fields)
+                // field_data_ptrs should always be allocated if there are any non-empty fields
+                if (!field_data_ptrs || !field_data_ptrs[i]) {
+                    // This should not happen if pre-allocation worked correctly
+                    return TEXT_CSV_E_INVALID;
+                }
                 char* field_data = field_data_ptrs[i];
                 memcpy(field_data, old_field->data, old_field->length);
                 field_data[old_field->length] = '\0';
@@ -2488,103 +2708,12 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
     free(new_field_arrays);
     free(new_field_data_ptrs);
 
-    // Pre-allocate Header Map Structures
-    csv_header_entry** new_header_map = NULL;
-    csv_header_entry** new_entry_ptrs = NULL;  // Temporary array to store all new entries
-    char** new_name_ptrs = NULL;  // Temporary array to store all name strings
-    size_t total_header_entries = 0;
-
-    if (source->has_header && source->header_map) {
-        // Count total header map entries
-        for (size_t i = 0; i < source->header_map_size; i++) {
-            csv_header_entry* entry = source->header_map[i];
-            while (entry) {
-                total_header_entries++;
-                entry = entry->next;
-            }
-        }
-
-        // Allocate new header map array (malloc'd, not in arena)
-        new_header_map = (csv_header_entry**)calloc(
-            source->header_map_size, sizeof(csv_header_entry*)
-        );
-        if (!new_header_map) {
-            free(new_table);
-            csv_context_free(new_ctx);
-            return NULL;
-        }
-
-        if (total_header_entries > 0) {
-            new_entry_ptrs = (csv_header_entry**)malloc(sizeof(csv_header_entry*) * total_header_entries);
-            new_name_ptrs = (char**)malloc(sizeof(char*) * total_header_entries);
-            if (!new_entry_ptrs || !new_name_ptrs) {
-                free(new_header_map);
-                free(new_entry_ptrs);
-                free(new_name_ptrs);
-                free(new_table);
-                csv_context_free(new_ctx);
-                return NULL;
-            }
-
-            // Pre-allocate all header map entries and name strings
-            size_t entry_idx = 0;
-            for (size_t i = 0; i < source->header_map_size; i++) {
-                csv_header_entry* old_entry = source->header_map[i];
-
-                while (old_entry) {
-                    // Allocate new entry in new arena
-                    csv_header_entry* new_entry = (csv_header_entry*)csv_arena_alloc_for_context(
-                        new_ctx, sizeof(csv_header_entry), 8
-                    );
-                    if (!new_entry) {
-                        // Free temporary arrays
-                        free(new_header_map);
-                        free(new_entry_ptrs);
-                        free(new_name_ptrs);
-                        free(new_table);
-                        csv_context_free(new_ctx);
-                        return NULL;
-                    }
-                    new_entry_ptrs[entry_idx] = new_entry;
-                    new_name_ptrs[entry_idx] = NULL;
-
-                    // Pre-allocate name string if needed
-                    if (old_entry->name_len == 0) {
-                        // Empty name - will use csv_empty_field_string
-                    } else {
-                        // Copy name to new arena (including in-situ names)
-                        // Check for overflow
-                        if (old_entry->name_len > SIZE_MAX - 1) {
-                            free(new_header_map);
-                            free(new_entry_ptrs);
-                            free(new_name_ptrs);
-                            free(new_table);
-                            csv_context_free(new_ctx);
-                            return NULL;
-                        }
-                        char* name_data = (char*)csv_arena_alloc_for_context(
-                            new_ctx, old_entry->name_len + 1, 1
-                        );
-                        if (!name_data) {
-                            free(new_header_map);
-                            free(new_entry_ptrs);
-                            free(new_name_ptrs);
-                            free(new_table);
-                            csv_context_free(new_ctx);
-                            return NULL;
-                        }
-                        new_name_ptrs[entry_idx] = name_data;
-                    }
-
-                    entry_idx++;
-                    old_entry = old_entry->next;
-                }
-            }
-        }
-    }
-
     // Copy Header Map Data
-    if (source->has_header && source->header_map && total_header_entries > 0) {
+    if (source->has_header && source->header_map && header_map->total_header_entries > 0) {
+        csv_header_entry** new_header_map = header_map->new_header_map;
+        csv_header_entry** new_entry_ptrs = header_map->new_entry_ptrs;
+        char** new_name_ptrs = header_map->new_name_ptrs;
+
         size_t entry_idx = 0;
         for (size_t i = 0; i < source->header_map_size; i++) {
             csv_header_entry* old_entry = source->header_map[i];
@@ -2628,17 +2757,62 @@ TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
         // Free temporary arrays
         free(new_entry_ptrs);
         free(new_name_ptrs);
-    }
 
-    // Set header map in new table
-    new_table->header_map = new_header_map;
+        // Set header map in new table
+        new_table->header_map = new_header_map;
+    }
 
     // Note: input_buffer is NOT copied - cloned table is independent
     // and doesn't reference the original input buffer
-    new_ctx->input_buffer = NULL;
-    new_ctx->input_buffer_len = 0;
+    structures->new_ctx->input_buffer = NULL;
+    structures->new_ctx->input_buffer_len = 0;
 
-    return new_table;
+    return TEXT_CSV_OK;
+}
+
+TEXT_API text_csv_table* text_csv_clone(const text_csv_table* source) {
+    // Validate inputs
+    if (!source) {
+        return NULL;
+    }
+
+    // Calculate total size needed for clone
+    size_t total_size = 0;
+    text_csv_status status = csv_clone_calculate_size(source, &total_size);
+    if (status != TEXT_CSV_OK) {
+        return NULL;
+    }
+
+    // Create new context/arena with calculated block size
+    csv_context* new_ctx = csv_context_new_with_block_size(total_size);
+    if (!new_ctx) {
+        return NULL;
+    }
+
+    // Pre-allocate all structures
+    csv_clone_structures structures;
+    csv_clone_header_map header_map;
+    status = csv_clone_preallocate_structures(source, new_ctx, &structures, &header_map);
+    if (status != TEXT_CSV_OK) {
+        // Cleanup: free table if allocated, then free context
+        if (structures.new_table) {
+            free(structures.new_table);
+        }
+        csv_context_free(new_ctx);
+        return NULL;
+    }
+
+    // Copy all data to pre-allocated structures
+    status = csv_clone_copy_data(source, &structures, &header_map);
+    if (status != TEXT_CSV_OK) {
+        // Cleanup: free table and context
+        free(structures.new_table);
+        csv_context_free(new_ctx);
+        return NULL;
+    }
+
+    // Return the cloned table
+    return structures.new_table;
 }
 
 /**
