@@ -1496,13 +1496,7 @@ TEXT_API text_csv_status text_csv_field_set(
     // Note: text_csv_field_set uses field_length parameter directly (not an array)
     size_t field_len;
     if (field_length == 0) {
-        if (field_data) {
-            // Null-terminated string
-            field_len = strlen(field_data);
-        } else {
-            // NULL field_data with field_length=0 means empty field
-            field_len = 0;
-        }
+        field_len = csv_calculate_field_length(field_data, NULL, 0);
     } else {
         field_len = field_length;
     }
@@ -3025,7 +3019,7 @@ static text_csv_status csv_determine_header_value(
         header_value = header_name;
         header_value_len = header_name_len;
         if (header_value_len == 0 && header_value) {
-            header_value_len = strlen(header_value);
+            header_value_len = csv_calculate_field_length(header_value, NULL, 0);
         }
         header_map_name = header_name;
         header_map_name_len = header_value_len;
@@ -3033,11 +3027,7 @@ static text_csv_status csv_determine_header_value(
     } else {
         // Use values[0] for both header field and header map entry
         header_value = values[0];
-        if (value_lengths && value_lengths[0] > 0) {
-            header_value_len = value_lengths[0];
-        } else if (header_value) {
-            header_value_len = strlen(header_value);
-        }
+        header_value_len = csv_calculate_field_length(header_value, value_lengths, 0);
         header_map_name = values[0];
         header_map_name_len = header_value_len;
         name_len = header_value_len;
@@ -3108,12 +3098,7 @@ static text_csv_status csv_preallocate_column_field_data(
             size_t value_idx = i;  // Direct mapping: array_idx == value_idx
 
             const char* value = values[value_idx];
-            size_t value_len = 0;
-            if (value_lengths && value_lengths[value_idx] > 0) {
-                value_len = value_lengths[value_idx];
-            } else if (value) {
-                value_len = strlen(value);
-            }
+            size_t value_len = csv_calculate_field_length(value, value_lengths, value_idx);
 
             if (value_len == 0) {
                 // Empty field - will use csv_empty_field_string
@@ -4119,7 +4104,7 @@ TEXT_API text_csv_status text_csv_column_rename(
     // Calculate new_name length if not provided
     size_t name_len = new_name_length;
     if (name_len == 0) {
-        name_len = strlen(new_name);
+        name_len = csv_calculate_field_length(new_name, NULL, 0);
     }
 
     // Calculate hash for new name (needed for later insertion)
@@ -4249,7 +4234,7 @@ TEXT_API text_csv_status text_csv_header_index(
         return TEXT_CSV_E_INVALID;
     }
 
-    size_t name_len = strlen(name);
+    size_t name_len = csv_calculate_field_length(name, NULL, 0);
     size_t hash = csv_header_hash(name, name_len, table->header_map_size);
 
     csv_header_entry* entry = table->header_map[hash];
@@ -4283,7 +4268,7 @@ TEXT_API text_csv_status text_csv_header_index_next(
         return TEXT_CSV_E_INVALID;
     }
 
-    size_t name_len = strlen(name);
+    size_t name_len = csv_calculate_field_length(name, NULL, 0);
     size_t hash = csv_header_hash(name, name_len, table->header_map_size);
 
     // Search through all entries in the hash bucket
