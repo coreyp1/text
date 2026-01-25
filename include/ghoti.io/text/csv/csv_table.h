@@ -435,6 +435,58 @@ TEXT_API text_csv_status text_csv_column_append(
 );
 
 /**
+ * @brief Append a new column to all rows in the table with initial values
+ *
+ * Adds a new column to the end of all rows in the table, initializing each
+ * field with the provided values. The number of values must exactly match
+ * the number of rows in the table.
+ *
+ * **Value Count Requirements**:
+ * - If the table has headers: value count must match `row_count + 1` (data rows + header row)
+ * - If the table has no headers: value count must match `row_count`
+ * - If the table is empty (`row_count == 0`), returns `TEXT_CSV_E_INVALID`
+ *
+ * **Header Handling**:
+ * - If the table has headers and `values` is provided:
+ *   - `values[0]` is used for both the header field value and the header map entry
+ *   - The `header_name` parameter is ignored (can be NULL)
+ * - If the table has headers and `values` is NULL (empty column):
+ *   - `header_name` is used for both the header field value and the header map entry
+ *   - `header_name` must not be NULL
+ * - If the table has no headers: `header_name` is ignored
+ *
+ * **Uniqueness Validation**:
+ * - If `require_unique_headers` is `true`, validates that the header value doesn't already exist
+ * - The check occurs before any allocations or state changes
+ * - If a duplicate is found, returns `TEXT_CSV_E_INVALID` and leaves the table unchanged
+ *
+ * **Value Length Handling**:
+ * - If `value_lengths` is NULL, all values are treated as null-terminated strings (uses strlen())
+ * - If `value_lengths` is provided, individual entries with length 0 use strlen() fallback
+ *
+ * All value data is copied to the arena and does not reference external buffers.
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations are performed before any
+ * state changes, ensuring no partial state modifications.
+ *
+ * @param table Table (must not be NULL)
+ * @param header_name Header name for the new column (used when values is NULL and table has headers, ignored otherwise)
+ * @param header_name_len Length of header name, or 0 if null-terminated
+ * @param values Array of field values (NULL for empty column, must match row count if provided)
+ * @param value_lengths Array of value lengths, or NULL if all are null-terminated
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_append_with_values(
+    text_csv_table* table,
+    const char* header_name,
+    size_t header_name_len,
+    const char* const* values,
+    const size_t* value_lengths
+);
+
+/**
  * @brief Insert a new column at the specified index
  *
  * Inserts a new column at the specified index, shifting existing columns right.
@@ -468,6 +520,65 @@ TEXT_API text_csv_status text_csv_column_insert(
     size_t col_idx,
     const char* header_name,
     size_t header_name_len
+);
+
+/**
+ * @brief Insert a new column at the specified index with initial values
+ *
+ * Inserts a new column at the specified index with initial values for all rows,
+ * shifting existing columns right. The index can equal the column count, which
+ * is equivalent to appending.
+ *
+ * **Value Count Requirements**:
+ * - If the table has headers: value count must match `row_count + 1` (data rows + header row)
+ * - If the table has no headers: value count must match `row_count`
+ * - If the table is empty (`row_count == 0`), returns `TEXT_CSV_E_INVALID`
+ *
+ * **Header Handling**:
+ * - If the table has headers and `values` is provided:
+ *   - `values[0]` is used for both the header field value and the header map entry
+ *   - The `header_name` parameter is ignored (can be NULL)
+ * - If the table has headers and `values` is NULL (empty column):
+ *   - `header_name` is used for both the header field value and the header map entry
+ *   - `header_name` must not be NULL
+ * - If the table has no headers: `header_name` is ignored
+ *
+ * **Uniqueness Validation**:
+ * - If `require_unique_headers` is `true`, validates that the header value doesn't already exist
+ * - The check occurs before any allocations or state changes
+ * - If a duplicate is found, returns `TEXT_CSV_E_INVALID` and leaves the table unchanged
+ *
+ * **Value Length Handling**:
+ * - If `value_lengths` is NULL, all values are treated as null-terminated strings (uses strlen())
+ * - If `value_lengths` is provided, individual entries with length 0 use strlen() fallback
+ *
+ * All value data is copied to the arena and does not reference external buffers.
+ *
+ * When headers are present:
+ * - The header field is inserted in the header row at the specified index
+ * - All header map entries with index >= col_idx are reindexed (incremented by 1)
+ * - A new header map entry is added with index = col_idx
+ *
+ * **Atomic Operation**: This function is atomic - either the entire operation
+ * succeeds and the table remains in a consistent state, or it fails and the
+ * table remains unchanged. All memory allocations are performed before any
+ * state changes, ensuring no partial state modifications.
+ *
+ * @param table Table (must not be NULL)
+ * @param col_idx Column index where to insert (0-based, must be <= column count)
+ * @param header_name Header name for the new column (used when values is NULL and table has headers, ignored otherwise)
+ * @param header_name_len Length of header name, or 0 if null-terminated
+ * @param values Array of field values (NULL for empty column, must match row count if provided)
+ * @param value_lengths Array of value lengths, or NULL if all are null-terminated
+ * @return TEXT_CSV_OK on success, error code on failure
+ */
+TEXT_API text_csv_status text_csv_column_insert_with_values(
+    text_csv_table* table,
+    size_t col_idx,
+    const char* header_name,
+    size_t header_name_len,
+    const char* const* values,
+    const size_t* value_lengths
 );
 
 /**
