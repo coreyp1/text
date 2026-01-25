@@ -86,7 +86,7 @@ The dialect defines the exact format rules for parsing and writing CSV:
 - **`treat_first_row_as_header`**: Treat first row as header — **Default: `false`**
 - **`header_dup_mode`**: Duplicate column name handling:
   - `TEXT_CSV_DUPCOL_ERROR`: Fail parse on duplicate column name
-  - `TEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence — **Default**
+  - `TEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence — **Default** (duplicates allowed, first match returned)
   - `TEXT_CSV_DUPCOL_LAST_WINS`: Use last occurrence
   - `TEXT_CSV_DUPCOL_COLLECT`: Store all indices for duplicate columns
 
@@ -155,8 +155,17 @@ The DOM provides accessors for CSV data:
 
 When header processing is enabled:
 
-- **Header lookup**: `text_csv_header_index()` — get column index by header name
+- **Header lookup**: `text_csv_header_index()` — get column index by header name (returns first match for duplicate headers)
+- **Header iteration**: `text_csv_header_index_next()` — get next column index for a header name after a given index (for iterating through duplicate headers)
+- **Header uniqueness check**: `text_csv_can_have_unique_headers()` — check if table has headers and all header names are unique
+- **Require unique headers**: `text_csv_set_require_unique_headers()` — enable/disable uniqueness requirement for mutation operations
+- **Toggle header row**: `text_csv_set_header_row()` — enable or disable header row processing after parsing
 - Header row is excluded from row count but accessible via adjusted indices
+
+**Default Behavior:**
+- By default, duplicate header names are **allowed** during parsing (`header_dup_mode` defaults to `TEXT_CSV_DUPCOL_FIRST_WINS`)
+- By default, mutation operations (column append, insert, rename) **allow** duplicate header names (`require_unique_headers` defaults to `false`)
+- To enforce uniqueness, set `require_unique_headers` to `true` or use `TEXT_CSV_DUPCOL_ERROR` mode during parsing
 
 ### 7.3 Table Mutation Operations
 
@@ -228,12 +237,33 @@ text_csv_column_append(table, "Country", 0);  // Add "Country" column (null-term
 
 Adds a new column to the end of all rows. If the table has headers, the `header_name` parameter is required. All existing rows get an empty field added at the end.
 
+**Append Column with Initial Values:**
+```c
+const char* values[] = {"Country", "USA", "Canada", "Mexico"};  // Header + 3 data rows
+text_csv_column_append_with_values(table, NULL, 0, values, NULL);
+```
+
+Adds a new column to the end of all rows with initial values for each row. The number of values must exactly match the number of rows:
+- If the table has headers: value count must match `row_count + 1` (header row + data rows)
+- If the table has no headers: value count must match `row_count`
+- If `values` is NULL, creates an empty column (uses `header_name` for header if table has headers)
+
+When the table has headers and `values` is provided, `values[0]` is used for both the header field value and the header map entry. The `header_name` parameter is ignored in this case.
+
 **Insert Column:**
 ```c
 text_csv_column_insert(table, 1, "MiddleName", 0);  // Insert at index 1
 ```
 
 Inserts a new column at the specified index, shifting existing columns right. The index can equal the column count, which is equivalent to appending. When headers are present, all header map entries after the insertion point are automatically reindexed.
+
+**Insert Column with Initial Values:**
+```c
+const char* values[] = {"MiddleName", "John", "Jane", "Bob"};  // Header + 3 data rows
+text_csv_column_insert_with_values(table, 1, NULL, 0, values, NULL);  // Insert at index 1
+```
+
+Inserts a new column at the specified index with initial values for each row. Same value count requirements as `text_csv_column_append_with_values()`. The index can equal the column count, which is equivalent to appending.
 
 **Remove Column:**
 ```c
@@ -247,7 +277,7 @@ Removes the column at the specified index from all rows, shifting remaining colu
 text_csv_column_rename(table, 0, "FullName", 0);  // Rename first column
 ```
 
-Renames a column header. This function only works if the table has headers. The new header name must not duplicate an existing header name.
+Renames a column header. This function only works if the table has headers. By default, duplicate header names are allowed. If `require_unique_headers` is `true`, the new header name must not duplicate an existing header name.
 
 #### 7.3.4 Field Operations
 
@@ -258,7 +288,55 @@ text_csv_field_set(table, 0, 1, "31", 0);  // Set row 0, column 1 to "31"
 
 Sets the value of a field at specified row and column indices. The field data is copied to the arena. If the field was previously in-situ (referencing the input buffer), it will be copied to the arena. If `field_length` is 0 and `field_data` is not NULL, it is assumed to be a null-terminated string.
 
-#### 7.3.5 Utility Operations
+#### 7.3.5 Header Management Operations
+
+**Set Header Row:**
+```c
+text_csv_set_header_row(table, true);   // Enable headers (first row becomes header)
+text_csv_set_header_row(table, false);  // Disable headers (header becomes first data row)
+```
+
+Enables or disables header row processing after parsing. When enabling headers:
+- The first data row becomes the header row
+- A header map is built for column name lookup
+- If `require_unique_headers` is `true`, validates that all header names are unique
+- Column count is adjusted if the first row has a different number of columns
+
+When disabling headers:
+- The header row becomes the first data row
+- The header map is cleared
+- Row count increases by 1 (header row becomes a data row)
+
+**Set Require Unique Headers:**
+```c
+text_csv_set_require_unique_headers(table, true);   // Enforce uniqueness
+text_csv_set_require_unique_headers(table, false);  // Allow duplicates (default)
+```
+
+Controls whether mutation operations (column append, insert, rename) enforce uniqueness of header names. When set to `true`, these operations will fail if they would create duplicate header names. This flag only affects mutation operations; parsing behavior is controlled by `header_dup_mode` in parse options.
+
+**Check Unique Headers:**
+```c
+bool can_have_unique = text_csv_can_have_unique_headers(table);
+```
+
+Returns `true` if the table has headers and all header names are currently unique. Returns `false` if the table has no headers or contains duplicate header names. Useful for checking if a table is in a state where unique headers can be enforced.
+
+**Iterate Through Duplicate Headers:**
+```c
+size_t idx;
+if (text_csv_header_index(table, "Name", &idx) == TEXT_CSV_OK) {
+    // Process first match
+    do {
+        // Process column at idx
+        // ...
+    } while (text_csv_header_index_next(table, "Name", idx, &idx) == TEXT_CSV_OK);
+}
+```
+
+Iterates through all columns with the same header name. First call `text_csv_header_index()` to get the first match, then repeatedly call `text_csv_header_index_next()` until it returns `TEXT_CSV_E_INVALID` (no more matches).
+
+#### 7.3.6 Utility Operations
 
 **Clone Table:**
 ```c
@@ -274,7 +352,7 @@ text_csv_table_compact(table);
 
 Moves all current table data to a new arena and frees the old arena. This releases memory from old allocations that may have been left behind due to repeated modifications. This function is automatically called by `text_csv_table_clear()`, but can also be called independently.
 
-#### 7.3.6 Performance Characteristics
+#### 7.3.7 Performance Characteristics
 
 **Row Operations:**
 - **Append**: O(1) amortized (O(n) when capacity grows)

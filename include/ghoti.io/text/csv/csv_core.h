@@ -155,6 +155,7 @@ typedef struct {
  * - Doubled quote escaping
  * - Standard newline handling
  * - Strict mode (no extensions)
+ * - Duplicate header names allowed by default (header_dup_mode = FIRST_WINS)
  *
  * @return Initialized dialect structure
  */
