@@ -285,6 +285,48 @@ static text_csv_status csv_preallocate_column_field_data(
 );
 
 /**
+ * @brief Temporary arrays structure for column operations
+ *
+ * Holds all temporary arrays allocated during column operations.
+ * These arrays are allocated with malloc() and must be freed when done.
+ *
+ * @note See csv_internal.h "Memory Management Design Notes" section for
+ *       detailed explanation of why temporary arrays use malloc() instead
+ *       of arena allocation.
+ */
+typedef struct {
+    csv_table_field** new_field_arrays;  ///< Array of pointers to new field arrays
+    size_t* old_field_counts;            ///< Array of old field counts per row
+    char** field_data_array;            ///< Array of field data pointers (from csv_preallocate_column_field_data)
+    size_t* field_data_lengths;         ///< Array of field data lengths (from csv_preallocate_column_field_data)
+} csv_column_op_temp_arrays;
+
+/**
+ * @brief Allocate all temporary arrays for column operations
+ *
+ * Allocates all temporary arrays needed for column operations.
+ * If any allocation fails, all previously allocated arrays are freed.
+ *
+ * @param rows_to_modify Number of rows to modify
+ * @param has_field_data Whether field_data_array and field_data_lengths are needed
+ * @param temp_arrays_out Output parameter for allocated structure (must not be NULL)
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_OOM on allocation failure
+ */
+static text_csv_status csv_column_op_alloc_temp_arrays(
+    size_t rows_to_modify,
+    csv_column_op_temp_arrays* temp_arrays_out
+);
+
+/**
+ * @brief Clean up all temporary arrays for column operations
+ *
+ * Safely frees all temporary arrays. Safe to call with partially allocated structure.
+ *
+ * @param temp_arrays Temporary arrays structure to clean up (can be NULL)
+ */
+static void csv_column_op_cleanup_temp_arrays(csv_column_op_temp_arrays* temp_arrays);
+
+/**
  * @brief Allocate and copy a single field to the arena
  *
  * Allocates memory from the arena and copies the field data.
@@ -3167,6 +3209,98 @@ static text_csv_status csv_preallocate_column_field_data(
 }
 
 /**
+ * @brief Allocate all temporary arrays for column operations
+ *
+ * Allocates all temporary arrays needed for column operations.
+ * If any allocation fails, all previously allocated arrays are freed.
+ * Note: field_data_array and field_data_lengths are allocated separately
+ * by csv_preallocate_column_field_data and should be set in temp_arrays
+ * after allocation.
+ *
+ * @param rows_to_modify Number of rows to modify
+ * @param temp_arrays_out Output parameter for allocated structure (must not be NULL)
+ * @return TEXT_CSV_OK on success, TEXT_CSV_E_OOM on allocation failure
+ */
+static text_csv_status csv_column_op_alloc_temp_arrays(
+    size_t rows_to_modify,
+    csv_column_op_temp_arrays* temp_arrays_out
+) {
+    if (!temp_arrays_out) {
+        return TEXT_CSV_E_INVALID;
+    }
+
+    // Initialize all pointers to NULL
+    temp_arrays_out->new_field_arrays = NULL;
+    temp_arrays_out->old_field_counts = NULL;
+    temp_arrays_out->field_data_array = NULL;
+    temp_arrays_out->field_data_lengths = NULL;
+
+    // Allocate new_field_arrays and old_field_counts if we have rows to modify
+    if (rows_to_modify > 0) {
+        temp_arrays_out->new_field_arrays = (csv_table_field**)malloc(sizeof(csv_table_field*) * rows_to_modify);
+        temp_arrays_out->old_field_counts = (size_t*)malloc(sizeof(size_t) * rows_to_modify);
+        if (!temp_arrays_out->new_field_arrays || !temp_arrays_out->old_field_counts) {
+            csv_column_op_cleanup_temp_arrays(temp_arrays_out);
+            return TEXT_CSV_E_OOM;
+        }
+    }
+
+    // field_data_array and field_data_lengths are allocated by csv_preallocate_column_field_data
+    // if has_field_data is true, but we don't allocate them here - they're handled separately
+    // This function only allocates new_field_arrays and old_field_counts
+
+    return TEXT_CSV_OK;
+}
+
+/**
+ * @brief Clean up all temporary arrays for column operations
+ *
+ * Safely frees all temporary arrays. Safe to call with partially allocated structure.
+ *
+ * @param temp_arrays Temporary arrays structure to clean up (can be NULL)
+ */
+static void csv_column_op_cleanup_temp_arrays(csv_column_op_temp_arrays* temp_arrays) {
+    if (!temp_arrays) {
+        return;
+    }
+
+    free(temp_arrays->new_field_arrays);
+    temp_arrays->new_field_arrays = NULL;
+
+    free(temp_arrays->old_field_counts);
+    temp_arrays->old_field_counts = NULL;
+
+    free(temp_arrays->field_data_array);
+    temp_arrays->field_data_array = NULL;
+
+    free(temp_arrays->field_data_lengths);
+    temp_arrays->field_data_lengths = NULL;
+}
+
+/**
+ * @brief Clean up temporary arrays from individual pointers
+ *
+ * Helper function for callers that have individual pointers instead of a structure.
+ * Safely frees all provided pointers.
+ *
+ * @param new_field_arrays Array of field array pointers to free (can be NULL)
+ * @param old_field_counts Array of field counts to free (can be NULL)
+ * @param field_data_array Array of field data pointers to free (can be NULL)
+ * @param field_data_lengths Array of field data lengths to free (can be NULL)
+ */
+static void csv_column_op_cleanup_individual(
+    csv_table_field** new_field_arrays,
+    size_t* old_field_counts,
+    char** field_data_array,
+    size_t* field_data_lengths
+) {
+    free(new_field_arrays);
+    free(old_field_counts);
+    free(field_data_array);
+    free(field_data_lengths);
+}
+
+/**
  * @brief Internal helper for column append/insert operations
  *
  * Handles common logic for column operations including validation,
@@ -3281,17 +3415,13 @@ static text_csv_status csv_column_operation_internal(
     size_t rows_to_modify = csv_get_rows_to_modify(table);
 
     // Pre-allocate all new field arrays before updating any row structures
-    csv_table_field** new_field_arrays = NULL;
-    size_t* old_field_counts = NULL;
-    if (rows_to_modify > 0) {
-        new_field_arrays = (csv_table_field**)malloc(sizeof(csv_table_field*) * rows_to_modify);
-        old_field_counts = (size_t*)malloc(sizeof(size_t) * rows_to_modify);
-        if (!new_field_arrays || !old_field_counts) {
-            free(new_field_arrays);
-            free(old_field_counts);
-            return TEXT_CSV_E_OOM;
-        }
+    csv_column_op_temp_arrays temp_arrays;
+    text_csv_status alloc_status = csv_column_op_alloc_temp_arrays(rows_to_modify, &temp_arrays);
+    if (alloc_status != TEXT_CSV_OK) {
+        return alloc_status;
     }
+    csv_table_field** new_field_arrays = temp_arrays.new_field_arrays;
+    size_t* old_field_counts = temp_arrays.old_field_counts;
 
     // Pre-allocate field arrays for data rows
     size_t array_idx = 0;
@@ -3302,15 +3432,13 @@ static text_csv_status csv_column_operation_internal(
 
         // Check for overflow
         if (new_field_count < old_field_count) {
-            free(new_field_arrays);
-            free(old_field_counts);
+            csv_column_op_cleanup_temp_arrays(&temp_arrays);
             return TEXT_CSV_E_OOM;
         }
 
         // Validate col_idx is within bounds for insert operations
         if (!is_append && col_idx > old_field_count) {
-            free(new_field_arrays);
-            free(old_field_counts);
+            csv_column_op_cleanup_temp_arrays(&temp_arrays);
             return TEXT_CSV_E_INVALID;
         }
 
@@ -3322,8 +3450,7 @@ static text_csv_status csv_column_operation_internal(
         );
         if (!new_fields) {
             // Free temporary arrays
-            free(new_field_arrays);
-            free(old_field_counts);
+            csv_column_op_cleanup_temp_arrays(&temp_arrays);
             return TEXT_CSV_E_OOM;
         }
 
@@ -3340,10 +3467,12 @@ static text_csv_status csv_column_operation_internal(
         &field_data_array, &field_data_lengths
     );
     if (field_data_status != TEXT_CSV_OK) {
-        free(new_field_arrays);
-        free(old_field_counts);
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
         return field_data_status;
     }
+    // Store field_data arrays in temp_arrays for unified cleanup
+    temp_arrays.field_data_array = field_data_array;
+    temp_arrays.field_data_lengths = field_data_lengths;
 
     // Phase 4: Determine Header Field Data (if needed)
     char* header_field_data = NULL;
@@ -3353,10 +3482,7 @@ static text_csv_status csv_column_operation_internal(
         if (!is_append) {
             csv_table_row* header_row = &table->rows[0];
             if (col_idx > header_row->field_count) {
-                free(new_field_arrays);
-                free(old_field_counts);
-                free(field_data_array);
-                free(field_data_lengths);
+                csv_column_op_cleanup_temp_arrays(&temp_arrays);
                 return TEXT_CSV_E_INVALID;
             }
         }
@@ -3370,20 +3496,14 @@ static text_csv_status csv_column_operation_internal(
             } else {
                 // Allocate header name field data
                 if (name_len > SIZE_MAX - 1) {
-                    free(new_field_arrays);
-                    free(old_field_counts);
-                    free(field_data_array);
-                    free(field_data_lengths);
+                    csv_column_op_cleanup_temp_arrays(&temp_arrays);
                     return TEXT_CSV_E_OOM;
                 }
                 header_field_data = (char*)csv_arena_alloc_for_context(
                     table->ctx, name_len + 1, 1
                 );
                 if (!header_field_data) {
-                    free(new_field_arrays);
-                    free(old_field_counts);
-                    free(field_data_array);
-                    free(field_data_lengths);
+                    csv_column_op_cleanup_temp_arrays(&temp_arrays);
                     return TEXT_CSV_E_OOM;
                 }
                 memcpy(header_field_data, header_value, name_len);
@@ -3406,10 +3526,7 @@ static text_csv_status csv_column_operation_internal(
             table->ctx, sizeof(csv_header_entry), 8
         );
         if (!new_entry) {
-            free(new_field_arrays);
-            free(old_field_counts);
-            free(field_data_array);
-            free(field_data_lengths);
+            csv_column_op_cleanup_temp_arrays(&temp_arrays);
             return TEXT_CSV_E_OOM;
         }
     }
@@ -3493,8 +3610,7 @@ static text_csv_status csv_column_operation_internal(
             table->ctx, sizeof(csv_table_field) * new_header_field_count, 8
         );
         if (!new_header_fields) {
-            free(new_field_arrays);
-            free(old_field_counts);
+            csv_column_op_cleanup_temp_arrays(&temp_arrays);
             return TEXT_CSV_E_OOM;
         }
 
@@ -3592,8 +3708,7 @@ TEXT_API text_csv_status text_csv_column_append(
     // Only after all allocations and copies succeed:
     // 1. Update column_count
     if (table->column_count == SIZE_MAX) {
-        free(new_field_arrays);
-        free(old_field_counts);
+        csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
         return TEXT_CSV_E_OOM;
     }
     size_t new_column_index = table->column_count;
@@ -3628,8 +3743,7 @@ TEXT_API text_csv_status text_csv_column_append(
     }
 
     // Free temporary arrays
-    free(new_field_arrays);
-    free(old_field_counts);
+    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
     return TEXT_CSV_OK;
 }
@@ -3686,10 +3800,7 @@ TEXT_API text_csv_status text_csv_column_append_with_values(
     // Only after all allocations and copies succeed:
     // 1. Update column_count
     if (table->column_count == SIZE_MAX) {
-        free(new_field_arrays);
-        free(old_field_counts);
-        free(field_data_array);
-        free(field_data_lengths);
+        csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
         return TEXT_CSV_E_OOM;
     }
     size_t new_column_index = table->column_count;
@@ -3724,10 +3835,7 @@ TEXT_API text_csv_status text_csv_column_append_with_values(
     }
 
     // Free temporary arrays
-    free(new_field_arrays);
-    free(old_field_counts);
-    free(field_data_array);
-    free(field_data_lengths);
+    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
     return TEXT_CSV_OK;
 }
@@ -3794,10 +3902,7 @@ TEXT_API text_csv_status text_csv_column_insert_with_values(
     // Only after all allocations, copies, and reindexing succeed:
     // 1. Update column_count
     if (table->column_count == SIZE_MAX) {
-        free(new_field_arrays);
-        free(old_field_counts);
-        free(field_data_array);
-        free(field_data_lengths);
+        csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
         return TEXT_CSV_E_OOM;
     }
     table->column_count++;
@@ -3831,10 +3936,7 @@ TEXT_API text_csv_status text_csv_column_insert_with_values(
     }
 
     // Free temporary arrays
-    free(new_field_arrays);
-    free(old_field_counts);
-    free(field_data_array);
-    free(field_data_lengths);
+    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
     return TEXT_CSV_OK;
 }
@@ -3894,8 +3996,7 @@ TEXT_API text_csv_status text_csv_column_insert(
     // Only after all allocations, copies, and reindexing succeed:
     // 1. Update column_count
     if (table->column_count == SIZE_MAX) {
-        free(new_field_arrays);
-        free(old_field_counts);
+        csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
         return TEXT_CSV_E_OOM;
     }
     table->column_count++;
@@ -3929,8 +4030,7 @@ TEXT_API text_csv_status text_csv_column_insert(
     }
 
     // Free temporary arrays
-    free(new_field_arrays);
-    free(old_field_counts);
+    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
     return TEXT_CSV_OK;
 }

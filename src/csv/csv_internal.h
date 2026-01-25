@@ -266,6 +266,44 @@ TEXT_INTERNAL_API text_csv_status csv_error_generate_context_snippet(
 TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src);
 
 // ============================================================================
+// Memory Management Design Notes
+// ============================================================================
+
+/**
+ * @brief Memory Allocation Strategy for CSV Table Operations
+ *
+ * The CSV module uses two distinct memory allocation strategies:
+ *
+ * **Arena Allocation (csv_arena_alloc_for_context):**
+ * - Used for all permanent table data structures
+ * - Row structures (csv_table_row)
+ * - Field arrays (csv_table_field*)
+ * - Field data (string content)
+ * - Header map entries
+ * - All data that lives with the table for its entire lifetime
+ * - Freed in bulk when the table is destroyed
+ *
+ * **Malloc Allocation (malloc/free):**
+ * - Used for temporary organizational arrays during mutation operations
+ * - Temporary pointer arrays (e.g., csv_column_op_temp_arrays)
+ * - Arrays used to organize/prepare data before committing to the table
+ * - Freed immediately after each operation completes
+ * - Not part of the permanent table structure
+ *
+ * **Rationale:**
+ * Temporary arrays use malloc() instead of arena allocation because:
+ * 1. **Lifetime**: They are freed immediately after use, not when the table is destroyed
+ * 2. **Memory efficiency**: Keeping temporary data in the arena would waste memory
+ *    until table destruction
+ * 3. **Error handling**: Immediate cleanup on error paths is simpler and safer
+ * 4. **Separation of concerns**: Temporary organizational data is distinct from
+ *    permanent table structures
+ *
+ * This design maintains atomicity: all allocations (both arena and malloc) happen
+ * before any state updates, allowing clean rollback on failure.
+ */
+
+// ============================================================================
 // Table Structure Definitions (for internal use)
 // ============================================================================
 
