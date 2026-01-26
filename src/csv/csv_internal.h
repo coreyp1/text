@@ -412,6 +412,9 @@ struct GTEXT_CSV_Table {
   bool has_header;                ///< Whether header was processed
   bool require_unique_headers;    ///< Whether to enforce unique headers for
                                   ///< mutation operations (default: false)
+  bool allow_irregular_rows;      ///< Whether to allow irregular rows (rows
+                                  ///< with different field counts) in mutation
+                                  ///< operations (default: false)
 
   // Reverse mapping for O(1) lookup by column index
   csv_header_entry ** index_to_entry; ///< Array mapping column index to header
@@ -496,7 +499,7 @@ typedef struct {
  * @brief CSV writer state enumeration
  */
 typedef enum {
-  CSV_WRITER_STATE_INITIAL,  ///< Initial state (no record open)
+  CSV_WRITER_STATE_INITIAL,   ///< Initial state (no record open)
   CSV_WRITER_STATE_IN_RECORD, ///< Record is open (fields can be written)
   CSV_WRITER_STATE_FINISHED   ///< Writer has been finished (no more writes)
 } csv_writer_state;

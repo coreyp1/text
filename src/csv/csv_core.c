@@ -56,5 +56,6 @@ GTEXT_API GTEXT_CSV_Write_Options gtext_csv_write_options_default(void) {
   opts.quote_if_needed = true;
   opts.always_escape_quotes = true; // Default behavior depends on escape mode
   opts.trailing_newline = false;
+  opts.trim_trailing_empty_fields = false;
   return opts;
 }

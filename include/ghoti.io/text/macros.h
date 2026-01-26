@@ -106,7 +106,7 @@ typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
  *
  * This macro is used to export internal functions that are needed for testing
  * but should not be part of the public API. These functions are only exported
- * when TEXT_TEST_BUILD is defined during library compilation.
+ * when GTEXT_TEST_BUILD is defined during library compilation.
  *
  * Example:
  * @code

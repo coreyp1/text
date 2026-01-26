@@ -814,6 +814,37 @@ GTEXT_API void gtext_csv_writer_free(GTEXT_CSV_Writer * writer) {
 // Table Serialization Implementation
 // ============================================================================
 
+/**
+ * @brief Find the last non-empty field in a row
+ *
+ * Iterates backwards through fields to find the index of the last non-empty
+ * field. A field is considered empty if its length is 0.
+ *
+ * @param row Row structure (must not be NULL)
+ * @return Index of last non-empty field, or SIZE_MAX if all fields are empty
+ */
+static size_t csv_find_last_non_empty_field(const csv_table_row * row) {
+  if (!row || !row->fields || row->field_count == 0) {
+    return SIZE_MAX;
+  }
+
+  // Iterate backwards through fields
+  for (size_t i = row->field_count; i > 0; i--) {
+    size_t idx = i - 1; // Convert to 0-based index
+    const csv_table_field * field = &row->fields[idx];
+
+    // Field is non-empty if length > 0
+    // Note: field->data may be NULL for empty fields, but we check length
+    // which is the authoritative indicator
+    if (field->length > 0) {
+      return idx;
+    }
+  }
+
+  // All fields are empty
+  return SIZE_MAX;
+}
+
 GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
     const GTEXT_CSV_Write_Options * opts, const GTEXT_CSV_Table * table) {
   if (!sink || !sink->write || !table) {
@@ -869,8 +900,19 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
       return GTEXT_CSV_E_INVALID;
     }
 
-    // Write all fields in header row
-    for (size_t col = 0; col < header_row->field_count; col++) {
+    // Determine how many fields to write (trim trailing empty if requested)
+    size_t fields_to_write = header_row->field_count;
+    if (opts->trim_trailing_empty_fields) {
+      size_t last_non_empty = csv_find_last_non_empty_field(header_row);
+      if (last_non_empty != SIZE_MAX) {
+        fields_to_write = last_non_empty + 1;
+      } else {
+        fields_to_write = 0; // All fields empty
+      }
+    }
+
+    // Write fields in header row
+    for (size_t col = 0; col < fields_to_write; col++) {
       const csv_table_field * field = &header_row->fields[col];
 
       // Defensive check: if field has length > 0, data must not be NULL
@@ -926,8 +968,19 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
       return GTEXT_CSV_E_INVALID;
     }
 
-    // Write all fields in row
-    for (size_t col = 0; col < table_row->field_count; col++) {
+    // Determine how many fields to write (trim trailing empty if requested)
+    size_t fields_to_write = table_row->field_count;
+    if (opts->trim_trailing_empty_fields) {
+      size_t last_non_empty = csv_find_last_non_empty_field(table_row);
+      if (last_non_empty != SIZE_MAX) {
+        fields_to_write = last_non_empty + 1;
+      } else {
+        fields_to_write = 0; // All fields empty
+      }
+    }
+
+    // Write fields in row
+    for (size_t col = 0; col < fields_to_write; col++) {
       const csv_table_field * field = &table_row->fields[col];
 
       // Defensive check: if field has length > 0, data must not be NULL

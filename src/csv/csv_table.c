@@ -7,6 +7,7 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -241,6 +242,64 @@ static void csv_setup_empty_field(csv_table_field * field) {
   field->data = csv_empty_field_string;
   field->length = 0;
   field->is_in_situ = false; // Not in-situ, but points to global constant
+}
+
+/**
+ * @brief Set error information for field count validation failures
+ *
+ * Populates an error structure with detailed information about field count
+ * mismatches, including a formatted message with expected vs actual counts.
+ * The formatted message is stored in context_snippet and message points to it,
+ * so it can be freed via gtext_csv_error_free().
+ *
+ * @param err Error structure to populate (can be NULL)
+ * @param expected_count Expected field count
+ * @param actual_count Actual field count provided
+ * @param row_index Row index where error occurred (0-based for data rows, SIZE_MAX for append)
+ */
+static void csv_set_field_count_error(GTEXT_CSV_Error * err,
+    size_t expected_count, size_t actual_count, size_t row_index) {
+  if (!err) {
+    return;
+  }
+
+  // Free any existing context snippet
+  if (err->context_snippet) {
+    free(err->context_snippet);
+    err->context_snippet = NULL;
+  }
+
+  err->code = GTEXT_CSV_E_INVALID;
+  err->byte_offset = 0;
+  err->line = 0;
+  err->column = 0;
+  err->row_index = row_index;
+  err->col_index = actual_count; // Store actual count in col_index
+  err->caret_offset = 0;
+
+  // Allocate and format error message with expected and actual counts
+  size_t msg_len = 128; // Sufficient for formatted message
+  char * msg = (char *)malloc(msg_len);
+  if (msg) {
+    if (row_index != SIZE_MAX) {
+      snprintf(msg, msg_len,
+          "Field count mismatch at row %zu: expected %zu fields, got %zu",
+          row_index, expected_count, actual_count);
+    } else {
+      snprintf(msg, msg_len,
+          "Field count mismatch on append: expected %zu fields, got %zu",
+          expected_count, actual_count);
+    }
+    err->context_snippet = msg;
+    err->context_snippet_len = strlen(msg);
+    // Point message to the formatted string (caller must free via gtext_csv_error_free)
+    err->message = err->context_snippet;
+  } else {
+    // Fallback to static message if allocation fails
+    err->message = "Field count mismatch: row field count does not match table column count";
+    err->context_snippet = NULL;
+    err->context_snippet_len = 0;
+  }
 }
 
 // Forward declarations for table calculation helpers
@@ -1250,15 +1309,24 @@ static GTEXT_CSV_Status csv_row_allocate_structures(GTEXT_CSV_Table * table,
 
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
     const char * const * fields, const size_t * field_lengths,
-    size_t field_count) {
+    size_t field_count, GTEXT_CSV_Error * err) {
   // Phase 1: Validation
   if (!table) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Table must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (!fields) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Fields array must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (field_count == 0) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Field count must be greater than 0");
+    }
     return GTEXT_CSV_E_INVALID;
   }
 
@@ -1266,15 +1334,28 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
   size_t data_row_count = csv_get_data_row_count(table);
 
   // Validate column count consistency (but don't update column_count yet)
-  if (data_row_count == 0 && table->column_count == 0) {
-    // First data row will set column count - validation passes
+  if (!table->allow_irregular_rows) {
+    // Strict mode: enforce rectangular structure
+    if (data_row_count == 0 && table->column_count == 0) {
+      // First data row will set column count - validation passes
+    }
+    else {
+      // Subsequent rows (or first data row when header exists) must match
+      // column count
+      if (field_count != table->column_count) {
+        size_t expected_count = table->column_count;
+        if (table->has_header && table->row_count > 0) {
+          // Use header row field count if column_count is 0
+          expected_count = table->rows[0].field_count;
+        }
+        csv_set_field_count_error(err, expected_count, field_count, SIZE_MAX);
+        return GTEXT_CSV_E_INVALID;
+      }
+    }
   }
   else {
-    // Subsequent rows (or first data row when header exists) must match column
-    // count
-    if (field_count != table->column_count) {
-      return GTEXT_CSV_E_INVALID;
-    }
+    // Irregular mode: accept any field count, will update column_count to max
+    // No validation needed here - all field counts are accepted
   }
 
   // Phase 2-3: Prepare fields (calculate lengths, validate, allocate bulk data)
@@ -1323,9 +1404,16 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
   new_row->fields = new_fields;
   new_row->field_count = field_count;
 
-  // 5. Update column_count if this is the first row
+  // 5. Update column_count
   if (data_row_count == 0 && table->column_count == 0) {
+    // First data row sets column count
     table->column_count = field_count;
+  }
+  else if (table->allow_irregular_rows) {
+    // Irregular mode: update column_count to maximum
+    if (field_count > table->column_count) {
+      table->column_count = field_count;
+    }
   }
 
   // 6. Increment row count
@@ -1336,15 +1424,24 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
 
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_insert(GTEXT_CSV_Table * table,
     size_t row_idx, const char * const * fields, const size_t * field_lengths,
-    size_t field_count) {
+    size_t field_count, GTEXT_CSV_Error * err) {
   // Phase 1: Validation
   if (!table) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Table must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (!fields) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Fields array must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (field_count == 0) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Field count must be greater than 0");
+    }
     return GTEXT_CSV_E_INVALID;
   }
 
@@ -1353,6 +1450,9 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_insert(GTEXT_CSV_Table * table,
 
   // Validate row_idx (must be <= data_row_count, allowing append)
   if (row_idx > data_row_count) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Row index out of bounds");
+    }
     return GTEXT_CSV_E_INVALID;
   }
 
@@ -1364,15 +1464,28 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_insert(GTEXT_CSV_Table * table,
   }
 
   // Validate column count consistency (but don't update column_count yet)
-  if (data_row_count == 0 && table->column_count == 0) {
-    // First data row will set column count - validation passes
+  if (!table->allow_irregular_rows) {
+    // Strict mode: enforce rectangular structure
+    if (data_row_count == 0 && table->column_count == 0) {
+      // First data row will set column count - validation passes
+    }
+    else {
+      // Subsequent rows (or first data row when header exists) must match
+      // column count
+      if (field_count != table->column_count) {
+        size_t expected_count = table->column_count;
+        if (table->has_header && table->row_count > 0) {
+          // Use header row field count if column_count is 0
+          expected_count = table->rows[0].field_count;
+        }
+        csv_set_field_count_error(err, expected_count, field_count, row_idx);
+        return GTEXT_CSV_E_INVALID;
+      }
+    }
   }
   else {
-    // Subsequent rows (or first data row when header exists) must match column
-    // count
-    if (field_count != table->column_count) {
-      return GTEXT_CSV_E_INVALID;
-    }
+    // Irregular mode: accept any field count, will update column_count to max
+    // No validation needed here - all field counts are accepted
   }
 
   // Check if inserting at end (equivalent to append)
@@ -1442,15 +1555,47 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_insert(GTEXT_CSV_Table * table,
   new_row->fields = new_fields;
   new_row->field_count = field_count;
 
-  // 5. Update column_count if this is the first row
+  // 5. Update column_count
   if (data_row_count == 0 && table->column_count == 0) {
+    // First data row sets column count
     table->column_count = field_count;
+  }
+  else if (table->allow_irregular_rows) {
+    // Irregular mode: update column_count to maximum
+    if (field_count > table->column_count) {
+      table->column_count = field_count;
+    }
   }
 
   // 6. Increment row count
   table->row_count++;
 
   return GTEXT_CSV_OK;
+}
+
+/**
+ * @brief Recalculate maximum column count across all rows
+ *
+ * Iterates through all rows and finds the maximum field_count.
+ * This is useful when irregular rows are allowed and we need to
+ * update column_count to reflect the current maximum.
+ *
+ * @param table Table (must not be NULL)
+ * @return Maximum field_count across all rows, or 0 if table is empty
+ */
+static size_t csv_recalculate_max_column_count(const GTEXT_CSV_Table * table) {
+  if (!table || table->row_count == 0) {
+    return 0;
+  }
+
+  size_t max_count = 0;
+  for (size_t i = 0; i < table->row_count; i++) {
+    if (table->rows[i].field_count > max_count) {
+      max_count = table->rows[i].field_count;
+    }
+  }
+
+  return max_count;
 }
 
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_remove(
@@ -1481,6 +1626,10 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_remove(
     return GTEXT_CSV_E_INVALID;
   }
 
+  // Store the removed row's field_count before shifting (needed for column_count
+  // recalculation in irregular mode)
+  size_t removed_row_field_count = table->rows[adjusted_row_idx].field_count;
+
   // Shift rows from adjusted_row_idx+1 to row_count-1 one position left
   // Shift in forward order (left shift)
   for (size_t i = adjusted_row_idx; i < table->row_count - 1; i++) {
@@ -1490,6 +1639,14 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_remove(
   // Decrement row count
   table->row_count--;
 
+  // Recalculate column_count if irregular rows are allowed and the removed row
+  // had the maximum field_count
+  if (table->allow_irregular_rows &&
+      removed_row_field_count == table->column_count) {
+    // The removed row had the maximum, need to recalculate
+    table->column_count = csv_recalculate_max_column_count(table);
+  }
+
   // Note: Field data remains in arena (no individual cleanup needed)
 
   return GTEXT_CSV_OK;
@@ -1497,15 +1654,24 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_remove(
 
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_set(GTEXT_CSV_Table * table,
     size_t row_idx, const char * const * fields, const size_t * field_lengths,
-    size_t field_count) {
+    size_t field_count, GTEXT_CSV_Error * err) {
   // Validate inputs
   if (!table) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Table must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (!fields) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Fields array must not be NULL");
+    }
     return GTEXT_CSV_E_INVALID;
   }
   if (field_count == 0) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Field count must be greater than 0");
+    }
     return GTEXT_CSV_E_INVALID;
   }
 
@@ -1514,6 +1680,9 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_set(GTEXT_CSV_Table * table,
 
   // Validate row_idx (must be < data_row_count)
   if (row_idx >= data_row_count) {
+    if (err) {
+      CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Row index out of bounds");
+    }
     return GTEXT_CSV_E_INVALID;
   }
 
@@ -1524,16 +1693,22 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_set(GTEXT_CSV_Table * table,
     adjusted_row_idx = row_idx + 1;
   }
 
-  // Validate field_count matches table column count
-  // If column_count is 0 but table has headers, get column count from header
-  // row
-  size_t expected_column_count = table->column_count;
-  if (expected_column_count == 0 && table->has_header && table->row_count > 0) {
-    expected_column_count = table->rows[0].field_count;
+  // Validate field_count matches table column count (unless irregular rows
+  // allowed)
+  if (!table->allow_irregular_rows) {
+    // Strict mode: enforce rectangular structure
+    size_t expected_column_count = table->column_count;
+    if (expected_column_count == 0 && table->has_header &&
+        table->row_count > 0) {
+      expected_column_count = table->rows[0].field_count;
+    }
+    if (field_count != expected_column_count) {
+      csv_set_field_count_error(err, expected_column_count, field_count, row_idx);
+      return GTEXT_CSV_E_INVALID;
+    }
   }
-  if (field_count != expected_column_count) {
-    return GTEXT_CSV_E_INVALID;
-  }
+  // Irregular mode: accept any field count, will update row's field_count and
+  // column_count to max if needed
 
   // Get existing row
   csv_table_row * existing_row = &table->rows[adjusted_row_idx];
@@ -1613,19 +1788,63 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_set(GTEXT_CSV_Table * table,
   }
 
   // Phase 2: Update all field structures atomically (all allocations succeeded)
-  for (size_t i = 0; i < field_count; i++) {
-    csv_table_field * field = &existing_row->fields[i];
-    // Update field structure (replace field data pointers)
-    // Note: Old field data remains in arena (no individual cleanup needed)
-    field->data = allocated_data[i];
-    field->length = allocated_lengths[i];
-    // For empty fields: points to global constant, not in-situ
-    // For non-empty fields: copied to arena, not in-situ
-    field->is_in_situ = false;
+  size_t old_field_count = existing_row->field_count;
+  bool field_count_changed = (field_count != old_field_count);
+
+  if (field_count_changed && table->allow_irregular_rows) {
+    // Field count changed: need to allocate new field array
+    csv_table_field * new_fields =
+        (csv_table_field *)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * field_count, 8);
+    if (!new_fields) {
+      // Allocation failed - row remains unchanged (atomic operation)
+      return GTEXT_CSV_E_OOM;
+    }
+
+    // Copy existing fields (up to min(old_count, new_count))
+    size_t fields_to_copy =
+        (old_field_count < field_count) ? old_field_count : field_count;
+    if (fields_to_copy > 0 && existing_row->fields) {
+      memcpy(new_fields, existing_row->fields,
+          sizeof(csv_table_field) * fields_to_copy);
+    }
+
+    // Update all fields with new data
+    for (size_t i = 0; i < field_count; i++) {
+      csv_table_field * field = &new_fields[i];
+      // Update field structure (replace field data pointers)
+      // Note: Old field data remains in arena (no individual cleanup needed)
+      field->data = allocated_data[i];
+      field->length = allocated_lengths[i];
+      // For empty fields: points to global constant, not in-situ
+      // For non-empty fields: copied to arena, not in-situ
+      field->is_in_situ = false;
+    }
+
+    // Update row structure with new field array
+    existing_row->fields = new_fields;
+    existing_row->field_count = field_count;
+  }
+  else {
+    // Field count unchanged: update fields in place
+    for (size_t i = 0; i < field_count; i++) {
+      csv_table_field * field = &existing_row->fields[i];
+      // Update field structure (replace field data pointers)
+      // Note: Old field data remains in arena (no individual cleanup needed)
+      field->data = allocated_data[i];
+      field->length = allocated_lengths[i];
+      // For empty fields: points to global constant, not in-situ
+      // For non-empty fields: copied to arena, not in-situ
+      field->is_in_situ = false;
+    }
+    // Field count is already set correctly (existing_row->field_count ==
+    // field_count) No need to update it since we're replacing fields in place
   }
 
-  // Note: Field count is already set correctly (existing_row->field_count ==
-  // field_count) No need to update it since we're replacing fields in place
+  // Update column_count to max if irregular rows are allowed
+  if (table->allow_irregular_rows && field_count > table->column_count) {
+    table->column_count = field_count;
+  }
 
   return GTEXT_CSV_OK;
 }
@@ -3442,8 +3661,14 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
   bool is_empty_column = (values == NULL);
 
   // Validate col_idx for insert operations
+  // When allow_irregular_rows is true, allow insertion beyond column_count
+  // (will update column_count and pad rows as needed)
   if (!is_append && col_idx > table->column_count) {
-    return GTEXT_CSV_E_INVALID;
+    if (!table->allow_irregular_rows) {
+      // Strict mode: require col_idx <= column_count
+      return GTEXT_CSV_E_INVALID;
+    }
+    // Irregular mode: will update column_count and pad rows - continue
   }
 
   // If table is empty: just update column count (no rows to modify)
@@ -3516,23 +3741,40 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
   for (size_t row_idx = start_row_idx; row_idx < table->row_count; row_idx++) {
     csv_table_row * row = &table->rows[row_idx];
     size_t old_field_count = row->field_count;
-    size_t new_field_count = old_field_count + 1;
 
-    // Check for overflow
-    if (new_field_count < old_field_count) {
-      csv_column_op_cleanup_temp_arrays(&temp_arrays);
-      return GTEXT_CSV_E_OOM;
-    }
-
-    // Validate col_idx is within bounds for insert operations
+    // Calculate new field count: if inserting beyond row length, need col_idx +
+    // 1 fields Otherwise, need old_field_count + 1 fields
+    size_t new_field_count;
     if (!is_append && col_idx > old_field_count) {
-      csv_column_op_cleanup_temp_arrays(&temp_arrays);
-      return GTEXT_CSV_E_INVALID;
+      // Inserting beyond row length: need col_idx + 1 fields (old fields +
+      // padding + new field)
+      if (col_idx == SIZE_MAX) {
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
+        return GTEXT_CSV_E_OOM;
+      }
+      new_field_count = col_idx + 1;
+
+      // Validate irregular rows are allowed
+      if (!table->allow_irregular_rows) {
+        // Strict mode: require all rows to be long enough
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
+        return GTEXT_CSV_E_INVALID;
+      }
+    }
+    else {
+      // Normal case: one more field
+      new_field_count = old_field_count + 1;
+
+      // Check for overflow
+      if (new_field_count < old_field_count) {
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
+        return GTEXT_CSV_E_OOM;
+      }
     }
 
     old_field_counts[array_idx] = old_field_count;
 
-    // Allocate new field array with one more field
+    // Allocate new field array
     csv_table_field * new_fields =
         (csv_table_field *)csv_arena_alloc_for_context(
             table->ctx, sizeof(csv_table_field) * new_field_count, 8);
@@ -3565,11 +3807,17 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
   size_t header_field_data_len = 0;
   if (table->has_header && table->header_map && table->row_count > 0) {
     // Validate col_idx is within bounds for header row (insert operations)
+    // When allow_irregular_rows is true, allow insertion beyond header row
+    // length (padding will happen in Task 2.2)
     if (!is_append) {
       csv_table_row * header_row = &table->rows[0];
       if (col_idx > header_row->field_count) {
-        csv_column_op_cleanup_temp_arrays(&temp_arrays);
-        return GTEXT_CSV_E_INVALID;
+        if (!table->allow_irregular_rows) {
+          // Strict mode: require header row to be long enough
+          csv_column_op_cleanup_temp_arrays(&temp_arrays);
+          return GTEXT_CSV_E_INVALID;
+        }
+        // Irregular mode: will pad header row - continue
       }
     }
 
@@ -3658,27 +3906,60 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
     else {
       // Insert: copy fields before insertion point, add new field, copy fields
       // after
-      if (col_idx > 0) {
-        memcpy(new_fields, row->fields, sizeof(csv_table_field) * col_idx);
-      }
-      csv_table_field * new_field = &new_fields[col_idx];
-      if (is_empty_column) {
-        csv_setup_empty_field(new_field);
-      }
-      else {
-        size_t value_idx = table->has_header ? (array_idx + 1) : array_idx;
-        if (field_data_array[value_idx] == NULL) {
+      // Handle padding when col_idx > old_field_count (irregular rows mode)
+      if (col_idx > old_field_count) {
+        // Row is too short: copy existing fields, pad with empty fields, insert
+        // new field
+        if (old_field_count > 0) {
+          memcpy(new_fields, row->fields,
+              sizeof(csv_table_field) * old_field_count);
+        }
+        // Pad with empty fields from old_field_count to col_idx
+        for (size_t i = old_field_count; i < col_idx; i++) {
+          csv_setup_empty_field(&new_fields[i]);
+        }
+        // Insert new field at col_idx
+        csv_table_field * new_field = &new_fields[col_idx];
+        if (is_empty_column) {
           csv_setup_empty_field(new_field);
         }
         else {
-          new_field->data = field_data_array[value_idx];
-          new_field->length = field_data_lengths[value_idx];
-          new_field->is_in_situ = false;
+          size_t value_idx = table->has_header ? (array_idx + 1) : array_idx;
+          if (field_data_array[value_idx] == NULL) {
+            csv_setup_empty_field(new_field);
+          }
+          else {
+            new_field->data = field_data_array[value_idx];
+            new_field->length = field_data_lengths[value_idx];
+            new_field->is_in_situ = false;
+          }
         }
+        // No fields to copy after (row was too short)
       }
-      if (col_idx < old_field_count) {
-        memcpy(new_fields + col_idx + 1, row->fields + col_idx,
-            sizeof(csv_table_field) * (old_field_count - col_idx));
+      else {
+        // Normal insertion: row is long enough
+        if (col_idx > 0) {
+          memcpy(new_fields, row->fields, sizeof(csv_table_field) * col_idx);
+        }
+        csv_table_field * new_field = &new_fields[col_idx];
+        if (is_empty_column) {
+          csv_setup_empty_field(new_field);
+        }
+        else {
+          size_t value_idx = table->has_header ? (array_idx + 1) : array_idx;
+          if (field_data_array[value_idx] == NULL) {
+            csv_setup_empty_field(new_field);
+          }
+          else {
+            new_field->data = field_data_array[value_idx];
+            new_field->length = field_data_lengths[value_idx];
+            new_field->is_in_situ = false;
+          }
+        }
+        if (col_idx < old_field_count) {
+          memcpy(new_fields + col_idx + 1, row->fields + col_idx,
+              sizeof(csv_table_field) * (old_field_count - col_idx));
+        }
       }
     }
 
@@ -3691,13 +3972,28 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
   if (table->has_header && table->header_map && table->row_count > 0) {
     csv_table_row * header_row = &table->rows[0];
     old_header_field_count = header_row->field_count;
-    size_t new_header_field_count = old_header_field_count + 1;
 
-    // Check for overflow
-    if (new_header_field_count < old_header_field_count) {
-      free(new_field_arrays);
-      free(old_field_counts);
-      return GTEXT_CSV_E_OOM;
+    // Calculate new header field count: if inserting beyond header row length,
+    // need col_idx + 1 fields (old fields + padding + new field)
+    // Otherwise, need old_header_field_count + 1 fields
+    size_t new_header_field_count;
+    if (!is_append && col_idx > old_header_field_count) {
+      // Inserting beyond header row length: need col_idx + 1 fields
+      if (col_idx == SIZE_MAX) {
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
+        return GTEXT_CSV_E_OOM;
+      }
+      new_header_field_count = col_idx + 1;
+    }
+    else {
+      // Normal case: one more field
+      new_header_field_count = old_header_field_count + 1;
+
+      // Check for overflow
+      if (new_header_field_count < old_header_field_count) {
+        csv_column_op_cleanup_temp_arrays(&temp_arrays);
+        return GTEXT_CSV_E_OOM;
+      }
     }
 
     // Allocate new field array for header row
@@ -3728,22 +4024,50 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
     else {
       // Insert: copy header fields before insertion point, add new header
       // field, copy after
-      if (col_idx > 0) {
-        memcpy(new_header_fields, header_row->fields,
-            sizeof(csv_table_field) * col_idx);
-      }
-      csv_table_field * new_header_field = &new_header_fields[col_idx];
-      if (header_field_data == NULL || header_field_data_len == 0) {
-        csv_setup_empty_field(new_header_field);
+      // Handle padding when col_idx > old_header_field_count (irregular rows
+      // mode)
+      if (col_idx > old_header_field_count) {
+        // Header row is too short: copy existing fields, pad with empty fields,
+        // insert new field
+        if (old_header_field_count > 0) {
+          memcpy(new_header_fields, header_row->fields,
+              sizeof(csv_table_field) * old_header_field_count);
+        }
+        // Pad with empty fields from old_header_field_count to col_idx
+        for (size_t i = old_header_field_count; i < col_idx; i++) {
+          csv_setup_empty_field(&new_header_fields[i]);
+        }
+        // Insert new header field at col_idx
+        csv_table_field * new_header_field = &new_header_fields[col_idx];
+        if (header_field_data == NULL || header_field_data_len == 0) {
+          csv_setup_empty_field(new_header_field);
+        }
+        else {
+          new_header_field->data = header_field_data;
+          new_header_field->length = header_field_data_len;
+          new_header_field->is_in_situ = false;
+        }
+        // No fields to copy after (header row was too short)
       }
       else {
-        new_header_field->data = header_field_data;
-        new_header_field->length = header_field_data_len;
-        new_header_field->is_in_situ = false;
-      }
-      if (col_idx < old_header_field_count) {
-        memcpy(new_header_fields + col_idx + 1, header_row->fields + col_idx,
-            sizeof(csv_table_field) * (old_header_field_count - col_idx));
+        // Normal insertion: header row is long enough
+        if (col_idx > 0) {
+          memcpy(new_header_fields, header_row->fields,
+              sizeof(csv_table_field) * col_idx);
+        }
+        csv_table_field * new_header_field = &new_header_fields[col_idx];
+        if (header_field_data == NULL || header_field_data_len == 0) {
+          csv_setup_empty_field(new_header_field);
+        }
+        else {
+          new_header_field->data = header_field_data;
+          new_header_field->length = header_field_data_len;
+          new_header_field->is_in_situ = false;
+        }
+        if (col_idx < old_header_field_count) {
+          memcpy(new_header_fields + col_idx + 1, header_row->fields + col_idx,
+              sizeof(csv_table_field) * (old_header_field_count - col_idx));
+        }
       }
     }
   }
@@ -3945,15 +4269,44 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
     return GTEXT_CSV_E_INVALID;
   }
 
-  // Validate col_idx (must be <= column count)
+  // Validate col_idx (must be <= column count, unless irregular rows allowed)
   if (col_idx > table->column_count) {
-    return GTEXT_CSV_E_INVALID;
+    if (!table->allow_irregular_rows) {
+      // Strict mode: require col_idx <= column_count
+      return GTEXT_CSV_E_INVALID;
+    }
+    // Irregular mode: will update column_count and pad rows - continue
   }
 
-  // If inserting at end (col_idx == column_count), use append logic
+  // If inserting at end (col_idx == column_count), check if we can use append
+  // logic (only if all rows have column_count fields)
   if (col_idx == table->column_count) {
-    return gtext_csv_column_append_with_values(
-        table, header_name, header_name_len, values, value_lengths);
+    // Check if all rows have column_count fields
+    bool all_rows_at_column_count = true;
+    if (table->row_count > 0) {
+      size_t start_row_idx = csv_get_start_row_idx(table);
+      for (size_t row_idx = start_row_idx; row_idx < table->row_count;
+           row_idx++) {
+        if (table->rows[row_idx].field_count < table->column_count) {
+          all_rows_at_column_count = false;
+          break;
+        }
+      }
+    }
+
+    // If all rows are at column_count, use append (no padding needed)
+    if (all_rows_at_column_count) {
+      return gtext_csv_column_append_with_values(
+          table, header_name, header_name_len, values, value_lengths);
+    }
+
+    // If irregular rows are allowed but some rows are shorter, we need to use
+    // insert logic with padding (don't use append)
+    if (!table->allow_irregular_rows) {
+      // Strict mode: some rows are shorter, would need padding - fail
+      return GTEXT_CSV_E_INVALID;
+    }
+    // Irregular mode: continue with insert logic (will pad short rows)
   }
 
   // Empty table check: if row_count == 0, return error
@@ -3990,12 +4343,26 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
   // Phase 8: Atomic State Update
   // Only after all allocations, copies, and reindexing succeed:
   // 1. Update column_count
-  if (table->column_count == SIZE_MAX) {
-    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
-        field_data_array, field_data_lengths);
-    return GTEXT_CSV_E_OOM;
+  // When inserting beyond column_count, set to col_idx + 1
+  // Otherwise, just increment
+  if (col_idx > table->column_count) {
+    // Inserting beyond current max: new max is col_idx + 1
+    if (col_idx == SIZE_MAX) {
+      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+          field_data_array, field_data_lengths);
+      return GTEXT_CSV_E_OOM;
+    }
+    table->column_count = col_idx + 1;
   }
-  table->column_count++;
+  else {
+    // Normal case: increment column_count
+    if (table->column_count == SIZE_MAX) {
+      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+          field_data_array, field_data_lengths);
+      return GTEXT_CSV_E_OOM;
+    }
+    table->column_count++;
+  }
 
   // 2. Update all data row structures
   size_t start_row_idx = csv_get_start_row_idx(table);
@@ -4006,7 +4373,14 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
     csv_table_field * new_fields = new_field_arrays[array_idx];
 
     row->fields = new_fields;
-    row->field_count = old_field_count + 1;
+    // When padding occurred (col_idx > old_field_count), new field_count is
+    // col_idx + 1 Otherwise, it's old_field_count + 1
+    if (col_idx > old_field_count) {
+      row->field_count = col_idx + 1;
+    }
+    else {
+      row->field_count = old_field_count + 1;
+    }
 
     array_idx++;
   }
@@ -4015,7 +4389,14 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
   if (table->has_header && table->header_map && table->row_count > 0) {
     csv_table_row * header_row = &table->rows[0];
     header_row->fields = new_header_fields;
-    header_row->field_count = old_header_field_count + 1;
+    // When padding occurred (col_idx > old_header_field_count), new field_count
+    // is col_idx + 1 Otherwise, it's old_header_field_count + 1
+    if (col_idx > old_header_field_count) {
+      header_row->field_count = col_idx + 1;
+    }
+    else {
+      header_row->field_count = old_header_field_count + 1;
+    }
 
     // 4. Add header map entry
     new_entry->name = new_header_fields[col_idx].data;
@@ -4042,14 +4423,44 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
     return GTEXT_CSV_E_INVALID;
   }
 
-  // Validate col_idx (must be <= column count)
+  // Validate col_idx (must be <= column count, unless irregular rows allowed)
   if (col_idx > table->column_count) {
-    return GTEXT_CSV_E_INVALID;
+    if (!table->allow_irregular_rows) {
+      // Strict mode: require col_idx <= column_count
+      return GTEXT_CSV_E_INVALID;
+    }
+    // Irregular mode: will update column_count and pad rows - continue
   }
 
-  // If inserting at end (col_idx == column_count), use append logic
+  // If inserting at end (col_idx == column_count), check if we can use append
+  // logic (only if all rows have column_count fields, or if irregular rows
+  // are allowed and all rows are already at column_count)
   if (col_idx == table->column_count) {
-    return gtext_csv_column_append(table, header_name, header_name_len);
+    // Check if all rows have column_count fields
+    bool all_rows_at_column_count = true;
+    if (table->row_count > 0) {
+      size_t start_row_idx = csv_get_start_row_idx(table);
+      for (size_t row_idx = start_row_idx; row_idx < table->row_count;
+           row_idx++) {
+        if (table->rows[row_idx].field_count < table->column_count) {
+          all_rows_at_column_count = false;
+          break;
+        }
+      }
+    }
+
+    // If all rows are at column_count, use append (no padding needed)
+    if (all_rows_at_column_count) {
+      return gtext_csv_column_append(table, header_name, header_name_len);
+    }
+
+    // If irregular rows are allowed but some rows are shorter, we need to use
+    // insert logic with padding (don't use append)
+    if (!table->allow_irregular_rows) {
+      // Strict mode: some rows are shorter, would need padding - fail
+      return GTEXT_CSV_E_INVALID;
+    }
+    // Irregular mode: continue with insert logic (will pad short rows)
   }
 
   // Use helper function for common column operation logic
@@ -4081,12 +4492,26 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
   // Phase 7: Atomic State Update
   // Only after all allocations, copies, and reindexing succeed:
   // 1. Update column_count
-  if (table->column_count == SIZE_MAX) {
-    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
-        field_data_array, field_data_lengths);
-    return GTEXT_CSV_E_OOM;
+  // When inserting beyond column_count, set to col_idx + 1
+  // Otherwise, just increment
+  if (col_idx > table->column_count) {
+    // Inserting beyond current max: new max is col_idx + 1
+    if (col_idx == SIZE_MAX) {
+      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+          field_data_array, field_data_lengths);
+      return GTEXT_CSV_E_OOM;
+    }
+    table->column_count = col_idx + 1;
   }
-  table->column_count++;
+  else {
+    // Normal case: increment column_count
+    if (table->column_count == SIZE_MAX) {
+      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+          field_data_array, field_data_lengths);
+      return GTEXT_CSV_E_OOM;
+    }
+    table->column_count++;
+  }
 
   // 2. Update all data row structures
   size_t start_row_idx = csv_get_start_row_idx(table);
@@ -4097,7 +4522,14 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
     csv_table_field * new_fields = new_field_arrays[array_idx];
 
     row->fields = new_fields;
-    row->field_count = old_field_count + 1;
+    // When padding occurred (col_idx > old_field_count), new field_count is
+    // col_idx + 1 Otherwise, it's old_field_count + 1
+    if (col_idx > old_field_count) {
+      row->field_count = col_idx + 1;
+    }
+    else {
+      row->field_count = old_field_count + 1;
+    }
 
     array_idx++;
   }
@@ -4106,7 +4538,14 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
   if (table->has_header && table->header_map && table->row_count > 0) {
     csv_table_row * header_row = &table->rows[0];
     header_row->fields = new_header_fields;
-    header_row->field_count = old_header_field_count + 1;
+    // When padding occurred (col_idx > old_header_field_count), new field_count
+    // is col_idx + 1 Otherwise, it's old_header_field_count + 1
+    if (col_idx > old_header_field_count) {
+      header_row->field_count = col_idx + 1;
+    }
+    else {
+      header_row->field_count = old_header_field_count + 1;
+    }
 
     // 4. Add header map entry
     new_entry->name = new_header_fields[col_idx].data;
@@ -4481,6 +4920,249 @@ GTEXT_API bool gtext_csv_can_have_unique_headers(
 
   // All header names are unique
   return true;
+}
+
+GTEXT_API GTEXT_CSV_Status gtext_csv_set_allow_irregular_rows(
+    GTEXT_CSV_Table * table, bool allow) {
+  if (!table) {
+    return GTEXT_CSV_E_INVALID;
+  }
+
+  table->allow_irregular_rows = allow;
+  return GTEXT_CSV_OK;
+}
+
+GTEXT_API bool gtext_csv_get_allow_irregular_rows(
+    const GTEXT_CSV_Table * table) {
+  // Handle NULL table gracefully (return false)
+  if (!table) {
+    return false;
+  }
+
+  return table->allow_irregular_rows;
+}
+
+GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_rows(GTEXT_CSV_Table * table,
+    size_t target_column_count, bool truncate_long_rows) {
+  // Phase 1: Validation
+  if (!table) {
+    return GTEXT_CSV_E_INVALID;
+  }
+
+  // Handle empty table
+  if (table->row_count == 0) {
+    // Empty table: set column_count to target if specified, otherwise no-op
+    if (target_column_count != 0 && target_column_count != SIZE_MAX) {
+      table->column_count = target_column_count;
+    }
+    return GTEXT_CSV_OK;
+  }
+
+  // Phase 2: Calculate target column count
+  size_t actual_target = target_column_count;
+  if (target_column_count == 0) {
+    // Find maximum column count across all rows
+    actual_target = csv_recalculate_max_column_count(table);
+  }
+  else if (target_column_count == SIZE_MAX) {
+    // Find minimum column count across all rows
+    size_t min_count = SIZE_MAX;
+    for (size_t i = 0; i < table->row_count; i++) {
+      if (table->rows[i].field_count < min_count) {
+        min_count = table->rows[i].field_count;
+      }
+    }
+    if (min_count == SIZE_MAX) {
+      // All rows empty or no rows (shouldn't happen due to empty check above)
+      return GTEXT_CSV_E_INVALID;
+    }
+    actual_target = min_count;
+  }
+
+  // Optimization: Check if already normalized (no-op)
+  bool already_normalized = true;
+  for (size_t i = 0; i < table->row_count; i++) {
+    if (table->rows[i].field_count != actual_target) {
+      already_normalized = false;
+      break;
+    }
+  }
+  if (already_normalized) {
+    table->column_count = actual_target;
+    return GTEXT_CSV_OK;
+  }
+
+  // Phase 3: Validate all rows (if truncate_long_rows is false)
+  if (!truncate_long_rows) {
+    for (size_t i = 0; i < table->row_count; i++) {
+      if (table->rows[i].field_count > actual_target) {
+        return GTEXT_CSV_E_INVALID;
+      }
+    }
+  }
+
+  // Phase 4: Pre-allocate all new field arrays (atomic)
+  csv_table_field ** new_field_arrays =
+      (csv_table_field **)calloc(table->row_count, sizeof(csv_table_field *));
+  if (!new_field_arrays) {
+    return GTEXT_CSV_E_OOM;
+  }
+
+  // Allocate each row's new field array
+  for (size_t i = 0; i < table->row_count; i++) {
+    // Allocate new field array
+    csv_table_field * new_fields =
+        (csv_table_field *)csv_arena_alloc_for_context(
+            table->ctx, sizeof(csv_table_field) * actual_target, 8);
+    if (!new_fields) {
+      // Cleanup: free already allocated arrays
+      for (size_t j = 0; j < i; j++) {
+        // Arrays are in arena, no individual free needed
+      }
+      free(new_field_arrays);
+      return GTEXT_CSV_E_OOM;
+    }
+    new_field_arrays[i] = new_fields;
+  }
+
+  // Phase 5: Copy/pad/truncate all rows
+  for (size_t i = 0; i < table->row_count; i++) {
+    csv_table_row * row = &table->rows[i];
+    size_t old_field_count = row->field_count;
+    csv_table_field * new_fields = new_field_arrays[i];
+
+    // Copy existing fields (up to min(old_count, target))
+    size_t fields_to_copy =
+        old_field_count < actual_target ? old_field_count : actual_target;
+    if (fields_to_copy > 0) {
+      memcpy(new_fields, row->fields, sizeof(csv_table_field) * fields_to_copy);
+    }
+
+    // Pad with empty fields if short
+    for (size_t j = old_field_count; j < actual_target; j++) {
+      csv_setup_empty_field(&new_fields[j]);
+    }
+    // Truncation is handled by only copying up to actual_target
+  }
+
+  // Phase 6: Atomic state update
+  // Only after all allocations and copies succeed:
+  for (size_t i = 0; i < table->row_count; i++) {
+    table->rows[i].fields = new_field_arrays[i];
+    table->rows[i].field_count = actual_target;
+  }
+  table->column_count = actual_target;
+
+  // Free temporary array (field arrays themselves are in arena)
+  free(new_field_arrays);
+
+  return GTEXT_CSV_OK;
+}
+
+GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_to_max(GTEXT_CSV_Table * table) {
+  return gtext_csv_normalize_rows(table, 0, false);
+}
+
+GTEXT_API bool gtext_csv_has_irregular_rows(const GTEXT_CSV_Table * table) {
+  if (!table) {
+    return false;
+  }
+
+  // Empty table has no irregular rows
+  if (table->row_count == 0) {
+    return false;
+  }
+
+  // Check all rows (including header row if present)
+  for (size_t i = 0; i < table->row_count; i++) {
+    if (table->rows[i].field_count != table->column_count) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+GTEXT_API size_t gtext_csv_max_col_count(const GTEXT_CSV_Table * table) {
+  if (!table || table->row_count == 0) {
+    return 0;
+  }
+
+  size_t max_count = 0;
+  for (size_t i = 0; i < table->row_count; i++) {
+    if (table->rows[i].field_count > max_count) {
+      max_count = table->rows[i].field_count;
+    }
+  }
+
+  return max_count;
+}
+
+GTEXT_API size_t gtext_csv_min_col_count(const GTEXT_CSV_Table * table) {
+  if (!table || table->row_count == 0) {
+    return 0;
+  }
+
+  size_t min_count = SIZE_MAX;
+  for (size_t i = 0; i < table->row_count; i++) {
+    if (table->rows[i].field_count < min_count) {
+      min_count = table->rows[i].field_count;
+    }
+  }
+
+  // If min_count is still SIZE_MAX, all rows were empty (shouldn't happen)
+  // but return 0 for safety
+  if (min_count == SIZE_MAX) {
+    return 0;
+  }
+
+  return min_count;
+}
+
+GTEXT_API GTEXT_CSV_Status gtext_csv_validate_table(
+    const GTEXT_CSV_Table * table) {
+  if (!table) {
+    return GTEXT_CSV_E_INVALID;
+  }
+
+  // Check row_count <= row_capacity
+  if (table->row_count > table->row_capacity) {
+    return GTEXT_CSV_E_INVALID;
+  }
+
+  // Check each row
+  for (size_t i = 0; i < table->row_count; i++) {
+    csv_table_row * row = &table->rows[i];
+
+    // Check field_count > 0 implies fields != NULL
+    if (row->field_count > 0 && row->fields == NULL) {
+      return GTEXT_CSV_E_INVALID;
+    }
+
+    // Check field data pointers (if length > 0, data != NULL)
+    for (size_t j = 0; j < row->field_count; j++) {
+      csv_table_field * field = &row->fields[j];
+      if (field->length > 0 && field->data == NULL) {
+        return GTEXT_CSV_E_INVALID;
+      }
+    }
+  }
+
+  // Check header map consistency (if present)
+  if (table->has_header && table->header_map) {
+    if (table->row_count == 0) {
+      // Headers but no rows is invalid
+      return GTEXT_CSV_E_INVALID;
+    }
+
+    csv_table_row * header_row = &table->rows[0];
+    // Header row should have fields if field_count > 0
+    if (header_row->field_count > 0 && header_row->fields == NULL) {
+      return GTEXT_CSV_E_INVALID;
+    }
+  }
+
+  return GTEXT_CSV_OK;
 }
 
 GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(

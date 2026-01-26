@@ -72,7 +72,7 @@ int main(void) {
 
   // Add a new row
   const char * new_row_fields[] = {"David", "28", "Boston"};
-  gtext_csv_row_append(table, new_row_fields, NULL, 3);
+  gtext_csv_row_append(table, new_row_fields, NULL, 3, NULL);
   printf("Added new row: David, 28, Boston\n");
 
   // Add a new column (Country)

@@ -234,7 +234,7 @@ static void json_free_children_recursive(GTEXT_JSON_Value * v) {
   }
 }
 
-void gtext_json_free(GTEXT_JSON_Value * v) {
+GTEXT_API void gtext_json_free(GTEXT_JSON_Value * v) {
   if (!v || !v->ctx) {
     return;
   }

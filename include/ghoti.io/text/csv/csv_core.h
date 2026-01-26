@@ -170,6 +170,8 @@ typedef struct {
   bool always_escape_quotes; ///< Always escape quotes (default: depends on
                              ///< escape mode)
   bool trailing_newline;     ///< Add trailing newline at end (default false)
+  bool trim_trailing_empty_fields; ///< Trim trailing empty fields from rows
+                                   ///< (default false)
 } GTEXT_CSV_Write_Options;
 
 /**

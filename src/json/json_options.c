@@ -7,7 +7,7 @@
  */
 
 #include <ghoti.io/text/json/json_core.h>
-GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
+GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   GTEXT_JSON_Parse_Options opts = {0};
 
   // Strictness / extensions - all off by default (strict JSON)
@@ -42,7 +42,7 @@ GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   return opts;
 }
 
-GTEXT_JSON_Write_Options gtext_json_write_options_default(void) {
+GTEXT_API GTEXT_JSON_Write_Options gtext_json_write_options_default(void) {
   GTEXT_JSON_Write_Options opts = {0};
 
   // Formatting

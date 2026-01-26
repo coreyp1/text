@@ -21,7 +21,7 @@
 #define JSON_ERROR_CONTEXT_BEFORE_DEF 20
 #define JSON_ERROR_CONTEXT_AFTER_DEF 20
 
-void gtext_json_error_free(GTEXT_JSON_Error * err) {
+GTEXT_API void gtext_json_error_free(GTEXT_JSON_Error * err) {
   if (err && err->context_snippet) {
     free(err->context_snippet);
     err->context_snippet = NULL;

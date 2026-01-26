@@ -17,7 +17,7 @@
  * @brief Get the major version number
  * @return The major version number
  */
-uint32_t gtext_version_major(void) {
+GTEXT_API uint32_t gtext_version_major(void) {
   return GTEXT_VERSION_MAJOR;
 }
 
@@ -25,7 +25,7 @@ uint32_t gtext_version_major(void) {
  * @brief Get the minor version number
  * @return The minor version number
  */
-uint32_t gtext_version_minor(void) {
+GTEXT_API uint32_t gtext_version_minor(void) {
   return GTEXT_VERSION_MINOR;
 }
 
@@ -33,7 +33,7 @@ uint32_t gtext_version_minor(void) {
  * @brief Get the patch version number
  * @return The patch version number
  */
-uint32_t gtext_version_patch(void) {
+GTEXT_API uint32_t gtext_version_patch(void) {
   return GTEXT_VERSION_PATCH;
 }
 
@@ -41,7 +41,7 @@ uint32_t gtext_version_patch(void) {
  * @brief Get the version string
  * @return A string representation of the version (e.g., "0.0.0")
  */
-const char * gtext_version_string(void) {
+GTEXT_API const char * gtext_version_string(void) {
   static char version_string[32];
   static int initialized = 0;
 

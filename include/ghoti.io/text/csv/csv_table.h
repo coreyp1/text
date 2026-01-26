@@ -205,11 +205,13 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
  * @param field_lengths Array of field lengths, or NULL if all fields are
  * null-terminated
  * @param field_count Number of fields (must be > 0)
+ * @param err Optional error structure to populate with detailed error
+ *            information (can be NULL)
  * @return GTEXT_CSV_OK on success, error code on failure
  */
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
     const char * const * fields, const size_t * field_lengths,
-    size_t field_count);
+    size_t field_count, GTEXT_CSV_Error * err);
 
 /**
  * @brief Insert a row at the specified index
@@ -243,11 +245,13 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_append(GTEXT_CSV_Table * table,
  * @param field_lengths Array of field lengths, or NULL if all fields are
  * null-terminated
  * @param field_count Number of fields (must be > 0)
+ * @param err Optional error structure to populate with detailed error
+ *            information (can be NULL)
  * @return GTEXT_CSV_OK on success, error code on failure
  */
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_insert(GTEXT_CSV_Table * table,
     size_t row_idx, const char * const * fields, const size_t * field_lengths,
-    size_t field_count);
+    size_t field_count, GTEXT_CSV_Error * err);
 
 /**
  * @brief Remove a row at the specified index
@@ -301,11 +305,13 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_row_remove(
  * @param field_lengths Array of field lengths, or NULL if all fields are
  * null-terminated
  * @param field_count Number of fields (must match table column count)
+ * @param err Optional error structure to populate with detailed error
+ *            information (can be NULL)
  * @return GTEXT_CSV_OK on success, error code on failure
  */
 GTEXT_API GTEXT_CSV_Status gtext_csv_row_set(GTEXT_CSV_Table * table,
     size_t row_idx, const char * const * fields, const size_t * field_lengths,
-    size_t field_count);
+    size_t field_count, GTEXT_CSV_Error * err);
 
 /**
  * @brief Set the value of a field at specified row and column indices
@@ -686,6 +692,129 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_require_unique_headers(
  * @return `true` if headers exist and are unique, `false` otherwise
  */
 GTEXT_API bool gtext_csv_can_have_unique_headers(const GTEXT_CSV_Table * table);
+
+/**
+ * @brief Set whether irregular rows are allowed for mutation operations
+ *
+ * When enabled, mutation operations (row append, insert, replace) accept
+ * any field count. When disabled (default), all rows must match the
+ * table's column_count.
+ *
+ * @param table Table (must not be NULL)
+ * @param allow Whether to allow irregular rows (true) or enforce strict
+ *              rectangular structure (false)
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if table is NULL
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_set_allow_irregular_rows(
+    GTEXT_CSV_Table * table, bool allow);
+
+/**
+ * @brief Get whether irregular rows are allowed for mutation operations
+ *
+ * @param table Table (must not be NULL)
+ * @return true if irregular rows are allowed, false if strict mode is
+ *         enforced. Returns false if table is NULL.
+ */
+GTEXT_API bool gtext_csv_get_allow_irregular_rows(
+    const GTEXT_CSV_Table * table);
+
+/**
+ * @brief Normalize all rows to uniform column count
+ *
+ * Pads short rows with empty fields and optionally truncates long rows
+ * to achieve uniform column count across all rows.
+ *
+ * **Target Column Count:**
+ * - If `target_column_count` is 0: Uses maximum column count across all rows
+ * - If `target_column_count` is SIZE_MAX: Uses minimum column count across all rows
+ * - Otherwise: Uses the specified column count
+ *
+ * **Truncation:**
+ * - If `truncate_long_rows` is false: Returns error if any row exceeds target
+ * - If `truncate_long_rows` is true: Truncates long rows to target count
+ *
+ * **Atomic Operation**: This function is atomic - either all rows are
+ * normalized or the table remains unchanged.
+ *
+ * @param table Table (must not be NULL)
+ * @param target_column_count Target column count (0 = max, SIZE_MAX = min, or specific count)
+ * @param truncate_long_rows Whether to truncate long rows (true) or error (false)
+ * @return GTEXT_CSV_OK on success, error code on failure
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_rows(
+    GTEXT_CSV_Table * table,
+    size_t target_column_count,
+    bool truncate_long_rows);
+
+/**
+ * @brief Normalize all rows to maximum column count
+ *
+ * Convenience function that normalizes all rows to match the longest row.
+ * Equivalent to calling `gtext_csv_normalize_rows(table, 0, false)`.
+ *
+ * **Atomic Operation**: This function is atomic - either all rows are
+ * normalized or the table remains unchanged.
+ *
+ * @param table Table (must not be NULL)
+ * @return GTEXT_CSV_OK on success, error code on failure
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_to_max(
+    GTEXT_CSV_Table * table);
+
+/**
+ * @brief Check if table has irregular rows
+ *
+ * Returns true if any row has a different field count than the table's
+ * column_count. Returns false if all rows have the same field count,
+ * or if the table is empty.
+ *
+ * @param table Table (must not be NULL)
+ * @return true if table has irregular rows, false otherwise. Returns
+ *         false if table is NULL.
+ */
+GTEXT_API bool gtext_csv_has_irregular_rows(
+    const GTEXT_CSV_Table * table);
+
+/**
+ * @brief Get maximum column count across all rows
+ *
+ * Returns the maximum field_count across all rows in the table.
+ * Returns 0 if the table is empty.
+ *
+ * @param table Table (must not be NULL)
+ * @return Maximum column count, or 0 if table is empty or NULL
+ */
+GTEXT_API size_t gtext_csv_max_col_count(
+    const GTEXT_CSV_Table * table);
+
+/**
+ * @brief Get minimum column count across all rows
+ *
+ * Returns the minimum field_count across all rows in the table.
+ * Returns 0 if the table is empty.
+ *
+ * @param table Table (must not be NULL)
+ * @return Minimum column count, or 0 if table is empty or NULL
+ */
+GTEXT_API size_t gtext_csv_min_col_count(
+    const GTEXT_CSV_Table * table);
+
+/**
+ * @brief Validate table structure
+ *
+ * Performs comprehensive validation of table structure including:
+ * - Bounds checking (row_count, column_count, field_count)
+ * - Consistency checks (field arrays allocated, data pointers valid)
+ * - Memory safety checks (no obvious corruption)
+ *
+ * This function is useful for debugging and validation pipelines.
+ * It does not modify the table.
+ *
+ * @param table Table (must not be NULL)
+ * @return GTEXT_CSV_OK if table is valid, error code otherwise
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_validate_table(
+    const GTEXT_CSV_Table * table);
 
 /**
  * @brief Enable or disable header row processing

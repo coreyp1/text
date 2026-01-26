@@ -82,8 +82,9 @@ CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -W
 CC := cc
 CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags ghoti.io-cutil-dev`
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
-# TEXT_TEST_BUILD enables export of internal functions for testing
-LIB_CFLAGS := $(CFLAGS) -DTEXT_BUILD -DTEXT_TEST_BUILD
+# GTEXT_BUILD enables DLL export on Windows (checked by GTEXT_API macro)
+# GTEXT_TEST_BUILD enables export of internal functions for testing (checked by GTEXT_INTERNAL_API macro)
+LIB_CFLAGS := $(CFLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD
 # -DGHOTIIO_CUTIL_ENABLE_MEMORY_DEBUG
 LDFLAGS := -L /usr/lib -lstdc++ -lm `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags ghoti.io-cutil-dev`
 BUILD_DIR := ./build/$(BUILD)

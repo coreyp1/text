@@ -269,14 +269,14 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
   return current;
 }
 
-const GTEXT_JSON_Value * gtext_json_pointer_get(
+GTEXT_API const GTEXT_JSON_Value * gtext_json_pointer_get(
     const GTEXT_JSON_Value * root, const char * ptr, size_t len) {
   // Cast away const for internal evaluation
   // This is safe because we're only reading
   return json_pointer_evaluate((GTEXT_JSON_Value *)root, ptr, len);
 }
 
-GTEXT_JSON_Value * gtext_json_pointer_get_mut(
+GTEXT_API GTEXT_JSON_Value * gtext_json_pointer_get_mut(
     GTEXT_JSON_Value * root, const char * ptr, size_t len) {
   return json_pointer_evaluate(root, ptr, len);
 }

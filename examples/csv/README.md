@@ -35,6 +35,14 @@ CSV header processing example. Demonstrates:
 - Looking up columns by header name
 - Accessing data using header names
 
+### csv_irregular_rows.c
+Irregular rows support example. Demonstrates:
+- Enabling irregular rows mode and appending rows with different field counts
+- Parsing irregular CSV and normalizing it
+- Column insertion with padding for short rows
+- Using validation functions to check table structure
+- Write trimming to remove trailing empty fields
+
 ## Building Examples
 
 The easiest way to build all examples is using the Makefile:
