@@ -5,6 +5,8 @@
  * This header provides cross-compiler macros for common functionality
  * such as marking unused parameters, deprecated functions, and utility
  * macros for array operations.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #ifndef GHOTI_IO_TEXT_MACROS_H
@@ -20,7 +22,7 @@ extern "C" {
  * These forward declarations allow headers to reference types before
  * their full definitions are available.
  */
-typedef struct text_json_value text_json_value;
+typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
 
 /**
  * @brief Cross-compiler macro for marking a function parameter as unused
@@ -32,19 +34,19 @@ typedef struct text_json_value text_json_value;
  *
  * Example:
  * @code
- * void my_function(int TEXT_MAYBE_UNUSED(param)) {
+ * void my_function(int GTEXT_MAYBE_UNUSED(param)) {
  *     // param is intentionally unused
  * }
  * @endcode
  */
 #if defined(__GNUC__) || defined(__clang__)
-#define TEXT_MAYBE_UNUSED(X) __attribute__((unused)) X
+#define GTEXT_MAYBE_UNUSED(X) __attribute__((unused)) X
 
 #elif defined(_MSC_VER)
-#define TEXT_MAYBE_UNUSED(X) (void)(X)
+#define GTEXT_MAYBE_UNUSED(X) (void)(X)
 
 #else
-#define TEXT_MAYBE_UNUSED(X) X
+#define GTEXT_MAYBE_UNUSED(X) X
 
 #endif
 
@@ -56,18 +58,18 @@ typedef struct text_json_value text_json_value;
  *
  * Example:
  * @code
- * TEXT_DEPRECATED
+ * GTEXT_DEPRECATED
  * void old_function(void);
  * @endcode
  */
 #if defined(__GNUC__) || defined(__clang__)
-#define TEXT_DEPRECATED __attribute__((deprecated))
+#define GTEXT_DEPRECATED __attribute__((deprecated))
 
 #elif defined(_MSC_VER)
-#define TEXT_DEPRECATED __declspec(deprecated)
+#define GTEXT_DEPRECATED __declspec(deprecated)
 
 #else
-#define TEXT_DEPRECATED
+#define GTEXT_DEPRECATED
 
 #endif
 
@@ -80,23 +82,23 @@ typedef struct text_json_value text_json_value;
  *
  * Example:
  * @code
- * TEXT_API void public_function(void);
+ * GTEXT_API void public_function(void);
  * @endcode
  */
 #ifdef __cplusplus
-#define TEXT_EXTERN extern "C"
+#define GTEXT_EXTERN extern "C"
 #else
-#define TEXT_EXTERN
+#define GTEXT_EXTERN
 #endif
 
 #if defined(_WIN32) || defined(__CYGWIN__)
-#ifdef TEXT_BUILD
-#define TEXT_API TEXT_EXTERN __declspec(dllexport)
+#ifdef GTEXT_BUILD
+#define GTEXT_API GTEXT_EXTERN __declspec(dllexport)
 #else
-#define TEXT_API TEXT_EXTERN __declspec(dllimport)
+#define GTEXT_API GTEXT_EXTERN __declspec(dllimport)
 #endif
 #else
-#define TEXT_API TEXT_EXTERN __attribute__((visibility("default")))
+#define GTEXT_API GTEXT_EXTERN __attribute__((visibility("default")))
 #endif
 
 /**
@@ -108,13 +110,13 @@ typedef struct text_json_value text_json_value;
  *
  * Example:
  * @code
- * TEXT_INTERNAL_API void internal_function(void);
+ * GTEXT_INTERNAL_API void internal_function(void);
  * @endcode
  */
-#ifdef TEXT_TEST_BUILD
-#define TEXT_INTERNAL_API TEXT_API
+#ifdef GTEXT_TEST_BUILD
+#define GTEXT_INTERNAL_API GTEXT_API
 #else
-#define TEXT_INTERNAL_API
+#define GTEXT_INTERNAL_API
 #endif
 
 /**
@@ -129,11 +131,11 @@ typedef struct text_json_value text_json_value;
  * Example:
  * @code
  * int arr[10];
- * size_t count = TEXT_ARRAY_SIZE(arr);  // count = 10
+ * size_t count = GTEXT_ARRAY_SIZE(arr);  // count = 10
  * @endcode
  */
-#ifndef TEXT_ARRAY_SIZE
-#define TEXT_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#ifndef GTEXT_ARRAY_SIZE
+#define GTEXT_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #endif
 
 /**
@@ -146,11 +148,11 @@ typedef struct text_json_value text_json_value;
  *
  * Example:
  * @code
- * unsigned int flags = TEXT_BIT(3);  // flags = 0x08
+ * unsigned int flags = GTEXT_BIT(3);  // flags = 0x08
  * @endcode
  */
-#ifndef TEXT_BIT
-#define TEXT_BIT(x) (1u << (x))
+#ifndef GTEXT_BIT
+#define GTEXT_BIT(x) (1u << (x))
 #endif
 
 #ifdef __cplusplus

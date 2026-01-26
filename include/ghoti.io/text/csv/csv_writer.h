@@ -1,21 +1,24 @@
 /**
- * @file csv_writer.h
- * @brief CSV writer infrastructure and sink abstraction
+ * @file
+ *
+ * CSV writer infrastructure and sink abstraction.
  *
  * This header provides the sink abstraction for writing CSV output to
  * various destinations (buffers, files, callbacks, etc.) and helper
  * functions for common sink types. It also provides the streaming writer
  * API for incremental CSV construction with structural enforcement.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_CSV_WRITER_H
-#define GHOTI_IO_TEXT_CSV_WRITER_H
+#ifndef GHOTI_IO_GTEXT_CSV_WRITER_H
+#define GHOTI_IO_GTEXT_CSV_WRITER_H
 
-#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/csv/csv_table.h>
-#include <stddef.h>
+#include <ghoti.io/text/macros.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,14 +29,15 @@ extern "C" {
  *
  * This callback is invoked by the writer to output CSV data chunks.
  * The callback should write the provided bytes to the destination and
- * return TEXT_CSV_OK on success, or an error code on failure.
+ * return GTEXT_CSV_OK on success, or an error code on failure.
  *
  * @param user User-provided context pointer
  * @param bytes Pointer to the data to write
  * @param len Number of bytes to write
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-typedef text_csv_status (*text_csv_write_fn)(void* user, const char* bytes, size_t len);
+typedef GTEXT_CSV_Status (*GTEXT_CSV_Write_Function)(
+    void * user, const char * bytes, size_t len);
 
 /**
  * @brief CSV output sink structure
@@ -43,59 +47,60 @@ typedef text_csv_status (*text_csv_write_fn)(void* user, const char* bytes, size
  * destinations (buffers, files, streams, etc.).
  */
 typedef struct {
-  text_csv_write_fn write;  ///< Write callback function
-  void* user;               ///< User context pointer passed to callback
-} text_csv_sink;
+  GTEXT_CSV_Write_Function write; ///< Write callback function
+  void * user;                    ///< User context pointer passed to callback
+} GTEXT_CSV_Sink;
 
 /**
  * @brief Growable buffer sink structure
  *
  * Internal structure for managing a growable buffer sink. Users should
- * use text_csv_sink_buffer() to create a sink, not this structure directly.
+ * use gtext_csv_sink_buffer() to create a sink, not this structure directly.
  */
 typedef struct {
-  char* data;      ///< Buffer data (owned by sink)
-  size_t size;     ///< Current buffer size (bytes allocated)
-  size_t used;     ///< Bytes used in buffer
-} text_csv_buffer_sink;
+  char * data; ///< Buffer data (owned by sink)
+  size_t size; ///< Current buffer size (bytes allocated)
+  size_t used; ///< Bytes used in buffer
+} GTEXT_CSV_Buffer_Sink;
 
 /**
  * @brief Fixed buffer sink structure
  *
  * Internal structure for managing a fixed-size buffer sink. Users should
- * use text_csv_sink_fixed_buffer() to create a sink, not this structure directly.
+ * use gtext_csv_sink_fixed_buffer() to create a sink, not this structure
+ * directly.
  */
 typedef struct {
-  char* data;      ///< Buffer data (provided by user, not owned)
-  size_t size;     ///< Maximum buffer size
-  size_t used;     ///< Bytes written to buffer
-  bool truncated;  ///< true if truncation occurred
-} text_csv_fixed_buffer_sink;
+  char * data;    ///< Buffer data (provided by user, not owned)
+  size_t size;    ///< Maximum buffer size
+  size_t used;    ///< Bytes written to buffer
+  bool truncated; ///< true if truncation occurred
+} GTEXT_CSV_Fixed_Buffer_Sink;
 
 /**
  * @brief Create a growable buffer sink
  *
  * Creates a sink that writes to a dynamically-growing buffer. The buffer
- * is allocated and managed by the sink. Use text_csv_sink_buffer_data()
- * and text_csv_sink_buffer_size() to access the buffer, and
- * text_csv_sink_buffer_free() to free it.
+ * is allocated and managed by the sink. Use gtext_csv_sink_buffer_data()
+ * and gtext_csv_sink_buffer_size() to access the buffer, and
+ * gtext_csv_sink_buffer_free() to free it.
  *
  * @param sink Output parameter for the created sink
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_OOM on allocation failure
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_OOM on allocation failure
  */
-TEXT_API text_csv_status text_csv_sink_buffer(text_csv_sink* sink);
+GTEXT_API GTEXT_CSV_Status gtext_csv_sink_buffer(GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Get the buffer data from a growable buffer sink
  *
  * Returns a pointer to the buffer data. The buffer is null-terminated
  * for convenience, but may contain null bytes in the middle. Use
- * text_csv_sink_buffer_size() to get the actual size.
+ * gtext_csv_sink_buffer_size() to get the actual size.
  *
- * @param sink Sink created by text_csv_sink_buffer()
+ * @param sink Sink created by gtext_csv_sink_buffer()
  * @return Pointer to buffer data, or NULL if sink is invalid
  */
-TEXT_API const char* text_csv_sink_buffer_data(const text_csv_sink* sink);
+GTEXT_API const char * gtext_csv_sink_buffer_data(const GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Get the buffer size from a growable buffer sink
@@ -103,40 +108,38 @@ TEXT_API const char* text_csv_sink_buffer_data(const text_csv_sink* sink);
  * Returns the number of bytes written to the buffer (not including
  * the null terminator).
  *
- * @param sink Sink created by text_csv_sink_buffer()
+ * @param sink Sink created by gtext_csv_sink_buffer()
  * @return Number of bytes written, or 0 if sink is invalid
  */
-TEXT_API size_t text_csv_sink_buffer_size(const text_csv_sink* sink);
+GTEXT_API size_t gtext_csv_sink_buffer_size(const GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Free a growable buffer sink
  *
- * Frees the buffer allocated by text_csv_sink_buffer(). After calling
+ * Frees the buffer allocated by gtext_csv_sink_buffer(). After calling
  * this function, the sink is invalid and should not be used.
  *
- * @param sink Sink created by text_csv_sink_buffer()
+ * @param sink Sink created by gtext_csv_sink_buffer()
  */
-TEXT_API void text_csv_sink_buffer_free(text_csv_sink* sink);
+GTEXT_API void gtext_csv_sink_buffer_free(GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Create a fixed-size buffer sink
  *
  * Creates a sink that writes to a fixed-size buffer provided by the caller.
  * If the output exceeds the buffer size, it will be truncated and the
- * truncated flag will be set. Use text_csv_sink_fixed_buffer_used() to
- * get the number of bytes written, and text_csv_sink_fixed_buffer_truncated()
+ * truncated flag will be set. Use gtext_csv_sink_fixed_buffer_used() to
+ * get the number of bytes written, and gtext_csv_sink_fixed_buffer_truncated()
  * to check if truncation occurred.
  *
  * @param sink Output parameter for the created sink
  * @param buffer Buffer to write to (must remain valid for sink lifetime)
  * @param size Maximum size of the buffer
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if buffer is NULL or size is 0
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if buffer is NULL or
+ * size is 0
  */
-TEXT_API text_csv_status text_csv_sink_fixed_buffer(
-  text_csv_sink* sink,
-  char* buffer,
-  size_t size
-);
+GTEXT_API GTEXT_CSV_Status gtext_csv_sink_fixed_buffer(
+    GTEXT_CSV_Sink * sink, char * buffer, size_t size);
 
 /**
  * @brief Get the number of bytes written to a fixed buffer sink
@@ -144,10 +147,10 @@ TEXT_API text_csv_status text_csv_sink_fixed_buffer(
  * Returns the number of bytes written to the buffer (may be less than
  * the buffer size if truncation occurred).
  *
- * @param sink Sink created by text_csv_sink_fixed_buffer()
+ * @param sink Sink created by gtext_csv_sink_fixed_buffer()
  * @return Number of bytes written, or 0 if sink is invalid
  */
-TEXT_API size_t text_csv_sink_fixed_buffer_used(const text_csv_sink* sink);
+GTEXT_API size_t gtext_csv_sink_fixed_buffer_used(const GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Check if truncation occurred in a fixed buffer sink
@@ -155,21 +158,22 @@ TEXT_API size_t text_csv_sink_fixed_buffer_used(const text_csv_sink* sink);
  * Returns true if the output was truncated due to insufficient buffer
  * space, false otherwise.
  *
- * @param sink Sink created by text_csv_sink_fixed_buffer()
+ * @param sink Sink created by gtext_csv_sink_fixed_buffer()
  * @return true if truncated, false otherwise
  */
-TEXT_API bool text_csv_sink_fixed_buffer_truncated(const text_csv_sink* sink);
+GTEXT_API bool gtext_csv_sink_fixed_buffer_truncated(
+    const GTEXT_CSV_Sink * sink);
 
 /**
  * @brief Free a fixed buffer sink
  *
- * Frees the internal structure allocated by text_csv_sink_fixed_buffer().
+ * Frees the internal structure allocated by gtext_csv_sink_fixed_buffer().
  * After calling this function, the sink is invalid and should not be used.
  * Note: This does NOT free the buffer itself (it's owned by the caller).
  *
- * @param sink Sink created by text_csv_sink_fixed_buffer()
+ * @param sink Sink created by gtext_csv_sink_fixed_buffer()
  */
-TEXT_API void text_csv_sink_fixed_buffer_free(text_csv_sink* sink);
+GTEXT_API void gtext_csv_sink_fixed_buffer_free(GTEXT_CSV_Sink * sink);
 
 // ============================================================================
 // Streaming Writer API
@@ -181,7 +185,7 @@ TEXT_API void text_csv_sink_fixed_buffer_free(text_csv_sink* sink);
  * The writer maintains state for incremental CSV construction and enforces
  * valid call ordering (fields only within records, etc.).
  */
-typedef struct text_csv_writer text_csv_writer;
+typedef struct GTEXT_CSV_Writer GTEXT_CSV_Writer;
 
 /**
  * @brief Create a new CSV writer
@@ -195,10 +199,8 @@ typedef struct text_csv_writer text_csv_writer;
  * @param opts Write options (copied internally, can be freed after call)
  * @return Pointer to new writer, or NULL on failure (invalid sink/opts or OOM)
  */
-TEXT_API text_csv_writer* text_csv_writer_new(
-  const text_csv_sink* sink,
-  const text_csv_write_options* opts
-);
+GTEXT_API GTEXT_CSV_Writer * gtext_csv_writer_new(
+    const GTEXT_CSV_Sink * sink, const GTEXT_CSV_Write_Options * opts);
 
 /**
  * @brief Begin a new CSV record
@@ -207,10 +209,11 @@ TEXT_API text_csv_writer* text_csv_writer_new(
  * and record_end() calls. Multiple records can be written sequentially.
  *
  * @param writer Writer instance
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if writer is NULL or
  *         already in a record, or write error if sink write fails
  */
-TEXT_API text_csv_status text_csv_writer_record_begin(text_csv_writer* writer);
+GTEXT_API GTEXT_CSV_Status gtext_csv_writer_record_begin(
+    GTEXT_CSV_Writer * writer);
 
 /**
  * @brief Write a field to the current record
@@ -222,14 +225,11 @@ TEXT_API text_csv_status text_csv_writer_record_begin(text_csv_writer* writer);
  * @param writer Writer instance
  * @param bytes Field data (may be NULL if len is 0)
  * @param len Field length in bytes
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if writer is NULL or
  *         not in a record, or write error if sink write fails
  */
-TEXT_API text_csv_status text_csv_writer_field(
-  text_csv_writer* writer,
-  const void* bytes,
-  size_t len
-);
+GTEXT_API GTEXT_CSV_Status gtext_csv_writer_field(
+    GTEXT_CSV_Writer * writer, const void * bytes, size_t len);
 
 /**
  * @brief End the current CSV record
@@ -239,10 +239,11 @@ TEXT_API text_csv_status text_csv_writer_field(
  * next record_begin() or finish().
  *
  * @param writer Writer instance
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL or
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if writer is NULL or
  *         not in a record, or write error if sink write fails
  */
-TEXT_API text_csv_status text_csv_writer_record_end(text_csv_writer* writer);
+GTEXT_API GTEXT_CSV_Status gtext_csv_writer_record_end(
+    GTEXT_CSV_Writer * writer);
 
 /**
  * @brief Finish writing CSV output
@@ -253,10 +254,10 @@ TEXT_API text_csv_status text_csv_writer_record_end(text_csv_writer* writer);
  * for further writing (though free() can still be called).
  *
  * @param writer Writer instance
- * @return TEXT_CSV_OK on success, TEXT_CSV_E_INVALID if writer is NULL,
+ * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if writer is NULL,
  *         or write error if sink write fails
  */
-TEXT_API text_csv_status text_csv_writer_finish(text_csv_writer* writer);
+GTEXT_API GTEXT_CSV_Status gtext_csv_writer_finish(GTEXT_CSV_Writer * writer);
 
 /**
  * @brief Free a CSV writer
@@ -268,7 +269,7 @@ TEXT_API text_csv_status text_csv_writer_finish(text_csv_writer* writer);
  *
  * @param writer Writer instance (can be NULL)
  */
-TEXT_API void text_csv_writer_free(text_csv_writer* writer);
+GTEXT_API void gtext_csv_writer_free(GTEXT_CSV_Writer * writer);
 
 // ============================================================================
 // Table Serialization API
@@ -287,16 +288,13 @@ TEXT_API void text_csv_writer_free(text_csv_writer* writer);
  * @param sink Output sink (must remain valid for function lifetime)
  * @param opts Write options (can be NULL for defaults)
  * @param table Table to serialize (must not be NULL)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-TEXT_API text_csv_status text_csv_write_table(
-    const text_csv_sink* sink,
-    const text_csv_write_options* opts,
-    const text_csv_table* table
-);
+GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
+    const GTEXT_CSV_Write_Options * opts, const GTEXT_CSV_Table * table);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_CSV_WRITER_H */
+#endif /* GHOTI_IO_GTEXT_CSV_WRITER_H */

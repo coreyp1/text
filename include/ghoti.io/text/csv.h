@@ -7,6 +7,8 @@
  *
  * For internal implementations that only need core types, use
  * <ghoti.io/text/csv/csv_core.h> instead to reduce compile-time dependencies.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #ifndef GHOTI_IO_TEXT_CSV_H
@@ -16,8 +18,8 @@
 #include <ghoti.io/text/csv/csv_core.h>
 
 // CSV module headers
-#include <ghoti.io/text/csv/csv_table.h>
 #include <ghoti.io/text/csv/csv_stream.h>
+#include <ghoti.io/text/csv/csv_table.h>
 #include <ghoti.io/text/csv/csv_writer.h>
 
 #endif /* GHOTI_IO_TEXT_CSV_H */

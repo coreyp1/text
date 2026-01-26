@@ -33,7 +33,7 @@ DOM parsing builds a complete in-memory table structure of the CSV data. This mo
 - Access values multiple times
 - Work with the entire document at once
 
-The DOM is allocated from an arena, making cleanup simple with a single `text_csv_free_table()` call.
+The DOM is allocated from an arena, making cleanup simple with a single `gtext_csv_free_table()` call.
 
 ### 2.2 Streaming Parsing
 
@@ -70,9 +70,9 @@ The dialect defines the exact format rules for parsing and writing CSV:
 - **`delimiter`**: Field delimiter — **Default: `','`**
 - **`quote`**: Quote character — **Default: `'"'`**
 - **`escape`**: Escape mode:
-  - `TEXT_CSV_ESCAPE_DOUBLED_QUOTE`: Escape quotes by doubling (`""`) — **Default**
-  - `TEXT_CSV_ESCAPE_BACKSLASH`: Escape quotes with backslash (`\"`)
-  - `TEXT_CSV_ESCAPE_NONE`: No escaping
+  - `GTEXT_CSV_ESCAPE_DOUBLED_QUOTE`: Escape quotes by doubling (`""`) — **Default**
+  - `GTEXT_CSV_ESCAPE_BACKSLASH`: Escape quotes with backslash (`\"`)
+  - `GTEXT_CSV_ESCAPE_NONE`: No escaping
 - **`newline_in_quotes`**: Allow newlines inside quoted fields — **Default: `true`**
 - **`accept_lf`**: Accept LF (`\n`) as newline — **Default: `true`**
 - **`accept_crlf`**: Accept CRLF (`\r\n`) as newline — **Default: `true`**
@@ -85,10 +85,10 @@ The dialect defines the exact format rules for parsing and writing CSV:
 - **`comment_prefix`**: Comment prefix string — **Default: `"#"`**
 - **`treat_first_row_as_header`**: Treat first row as header — **Default: `false`**
 - **`header_dup_mode`**: Duplicate column name handling:
-  - `TEXT_CSV_DUPCOL_ERROR`: Fail parse on duplicate column name
-  - `TEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence — **Default** (duplicates allowed, first match returned)
-  - `TEXT_CSV_DUPCOL_LAST_WINS`: Use last occurrence
-  - `TEXT_CSV_DUPCOL_COLLECT`: Store all indices for duplicate columns
+  - `GTEXT_CSV_DUPCOL_ERROR`: Fail parse on duplicate column name
+  - `GTEXT_CSV_DUPCOL_FIRST_WINS`: Use first occurrence — **Default** (duplicates allowed, first match returned)
+  - `GTEXT_CSV_DUPCOL_LAST_WINS`: Use last occurrence
+  - `GTEXT_CSV_DUPCOL_COLLECT`: Store all indices for duplicate columns
 
 ### 4.2 Unicode / Input Handling
 
@@ -147,25 +147,25 @@ The writer supports multiple output destinations through a sink abstraction:
 
 The DOM provides accessors for CSV data:
 
-- **Row count**: `text_csv_row_count()` — returns number of data rows (excluding header if present)
-- **Column count**: `text_csv_col_count()` — returns number of columns in a row
-- **Field access**: `text_csv_field()` — returns field data and length
+- **Row count**: `gtext_csv_row_count()` — returns number of data rows (excluding header if present)
+- **Column count**: `gtext_csv_col_count()` — returns number of columns in a row
+- **Field access**: `gtext_csv_field()` — returns field data and length
 
 ### 7.2 Header Operations
 
 When header processing is enabled:
 
-- **Header lookup**: `text_csv_header_index()` — get column index by header name (returns first match for duplicate headers)
-- **Header iteration**: `text_csv_header_index_next()` — get next column index for a header name after a given index (for iterating through duplicate headers)
-- **Header uniqueness check**: `text_csv_can_have_unique_headers()` — check if table has headers and all header names are unique
-- **Require unique headers**: `text_csv_set_require_unique_headers()` — enable/disable uniqueness requirement for mutation operations
-- **Toggle header row**: `text_csv_set_header_row()` — enable or disable header row processing after parsing
+- **Header lookup**: `gtext_csv_header_index()` — get column index by header name (returns first match for duplicate headers)
+- **Header iteration**: `gtext_csv_header_index_next()` — get next column index for a header name after a given index (for iterating through duplicate headers)
+- **Header uniqueness check**: `gtext_csv_can_have_unique_headers()` — check if table has headers and all header names are unique
+- **Require unique headers**: `gtext_csv_set_require_unique_headers()` — enable/disable uniqueness requirement for mutation operations
+- **Toggle header row**: `gtext_csv_set_header_row()` — enable or disable header row processing after parsing
 - Header row is excluded from row count but accessible via adjusted indices
 
 **Default Behavior:**
-- By default, duplicate header names are **allowed** during parsing (`header_dup_mode` defaults to `TEXT_CSV_DUPCOL_FIRST_WINS`)
+- By default, duplicate header names are **allowed** during parsing (`header_dup_mode` defaults to `GTEXT_CSV_DUPCOL_FIRST_WINS`)
 - By default, mutation operations (column append, insert, rename) **allow** duplicate header names (`require_unique_headers` defaults to `false`)
-- To enforce uniqueness, set `require_unique_headers` to `true` or use `TEXT_CSV_DUPCOL_ERROR` mode during parsing
+- To enforce uniqueness, set `require_unique_headers` to `true` or use `GTEXT_CSV_DUPCOL_ERROR` mode during parsing
 
 ### 7.3 Table Mutation Operations
 
@@ -175,7 +175,7 @@ The CSV module provides a comprehensive set of mutation operations for modifying
 
 **Create Empty Table:**
 ```c
-text_csv_table* table = text_csv_new_table();
+gtext_csv_table* table = gtext_csv_new_table();
 ```
 
 Creates a new empty table with initialized context and arena. The table starts with a default row capacity of 16 rows. No columns are defined until the first row is added.
@@ -183,7 +183,7 @@ Creates a new empty table with initialized context and arena. The table starts w
 **Create Table With Headers:**
 ```c
 const char* headers[] = {"Name", "Age", "City"};
-text_csv_table* table = text_csv_new_table_with_headers(headers, NULL, 3);
+gtext_csv_table* table = gtext_csv_new_table_with_headers(headers, NULL, 3);
 ```
 
 Creates a new table with specified column headers. Headers are treated as the first row and are excluded from the row count. A header map is built for fast column name lookup. Duplicate header names are not allowed.
@@ -193,7 +193,7 @@ Creates a new table with specified column headers. Headers are treated as the fi
 **Append Row:**
 ```c
 const char* fields[] = {"Alice", "30", "New York"};
-text_csv_row_append(table, fields, NULL, 3);
+gtext_csv_row_append(table, fields, NULL, 3);
 ```
 
 Adds a new row with the specified field values to the end of the table. The first row added sets the column count for the table. Subsequent rows must have the same number of fields (strict validation). All field data is copied to the arena.
@@ -201,14 +201,14 @@ Adds a new row with the specified field values to the end of the table. The firs
 **Insert Row:**
 ```c
 const char* fields[] = {"Bob", "25", "San Francisco"};
-text_csv_row_insert(table, 1, fields, NULL, 3);  // Insert at index 1
+gtext_csv_row_insert(table, 1, fields, NULL, 3);  // Insert at index 1
 ```
 
 Inserts a new row at the specified index, shifting existing rows right. The index can equal `row_count`, which is equivalent to appending.
 
 **Remove Row:**
 ```c
-text_csv_row_remove(table, 0);  // Remove first data row
+gtext_csv_row_remove(table, 0);  // Remove first data row
 ```
 
 Removes the row at the specified index, shifting remaining rows left. If the table has headers, the header row (index 0) cannot be removed.
@@ -216,14 +216,14 @@ Removes the row at the specified index, shifting remaining rows left. If the tab
 **Replace Row:**
 ```c
 const char* fields[] = {"Charlie", "35", "Chicago"};
-text_csv_row_set(table, 0, fields, NULL, 3);  // Replace first data row
+gtext_csv_row_set(table, 0, fields, NULL, 3);  // Replace first data row
 ```
 
 Replaces the row at the specified index with new field values. The field count must match the table's column count.
 
 **Clear Table:**
 ```c
-text_csv_table_clear(table);
+gtext_csv_table_clear(table);
 ```
 
 Removes all data rows from the table while preserving the table structure (headers if present, column count). This function automatically compacts the table to free memory from cleared rows.
@@ -232,7 +232,7 @@ Removes all data rows from the table while preserving the table structure (heade
 
 **Append Column:**
 ```c
-text_csv_column_append(table, "Country", 0);  // Add "Country" column (null-terminated)
+gtext_csv_column_append(table, "Country", 0);  // Add "Country" column (null-terminated)
 ```
 
 Adds a new column to the end of all rows. If the table has headers, the `header_name` parameter is required. All existing rows get an empty field added at the end.
@@ -240,7 +240,7 @@ Adds a new column to the end of all rows. If the table has headers, the `header_
 **Append Column with Initial Values:**
 ```c
 const char* values[] = {"Country", "USA", "Canada", "Mexico"};  // Header + 3 data rows
-text_csv_column_append_with_values(table, NULL, 0, values, NULL);
+gtext_csv_column_append_with_values(table, NULL, 0, values, NULL);
 ```
 
 Adds a new column to the end of all rows with initial values for each row. The number of values must exactly match the number of rows:
@@ -252,7 +252,7 @@ When the table has headers and `values` is provided, `values[0]` is used for bot
 
 **Insert Column:**
 ```c
-text_csv_column_insert(table, 1, "MiddleName", 0);  // Insert at index 1
+gtext_csv_column_insert(table, 1, "MiddleName", 0);  // Insert at index 1
 ```
 
 Inserts a new column at the specified index, shifting existing columns right. The index can equal the column count, which is equivalent to appending. When headers are present, all header map entries after the insertion point are automatically reindexed.
@@ -260,21 +260,21 @@ Inserts a new column at the specified index, shifting existing columns right. Th
 **Insert Column with Initial Values:**
 ```c
 const char* values[] = {"MiddleName", "John", "Jane", "Bob"};  // Header + 3 data rows
-text_csv_column_insert_with_values(table, 1, NULL, 0, values, NULL);  // Insert at index 1
+gtext_csv_column_insert_with_values(table, 1, NULL, 0, values, NULL);  // Insert at index 1
 ```
 
-Inserts a new column at the specified index with initial values for each row. Same value count requirements as `text_csv_column_append_with_values()`. The index can equal the column count, which is equivalent to appending.
+Inserts a new column at the specified index with initial values for each row. Same value count requirements as `gtext_csv_column_append_with_values()`. The index can equal the column count, which is equivalent to appending.
 
 **Remove Column:**
 ```c
-text_csv_column_remove(table, 0);  // Remove first column
+gtext_csv_column_remove(table, 0);  // Remove first column
 ```
 
 Removes the column at the specified index from all rows, shifting remaining columns left. When headers are present, the header map entry is removed and remaining entries are reindexed.
 
 **Rename Column:**
 ```c
-text_csv_column_rename(table, 0, "FullName", 0);  // Rename first column
+gtext_csv_column_rename(table, 0, "FullName", 0);  // Rename first column
 ```
 
 Renames a column header. This function only works if the table has headers. By default, duplicate header names are allowed. If `require_unique_headers` is `true`, the new header name must not duplicate an existing header name.
@@ -283,7 +283,7 @@ Renames a column header. This function only works if the table has headers. By d
 
 **Set Field Value:**
 ```c
-text_csv_field_set(table, 0, 1, "31", 0);  // Set row 0, column 1 to "31"
+gtext_csv_field_set(table, 0, 1, "31", 0);  // Set row 0, column 1 to "31"
 ```
 
 Sets the value of a field at specified row and column indices. The field data is copied to the arena. If the field was previously in-situ (referencing the input buffer), it will be copied to the arena. If `field_length` is 0 and `field_data` is not NULL, it is assumed to be a null-terminated string.
@@ -292,8 +292,8 @@ Sets the value of a field at specified row and column indices. The field data is
 
 **Set Header Row:**
 ```c
-text_csv_set_header_row(table, true);   // Enable headers (first row becomes header)
-text_csv_set_header_row(table, false);  // Disable headers (header becomes first data row)
+gtext_csv_set_header_row(table, true);   // Enable headers (first row becomes header)
+gtext_csv_set_header_row(table, false);  // Disable headers (header becomes first data row)
 ```
 
 Enables or disables header row processing after parsing. When enabling headers:
@@ -309,15 +309,15 @@ When disabling headers:
 
 **Set Require Unique Headers:**
 ```c
-text_csv_set_require_unique_headers(table, true);   // Enforce uniqueness
-text_csv_set_require_unique_headers(table, false);  // Allow duplicates (default)
+gtext_csv_set_require_unique_headers(table, true);   // Enforce uniqueness
+gtext_csv_set_require_unique_headers(table, false);  // Allow duplicates (default)
 ```
 
 Controls whether mutation operations (column append, insert, rename) enforce uniqueness of header names. When set to `true`, these operations will fail if they would create duplicate header names. This flag only affects mutation operations; parsing behavior is controlled by `header_dup_mode` in parse options.
 
 **Check Unique Headers:**
 ```c
-bool can_have_unique = text_csv_can_have_unique_headers(table);
+bool can_have_unique = gtext_csv_can_have_unique_headers(table);
 ```
 
 Returns `true` if the table has headers and all header names are currently unique. Returns `false` if the table has no headers or contains duplicate header names. Useful for checking if a table is in a state where unique headers can be enforced.
@@ -325,32 +325,32 @@ Returns `true` if the table has headers and all header names are currently uniqu
 **Iterate Through Duplicate Headers:**
 ```c
 size_t idx;
-if (text_csv_header_index(table, "Name", &idx) == TEXT_CSV_OK) {
+if (gtext_csv_header_index(table, "Name", &idx) == GTEXT_CSV_OK) {
     // Process first match
     do {
         // Process column at idx
         // ...
-    } while (text_csv_header_index_next(table, "Name", idx, &idx) == TEXT_CSV_OK);
+    } while (gtext_csv_header_index_next(table, "Name", idx, &idx) == GTEXT_CSV_OK);
 }
 ```
 
-Iterates through all columns with the same header name. First call `text_csv_header_index()` to get the first match, then repeatedly call `text_csv_header_index_next()` until it returns `TEXT_CSV_E_INVALID` (no more matches).
+Iterates through all columns with the same header name. First call `gtext_csv_header_index()` to get the first match, then repeatedly call `gtext_csv_header_index_next()` until it returns `GTEXT_CSV_E_INVALID` (no more matches).
 
 #### 7.3.6 Utility Operations
 
 **Clone Table:**
 ```c
-text_csv_table* clone = text_csv_clone(table);
+gtext_csv_table* clone = gtext_csv_clone(table);
 ```
 
 Creates a deep copy of the table, allocating all memory from a new arena. The cloned table is completely independent of the original.
 
 **Compact Table:**
 ```c
-text_csv_table_compact(table);
+gtext_csv_table_compact(table);
 ```
 
-Moves all current table data to a new arena and frees the old arena. This releases memory from old allocations that may have been left behind due to repeated modifications. This function is automatically called by `text_csv_table_clear()`, but can also be called independently.
+Moves all current table data to a new arena and frees the old arena. This releases memory from old allocations that may have been left behind due to repeated modifications. This function is automatically called by `gtext_csv_table_clear()`, but can also be called independently.
 
 #### 7.3.7 Performance Characteristics
 
@@ -399,7 +399,7 @@ In-situ mode is used for a field when **all** of the following conditions are me
 
 1. **`in_situ_mode` is enabled** in parse options
 2. **`validate_utf8` is disabled** (`false`) — UTF-8 validation requires copying
-3. **Single-chunk parsing** — the entire CSV data is provided in one `text_csv_parse_table()` call
+3. **Single-chunk parsing** — the entire CSV data is provided in one `gtext_csv_parse_table()` call
 4. **No transformation needed** — the field doesn't require unescaping (no doubled quotes or backslash escapes)
 5. **Field not buffered** — the field didn't span chunks or contain newlines in quotes
 
@@ -414,7 +414,7 @@ Fields are automatically copied to arena-allocated memory when:
 
 **Lifetime Requirements:**
 
-⚠️ **Critical**: When in-situ mode is enabled, the input buffer (`data` parameter to `text_csv_parse_table()`) **must remain valid for the entire lifetime of the table**. The table may contain pointers directly into this buffer.
+⚠️ **Critical**: When in-situ mode is enabled, the input buffer (`data` parameter to `gtext_csv_parse_table()`) **must remain valid for the entire lifetime of the table**. The table may contain pointers directly into this buffer.
 
 **Example Usage:**
 
@@ -424,17 +424,17 @@ const char* csv_data = "Name,Age\nJohn,30\nJane,25";
 size_t csv_len = strlen(csv_data);
 
 // Enable in-situ mode
-text_csv_parse_options opts = text_csv_parse_options_default();
+gtext_csv_parse_options opts = gtext_csv_parse_options_default();
 opts.in_situ_mode = true;
 opts.validate_utf8 = false;  // Required for in-situ mode
 
-text_csv_table* table = text_csv_parse_table(csv_data, csv_len, &opts, NULL);
+gtext_csv_table* table = gtext_csv_parse_table(csv_data, csv_len, &opts, NULL);
 
 // Fields may point directly into csv_data
-const char* name = text_csv_field(table, 0, 0, NULL);
+const char* name = gtext_csv_field(table, 0, 0, NULL);
 
 // CRITICAL: csv_data must remain valid until table is freed
-text_csv_free_table(table);
+gtext_csv_free_table(table);
 ```
 
 ---
@@ -451,7 +451,7 @@ The library provides comprehensive error information:
   - Context snippet showing the error location
   - Caret positioning within the snippet
 
-Error context snippets are dynamically allocated and must be freed via `text_csv_error_free()`.
+Error context snippets are dynamically allocated and must be freed via `gtext_csv_error_free()`.
 
 Common error cases:
 

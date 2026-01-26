@@ -1,6 +1,7 @@
 /**
- * @file json_schema.h
- * @brief JSON Schema validation (core subset)
+ * @file
+ *
+ * JSON Schema validation (core subset).
  *
  * This header provides functions for compiling and validating JSON values
  * against JSON Schema documents. This implementation supports a pragmatic
@@ -18,13 +19,15 @@
  * - minItems/maxItems: Array size constraints
  *
  * The schema engine is designed to be modular and optional at compile time.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_SCHEMA_H
-#define GHOTI_IO_TEXT_JSON_SCHEMA_H
+#ifndef GHOTI_IO_GTEXT_JSON_SCHEMA_H
+#define GHOTI_IO_GTEXT_JSON_SCHEMA_H
 
-#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/macros.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -37,7 +40,7 @@ extern "C" {
  * Represents a compiled JSON Schema. The structure is opaque to users;
  * all interaction is through the API functions.
  */
-typedef struct text_json_schema text_json_schema;
+typedef struct GTEXT_JSON_Schema GTEXT_JSON_Schema;
 
 /**
  * @brief Compile a JSON Schema document into a compiled schema
@@ -49,14 +52,13 @@ typedef struct text_json_schema text_json_schema;
  * The compiled schema is independent of the original schema document;
  * the document can be freed after compilation.
  *
- * @param schema_doc JSON value representing the schema document (must not be NULL, must be TEXT_JSON_OBJECT)
+ * @param schema_doc JSON value representing the schema document (must not be
+ * NULL, must be GTEXT_JSON_OBJECT)
  * @param err Error output structure (can be NULL if error details not needed)
  * @return Compiled schema on success, NULL on failure (check err for details)
  */
-TEXT_API text_json_schema* text_json_schema_compile(
-    const text_json_value* schema_doc,
-    text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile(
+    const GTEXT_JSON_Value * schema_doc, GTEXT_JSON_Error * err);
 
 /**
  * @brief Free a compiled schema
@@ -66,13 +68,13 @@ TEXT_API text_json_schema* text_json_schema_compile(
  *
  * @param schema Schema to free (can be NULL, in which case this is a no-op)
  */
-TEXT_API void text_json_schema_free(text_json_schema* schema);
+GTEXT_API void gtext_json_schema_free(GTEXT_JSON_Schema * schema);
 
 /**
  * @brief Validate a JSON value against a compiled schema
  *
- * Validates a JSON value against a compiled schema. Returns TEXT_JSON_OK
- * if the value matches the schema, or TEXT_JSON_E_SCHEMA if validation fails.
+ * Validates a JSON value against a compiled schema. Returns GTEXT_JSON_OK
+ * if the value matches the schema, or GTEXT_JSON_E_SCHEMA if validation fails.
  *
  * Error details are provided in the err structure, including which schema
  * keyword failed and why.
@@ -80,16 +82,15 @@ TEXT_API void text_json_schema_free(text_json_schema* schema);
  * @param schema Compiled schema (must not be NULL)
  * @param instance JSON value to validate (must not be NULL)
  * @param err Error output structure (can be NULL if error details not needed)
- * @return TEXT_JSON_OK if validation succeeds, TEXT_JSON_E_SCHEMA if validation fails
+ * @return GTEXT_JSON_OK if validation succeeds, GTEXT_JSON_E_SCHEMA if
+ * validation fails
  */
-TEXT_API text_json_status text_json_schema_validate(
-    const text_json_schema* schema,
-    const text_json_value* instance,
-    text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_schema_validate(
+    const GTEXT_JSON_Schema * schema, const GTEXT_JSON_Value * instance,
+    GTEXT_JSON_Error * err);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_SCHEMA_H */
+#endif /* GHOTI_IO_GTEXT_JSON_SCHEMA_H */

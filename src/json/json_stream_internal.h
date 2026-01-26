@@ -1,33 +1,61 @@
 /**
- * @file json_stream_internal.h
- * @brief Internal definitions for JSON streaming parser
+ * @file
  *
- * This header contains internal-only definitions used by the JSON streaming parser
- * implementation. It should not be included by external code.
+ * Internal definitions for JSON streaming parser.
+ *
+ * This header contains internal-only definitions used by the JSON streaming
+ * parser implementation. It should not be included by external code.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_STREAM_INTERNAL_H
-#define GHOTI_IO_TEXT_JSON_STREAM_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H
+#define GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H
 
 #include "json_internal.h"
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_stream.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
-#include <limits.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
+ * @brief Streaming parser state machine states
+ */
+typedef enum {
+  JSON_STREAM_STATE_INIT,  ///< Initial state, waiting for first value
+  JSON_STREAM_STATE_VALUE, ///< Just processed a value, waiting for comma or
+                           ///< closing bracket/brace
+  JSON_STREAM_STATE_ARRAY, ///< Inside an array, expecting value or ]
+  JSON_STREAM_STATE_OBJECT_KEY,   ///< Inside object, expecting key
+  JSON_STREAM_STATE_OBJECT_VALUE, ///< Just processed key, expecting colon
+  JSON_STREAM_STATE_EXPECT_VALUE, ///< Expecting a value (after colon in object,
+                                  ///< or in array)
+  JSON_STREAM_STATE_DONE,         ///< Parsing complete
+  JSON_STREAM_STATE_ERROR         ///< Error state
+} json_stream_state;
+
+/**
+ * @brief Stack entry for tracking nesting
+ */
+typedef struct {
+  json_stream_state state; ///< State when entering this level
+  int is_array;            ///< 1 if array, 0 if object
+  int has_elements;        ///< 1 if container has at least one element
+} json_stream_stack_entry;
+
+/**
  * @brief Token buffer type enumeration
  */
 typedef enum {
-    JSON_TOKEN_BUFFER_NONE,      ///< No active token buffer
-    JSON_TOKEN_BUFFER_STRING,    ///< Buffering a string token
-    JSON_TOKEN_BUFFER_NUMBER     ///< Buffering a number token
+  JSON_TOKEN_BUFFER_NONE,   ///< No active token buffer
+  JSON_TOKEN_BUFFER_STRING, ///< Buffering a string token
+  JSON_TOKEN_BUFFER_NUMBER  ///< Buffering a number token
 } json_token_buffer_type;
 
 /**
@@ -38,32 +66,33 @@ typedef enum {
  * more input arrives.
  */
 typedef struct json_token_buffer {
-    json_token_buffer_type type;  ///< Type of token being buffered
+  json_token_buffer_type type; ///< Type of token being buffered
 
-    // Buffer management (similar to CSV field_buffer)
-    char* buffer;                  ///< Allocated buffer (NULL if not buffered)
-    size_t buffer_size;            ///< Allocated buffer size in bytes
-    size_t buffer_used;            ///< Used buffer size in bytes
-    bool is_buffered;              ///< Whether data is in allocated buffer
+  // Buffer management (similar to CSV field_buffer)
+  char * buffer;      ///< Allocated buffer (NULL if not buffered)
+  size_t buffer_size; ///< Allocated buffer size in bytes
+  size_t buffer_used; ///< Used buffer size in bytes
+  bool is_buffered;   ///< Whether data is in allocated buffer
 
-    // JSON-specific parsing state
-    union {
-        struct {
-            int in_escape;                  ///< 1 if last char was '\'
-            int unicode_escape_remaining;   ///< Hex digits remaining for \uXXXX (0-4)
-            int high_surrogate_seen;        ///< 1 if high surrogate seen, waiting for low
-        } string_state;
-        struct {
-            int has_dot;                    ///< 1 if number contains '.'
-            int has_exp;                    ///< 1 if number contains 'e' or 'E'
-            int exp_sign_seen;              ///< 1 if exponent sign (+/-) seen
-            int starts_with_minus;          ///< 1 if number starts with '-'
-        } number_state;
-    } parse_state;
+  // JSON-specific parsing state
+  union {
+    struct {
+      int in_escape;                ///< 1 if last char was '\'
+      int unicode_escape_remaining; ///< Hex digits remaining for \uXXXX (0-4)
+      int high_surrogate_seen; ///< 1 if high surrogate seen, waiting for low
+    } string_state;
+    struct {
+      int has_dot;           ///< 1 if number contains '.'
+      int has_exp;           ///< 1 if number contains 'e' or 'E'
+      int exp_sign_seen;     ///< 1 if exponent sign (+/-) seen
+      int starts_with_minus; ///< 1 if number starts with '-'
+    } number_state;
+  } parse_state;
 
-    // Position tracking
-    size_t start_offset;                   ///< Offset where token started in input_buffer
-    size_t consumed_length;                ///< Length of data consumed from input_buffer (for incomplete tokens)
+  // Position tracking
+  size_t start_offset;    ///< Offset where token started in input_buffer
+  size_t consumed_length; ///< Length of data consumed from input_buffer (for
+                          ///< incomplete tokens)
 } json_token_buffer;
 
 /**
@@ -99,7 +128,7 @@ typedef struct json_token_buffer {
  *
  * @param tb Token buffer to initialize (must not be NULL)
  */
-void json_token_buffer_init(json_token_buffer* tb);
+void json_token_buffer_init(json_token_buffer * tb);
 
 /**
  * @brief Clear a token buffer structure
@@ -109,7 +138,7 @@ void json_token_buffer_init(json_token_buffer* tb);
  *
  * @param tb Token buffer to clear (must not be NULL)
  */
-void json_token_buffer_clear(json_token_buffer* tb);
+void json_token_buffer_clear(json_token_buffer * tb);
 
 /**
  * @brief Append data to token buffer
@@ -120,28 +149,23 @@ void json_token_buffer_clear(json_token_buffer* tb);
  * @param tb Token buffer to append to (must not be NULL)
  * @param data Data to append (must not be NULL)
  * @param len Length of data to append
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-text_json_status json_token_buffer_append(
-    json_token_buffer* tb,
-    const char* data,
-    size_t len
-);
+GTEXT_JSON_Status json_token_buffer_append(
+    json_token_buffer * tb, const char * data, size_t len);
 
 /**
  * @brief Grow token buffer to accommodate needed size
  *
  * Allocates or reallocates the token buffer to at least the needed size.
- * Uses hybrid growth strategy (exponential for small buffers, linear for large).
+ * Uses hybrid growth strategy (exponential for small buffers, linear for
+ * large).
  *
  * @param tb Token buffer to grow (must not be NULL)
  * @param needed Minimum size needed in bytes
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-text_json_status json_token_buffer_grow(
-    json_token_buffer* tb,
-    size_t needed
-);
+GTEXT_JSON_Status json_token_buffer_grow(json_token_buffer * tb, size_t needed);
 
 /**
  * @brief Set parsing state for string token
@@ -151,14 +175,11 @@ text_json_status json_token_buffer_grow(
  * @param tb Token buffer to set state on (must not be NULL)
  * @param in_escape 1 if last char was '\', 0 otherwise
  * @param unicode_escape_remaining Hex digits remaining for \uXXXX (0-4)
- * @param high_surrogate_seen 1 if high surrogate seen, waiting for low, 0 otherwise
+ * @param high_surrogate_seen 1 if high surrogate seen, waiting for low, 0
+ * otherwise
  */
-void json_token_buffer_set_string_state(
-    json_token_buffer* tb,
-    int in_escape,
-    int unicode_escape_remaining,
-    int high_surrogate_seen
-);
+void json_token_buffer_set_string_state(json_token_buffer * tb, int in_escape,
+    int unicode_escape_remaining, int high_surrogate_seen);
 
 /**
  * @brief Set parsing state for number token
@@ -171,13 +192,8 @@ void json_token_buffer_set_string_state(
  * @param exp_sign_seen 1 if exponent sign (+/-) seen, 0 otherwise
  * @param starts_with_minus 1 if number starts with '-', 0 otherwise
  */
-void json_token_buffer_set_number_state(
-    json_token_buffer* tb,
-    int has_dot,
-    int has_exp,
-    int exp_sign_seen,
-    int starts_with_minus
-);
+void json_token_buffer_set_number_state(json_token_buffer * tb, int has_dot,
+    int has_exp, int exp_sign_seen, int starts_with_minus);
 
 /**
  * @brief Get current buffer data pointer
@@ -188,7 +204,7 @@ void json_token_buffer_set_number_state(
  * @param tb Token buffer (must not be NULL)
  * @return Pointer to buffer data, or NULL if not allocated
  */
-const char* json_token_buffer_data(const json_token_buffer* tb);
+const char * json_token_buffer_data(const json_token_buffer * tb);
 
 /**
  * @brief Get current buffer length
@@ -198,10 +214,48 @@ const char* json_token_buffer_data(const json_token_buffer* tb);
  * @param tb Token buffer (must not be NULL)
  * @return Current buffer length in bytes
  */
-size_t json_token_buffer_length(const json_token_buffer* tb);
+size_t json_token_buffer_length(const json_token_buffer * tb);
+
+/**
+ * @brief Internal streaming parser structure
+ */
+struct GTEXT_JSON_Stream {
+  // Configuration
+  GTEXT_JSON_Parse_Options opts; ///< Parse options (copied)
+  GTEXT_JSON_Event_cb callback;  ///< Event callback
+  void * user_data;              ///< User context for callback
+
+  // State machine
+  json_stream_state state; ///< Current parser state
+  size_t depth;            ///< Current nesting depth
+
+  // Input buffering (for incremental parsing)
+  char * input_buffer;           ///< Buffered input data
+  size_t input_buffer_size;      ///< Allocated size of buffer
+  size_t input_buffer_used;      ///< Used portion of buffer
+  size_t input_buffer_processed; ///< Processed portion of buffer
+  size_t buffer_start_offset; ///< Absolute offset where buffer starts in total
+                              ///< input
+
+  // Lexer state (will be initialized when we have enough input)
+  json_lexer lexer;      ///< Lexer instance
+  int lexer_initialized; ///< Whether lexer is initialized
+
+  // Stack for tracking nesting
+  json_stream_stack_entry * stack; ///< Stack of nested structures
+  size_t stack_capacity;           ///< Allocated stack capacity
+  size_t stack_size;               ///< Current stack depth
+
+  // Token buffer for incomplete tokens (strings, numbers) spanning chunks
+  json_token_buffer token_buffer; ///< Buffer for incomplete tokens
+
+  // Limits tracking
+  size_t total_bytes_consumed; ///< Total bytes processed
+  size_t container_elem_count; ///< Current container element count
+};
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_STREAM_INTERNAL_H */
+#endif /* GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H */

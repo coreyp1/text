@@ -1,45 +1,24 @@
 /**
- * @file json_dom.c
- * @brief DOM value structure and memory management for JSON module
+ * @file
+ *
+ * DOM value structure and memory management for JSON module.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#include "json_internal.h"
-#include <ghoti.io/text/json/json_core.h>
-#include <ghoti.io/text/json/json_dom.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "json_internal.h"
+
+#include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/json/json_dom.h>
 // Arena allocator implementation
 // Uses a simple linked list of blocks for efficient bulk allocation
-
-/**
- * @brief Arena block structure
- *
- * Each block contains a chunk of memory that can be allocated from.
- * Blocks are linked together to form the arena.
- */
-typedef struct json_arena_block {
-    struct json_arena_block* next;  ///< Next block in the arena
-    size_t used;                     ///< Bytes used in this block
-    size_t size;                     ///< Total size of this block
-    char data[];                      ///< Flexible array member for block data
-} json_arena_block;
-
-/**
- * @brief Arena allocator structure
- *
- * Manages a collection of blocks for efficient bulk allocation.
- * All memory is freed when the arena is destroyed.
- */
-typedef struct json_arena {
-    json_arena_block* first;         ///< First block in the arena
-    json_arena_block* current;        ///< Current block being used
-    size_t block_size;                ///< Size of each new block
-} json_arena;
 
 // Default block size (64KB)
 #define JSON_ARENA_DEFAULT_BLOCK_SIZE (64 * 1024)
@@ -47,17 +26,18 @@ typedef struct json_arena {
 // Create a new arena allocator
 // initial_block_size: Initial block size (0 = use default)
 // Returns: Pointer to arena, or NULL on failure
-static json_arena* json_arena_new(size_t initial_block_size) {
-    json_arena* arena = malloc(sizeof(json_arena));
-    if (!arena) {
-        return NULL;
-    }
+static json_arena * json_arena_new(size_t initial_block_size) {
+  json_arena * arena = malloc(sizeof(json_arena));
+  if (!arena) {
+    return NULL;
+  }
 
-    arena->block_size = initial_block_size > 0 ? initial_block_size : JSON_ARENA_DEFAULT_BLOCK_SIZE;
-    arena->first = NULL;
-    arena->current = NULL;
+  arena->block_size = initial_block_size > 0 ? initial_block_size
+                                             : JSON_ARENA_DEFAULT_BLOCK_SIZE;
+  arena->first = NULL;
+  arena->current = NULL;
 
-    return arena;
+  return arena;
 }
 
 // Allocate memory from the arena
@@ -65,89 +45,89 @@ static json_arena* json_arena_new(size_t initial_block_size) {
 // size: Size in bytes to allocate
 // align: Alignment requirement (must be power of 2, not 0)
 // Returns: Pointer to allocated memory, or NULL on failure
-static void* json_arena_alloc(json_arena* arena, size_t size, size_t align) {
-    if (!arena || size == 0) {
-        return NULL;
-    }
+static void * json_arena_alloc(json_arena * arena, size_t size, size_t align) {
+  if (!arena || size == 0) {
+    return NULL;
+  }
 
-    // Validate alignment: must be power of 2 and not 0
-    // Check if align is 0 or not a power of 2
-    if (align == 0 || (align & (align - 1)) != 0) {
-        return NULL;  // Invalid alignment
-    }
+  // Validate alignment: must be power of 2 and not 0
+  // Check if align is 0 or not a power of 2
+  if (align == 0 || (align & (align - 1)) != 0) {
+    return NULL; // Invalid alignment
+  }
 
-    // Calculate alignment mask
-    size_t align_mask = align - 1;
+  // Calculate alignment mask
+  size_t align_mask = align - 1;
 
-    // If we have a current block, try to allocate from it
-    if (arena->current) {
-        size_t offset = arena->current->used;
-        size_t aligned_offset = (offset + align_mask) & ~align_mask;
-
-        if (aligned_offset + size <= arena->current->size) {
-            // Can fit in current block
-            arena->current->used = aligned_offset + size;
-            return arena->current->data + aligned_offset;
-        }
-    }
-
-    // Need a new block
-    // Block size should be at least size + alignment overhead
-    size_t block_size = arena->block_size;
-    // Check for overflow in size + align
-    if (size > SIZE_MAX - align) {
-        return NULL;  // Overflow
-    }
-    if (size + align > block_size) {
-        block_size = size + align;
-    }
-
-    // Check for overflow in sizeof + block_size
-    size_t block_alloc_size = sizeof(json_arena_block) + block_size;
-    if (block_alloc_size < block_size) {  // Overflow check
-        return NULL;
-    }
-    json_arena_block* block = malloc(block_alloc_size);
-    if (!block) {
-        return NULL;
-    }
-
-    block->next = NULL;
-    block->size = block_size;
-
-    // Align the data pointer
-    size_t offset = 0;
+  // If we have a current block, try to allocate from it
+  if (arena->current) {
+    size_t offset = arena->current->used;
     size_t aligned_offset = (offset + align_mask) & ~align_mask;
-    block->used = aligned_offset + size;
 
-    // Link into arena
-    if (arena->first == NULL) {
-        arena->first = block;
-    } else {
-        arena->current->next = block;
+    if (aligned_offset + size <= arena->current->size) {
+      // Can fit in current block
+      arena->current->used = aligned_offset + size;
+      return arena->current->data + aligned_offset;
     }
-    arena->current = block;
+  }
 
-    return block->data + aligned_offset;
+  // Need a new block
+  // Block size should be at least size + alignment overhead
+  size_t block_size = arena->block_size;
+  // Check for overflow in size + align
+  if (size > SIZE_MAX - align) {
+    return NULL; // Overflow
+  }
+  if (size + align > block_size) {
+    block_size = size + align;
+  }
+
+  // Check for overflow in sizeof + block_size
+  size_t block_alloc_size = sizeof(json_arena_block) + block_size;
+  if (block_alloc_size < block_size) { // Overflow check
+    return NULL;
+  }
+  json_arena_block * block = malloc(block_alloc_size);
+  if (!block) {
+    return NULL;
+  }
+
+  block->next = NULL;
+  block->size = block_size;
+
+  // Align the data pointer
+  size_t offset = 0;
+  size_t aligned_offset = (offset + align_mask) & ~align_mask;
+  block->used = aligned_offset + size;
+
+  // Link into arena
+  if (arena->first == NULL) {
+    arena->first = block;
+  }
+  else {
+    arena->current->next = block;
+  }
+  arena->current = block;
+
+  return block->data + aligned_offset;
 }
 
 // Free all memory in the arena
 // arena: Arena to free (can be NULL)
-static void json_arena_free(json_arena* arena) {
-    if (!arena) {
-        return;
-    }
+static void json_arena_free(json_arena * arena) {
+  if (!arena) {
+    return;
+  }
 
-    json_arena_block* block = arena->first;
-    while (block) {
-        json_arena_block* next = block->next;
-        free(block);
-        block = next;
-    }
+  json_arena_block * block = arena->first;
+  while (block) {
+    json_arena_block * next = block->next;
+    free(block);
+    block = next;
+  }
 
-    free(arena);
+  free(arena);
 }
-
 
 
 // Create a new context with an arena
@@ -155,22 +135,22 @@ static void json_arena_free(json_arena* arena) {
 // The context is allocated with malloc (not in the arena) so it can
 // be accessed to free the arena.
 // Returns: New context, or NULL on failure
-json_context* json_context_new(void) {
-    json_context* ctx = malloc(sizeof(json_context));
-    if (!ctx) {
-        return NULL;
-    }
+json_context * json_context_new(void) {
+  json_context * ctx = malloc(sizeof(json_context));
+  if (!ctx) {
+    return NULL;
+  }
 
-    ctx->arena = json_arena_new(0);  // Use default block size
-    if (!ctx->arena) {
-        free(ctx);
-        return NULL;
-    }
+  ctx->arena = json_arena_new(0); // Use default block size
+  if (!ctx->arena) {
+    free(ctx);
+    return NULL;
+  }
 
-    ctx->input_buffer = NULL;
-    ctx->input_buffer_len = 0;
+  ctx->input_buffer = NULL;
+  ctx->input_buffer_len = 0;
 
-    return ctx;
+  return ctx;
 }
 
 // Set input buffer for in-situ mode
@@ -179,1128 +159,1180 @@ json_context* json_context_new(void) {
 // ctx: Context to set input buffer on (must not be NULL)
 // input_buffer: Original input buffer (caller-owned, must remain valid)
 // input_buffer_len: Length of input buffer
-void json_context_set_input_buffer(json_context* ctx, const char* input_buffer, size_t input_buffer_len) {
-    if (!ctx) {
-        return;
-    }
-    ctx->input_buffer = input_buffer;
-    ctx->input_buffer_len = input_buffer_len;
+void json_context_set_input_buffer(
+    json_context * ctx, const char * input_buffer, size_t input_buffer_len) {
+  if (!ctx) {
+    return;
+  }
+  ctx->input_buffer = input_buffer;
+  ctx->input_buffer_len = input_buffer_len;
 }
 
 // Free a context and its arena
 // ctx: Context to free (can be NULL)
 // Note: The input buffer (if set) is caller-owned and is NOT freed here.
-void json_context_free(json_context* ctx) {
-    if (!ctx) {
-        return;
-    }
+void json_context_free(json_context * ctx) {
+  if (!ctx) {
+    return;
+  }
 
-    json_arena_free(ctx->arena);
-    free(ctx);
+  json_arena_free(ctx->arena);
+  free(ctx);
 }
 
 // Recursively free child values that have different contexts
-static void json_free_children_recursive(text_json_value* v) {
-    if (!v) {
-        return;
-    }
+static void json_free_children_recursive(GTEXT_JSON_Value * v) {
+  if (!v) {
+    return;
+  }
 
-    json_context* parent_ctx = v->ctx;
+  json_context * parent_ctx = v->ctx;
 
-    if (v->type == TEXT_JSON_ARRAY && v->as.array.elems) {
-        for (size_t i = 0; i < v->as.array.count; i++) {
-            text_json_value* child = v->as.array.elems[i];
-            if (child) {
-                if (child->ctx && child->ctx != parent_ctx) {
-                    // Child has different context - save context before freeing
-                    json_context* child_ctx = child->ctx;
-                    // Recursively free child's children first (to find nested values with different contexts)
-                    json_free_children_recursive(child);
-                    // Now free the child's context (this frees the child value structure itself)
-                    json_context_free(child_ctx);
-                } else {
-                    // Child has same context - still need to recurse to find nested values with different contexts
-                    json_free_children_recursive(child);
-                }
-            }
+  if (v->type == GTEXT_JSON_ARRAY && v->as.array.elems) {
+    for (size_t i = 0; i < v->as.array.count; i++) {
+      GTEXT_JSON_Value * child = v->as.array.elems[i];
+      if (child) {
+        if (child->ctx && child->ctx != parent_ctx) {
+          // Child has different context - save context before freeing
+          json_context * child_ctx = child->ctx;
+          // Recursively free child's children first (to find nested values with
+          // different contexts)
+          json_free_children_recursive(child);
+          // Now free the child's context (this frees the child value structure
+          // itself)
+          json_context_free(child_ctx);
         }
-    } else if (v->type == TEXT_JSON_OBJECT && v->as.object.pairs) {
-        for (size_t i = 0; i < v->as.object.count; i++) {
-            text_json_value* child = v->as.object.pairs[i].value;
-            if (child) {
-                if (child->ctx && child->ctx != parent_ctx) {
-                    // Child has different context - save context before freeing
-                    json_context* child_ctx = child->ctx;
-                    // Recursively free child's children first (to find nested values with different contexts)
-                    json_free_children_recursive(child);
-                    // Now free the child's context (this frees the child value structure itself)
-                    json_context_free(child_ctx);
-                } else {
-                    // Child has same context - still need to recurse to find nested values with different contexts
-                    json_free_children_recursive(child);
-                }
-            }
+        else {
+          // Child has same context - still need to recurse to find nested
+          // values with different contexts
+          json_free_children_recursive(child);
         }
+      }
     }
+  }
+  else if (v->type == GTEXT_JSON_OBJECT && v->as.object.pairs) {
+    for (size_t i = 0; i < v->as.object.count; i++) {
+      GTEXT_JSON_Value * child = v->as.object.pairs[i].value;
+      if (child) {
+        if (child->ctx && child->ctx != parent_ctx) {
+          // Child has different context - save context before freeing
+          json_context * child_ctx = child->ctx;
+          // Recursively free child's children first (to find nested values with
+          // different contexts)
+          json_free_children_recursive(child);
+          // Now free the child's context (this frees the child value structure
+          // itself)
+          json_context_free(child_ctx);
+        }
+        else {
+          // Child has same context - still need to recurse to find nested
+          // values with different contexts
+          json_free_children_recursive(child);
+        }
+      }
+    }
+  }
 }
 
-void text_json_free(text_json_value* v) {
-    if (!v || !v->ctx) {
-        return;
-    }
+void gtext_json_free(GTEXT_JSON_Value * v) {
+  if (!v || !v->ctx) {
+    return;
+  }
 
-    // First, recursively free any children that have different contexts
-    json_free_children_recursive(v);
+  // First, recursively free any children that have different contexts
+  json_free_children_recursive(v);
 
-    // Then free this value's context, which frees the arena and all memory
-    json_context* ctx = v->ctx;
-    json_context_free(ctx);
+  // Then free this value's context, which frees the arena and all memory
+  json_context * ctx = v->ctx;
+  json_context_free(ctx);
 }
 
-// Alignment for text_json_value (align to pointer size, typically 8 bytes)
+// Alignment for GTEXT_JSON_Value (align to pointer size, typically 8 bytes)
 #define JSON_VALUE_ALIGN 8
 
 // Helper to create a value with a new context
-static text_json_value* json_value_new_with_context(text_json_type type, json_context* ctx) {
-    if (!ctx) {
-        return NULL;
-    }
+static GTEXT_JSON_Value * json_value_new_with_context(
+    GTEXT_JSON_Type type, json_context * ctx) {
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = (text_json_value*)json_arena_alloc(ctx->arena, sizeof(text_json_value), JSON_VALUE_ALIGN);
-    if (!val) {
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = (GTEXT_JSON_Value *)json_arena_alloc(
+      ctx->arena, sizeof(GTEXT_JSON_Value), JSON_VALUE_ALIGN);
+  if (!val) {
+    return NULL;
+  }
 
-    val->type = type;
-    val->ctx = ctx;
-    memset(&val->as, 0, sizeof(val->as));
+  val->type = type;
+  val->ctx = ctx;
+  memset(&val->as, 0, sizeof(val->as));
 
-    return val;
+  return val;
 }
 
 // Internal helper to create a value using an existing context (for parser)
 // This allows all values in a parse tree to share the same context
-text_json_value* json_value_new_with_existing_context(text_json_type type, json_context* ctx) {
-    return json_value_new_with_context(type, ctx);
+GTEXT_JSON_Value * json_value_new_with_existing_context(
+    GTEXT_JSON_Type type, json_context * ctx) {
+  return json_value_new_with_context(type, ctx);
 }
 
 // Internal helper to allocate from an arena (for parser)
-void* json_arena_alloc_for_context(json_context* ctx, size_t size, size_t align) {
-    if (!ctx || !ctx->arena) {
-        return NULL;
-    }
-    return json_arena_alloc(ctx->arena, size, align);
+void * json_arena_alloc_for_context(
+    json_context * ctx, size_t size, size_t align) {
+  if (!ctx || !ctx->arena) {
+    return NULL;
+  }
+  return json_arena_alloc(ctx->arena, size, align);
 }
 
-TEXT_API text_json_value* text_json_new_null(void) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_null(void) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_NULL, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_NULL, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    return val;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_bool(bool b) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_bool(bool b) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_BOOL, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_BOOL, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    val->as.boolean = b ? 1 : 0;
-    return val;
+  val->as.boolean = b ? 1 : 0;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_string(const char* s, size_t len) {
-    // Allow NULL pointer only if len is 0 (empty string)
-    if (!s && len > 0) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_string(const char * s, size_t len) {
+  // Allow NULL pointer only if len is 0 (empty string)
+  if (!s && len > 0) {
+    return NULL;
+  }
 
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_STRING, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_STRING, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Allocate string data (len + 1 for null terminator)
-    if (len > SIZE_MAX - 1) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    char* str_data = (char*)json_arena_alloc(ctx->arena, len + 1, 1);
-    if (!str_data) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  // Allocate string data (len + 1 for null terminator)
+  if (len > SIZE_MAX - 1) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  char * str_data = (char *)json_arena_alloc(ctx->arena, len + 1, 1);
+  if (!str_data) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Copy string data (safe even if s is NULL and len is 0)
-    if (len > 0 && s != NULL) {
-        memcpy(str_data, s, len);
-    }
-    str_data[len] = '\0';  // Null terminator
+  // Copy string data (safe even if s is NULL and len is 0)
+  if (len > 0 && s != NULL) {
+    memcpy(str_data, s, len);
+  }
+  str_data[len] = '\0'; // Null terminator
 
-    val->as.string.data = str_data;
-    val->as.string.len = len;
-    return val;
+  val->as.string.data = str_data;
+  val->as.string.len = len;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_number_from_lexeme(const char* s, size_t len) {
-    if (!s || len == 0) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_from_lexeme(
+    const char * s, size_t len) {
+  if (!s || len == 0) {
+    return NULL;
+  }
 
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_NUMBER, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Allocate lexeme
-    char* lexeme = (char*)json_arena_alloc(ctx->arena, len + 1, 1);
-    if (!lexeme) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  // Allocate lexeme
+  char * lexeme = (char *)json_arena_alloc(ctx->arena, len + 1, 1);
+  if (!lexeme) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    memcpy(lexeme, s, len);
-    lexeme[len] = '\0';
+  memcpy(lexeme, s, len);
+  lexeme[len] = '\0';
 
-    val->as.number.lexeme = lexeme;
-    val->as.number.lexeme_len = len;
-    val->as.number.has_i64 = 0;
-    val->as.number.has_u64 = 0;
-    val->as.number.has_dbl = 0;
-    return val;
+  val->as.number.lexeme = lexeme;
+  val->as.number.lexeme_len = len;
+  val->as.number.has_i64 = 0;
+  val->as.number.has_u64 = 0;
+  val->as.number.has_dbl = 0;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_number_i64(int64_t x) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_i64(int64_t x) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_NUMBER, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Generate lexeme from int64
-    char lexeme_buf[32];  // Enough for any int64
-    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%lld", (long long)x);
-    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    size_t lexeme_len = (size_t)snprintf_result;
+  // Generate lexeme from int64
+  char lexeme_buf[32]; // Enough for any int64
+  int snprintf_result =
+      snprintf(lexeme_buf, sizeof(lexeme_buf), "%lld", (long long)x);
+  if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  size_t lexeme_len = (size_t)snprintf_result;
 
-    // Allocate lexeme in arena
-    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
-    if (!lexeme) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+  // Allocate lexeme in arena
+  char * lexeme = (char *)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+  if (!lexeme) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  memcpy(lexeme, lexeme_buf, lexeme_len + 1);
 
-    val->as.number.lexeme = lexeme;
-    val->as.number.lexeme_len = lexeme_len;
-    val->as.number.i64 = x;
-    val->as.number.has_i64 = 1;
-    val->as.number.has_u64 = 0;
-    val->as.number.has_dbl = 0;
-    return val;
+  val->as.number.lexeme = lexeme;
+  val->as.number.lexeme_len = lexeme_len;
+  val->as.number.i64 = x;
+  val->as.number.has_i64 = 1;
+  val->as.number.has_u64 = 0;
+  val->as.number.has_dbl = 0;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_number_u64(uint64_t x) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_u64(uint64_t x) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_NUMBER, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Generate lexeme from uint64
-    char lexeme_buf[32];  // Enough for any uint64
-    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%llu", (unsigned long long)x);
-    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    size_t lexeme_len = (size_t)snprintf_result;
+  // Generate lexeme from uint64
+  char lexeme_buf[32]; // Enough for any uint64
+  int snprintf_result =
+      snprintf(lexeme_buf, sizeof(lexeme_buf), "%llu", (unsigned long long)x);
+  if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  size_t lexeme_len = (size_t)snprintf_result;
 
-    // Allocate lexeme in arena
-    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
-    if (!lexeme) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+  // Allocate lexeme in arena
+  char * lexeme = (char *)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+  if (!lexeme) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  memcpy(lexeme, lexeme_buf, lexeme_len + 1);
 
-    val->as.number.lexeme = lexeme;
-    val->as.number.lexeme_len = lexeme_len;
-    val->as.number.u64 = x;
-    val->as.number.has_i64 = 0;
-    val->as.number.has_u64 = 1;
-    val->as.number.has_dbl = 0;
-    return val;
+  val->as.number.lexeme = lexeme;
+  val->as.number.lexeme_len = lexeme_len;
+  val->as.number.u64 = x;
+  val->as.number.has_i64 = 0;
+  val->as.number.has_u64 = 1;
+  val->as.number.has_dbl = 0;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_number_double(double x) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_double(double x) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_NUMBER, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_NUMBER, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Generate lexeme from double
-    // Use %g for compact representation, but %f might be better for round-trip
-    // For now, use %g and let the user specify precision if needed
-    char lexeme_buf[64];  // Enough for any double
-    int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
-    if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    size_t lexeme_len = (size_t)snprintf_result;
+  // Generate lexeme from double
+  // Use %g for compact representation, but %f might be better for round-trip
+  // For now, use %g and let the user specify precision if needed
+  char lexeme_buf[64]; // Enough for any double
+  int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
+  if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  size_t lexeme_len = (size_t)snprintf_result;
 
-    // Allocate lexeme in arena
-    char* lexeme = (char*)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
-    if (!lexeme) {
-        json_context_free(ctx);
-        return NULL;
-    }
-    memcpy(lexeme, lexeme_buf, lexeme_len + 1);
+  // Allocate lexeme in arena
+  char * lexeme = (char *)json_arena_alloc(ctx->arena, lexeme_len + 1, 1);
+  if (!lexeme) {
+    json_context_free(ctx);
+    return NULL;
+  }
+  memcpy(lexeme, lexeme_buf, lexeme_len + 1);
 
-    val->as.number.lexeme = lexeme;
-    val->as.number.lexeme_len = lexeme_len;
-    val->as.number.dbl = x;
-    val->as.number.has_i64 = 0;
-    val->as.number.has_u64 = 0;
-    val->as.number.has_dbl = 1;
-    return val;
+  val->as.number.lexeme = lexeme;
+  val->as.number.lexeme_len = lexeme_len;
+  val->as.number.dbl = x;
+  val->as.number.has_i64 = 0;
+  val->as.number.has_u64 = 0;
+  val->as.number.has_dbl = 1;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_array(void) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_array(void) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_ARRAY, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_ARRAY, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Initialize empty array
-    val->as.array.elems = NULL;
-    val->as.array.count = 0;
-    val->as.array.capacity = 0;
-    return val;
+  // Initialize empty array
+  val->as.array.elems = NULL;
+  val->as.array.count = 0;
+  val->as.array.capacity = 0;
+  return val;
 }
 
-TEXT_API text_json_value* text_json_new_object(void) {
-    json_context* ctx = json_context_new();
-    if (!ctx) {
-        return NULL;
-    }
+GTEXT_API GTEXT_JSON_Value * gtext_json_new_object(void) {
+  json_context * ctx = json_context_new();
+  if (!ctx) {
+    return NULL;
+  }
 
-    text_json_value* val = json_value_new_with_context(TEXT_JSON_OBJECT, ctx);
-    if (!val) {
-        json_context_free(ctx);
-        return NULL;
-    }
+  GTEXT_JSON_Value * val = json_value_new_with_context(GTEXT_JSON_OBJECT, ctx);
+  if (!val) {
+    json_context_free(ctx);
+    return NULL;
+  }
 
-    // Initialize empty object
-    val->as.object.pairs = NULL;
-    val->as.object.count = 0;
-    val->as.object.capacity = 0;
-    return val;
+  // Initialize empty object
+  val->as.object.pairs = NULL;
+  val->as.object.count = 0;
+  val->as.object.capacity = 0;
+  return val;
 }
 
 // Accessor functions
 
-TEXT_API text_json_type text_json_typeof(const text_json_value* v) {
-    if (!v) {
-        return TEXT_JSON_NULL;
-    }
-    return v->type;
+GTEXT_API GTEXT_JSON_Type gtext_json_typeof(const GTEXT_JSON_Value * v) {
+  if (!v) {
+    return GTEXT_JSON_NULL;
+  }
+  return v->type;
 }
 
-TEXT_API text_json_status text_json_get_bool(const text_json_value* v, bool* out) {
-    if (!v || !out) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_BOOL) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.boolean ? true : false;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_bool(
+    const GTEXT_JSON_Value * v, bool * out) {
+  if (!v || !out) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_BOOL) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.boolean ? true : false;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_get_string(const text_json_value* v, const char** out, size_t* out_len) {
-    if (!v || !out || !out_len) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_STRING) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.string.data;
-    *out_len = v->as.string.len;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_string(
+    const GTEXT_JSON_Value * v, const char ** out, size_t * out_len) {
+  if (!v || !out || !out_len) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_STRING) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.string.data;
+  *out_len = v->as.string.len;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_get_number_lexeme(const text_json_value* v, const char** out, size_t* out_len) {
-    if (!v || !out || !out_len) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_NUMBER) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (!v->as.number.lexeme) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.number.lexeme;
-    *out_len = v->as.number.lexeme_len;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_number_lexeme(
+    const GTEXT_JSON_Value * v, const char ** out, size_t * out_len) {
+  if (!v || !out || !out_len) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_NUMBER) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (!v->as.number.lexeme) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.number.lexeme;
+  *out_len = v->as.number.lexeme_len;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_get_i64(const text_json_value* v, int64_t* out) {
-    if (!v || !out) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_NUMBER) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (!v->as.number.has_i64) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.number.i64;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_i64(
+    const GTEXT_JSON_Value * v, int64_t * out) {
+  if (!v || !out) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_NUMBER) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (!v->as.number.has_i64) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.number.i64;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_get_u64(const text_json_value* v, uint64_t* out) {
-    if (!v || !out) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_NUMBER) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (!v->as.number.has_u64) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.number.u64;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_u64(
+    const GTEXT_JSON_Value * v, uint64_t * out) {
+  if (!v || !out) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_NUMBER) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (!v->as.number.has_u64) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.number.u64;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_get_double(const text_json_value* v, double* out) {
-    if (!v || !out) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (v->type != TEXT_JSON_NUMBER) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (!v->as.number.has_dbl) {
-        return TEXT_JSON_E_INVALID;
-    }
-    *out = v->as.number.dbl;
-    return TEXT_JSON_OK;
+GTEXT_API GTEXT_JSON_Status gtext_json_get_double(
+    const GTEXT_JSON_Value * v, double * out) {
+  if (!v || !out) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (v->type != GTEXT_JSON_NUMBER) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (!v->as.number.has_dbl) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  *out = v->as.number.dbl;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API size_t text_json_array_size(const text_json_value* v) {
-    if (!v || v->type != TEXT_JSON_ARRAY) {
-        return 0;
-    }
-    return v->as.array.count;
+GTEXT_API size_t gtext_json_array_size(const GTEXT_JSON_Value * v) {
+  if (!v || v->type != GTEXT_JSON_ARRAY) {
+    return 0;
+  }
+  return v->as.array.count;
 }
 
-TEXT_API const text_json_value* text_json_array_get(const text_json_value* v, size_t idx) {
-    if (!v || v->type != TEXT_JSON_ARRAY) {
-        return NULL;
-    }
-    if (idx >= v->as.array.count) {
-        return NULL;
-    }
-    return v->as.array.elems[idx];
-}
-
-TEXT_API size_t text_json_object_size(const text_json_value* v) {
-    if (!v || v->type != TEXT_JSON_OBJECT) {
-        return 0;
-    }
-    return v->as.object.count;
-}
-
-TEXT_API const char* text_json_object_key(const text_json_value* v, size_t idx, size_t* key_len) {
-    if (!v || v->type != TEXT_JSON_OBJECT) {
-        if (key_len) {
-            *key_len = 0;
-        }
-        return NULL;
-    }
-    if (idx >= v->as.object.count) {
-        if (key_len) {
-            *key_len = 0;
-        }
-        return NULL;
-    }
-    if (key_len) {
-        *key_len = v->as.object.pairs[idx].key_len;
-    }
-    return v->as.object.pairs[idx].key;
-}
-
-TEXT_API const text_json_value* text_json_object_value(const text_json_value* v, size_t idx) {
-    if (!v || v->type != TEXT_JSON_OBJECT) {
-        return NULL;
-    }
-    if (idx >= v->as.object.count) {
-        return NULL;
-    }
-    return v->as.object.pairs[idx].value;
-}
-
-TEXT_API const text_json_value* text_json_object_get(const text_json_value* v, const char* key, size_t key_len) {
-    if (!v || !key || v->type != TEXT_JSON_OBJECT) {
-        return NULL;
-    }
-
-    // Linear search through object pairs
-    for (size_t i = 0; i < v->as.object.count; ++i) {
-        if (v->as.object.pairs[i].key_len == key_len) {
-            if (key_len == 0 || memcmp(v->as.object.pairs[i].key, key, v->as.object.pairs[i].key_len) == 0) {
-                return v->as.object.pairs[i].value;
-            }
-        }
-    }
-
+GTEXT_API const GTEXT_JSON_Value * gtext_json_array_get(
+    const GTEXT_JSON_Value * v, size_t idx) {
+  if (!v || v->type != GTEXT_JSON_ARRAY) {
     return NULL;
+  }
+  if (idx >= v->as.array.count) {
+    return NULL;
+  }
+  return v->as.array.elems[idx];
+}
+
+GTEXT_API size_t gtext_json_object_size(const GTEXT_JSON_Value * v) {
+  if (!v || v->type != GTEXT_JSON_OBJECT) {
+    return 0;
+  }
+  return v->as.object.count;
+}
+
+GTEXT_API const char * gtext_json_object_key(
+    const GTEXT_JSON_Value * v, size_t idx, size_t * key_len) {
+  if (!v || v->type != GTEXT_JSON_OBJECT) {
+    if (key_len) {
+      *key_len = 0;
+    }
+    return NULL;
+  }
+  if (idx >= v->as.object.count) {
+    if (key_len) {
+      *key_len = 0;
+    }
+    return NULL;
+  }
+  if (key_len) {
+    *key_len = v->as.object.pairs[idx].key_len;
+  }
+  return v->as.object.pairs[idx].key;
+}
+
+GTEXT_API const GTEXT_JSON_Value * gtext_json_object_value(
+    const GTEXT_JSON_Value * v, size_t idx) {
+  if (!v || v->type != GTEXT_JSON_OBJECT) {
+    return NULL;
+  }
+  if (idx >= v->as.object.count) {
+    return NULL;
+  }
+  return v->as.object.pairs[idx].value;
+}
+
+GTEXT_API const GTEXT_JSON_Value * gtext_json_object_get(
+    const GTEXT_JSON_Value * v, const char * key, size_t key_len) {
+  if (!v || !key || v->type != GTEXT_JSON_OBJECT) {
+    return NULL;
+  }
+
+  // Linear search through object pairs
+  for (size_t i = 0; i < v->as.object.count; ++i) {
+    if (v->as.object.pairs[i].key_len == key_len) {
+      if (key_len == 0 ||
+          memcmp(v->as.object.pairs[i].key, key,
+              v->as.object.pairs[i].key_len) == 0) {
+        return v->as.object.pairs[i].value;
+      }
+    }
+  }
+
+  return NULL;
 }
 
 // Internal helper functions for parser
 
-text_json_status json_array_add_element(text_json_value* array, text_json_value* element) {
-    if (!array || array->type != TEXT_JSON_ARRAY || !element) {
-        return TEXT_JSON_E_INVALID;
+GTEXT_JSON_Status json_array_add_element(
+    GTEXT_JSON_Value * array, GTEXT_JSON_Value * element) {
+  if (!array || array->type != GTEXT_JSON_ARRAY || !element) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Grow array if needed
+  if (array->as.array.count >= array->as.array.capacity) {
+    size_t new_capacity =
+        array->as.array.capacity == 0 ? 8 : array->as.array.capacity * 2;
+
+    // Check for overflow
+    if (new_capacity < array->as.array.capacity) {
+      return GTEXT_JSON_E_LIMIT;
     }
 
-    // Grow array if needed
-    if (array->as.array.count >= array->as.array.capacity) {
-        size_t new_capacity = array->as.array.capacity == 0 ? 8 : array->as.array.capacity * 2;
-
-        // Check for overflow
-        if (new_capacity < array->as.array.capacity) {
-            return TEXT_JSON_E_LIMIT;
-        }
-
-        // Allocate new array (using arena from the array's context)
-        // Check for overflow in multiplication
-        if (new_capacity > SIZE_MAX / sizeof(text_json_value*)) {
-            return TEXT_JSON_E_LIMIT;
-        }
-        text_json_value** new_elems = (text_json_value**)json_arena_alloc_for_context(
-            array->ctx,
-            new_capacity * sizeof(text_json_value*),
-            sizeof(void*)
-        );
-        if (!new_elems) {
-            return TEXT_JSON_E_OOM;
-        }
-
-        // Copy existing elements
-        if (array->as.array.elems) {
-            memcpy(new_elems, array->as.array.elems, array->as.array.count * sizeof(text_json_value*));
-        }
-
-        array->as.array.elems = new_elems;
-        array->as.array.capacity = new_capacity;
+    // Allocate new array (using arena from the array's context)
+    // Check for overflow in multiplication
+    if (new_capacity > SIZE_MAX / sizeof(GTEXT_JSON_Value *)) {
+      return GTEXT_JSON_E_LIMIT;
+    }
+    GTEXT_JSON_Value ** new_elems =
+        (GTEXT_JSON_Value **)json_arena_alloc_for_context(array->ctx,
+            new_capacity * sizeof(GTEXT_JSON_Value *), sizeof(void *));
+    if (!new_elems) {
+      return GTEXT_JSON_E_OOM;
     }
 
-    // Add element (check for overflow before incrementing)
-    if (array->as.array.count == SIZE_MAX) {
-        return TEXT_JSON_E_LIMIT;
+    // Copy existing elements
+    if (array->as.array.elems) {
+      memcpy(new_elems, array->as.array.elems,
+          array->as.array.count * sizeof(GTEXT_JSON_Value *));
     }
-    array->as.array.elems[array->as.array.count++] = element;
-    return TEXT_JSON_OK;
+
+    array->as.array.elems = new_elems;
+    array->as.array.capacity = new_capacity;
+  }
+
+  // Add element (check for overflow before incrementing)
+  if (array->as.array.count == SIZE_MAX) {
+    return GTEXT_JSON_E_LIMIT;
+  }
+  array->as.array.elems[array->as.array.count++] = element;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status json_object_add_pair(
-    text_json_value* object,
-    const char* key,
-    size_t key_len,
-    text_json_value* value
-) {
-    if (!object || object->type != TEXT_JSON_OBJECT || !key || !value) {
-        return TEXT_JSON_E_INVALID;
+GTEXT_JSON_Status json_object_add_pair(GTEXT_JSON_Value * object,
+    const char * key, size_t key_len, GTEXT_JSON_Value * value) {
+  if (!object || object->type != GTEXT_JSON_OBJECT || !key || !value) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Grow object if needed
+  if (object->as.object.count >= object->as.object.capacity) {
+    size_t new_capacity =
+        object->as.object.capacity == 0 ? 8 : object->as.object.capacity * 2;
+
+    // Check for overflow
+    if (new_capacity < object->as.object.capacity) {
+      return GTEXT_JSON_E_LIMIT;
     }
 
-    // Grow object if needed
-    if (object->as.object.count >= object->as.object.capacity) {
-        size_t new_capacity = object->as.object.capacity == 0 ? 8 : object->as.object.capacity * 2;
-
-        // Check for overflow
-        if (new_capacity < object->as.object.capacity) {
-            return TEXT_JSON_E_LIMIT;
-        }
-
-        // Allocate new pairs array (using arena from the object's context)
-        // Check for overflow in multiplication
-        size_t pair_size = sizeof(*(object->as.object.pairs));
-        if (new_capacity > SIZE_MAX / pair_size) {
-            return TEXT_JSON_E_LIMIT;
-        }
-        // Cast through void* to avoid anonymous struct type mismatch issues
-        void* new_pairs_ptr = json_arena_alloc_for_context(
-            object->ctx,
-            new_capacity * pair_size,
-            sizeof(void*)
-        );
-        if (!new_pairs_ptr) {
-            return TEXT_JSON_E_OOM;
-        }
-
-        // Copy existing pairs
-        if (object->as.object.pairs) {
-            memcpy(new_pairs_ptr, object->as.object.pairs, object->as.object.count * sizeof(*(object->as.object.pairs)));
-        }
-
-        // Assign through void* to avoid type checking (we know the types match)
-        object->as.object.pairs = (void*)new_pairs_ptr;
-        object->as.object.capacity = new_capacity;
+    // Allocate new pairs array (using arena from the object's context)
+    // Check for overflow in multiplication
+    size_t pair_size = sizeof(*(object->as.object.pairs));
+    if (new_capacity > SIZE_MAX / pair_size) {
+      return GTEXT_JSON_E_LIMIT;
+    }
+    // Cast through void * to avoid anonymous struct type mismatch issues
+    void * new_pairs_ptr = json_arena_alloc_for_context(
+        object->ctx, new_capacity * pair_size, sizeof(void *));
+    if (!new_pairs_ptr) {
+      return GTEXT_JSON_E_OOM;
     }
 
-    // Allocate key string in arena
-    // Check for overflow in key_len + 1
-    if (key_len > SIZE_MAX - 1) {
-        return TEXT_JSON_E_LIMIT;
+    // Copy existing pairs
+    if (object->as.object.pairs) {
+      memcpy(new_pairs_ptr, object->as.object.pairs,
+          object->as.object.count * sizeof(*(object->as.object.pairs)));
     }
-    char* key_copy = (char*)json_arena_alloc_for_context(object->ctx, key_len + 1, 1);
-    if (!key_copy) {
-        return TEXT_JSON_E_OOM;
-    }
-    memcpy(key_copy, key, key_len);
-    key_copy[key_len] = '\0';
 
-    // Add pair (check for overflow before incrementing)
-    if (object->as.object.count == SIZE_MAX) {
-        // Note: key_copy was allocated from arena, so it will be freed when arena is freed
-        return TEXT_JSON_E_LIMIT;
-    }
-    size_t idx = object->as.object.count++;
-    object->as.object.pairs[idx].key = key_copy;
-    object->as.object.pairs[idx].key_len = key_len;
-    object->as.object.pairs[idx].value = value;
-    return TEXT_JSON_OK;
+    // Assign through void * to avoid type checking (we know the types match)
+    object->as.object.pairs = (void *)new_pairs_ptr;
+    object->as.object.capacity = new_capacity;
+  }
+
+  // Allocate key string in arena
+  // Check for overflow in key_len + 1
+  if (key_len > SIZE_MAX - 1) {
+    return GTEXT_JSON_E_LIMIT;
+  }
+  char * key_copy =
+      (char *)json_arena_alloc_for_context(object->ctx, key_len + 1, 1);
+  if (!key_copy) {
+    return GTEXT_JSON_E_OOM;
+  }
+  memcpy(key_copy, key, key_len);
+  key_copy[key_len] = '\0';
+
+  // Add pair (check for overflow before incrementing)
+  if (object->as.object.count == SIZE_MAX) {
+    // Note: key_copy was allocated from arena, so it will be freed when arena
+    // is freed
+    return GTEXT_JSON_E_LIMIT;
+  }
+  size_t idx = object->as.object.count++;
+  object->as.object.pairs[idx].key = key_copy;
+  object->as.object.pairs[idx].key_len = key_len;
+  object->as.object.pairs[idx].value = value;
+  return GTEXT_JSON_OK;
 }
 
 // Public mutation API functions
 
-TEXT_API text_json_status text_json_array_push(text_json_value* arr, text_json_value* child) {
-    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
-        return TEXT_JSON_E_INVALID;
-    }
+GTEXT_API GTEXT_JSON_Status gtext_json_array_push(
+    GTEXT_JSON_Value * arr, GTEXT_JSON_Value * child) {
+  if (!arr || arr->type != GTEXT_JSON_ARRAY || !child) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Use the internal helper function which handles growing the array
+  // Use the internal helper function which handles growing the array
+  return json_array_add_element(arr, child);
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_array_set(
+    GTEXT_JSON_Value * arr, size_t idx, GTEXT_JSON_Value * child) {
+  if (!arr || arr->type != GTEXT_JSON_ARRAY || !child) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Check bounds
+  if (idx >= arr->as.array.count) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Get the old value to be replaced
+  GTEXT_JSON_Value * old_value = arr->as.array.elems[idx];
+
+  // If the old value has a different context, free it recursively
+  if (old_value && old_value->ctx && old_value->ctx != arr->ctx) {
+    json_context * child_ctx = old_value->ctx;
+    // Recursively free child's children first
+    json_free_children_recursive(old_value);
+    // Now free the child's context (this frees the child value structure
+    // itself)
+    json_context_free(child_ctx);
+  }
+
+  // Set element at index (replacing existing element)
+  arr->as.array.elems[idx] = child;
+
+  // Note: If child has a different context, it will be freed when
+  // gtext_json_free() is called on the root, via
+  // json_free_children_recursive(). We don't free it here because the child
+  // value structure itself is in that context's arena.
+  return GTEXT_JSON_OK;
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_array_insert(
+    GTEXT_JSON_Value * arr, size_t idx, GTEXT_JSON_Value * child) {
+  if (!arr || arr->type != GTEXT_JSON_ARRAY || !child) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Check bounds - allow inserting at count (same as push)
+  if (idx > arr->as.array.count) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // If inserting at the end, use push logic
+  if (idx == arr->as.array.count) {
     return json_array_add_element(arr, child);
+  }
+
+  // Need to insert in the middle - grow array if needed first
+  if (arr->as.array.count >= arr->as.array.capacity) {
+    size_t new_capacity =
+        arr->as.array.capacity == 0 ? 8 : arr->as.array.capacity * 2;
+
+    // Check for overflow
+    if (new_capacity < arr->as.array.capacity) {
+      return GTEXT_JSON_E_LIMIT;
+    }
+
+    // Allocate new array
+    if (new_capacity > SIZE_MAX / sizeof(GTEXT_JSON_Value *)) {
+      return GTEXT_JSON_E_LIMIT;
+    }
+    GTEXT_JSON_Value ** new_elems =
+        (GTEXT_JSON_Value **)json_arena_alloc_for_context(arr->ctx,
+            new_capacity * sizeof(GTEXT_JSON_Value *), sizeof(void *));
+    if (!new_elems) {
+      return GTEXT_JSON_E_OOM;
+    }
+
+    // Copy existing elements: [0..idx) to [0..idx), then [idx..count) to
+    // [idx+1..count+1)
+    if (arr->as.array.elems) {
+      // Copy elements before insertion point
+      if (idx > 0) {
+        memcpy(
+            new_elems, arr->as.array.elems, idx * sizeof(GTEXT_JSON_Value *));
+      }
+      // Copy elements after insertion point, shifted right by one
+      if (idx < arr->as.array.count) {
+        memcpy(new_elems + idx + 1, arr->as.array.elems + idx,
+            (arr->as.array.count - idx) * sizeof(GTEXT_JSON_Value *));
+      }
+    }
+
+    arr->as.array.elems = new_elems;
+    arr->as.array.capacity = new_capacity;
+  }
+  else {
+    // Have capacity - shift elements in place to make room
+    // Shift elements from idx to count-1 one position to the right
+    // Note: Writing to elems[count] is safe because we're in the else branch,
+    // which means count < capacity, so elems[count] is within allocated bounds.
+    for (size_t i = arr->as.array.count; i > idx; --i) {
+      arr->as.array.elems[i] = arr->as.array.elems[i - 1];
+    }
+  }
+
+  // Insert new element at idx
+  arr->as.array.elems[idx] = child;
+
+  // Increment count (check for overflow)
+  if (arr->as.array.count == SIZE_MAX) {
+    return GTEXT_JSON_E_LIMIT;
+  }
+  arr->as.array.count++;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_array_set(text_json_value* arr, size_t idx, text_json_value* child) {
-    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
-        return TEXT_JSON_E_INVALID;
-    }
+GTEXT_API GTEXT_JSON_Status gtext_json_array_remove(
+    GTEXT_JSON_Value * arr, size_t idx) {
+  if (!arr || arr->type != GTEXT_JSON_ARRAY) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Check bounds
-    if (idx >= arr->as.array.count) {
-        return TEXT_JSON_E_INVALID;
-    }
+  // Check bounds
+  if (idx >= arr->as.array.count) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Get the old value to be replaced
-    text_json_value* old_value = arr->as.array.elems[idx];
+  // Get the value to be removed
+  GTEXT_JSON_Value * removed_value = arr->as.array.elems[idx];
 
-    // If the old value has a different context, free it recursively
-    if (old_value && old_value->ctx && old_value->ctx != arr->ctx) {
-        json_context* child_ctx = old_value->ctx;
-        // Recursively free child's children first
-        json_free_children_recursive(old_value);
-        // Now free the child's context (this frees the child value structure itself)
-        json_context_free(child_ctx);
-    }
+  // If the removed value has a different context, free it recursively
+  if (removed_value && removed_value->ctx && removed_value->ctx != arr->ctx) {
+    json_context * child_ctx = removed_value->ctx;
+    // Recursively free child's children first
+    json_free_children_recursive(removed_value);
+    // Now free the child's context (this frees the child value structure
+    // itself)
+    json_context_free(child_ctx);
+  }
 
-    // Set element at index (replacing existing element)
-    arr->as.array.elems[idx] = child;
+  // Shift elements to the left to fill the gap
+  for (size_t i = idx; i + 1 < arr->as.array.count; ++i) {
+    arr->as.array.elems[i] = arr->as.array.elems[i + 1];
+  }
 
-    // Note: If child has a different context, it will be freed when text_json_free()
-    // is called on the root, via json_free_children_recursive(). We don't free it here
-    // because the child value structure itself is in that context's arena.
-    return TEXT_JSON_OK;
+  // Decrement count
+  arr->as.array.count--;
+  return GTEXT_JSON_OK;
 }
 
-TEXT_API text_json_status text_json_array_insert(text_json_value* arr, size_t idx, text_json_value* child) {
-    if (!arr || arr->type != TEXT_JSON_ARRAY || !child) {
-        return TEXT_JSON_E_INVALID;
-    }
+GTEXT_API GTEXT_JSON_Status gtext_json_object_put(GTEXT_JSON_Value * obj,
+    const char * key, size_t key_len, GTEXT_JSON_Value * val) {
+  if (!obj || obj->type != GTEXT_JSON_OBJECT || !key || !val) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Check bounds - allow inserting at count (same as push)
-    if (idx > arr->as.array.count) {
-        return TEXT_JSON_E_INVALID;
-    }
+  // Check if key already exists - if so, replace the value
+  for (size_t i = 0; i < obj->as.object.count; ++i) {
+    if (obj->as.object.pairs[i].key_len == key_len) {
+      if (key_len == 0 ||
+          memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
+        // Key exists - replace value
+        GTEXT_JSON_Value * old_value = obj->as.object.pairs[i].value;
 
-    // If inserting at the end, use push logic
-    if (idx == arr->as.array.count) {
-        return json_array_add_element(arr, child);
-    }
-
-    // Need to insert in the middle - grow array if needed first
-    if (arr->as.array.count >= arr->as.array.capacity) {
-        size_t new_capacity = arr->as.array.capacity == 0 ? 8 : arr->as.array.capacity * 2;
-
-        // Check for overflow
-        if (new_capacity < arr->as.array.capacity) {
-            return TEXT_JSON_E_LIMIT;
+        // If the old value has a different context, free it recursively
+        if (old_value && old_value->ctx && old_value->ctx != obj->ctx) {
+          json_context * child_ctx = old_value->ctx;
+          // Recursively free child's children first
+          json_free_children_recursive(old_value);
+          // Now free the child's context (this frees the child value structure
+          // itself)
+          json_context_free(child_ctx);
         }
 
-        // Allocate new array
-        if (new_capacity > SIZE_MAX / sizeof(text_json_value*)) {
-            return TEXT_JSON_E_LIMIT;
-        }
-        text_json_value** new_elems = (text_json_value**)json_arena_alloc_for_context(
-            arr->ctx,
-            new_capacity * sizeof(text_json_value*),
-            sizeof(void*)
-        );
-        if (!new_elems) {
-            return TEXT_JSON_E_OOM;
-        }
-
-        // Copy existing elements: [0..idx) to [0..idx), then [idx..count) to [idx+1..count+1)
-        if (arr->as.array.elems) {
-            // Copy elements before insertion point
-            if (idx > 0) {
-                memcpy(new_elems, arr->as.array.elems, idx * sizeof(text_json_value*));
-            }
-            // Copy elements after insertion point, shifted right by one
-            if (idx < arr->as.array.count) {
-                memcpy(new_elems + idx + 1, arr->as.array.elems + idx,
-                       (arr->as.array.count - idx) * sizeof(text_json_value*));
-            }
-        }
-
-        arr->as.array.elems = new_elems;
-        arr->as.array.capacity = new_capacity;
-    } else {
-        // Have capacity - shift elements in place to make room
-        // Shift elements from idx to count-1 one position to the right
-        // Note: Writing to elems[count] is safe because we're in the else branch,
-        // which means count < capacity, so elems[count] is within allocated bounds.
-        for (size_t i = arr->as.array.count; i > idx; --i) {
-            arr->as.array.elems[i] = arr->as.array.elems[i - 1];
-        }
+        obj->as.object.pairs[i].value = val;
+        return GTEXT_JSON_OK;
+      }
     }
+  }
 
-    // Insert new element at idx
-    arr->as.array.elems[idx] = child;
-
-    // Increment count (check for overflow)
-    if (arr->as.array.count == SIZE_MAX) {
-        return TEXT_JSON_E_LIMIT;
-    }
-    arr->as.array.count++;
-    return TEXT_JSON_OK;
+  // Key doesn't exist - add new pair using internal helper
+  return json_object_add_pair(obj, key, key_len, val);
 }
 
-TEXT_API text_json_status text_json_array_remove(text_json_value* arr, size_t idx) {
-    if (!arr || arr->type != TEXT_JSON_ARRAY) {
-        return TEXT_JSON_E_INVALID;
+GTEXT_API GTEXT_JSON_Status gtext_json_object_remove(
+    GTEXT_JSON_Value * obj, const char * key, size_t key_len) {
+  if (!obj || obj->type != GTEXT_JSON_OBJECT || !key) {
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  // Find the key
+  size_t found_idx = SIZE_MAX;
+  for (size_t i = 0; i < obj->as.object.count; ++i) {
+    if (obj->as.object.pairs[i].key_len == key_len) {
+      if (key_len == 0 ||
+          memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
+        found_idx = i;
+        break;
+      }
     }
+  }
 
-    // Check bounds
-    if (idx >= arr->as.array.count) {
-        return TEXT_JSON_E_INVALID;
-    }
+  // Key not found
+  if (found_idx == SIZE_MAX) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Get the value to be removed
-    text_json_value* removed_value = arr->as.array.elems[idx];
+  // Get the value to be removed
+  GTEXT_JSON_Value * removed_value = obj->as.object.pairs[found_idx].value;
 
-    // If the removed value has a different context, free it recursively
-    if (removed_value && removed_value->ctx && removed_value->ctx != arr->ctx) {
-        json_context* child_ctx = removed_value->ctx;
-        // Recursively free child's children first
-        json_free_children_recursive(removed_value);
-        // Now free the child's context (this frees the child value structure itself)
-        json_context_free(child_ctx);
-    }
+  // If the removed value has a different context, free it recursively
+  if (removed_value && removed_value->ctx && removed_value->ctx != obj->ctx) {
+    json_context * child_ctx = removed_value->ctx;
+    // Recursively free child's children first
+    json_free_children_recursive(removed_value);
+    // Now free the child's context (this frees the child value structure
+    // itself)
+    json_context_free(child_ctx);
+  }
 
-    // Shift elements to the left to fill the gap
-    for (size_t i = idx; i + 1 < arr->as.array.count; ++i) {
-        arr->as.array.elems[i] = arr->as.array.elems[i + 1];
-    }
+  // Shift pairs to the left to fill the gap
+  for (size_t i = found_idx; i + 1 < obj->as.object.count; ++i) {
+    obj->as.object.pairs[i] = obj->as.object.pairs[i + 1];
+  }
 
-    // Decrement count
-    arr->as.array.count--;
-    return TEXT_JSON_OK;
-}
-
-TEXT_API text_json_status text_json_object_put(text_json_value* obj, const char* key, size_t key_len, text_json_value* val) {
-    if (!obj || obj->type != TEXT_JSON_OBJECT || !key || !val) {
-        return TEXT_JSON_E_INVALID;
-    }
-
-    // Check if key already exists - if so, replace the value
-    for (size_t i = 0; i < obj->as.object.count; ++i) {
-        if (obj->as.object.pairs[i].key_len == key_len) {
-            if (key_len == 0 || memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
-                // Key exists - replace value
-                text_json_value* old_value = obj->as.object.pairs[i].value;
-
-                // If the old value has a different context, free it recursively
-                if (old_value && old_value->ctx && old_value->ctx != obj->ctx) {
-                    json_context* child_ctx = old_value->ctx;
-                    // Recursively free child's children first
-                    json_free_children_recursive(old_value);
-                    // Now free the child's context (this frees the child value structure itself)
-                    json_context_free(child_ctx);
-                }
-
-                obj->as.object.pairs[i].value = val;
-                return TEXT_JSON_OK;
-            }
-        }
-    }
-
-    // Key doesn't exist - add new pair using internal helper
-    return json_object_add_pair(obj, key, key_len, val);
-}
-
-TEXT_API text_json_status text_json_object_remove(text_json_value* obj, const char* key, size_t key_len) {
-    if (!obj || obj->type != TEXT_JSON_OBJECT || !key) {
-        return TEXT_JSON_E_INVALID;
-    }
-
-    // Find the key
-    size_t found_idx = SIZE_MAX;
-    for (size_t i = 0; i < obj->as.object.count; ++i) {
-        if (obj->as.object.pairs[i].key_len == key_len) {
-            if (key_len == 0 || memcmp(obj->as.object.pairs[i].key, key, key_len) == 0) {
-                found_idx = i;
-                break;
-            }
-        }
-    }
-
-    // Key not found
-    if (found_idx == SIZE_MAX) {
-        return TEXT_JSON_E_INVALID;
-    }
-
-    // Get the value to be removed
-    text_json_value* removed_value = obj->as.object.pairs[found_idx].value;
-
-    // If the removed value has a different context, free it recursively
-    if (removed_value && removed_value->ctx && removed_value->ctx != obj->ctx) {
-        json_context* child_ctx = removed_value->ctx;
-        // Recursively free child's children first
-        json_free_children_recursive(removed_value);
-        // Now free the child's context (this frees the child value structure itself)
-        json_context_free(child_ctx);
-    }
-
-    // Shift pairs to the left to fill the gap
-    for (size_t i = found_idx; i + 1 < obj->as.object.count; ++i) {
-        obj->as.object.pairs[i] = obj->as.object.pairs[i + 1];
-    }
-
-    // Decrement count
-    obj->as.object.count--;
-    return TEXT_JSON_OK;
+  // Decrement count
+  obj->as.object.count--;
+  return GTEXT_JSON_OK;
 }
 
 // Helper function for deep equality comparison with configurable mode
-static bool json_value_equal_internal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
-    if (a == b) {
-        return 1;  // Same pointer
+static bool json_value_equal_internal(const GTEXT_JSON_Value * a,
+    const GTEXT_JSON_Value * b, GTEXT_JSON_Equal_Mode mode) {
+  if (a == b) {
+    return 1; // Same pointer
+  }
+
+  if (!a || !b) {
+    return 0; // One is NULL
+  }
+
+  if (a->type != b->type) {
+    return 0; // Different types
+  }
+
+  switch (a->type) {
+  case GTEXT_JSON_NULL:
+    return 1; // Both are null
+
+  case GTEXT_JSON_BOOL:
+    return a->as.boolean == b->as.boolean;
+
+  case GTEXT_JSON_STRING:
+    if (a->as.string.len != b->as.string.len) {
+      return 0;
     }
-
-    if (!a || !b) {
-        return 0;  // One is NULL
+    // Check for NULL pointers before memcmp
+    if (!a->as.string.data || !b->as.string.data) {
+      return (
+          a->as.string.data == b->as.string.data); // Both NULL or both non-NULL
     }
+    return memcmp(a->as.string.data, b->as.string.data, a->as.string.len) == 0;
 
-    if (a->type != b->type) {
-        return 0;  // Different types
+  case GTEXT_JSON_NUMBER: {
+    if (mode == GTEXT_JSON_EQUAL_LEXEME) {
+      // Lexeme-based comparison: must have identical lexemes
+      if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
+        return 0;
+      }
+      if (a->as.number.lexeme && b->as.number.lexeme) {
+        return memcmp(a->as.number.lexeme, b->as.number.lexeme,
+                   a->as.number.lexeme_len) == 0;
+      }
+      // If either doesn't have a lexeme, they're not equal in lexeme mode
+      return 0;
     }
+    else {
+      // Numeric equivalence comparison
+      // First check if both have the same representation available
+      if (a->as.number.has_i64 && b->as.number.has_i64) {
+        return a->as.number.i64 == b->as.number.i64;
+      }
+      if (a->as.number.has_u64 && b->as.number.has_u64) {
+        return a->as.number.u64 == b->as.number.u64;
+      }
+      if (a->as.number.has_dbl && b->as.number.has_dbl) {
+        // Use approximate equality for doubles (with epsilon)
+        double diff = fabs(a->as.number.dbl - b->as.number.dbl);
+        return diff < 1e-15 || (a->as.number.dbl == b->as.number.dbl);
+      }
+      // Fall back to lexeme comparison if no numeric representation available
+      if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
+        return 0;
+      }
+      if (a->as.number.lexeme && b->as.number.lexeme) {
+        return memcmp(a->as.number.lexeme, b->as.number.lexeme,
+                   a->as.number.lexeme_len) == 0;
+      }
+      return 0;
+    }
+  }
 
-    switch (a->type) {
-        case TEXT_JSON_NULL:
-            return 1;  // Both are null
+  case GTEXT_JSON_ARRAY: {
+    if (a->as.array.count != b->as.array.count) {
+      return 0;
+    }
+    // Check for NULL elems arrays
+    if (!a->as.array.elems || !b->as.array.elems) {
+      return (
+          a->as.array.elems == b->as.array.elems); // Both NULL or both non-NULL
+    }
+    for (size_t i = 0; i < a->as.array.count; i++) {
+      if (!json_value_equal_internal(
+              a->as.array.elems[i], b->as.array.elems[i], mode)) {
+        return 0;
+      }
+    }
+    return 1;
+  }
 
-        case TEXT_JSON_BOOL:
-            return a->as.boolean == b->as.boolean;
+  case GTEXT_JSON_OBJECT: {
+    if (a->as.object.count != b->as.object.count) {
+      return 0;
+    }
+    // Check for NULL pairs arrays
+    if (!a->as.object.pairs || !b->as.object.pairs) {
+      return (a->as.object.pairs ==
+          b->as.object.pairs); // Both NULL or both non-NULL
+    }
+    // For objects, we need to match keys regardless of order
+    // For each key in a, find it in b and compare values
+    for (size_t i = 0; i < a->as.object.count; i++) {
+      const char * key_a = a->as.object.pairs[i].key;
+      size_t key_len_a = a->as.object.pairs[i].key_len;
+      const GTEXT_JSON_Value * val_a = a->as.object.pairs[i].value;
 
-        case TEXT_JSON_STRING:
-            if (a->as.string.len != b->as.string.len) {
+      // Find matching key in b
+      int found = 0;
+      for (size_t j = 0; j < b->as.object.count; j++) {
+        if (b->as.object.pairs[j].key_len == key_len_a) {
+          // Check for NULL key pointers before memcmp
+          if (key_len_a == 0) {
+            // Empty key - both must have NULL or both must have non-NULL
+            if ((key_a == NULL) == (b->as.object.pairs[j].key == NULL)) {
+              // Found matching key - compare values
+              if (!json_value_equal_internal(
+                      val_a, b->as.object.pairs[j].value, mode)) {
                 return 0;
+              }
+              found = 1;
+              break;
             }
-            // Check for NULL pointers before memcmp
-            if (!a->as.string.data || !b->as.string.data) {
-                return (a->as.string.data == b->as.string.data);  // Both NULL or both non-NULL
-            }
-            return memcmp(a->as.string.data, b->as.string.data, a->as.string.len) == 0;
-
-        case TEXT_JSON_NUMBER: {
-            if (mode == TEXT_JSON_EQUAL_LEXEME) {
-                // Lexeme-based comparison: must have identical lexemes
-                if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
-                    return 0;
-                }
-                if (a->as.number.lexeme && b->as.number.lexeme) {
-                    return memcmp(a->as.number.lexeme, b->as.number.lexeme, a->as.number.lexeme_len) == 0;
-                }
-                // If either doesn't have a lexeme, they're not equal in lexeme mode
+          }
+          else if (key_a != NULL && b->as.object.pairs[j].key != NULL) {
+            if (memcmp(b->as.object.pairs[j].key, key_a, key_len_a) == 0) {
+              // Found matching key - compare values
+              if (!json_value_equal_internal(
+                      val_a, b->as.object.pairs[j].value, mode)) {
                 return 0;
-            } else {
-                // Numeric equivalence comparison
-                // First check if both have the same representation available
-                if (a->as.number.has_i64 && b->as.number.has_i64) {
-                    return a->as.number.i64 == b->as.number.i64;
-                }
-                if (a->as.number.has_u64 && b->as.number.has_u64) {
-                    return a->as.number.u64 == b->as.number.u64;
-                }
-                if (a->as.number.has_dbl && b->as.number.has_dbl) {
-                    // Use approximate equality for doubles (with epsilon)
-                    double diff = fabs(a->as.number.dbl - b->as.number.dbl);
-                    return diff < 1e-15 || (a->as.number.dbl == b->as.number.dbl);
-                }
-                // Fall back to lexeme comparison if no numeric representation available
-                if (a->as.number.lexeme_len != b->as.number.lexeme_len) {
-                    return 0;
-                }
-                if (a->as.number.lexeme && b->as.number.lexeme) {
-                    return memcmp(a->as.number.lexeme, b->as.number.lexeme, a->as.number.lexeme_len) == 0;
-                }
-                return 0;
+              }
+              found = 1;
+              break;
             }
+          }
         }
-
-        case TEXT_JSON_ARRAY: {
-            if (a->as.array.count != b->as.array.count) {
-                return 0;
-            }
-            // Check for NULL elems arrays
-            if (!a->as.array.elems || !b->as.array.elems) {
-                return (a->as.array.elems == b->as.array.elems);  // Both NULL or both non-NULL
-            }
-            for (size_t i = 0; i < a->as.array.count; i++) {
-                if (!json_value_equal_internal(a->as.array.elems[i], b->as.array.elems[i], mode)) {
-                    return 0;
-                }
-            }
-            return 1;
-        }
-
-        case TEXT_JSON_OBJECT: {
-            if (a->as.object.count != b->as.object.count) {
-                return 0;
-            }
-            // Check for NULL pairs arrays
-            if (!a->as.object.pairs || !b->as.object.pairs) {
-                return (a->as.object.pairs == b->as.object.pairs);  // Both NULL or both non-NULL
-            }
-            // For objects, we need to match keys regardless of order
-            // For each key in a, find it in b and compare values
-            for (size_t i = 0; i < a->as.object.count; i++) {
-                const char* key_a = a->as.object.pairs[i].key;
-                size_t key_len_a = a->as.object.pairs[i].key_len;
-                const text_json_value* val_a = a->as.object.pairs[i].value;
-
-                // Find matching key in b
-                int found = 0;
-                for (size_t j = 0; j < b->as.object.count; j++) {
-                    if (b->as.object.pairs[j].key_len == key_len_a) {
-                        // Check for NULL key pointers before memcmp
-                        if (key_len_a == 0) {
-                            // Empty key - both must have NULL or both must have non-NULL
-                            if ((key_a == NULL) == (b->as.object.pairs[j].key == NULL)) {
-                                // Found matching key - compare values
-                                if (!json_value_equal_internal(val_a, b->as.object.pairs[j].value, mode)) {
-                                    return 0;
-                                }
-                                found = 1;
-                                break;
-                            }
-                        } else if (key_a != NULL && b->as.object.pairs[j].key != NULL) {
-                            if (memcmp(b->as.object.pairs[j].key, key_a, key_len_a) == 0) {
-                                // Found matching key - compare values
-                                if (!json_value_equal_internal(val_a, b->as.object.pairs[j].value, mode)) {
-                                    return 0;
-                                }
-                                found = 1;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (!found) {
-                    return 0;  // Key not found in b
-                }
-            }
-            return 1;
-        }
-
-        default:
-            return 0;
+      }
+      if (!found) {
+        return 0; // Key not found in b
+      }
     }
+    return 1;
+  }
+
+  default:
+    return 0;
+  }
 }
 
-TEXT_API bool text_json_equal(const text_json_value* a, const text_json_value* b, text_json_equal_mode mode) {
-    return json_value_equal_internal(a, b, mode);
+GTEXT_API bool gtext_json_equal(const GTEXT_JSON_Value * a,
+    const GTEXT_JSON_Value * b, GTEXT_JSON_Equal_Mode mode) {
+  return json_value_equal_internal(a, b, mode);
 }
 
 // Helper function to deep clone a value into a new context
-static text_json_value* json_value_clone_into_new_context(const text_json_value* src) {
-    if (!src) {
-        return NULL;
-    }
+static GTEXT_JSON_Value * json_value_clone_into_new_context(
+    const GTEXT_JSON_Value * src) {
+  if (!src) {
+    return NULL;
+  }
 
-    // Create a new context for the clone
-    json_context* new_ctx = json_context_new();
-    if (!new_ctx) {
-        return NULL;
-    }
+  // Create a new context for the clone
+  json_context * new_ctx = json_context_new();
+  if (!new_ctx) {
+    return NULL;
+  }
 
-    // Use the existing clone function but with the new context
-    text_json_value* dst = json_value_clone(src, new_ctx);
-    if (!dst) {
-        json_context_free(new_ctx);
-        return NULL;
-    }
+  // Use the existing clone function but with the new context
+  GTEXT_JSON_Value * dst = json_value_clone(src, new_ctx);
+  if (!dst) {
+    json_context_free(new_ctx);
+    return NULL;
+  }
 
-    return dst;
+  return dst;
 }
 
-TEXT_API text_json_value* text_json_clone(const text_json_value* src) {
-    return json_value_clone_into_new_context(src);
+GTEXT_API GTEXT_JSON_Value * gtext_json_clone(const GTEXT_JSON_Value * src) {
+  return json_value_clone_into_new_context(src);
 }
 
-TEXT_API text_json_status text_json_object_merge(
-    text_json_value* target,
-    const text_json_value* source,
-    text_json_merge_policy policy
-) {
-    if (!target || target->type != TEXT_JSON_OBJECT) {
-        return TEXT_JSON_E_INVALID;
-    }
-    if (!source || source->type != TEXT_JSON_OBJECT) {
-        return TEXT_JSON_E_INVALID;
-    }
+GTEXT_API GTEXT_JSON_Status gtext_json_object_merge(GTEXT_JSON_Value * target,
+    const GTEXT_JSON_Value * source, GTEXT_JSON_Merge_Policy policy) {
+  if (!target || target->type != GTEXT_JSON_OBJECT) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  if (!source || source->type != GTEXT_JSON_OBJECT) {
+    return GTEXT_JSON_E_INVALID;
+  }
 
-    // Iterate through all pairs in source
-    for (size_t i = 0; i < source->as.object.count; i++) {
-        const char* key = source->as.object.pairs[i].key;
-        size_t key_len = source->as.object.pairs[i].key_len;
-        const text_json_value* source_val = source->as.object.pairs[i].value;
+  // Iterate through all pairs in source
+  for (size_t i = 0; i < source->as.object.count; i++) {
+    const char * key = source->as.object.pairs[i].key;
+    size_t key_len = source->as.object.pairs[i].key_len;
+    const GTEXT_JSON_Value * source_val = source->as.object.pairs[i].value;
 
-        // Check if key exists in target
-        int key_exists = 0;
-        for (size_t j = 0; j < target->as.object.count; j++) {
-            if (target->as.object.pairs[j].key_len == key_len) {
-                if (key_len == 0 || memcmp(target->as.object.pairs[j].key, key, key_len) == 0) {
-                    key_exists = 1;
+    // Check if key exists in target
+    int key_exists = 0;
+    for (size_t j = 0; j < target->as.object.count; j++) {
+      if (target->as.object.pairs[j].key_len == key_len) {
+        if (key_len == 0 ||
+            memcmp(target->as.object.pairs[j].key, key, key_len) == 0) {
+          key_exists = 1;
 
-                    // Handle conflict based on policy
-                    if (policy == TEXT_JSON_MERGE_ERROR) {
-                        return TEXT_JSON_E_DUPKEY;  // Conflict detected
-                    }
+          // Handle conflict based on policy
+          if (policy == GTEXT_JSON_MERGE_ERROR) {
+            return GTEXT_JSON_E_DUPKEY; // Conflict detected
+          }
 
-                    // If both values are objects, merge recursively
-                    if (target->as.object.pairs[j].value != NULL &&
-                        target->as.object.pairs[j].value->type == TEXT_JSON_OBJECT &&
-                        source_val != NULL &&
-                        source_val->type == TEXT_JSON_OBJECT) {
-                        text_json_status status = text_json_object_merge(
-                            target->as.object.pairs[j].value,
-                            source_val,
-                            policy
-                        );
-                        if (status != TEXT_JSON_OK) {
-                            return status;
-                        }
-                    } else {
-                        // Not both objects - replace based on policy
-                        if (policy == TEXT_JSON_MERGE_LAST_WINS) {
-                            // Clone the source value into target's context
-                            text_json_value* cloned_val = json_value_clone(source_val, target->ctx);
-                            if (!cloned_val) {
-                                return TEXT_JSON_E_OOM;
-                            }
-                            // Free old value if it has different context
-                            text_json_value* old_val = target->as.object.pairs[j].value;
-                            if (old_val && old_val->ctx && old_val->ctx != target->ctx) {
-                                json_context* old_ctx = old_val->ctx;
-                                json_free_children_recursive(old_val);
-                                json_context_free(old_ctx);
-                            }
-                            target->as.object.pairs[j].value = cloned_val;
-                        }
-                        // For FIRST_WINS, do nothing (keep existing value)
-                    }
-                    break;
-                }
+          // If both values are objects, merge recursively
+          if (target->as.object.pairs[j].value != NULL &&
+              target->as.object.pairs[j].value->type == GTEXT_JSON_OBJECT &&
+              source_val != NULL && source_val->type == GTEXT_JSON_OBJECT) {
+            GTEXT_JSON_Status status = gtext_json_object_merge(
+                target->as.object.pairs[j].value, source_val, policy);
+            if (status != GTEXT_JSON_OK) {
+              return status;
             }
+          }
+          else {
+            // Not both objects - replace based on policy
+            if (policy == GTEXT_JSON_MERGE_LAST_WINS) {
+              // Clone the source value into target's context
+              GTEXT_JSON_Value * cloned_val =
+                  json_value_clone(source_val, target->ctx);
+              if (!cloned_val) {
+                return GTEXT_JSON_E_OOM;
+              }
+              // Free old value if it has different context
+              GTEXT_JSON_Value * old_val = target->as.object.pairs[j].value;
+              if (old_val && old_val->ctx && old_val->ctx != target->ctx) {
+                json_context * old_ctx = old_val->ctx;
+                json_free_children_recursive(old_val);
+                json_context_free(old_ctx);
+              }
+              target->as.object.pairs[j].value = cloned_val;
+            }
+            // For FIRST_WINS, do nothing (keep existing value)
+          }
+          break;
         }
-
-        // Key doesn't exist in target - add it
-        if (!key_exists) {
-            // Clone the source value into target's context
-            text_json_value* cloned_val = json_value_clone(source_val, target->ctx);
-            if (!cloned_val) {
-                return TEXT_JSON_E_OOM;
-            }
-            text_json_status status = json_object_add_pair(target, key, key_len, cloned_val);
-            if (status != TEXT_JSON_OK) {
-                // Note: If json_object_add_pair fails after cloning, the cloned value
-                // is orphaned in target->ctx. Since arena allocators don't support
-                // freeing individual items, the value will remain allocated until
-                // target->ctx is freed. This is acceptable because:
-                // 1. The failure cases are rare (OOM or integer overflow)
-                // 2. The memory will be freed when the target object is freed
-                // 3. The alternative (cloning only after successful allocation) would
-                //    require significant refactoring and is not worth the complexity
-                return status;
-            }
-        }
+      }
     }
 
-    return TEXT_JSON_OK;
+    // Key doesn't exist in target - add it
+    if (!key_exists) {
+      // Clone the source value into target's context
+      GTEXT_JSON_Value * cloned_val = json_value_clone(source_val, target->ctx);
+      if (!cloned_val) {
+        return GTEXT_JSON_E_OOM;
+      }
+      GTEXT_JSON_Status status =
+          json_object_add_pair(target, key, key_len, cloned_val);
+      if (status != GTEXT_JSON_OK) {
+        // Note: If json_object_add_pair fails after cloning, the cloned value
+        // is orphaned in target->ctx. Since arena allocators don't support
+        // freeing individual items, the value will remain allocated until
+        // target->ctx is freed. This is acceptable because:
+        // 1. The failure cases are rare (OOM or integer overflow)
+        // 2. The memory will be freed when the target object is freed
+        // 3. The alternative (cloning only after successful allocation) would
+        //    require significant refactoring and is not worth the complexity
+        return status;
+      }
+    }
+  }
+
+  return GTEXT_JSON_OK;
 }

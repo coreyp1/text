@@ -1,10 +1,16 @@
-// Internal utility functions for JSON module
+/**
+ * @file
+ *
+ * Internal utility functions for JSON module.
+ *
+ * Copyright 2026 by Corey Pennycuff
+ */
 
-#include "json_internal.h"
 #include <string.h>
 
+#include "json_internal.h"
 // Check if a length-delimited string exactly equals a null-terminated keyword
-int json_matches(const char* input, size_t len, const char* keyword) {
-    size_t keyword_len = strlen(keyword);
-    return len == keyword_len && memcmp(input, keyword, keyword_len) == 0;
+int json_matches(const char * input, size_t len, const char * keyword) {
+  size_t keyword_len = strlen(keyword);
+  return len == keyword_len && memcmp(input, keyword, keyword_len) == 0;
 }

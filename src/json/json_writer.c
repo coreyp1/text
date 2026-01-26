@@ -1,39 +1,43 @@
 /**
- * @file json_writer.c
- * @brief JSON writer infrastructure implementation
+ * @file
+ *
+ * JSON writer infrastructure implementation.
  *
  * This file implements the sink abstraction for writing JSON output
  * to various destinations.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#include <ghoti.io/text/json/json_writer.h>
-#include <ghoti.io/text/json/json_core.h>
-#include <ghoti.io/text/json/json_dom.h>
-#include "json_internal.h"
+#include <ctype.h>
+#include <limits.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <limits.h>
-#include <stdio.h>
-#include <math.h>
-#include <ctype.h>
+
+#include "json_internal.h"
+#include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/json/json_dom.h>
+#include <ghoti.io/text/json/json_writer.h>
 
 // Locale support for locale-independent formatting
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
-  #include <locale.h>
-  #define HAVE_USELOCALE 1
+#include <locale.h>
+#define HAVE_USELOCALE 1
 #elif defined(__APPLE__) || defined(__FreeBSD__)
-  #include <xlocale.h>
-  #define HAVE_USELOCALE 1
+#include <xlocale.h>
+#define HAVE_USELOCALE 1
 #else
-  #include <locale.h>
-  #define HAVE_USELOCALE 0
+#include <locale.h>
+#define HAVE_USELOCALE 0
 #endif
 
 // Internal write callback for growable buffer sink
-static int buffer_write_fn(void* user, const char* bytes, size_t len) {
-  text_json_buffer_sink* buf = (text_json_buffer_sink*)user;
+static int buffer_write_fn(void * user, const char * bytes, size_t len) {
+  GTEXT_JSON_Buffer_Sink * buf = (GTEXT_JSON_Buffer_Sink *)user;
   if (!buf || !bytes) {
     return 1; // Error
   }
@@ -59,7 +63,7 @@ static int buffer_write_fn(void* user, const char* bytes, size_t len) {
       new_size *= 2;
     }
 
-    char* new_data = (char*)realloc(buf->data, new_size);
+    char * new_data = (char *)realloc(buf->data, new_size);
     if (!new_data) {
       return 1; // Out of memory
     }
@@ -84,19 +88,20 @@ static int buffer_write_fn(void* user, const char* bytes, size_t len) {
 }
 
 // Internal write callback for fixed buffer sink
-static int fixed_buffer_write_fn(void* user, const char* bytes, size_t len) {
-  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)user;
+static int fixed_buffer_write_fn(void * user, const char * bytes, size_t len) {
+  GTEXT_JSON_Fixed_Buffer_Sink * buf = (GTEXT_JSON_Fixed_Buffer_Sink *)user;
   if (!buf || !bytes) {
     return 1; // Error
   }
 
   // Calculate how much we can write (leave room for null terminator)
-  // We can write up to (size - used - 1) bytes to leave room for null terminator
-  // If used >= size, available = 0 (no underflow possible since size_t is unsigned)
+  // We can write up to (size - used - 1) bytes to leave room for null
+  // terminator If used >= size, available = 0 (no underflow possible since
+  // size_t is unsigned)
   size_t available = 0;
   if (buf->size > buf->used) {
-    // Check for underflow: if size - used would underflow, but since size > used,
-    // we know size - used is valid. Then check if we can subtract 1.
+    // Check for underflow: if size - used would underflow, but since size >
+    // used, we know size - used is valid. Then check if we can subtract 1.
     if (buf->size - buf->used > 1) {
       available = buf->size - buf->used - 1;
     }
@@ -123,7 +128,8 @@ static int fixed_buffer_write_fn(void* user, const char* bytes, size_t len) {
       if (buf->used < buf->size) {
         buf->data[buf->used] = '\0';
       }
-    } else {
+    }
+    else {
       // Should not happen if logic is correct, but be safe
       truncated = 1;
       buf->truncated = 1;
@@ -134,14 +140,15 @@ static int fixed_buffer_write_fn(void* user, const char* bytes, size_t len) {
   return truncated ? 1 : 0;
 }
 
-text_json_status text_json_sink_buffer(text_json_sink* sink) {
+GTEXT_API GTEXT_JSON_Status gtext_json_sink_buffer(GTEXT_JSON_Sink * sink) {
   if (!sink) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
-  text_json_buffer_sink* buf = (text_json_buffer_sink*)malloc(sizeof(text_json_buffer_sink));
+  GTEXT_JSON_Buffer_Sink * buf =
+      (GTEXT_JSON_Buffer_Sink *)malloc(sizeof(GTEXT_JSON_Buffer_Sink));
   if (!buf) {
-    return TEXT_JSON_E_OOM;
+    return GTEXT_JSON_E_OOM;
   }
 
   buf->data = NULL;
@@ -151,15 +158,16 @@ text_json_status text_json_sink_buffer(text_json_sink* sink) {
   sink->write = buffer_write_fn;
   sink->user = buf;
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-const char* text_json_sink_buffer_data(const text_json_sink* sink) {
+GTEXT_API const char * gtext_json_sink_buffer_data(
+    const GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != buffer_write_fn) {
     return NULL;
   }
 
-  text_json_buffer_sink* buf = (text_json_buffer_sink*)sink->user;
+  GTEXT_JSON_Buffer_Sink * buf = (GTEXT_JSON_Buffer_Sink *)sink->user;
   if (!buf) {
     return NULL;
   }
@@ -167,12 +175,12 @@ const char* text_json_sink_buffer_data(const text_json_sink* sink) {
   return buf->data ? buf->data : "";
 }
 
-size_t text_json_sink_buffer_size(const text_json_sink* sink) {
+GTEXT_API size_t gtext_json_sink_buffer_size(const GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != buffer_write_fn) {
     return 0;
   }
 
-  text_json_buffer_sink* buf = (text_json_buffer_sink*)sink->user;
+  GTEXT_JSON_Buffer_Sink * buf = (GTEXT_JSON_Buffer_Sink *)sink->user;
   if (!buf) {
     return 0;
   }
@@ -180,12 +188,12 @@ size_t text_json_sink_buffer_size(const text_json_sink* sink) {
   return buf->used;
 }
 
-void text_json_sink_buffer_free(text_json_sink* sink) {
+GTEXT_API void gtext_json_sink_buffer_free(GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != buffer_write_fn) {
     return;
   }
 
-  text_json_buffer_sink* buf = (text_json_buffer_sink*)sink->user;
+  GTEXT_JSON_Buffer_Sink * buf = (GTEXT_JSON_Buffer_Sink *)sink->user;
   if (buf) {
     free(buf->data);
     free(buf);
@@ -194,18 +202,16 @@ void text_json_sink_buffer_free(text_json_sink* sink) {
   }
 }
 
-text_json_status text_json_sink_fixed_buffer(
-  text_json_sink* sink,
-  char* buffer,
-  size_t size
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_sink_fixed_buffer(
+    GTEXT_JSON_Sink * sink, char * buffer, size_t size) {
   if (!sink || !buffer || size == 0) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
-  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)malloc(sizeof(text_json_fixed_buffer_sink));
+  GTEXT_JSON_Fixed_Buffer_Sink * buf = (GTEXT_JSON_Fixed_Buffer_Sink *)malloc(
+      sizeof(GTEXT_JSON_Fixed_Buffer_Sink));
   if (!buf) {
-    return TEXT_JSON_E_OOM;
+    return GTEXT_JSON_E_OOM;
   }
 
   buf->data = buffer;
@@ -221,15 +227,17 @@ text_json_status text_json_sink_fixed_buffer(
   sink->write = fixed_buffer_write_fn;
   sink->user = buf;
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink) {
+GTEXT_API size_t gtext_json_sink_fixed_buffer_used(
+    const GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != fixed_buffer_write_fn) {
     return 0;
   }
 
-  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)sink->user;
+  GTEXT_JSON_Fixed_Buffer_Sink * buf =
+      (GTEXT_JSON_Fixed_Buffer_Sink *)sink->user;
   if (!buf) {
     return 0;
   }
@@ -237,12 +245,14 @@ size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink) {
   return buf->used;
 }
 
-bool text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
+GTEXT_API bool gtext_json_sink_fixed_buffer_truncated(
+    const GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != fixed_buffer_write_fn) {
     return false;
   }
 
-  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)sink->user;
+  GTEXT_JSON_Fixed_Buffer_Sink * buf =
+      (GTEXT_JSON_Fixed_Buffer_Sink *)sink->user;
   if (!buf) {
     return false;
   }
@@ -250,12 +260,13 @@ bool text_json_sink_fixed_buffer_truncated(const text_json_sink* sink) {
   return buf->truncated;
 }
 
-void text_json_sink_fixed_buffer_free(text_json_sink* sink) {
+GTEXT_API void gtext_json_sink_fixed_buffer_free(GTEXT_JSON_Sink * sink) {
   if (!sink || sink->write != fixed_buffer_write_fn) {
     return;
   }
 
-  text_json_fixed_buffer_sink* buf = (text_json_fixed_buffer_sink*)sink->user;
+  GTEXT_JSON_Fixed_Buffer_Sink * buf =
+      (GTEXT_JSON_Fixed_Buffer_Sink *)sink->user;
   if (buf) {
     free(buf);
     sink->user = NULL;
@@ -264,7 +275,7 @@ void text_json_sink_fixed_buffer_free(text_json_sink* sink) {
 }
 
 // Helper function to write bytes to sink
-static int write_bytes(text_json_sink* sink, const char* bytes, size_t len) {
+static int write_bytes(GTEXT_JSON_Sink * sink, const char * bytes, size_t len) {
   if (!sink || !sink->write || !bytes) {
     return 1;
   }
@@ -272,12 +283,12 @@ static int write_bytes(text_json_sink* sink, const char* bytes, size_t len) {
 }
 
 // Helper function to write a single character
-static int write_char(text_json_sink* sink, char c) {
+static int write_char(GTEXT_JSON_Sink * sink, char c) {
   return write_bytes(sink, &c, 1);
 }
 
 // Helper function to write a string
-static int write_string(text_json_sink* sink, const char* s) {
+static int write_string(GTEXT_JSON_Sink * sink, const char * s) {
   if (!s) {
     return 0;
   }
@@ -285,7 +296,8 @@ static int write_string(text_json_sink* sink, const char* s) {
 }
 
 // Write Unicode escape sequence \uXXXX
-static int write_unicode_escape(text_json_sink* sink, unsigned int codepoint) {
+static int write_unicode_escape(
+    GTEXT_JSON_Sink * sink, unsigned int codepoint) {
   char buf[7];
   int len = snprintf(buf, sizeof(buf), "\\u%04X", codepoint);
   if (len < 0 || (size_t)len >= sizeof(buf)) {
@@ -295,17 +307,14 @@ static int write_unicode_escape(text_json_sink* sink, unsigned int codepoint) {
 }
 
 // Escape and write a string value
-static int write_escaped_string(
-  text_json_sink* sink,
-  const char* str,
-  size_t len,
-  const text_json_write_options* opt
-) {
+static int write_escaped_string(GTEXT_JSON_Sink * sink, const char * str,
+    size_t len, const GTEXT_JSON_Write_Options * opt) {
   if (write_char(sink, '"') != 0) {
     return 1;
   }
 
-  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+  const GTEXT_JSON_Write_Options * opts =
+      opt ? opt : &(GTEXT_JSON_Write_Options){0};
   int escape_solidus = opts->escape_solidus;
   int escape_unicode = opts->escape_unicode;
   int escape_all_non_ascii = opts->escape_all_non_ascii;
@@ -315,39 +324,50 @@ static int write_escaped_string(
 
     // Standard escape sequences
     switch (c) {
-      case '"':
-        if (write_string(sink, "\\\"") != 0) return 1;
-        continue;
-      case '\\':
-        if (write_string(sink, "\\\\") != 0) return 1;
-        continue;
-      case '/':
-        if (escape_solidus) {
-          if (write_string(sink, "\\/") != 0) return 1;
-        } else {
-          if (write_char(sink, '/') != 0) return 1;
-        }
-        continue;
-      case '\b':
-        if (write_string(sink, "\\b") != 0) return 1;
-        continue;
-      case '\f':
-        if (write_string(sink, "\\f") != 0) return 1;
-        continue;
-      case '\n':
-        if (write_string(sink, "\\n") != 0) return 1;
-        continue;
-      case '\r':
-        if (write_string(sink, "\\r") != 0) return 1;
-        continue;
-      case '\t':
-        if (write_string(sink, "\\t") != 0) return 1;
-        continue;
+    case '"':
+      if (write_string(sink, "\\\"") != 0)
+        return 1;
+      continue;
+    case '\\':
+      if (write_string(sink, "\\\\") != 0)
+        return 1;
+      continue;
+    case '/':
+      if (escape_solidus) {
+        if (write_string(sink, "\\/") != 0)
+          return 1;
+      }
+      else {
+        if (write_char(sink, '/') != 0)
+          return 1;
+      }
+      continue;
+    case '\b':
+      if (write_string(sink, "\\b") != 0)
+        return 1;
+      continue;
+    case '\f':
+      if (write_string(sink, "\\f") != 0)
+        return 1;
+      continue;
+    case '\n':
+      if (write_string(sink, "\\n") != 0)
+        return 1;
+      continue;
+    case '\r':
+      if (write_string(sink, "\\r") != 0)
+        return 1;
+      continue;
+    case '\t':
+      if (write_string(sink, "\\t") != 0)
+        return 1;
+      continue;
     }
 
     // Control characters (0x00-0x1F) must be escaped as \uXXXX
     if (c < 0x20) {
-      if (write_unicode_escape(sink, c) != 0) return 1;
+      if (write_unicode_escape(sink, c) != 0)
+        return 1;
       continue;
     }
 
@@ -355,19 +375,24 @@ static int write_escaped_string(
     if (c >= 0x80) {
       if (escape_all_non_ascii) {
         // Escape all non-ASCII as \uXXXX
-        if (write_unicode_escape(sink, c) != 0) return 1;
+        if (write_unicode_escape(sink, c) != 0)
+          return 1;
         continue;
-      } else if (escape_unicode) {
+      }
+      else if (escape_unicode) {
         // For escape_unicode, we need to handle UTF-8 sequences properly
         // For now, escape individual bytes if they're >= 0x80
-        // A more sophisticated implementation would decode UTF-8 and escape codepoints
-        if (write_unicode_escape(sink, c) != 0) return 1;
+        // A more sophisticated implementation would decode UTF-8 and escape
+        // codepoints
+        if (write_unicode_escape(sink, c) != 0)
+          return 1;
         continue;
       }
     }
 
     // Regular character - write as-is
-    if (write_char(sink, (char)c) != 0) return 1;
+    if (write_char(sink, (char)c) != 0)
+      return 1;
   }
 
   if (write_char(sink, '"') != 0) {
@@ -378,12 +403,13 @@ static int write_escaped_string(
 }
 
 // Write indentation for pretty printing
-static int write_indent(text_json_sink* sink, int depth, const text_json_write_options* opt) {
+static int write_indent(
+    GTEXT_JSON_Sink * sink, int depth, const GTEXT_JSON_Write_Options * opt) {
   if (!opt || !opt->pretty) {
     return 0;
   }
 
-  const char* newline = opt->newline ? opt->newline : "\n";
+  const char * newline = opt->newline ? opt->newline : "\n";
   if (write_string(sink, newline) != 0) {
     return 1;
   }
@@ -412,126 +438,118 @@ static int write_indent(text_json_sink* sink, int depth, const text_json_write_o
 #if HAVE_USELOCALE
 // Use uselocale for thread-safe locale switching (POSIX)
 static int format_number_locale_independent(
-  char* buf,
-  size_t buf_size,
-  const char* format,
-  ...
-) {
+    char * buf, size_t buf_size, const char * format, ...) {
   // Null pointer and size checks
   if (!buf || !format || buf_size == 0) {
     return -1;
   }
-  
+
   locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", NULL);
   if (!c_locale) {
     return -1;
   }
   locale_t old_locale = uselocale(c_locale);
-  
+
   va_list args;
   va_start(args, format);
   int result = vsnprintf(buf, buf_size, format, args);
   va_end(args);
-  
+
   uselocale(old_locale);
   freelocale(c_locale);
-  
+
   return result;
 }
 #else
 // Fallback: use setlocale (not thread-safe, but more portable)
 static int format_number_locale_independent(
-  char* buf,
-  size_t buf_size,
-  const char* format,
-  ...
-) {
+    char * buf, size_t buf_size, const char * format, ...) {
   // Null pointer and size checks
   if (!buf || !format || buf_size == 0) {
     return -1;
   }
-  
-  char* old_locale = setlocale(LC_NUMERIC, NULL);
-  char* saved_locale = NULL;
+
+  char * old_locale = setlocale(LC_NUMERIC, NULL);
+  char * saved_locale = NULL;
   if (old_locale) {
     size_t len = strlen(old_locale);
     // Check for integer overflow: len + 1
     if (len == SIZE_MAX) {
       return -1; // Cannot allocate (string too long)
     }
-    saved_locale = (char*)malloc(len + 1);
+    saved_locale = (char *)malloc(len + 1);
     if (!saved_locale) {
       return -1;
     }
     memcpy(saved_locale, old_locale, len + 1);
   }
-  
+
   setlocale(LC_NUMERIC, "C");
-  
+
   va_list args;
   va_start(args, format);
   int result = vsnprintf(buf, buf_size, format, args);
   va_end(args);
-  
+
   if (saved_locale) {
     setlocale(LC_NUMERIC, saved_locale);
     free(saved_locale);
-  } else {
+  }
+  else {
     setlocale(LC_NUMERIC, "C"); // Keep C locale if we couldn't save
   }
-  
+
   return result;
 }
 #endif
 
 // Format a double according to the specified strategy
-static int format_double(
-  char* buf,
-  size_t buf_size,
-  double d,
-  text_json_float_format format,
-  int precision
-) {
+static int format_double(char * buf, size_t buf_size, double d,
+    GTEXT_JSON_Float_Format format, int precision) {
   // Null pointer and size checks
   if (!buf || buf_size == 0) {
     return -1;
   }
-  
-  const char* fmt_str;
-  
+
+  const char * fmt_str;
+
   switch (format) {
-    case TEXT_JSON_FLOAT_SHORTEST:
-      fmt_str = "%.17g";
-      return format_number_locale_independent(buf, buf_size, fmt_str, d);
-      
-    case TEXT_JSON_FLOAT_FIXED:
-      // Clamp precision to reasonable range
-      if (precision < 0) precision = 0;
-      if (precision > 20) precision = 20;
-      fmt_str = "%.*f";
-      return format_number_locale_independent(buf, buf_size, fmt_str, precision, d);
-      
-    case TEXT_JSON_FLOAT_SCIENTIFIC:
-      // Clamp precision to reasonable range
-      if (precision < 0) precision = 0;
-      if (precision > 20) precision = 20;
-      fmt_str = "%.*e";
-      return format_number_locale_independent(buf, buf_size, fmt_str, precision, d);
-      
-    default:
-      // Fallback to shortest
-      fmt_str = "%.17g";
-      return format_number_locale_independent(buf, buf_size, fmt_str, d);
+  case GTEXT_JSON_FLOAT_SHORTEST:
+    fmt_str = "%.17g";
+    return format_number_locale_independent(buf, buf_size, fmt_str, d);
+
+  case GTEXT_JSON_FLOAT_FIXED:
+    // Clamp precision to reasonable range
+    if (precision < 0)
+      precision = 0;
+    if (precision > 20)
+      precision = 20;
+    fmt_str = "%.*f";
+    return format_number_locale_independent(
+        buf, buf_size, fmt_str, precision, d);
+
+  case GTEXT_JSON_FLOAT_SCIENTIFIC:
+    // Clamp precision to reasonable range
+    if (precision < 0)
+      precision = 0;
+    if (precision > 20)
+      precision = 20;
+    fmt_str = "%.*e";
+    return format_number_locale_independent(
+        buf, buf_size, fmt_str, precision, d);
+
+  default:
+    // Fallback to shortest
+    fmt_str = "%.17g";
+    return format_number_locale_independent(buf, buf_size, fmt_str, d);
   }
 }
 
 // Write a number value
-static int write_number(
-  text_json_sink* sink,
-  const text_json_value* v,
-  const text_json_write_options* opt
-) {
-  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
+    const GTEXT_JSON_Write_Options * opt) {
+  const GTEXT_JSON_Write_Options * opts =
+      opt ? opt : &(GTEXT_JSON_Write_Options){0};
 
   // Check for nonfinite numbers
   if (v->as.number.has_dbl) {
@@ -542,10 +560,12 @@ static int write_number(
       }
       if (isnan(d)) {
         return write_string(sink, "NaN");
-      } else if (isinf(d)) {
+      }
+      else if (isinf(d)) {
         if (d < 0) {
           return write_string(sink, "-Infinity");
-        } else {
+        }
+        else {
           return write_string(sink, "Infinity");
         }
       }
@@ -553,7 +573,8 @@ static int write_number(
   }
 
   // Prefer lexeme if available and canonical_numbers is off
-  if (v->as.number.lexeme && v->as.number.lexeme_len > 0 && !opts->canonical_numbers) {
+  if (v->as.number.lexeme && v->as.number.lexeme_len > 0 &&
+      !opts->canonical_numbers) {
     // Check for integer overflow in lexeme_len (defensive, though unlikely)
     if (v->as.number.lexeme_len > SIZE_MAX) {
       return 1; // Invalid length
@@ -568,7 +589,8 @@ static int write_number(
   // Try int64 first (if available and fits)
   if (v->as.number.has_i64) {
     int64_t i64 = v->as.number.i64;
-    len = format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", (long long)i64);
+    len = format_number_locale_independent(
+        num_buf, sizeof(num_buf), "%lld", (long long)i64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -577,7 +599,8 @@ static int write_number(
   // Try uint64 next
   if (v->as.number.has_u64) {
     uint64_t u64 = v->as.number.u64;
-    len = format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
+    len = format_number_locale_independent(
+        num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -586,7 +609,7 @@ static int write_number(
   // Use double (or format from lexeme if available)
   if (v->as.number.has_dbl) {
     double d = v->as.number.dbl;
-    text_json_float_format float_fmt = opts->float_format;
+    GTEXT_JSON_Float_Format float_fmt = opts->float_format;
     int float_prec = opts->float_precision > 0 ? opts->float_precision : 6;
     len = format_double(num_buf, sizeof(num_buf), d, float_fmt, float_prec);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
@@ -604,341 +627,340 @@ static int write_number(
 }
 
 // Recursive write function
-static int write_value_recursive(
-  text_json_sink* sink,
-  const text_json_value* v,
-  const text_json_write_options* opt,
-  int depth
-) {
+static int write_value_recursive(GTEXT_JSON_Sink * sink,
+    const GTEXT_JSON_Value * v, const GTEXT_JSON_Write_Options * opt,
+    int depth) {
   if (!v) {
     return write_string(sink, "null");
   }
 
-  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+  const GTEXT_JSON_Write_Options * opts =
+      opt ? opt : &(GTEXT_JSON_Write_Options){0};
 
   switch (v->type) {
-    case TEXT_JSON_NULL:
-      return write_string(sink, "null");
+  case GTEXT_JSON_NULL:
+    return write_string(sink, "null");
 
-    case TEXT_JSON_BOOL:
-      return write_string(sink, v->as.boolean ? "true" : "false");
+  case GTEXT_JSON_BOOL:
+    return write_string(sink, v->as.boolean ? "true" : "false");
 
-    case TEXT_JSON_NUMBER:
-      return write_number(sink, v, opts);
+  case GTEXT_JSON_NUMBER:
+    return write_number(sink, v, opts);
 
-    case TEXT_JSON_STRING:
-      // Check for NULL string data (empty string is valid, but NULL pointer is not)
-      if (!v->as.string.data && v->as.string.len > 0) {
-        return 1; // Invalid string state
-      }
-      return write_escaped_string(sink, v->as.string.data, v->as.string.len, opts);
+  case GTEXT_JSON_STRING:
+    // Check for NULL string data (empty string is valid, but NULL pointer is
+    // not)
+    if (!v->as.string.data && v->as.string.len > 0) {
+      return 1; // Invalid string state
+    }
+    return write_escaped_string(
+        sink, v->as.string.data, v->as.string.len, opts);
 
-    case TEXT_JSON_ARRAY: {
-      if (write_char(sink, '[') != 0) return 1;
+  case GTEXT_JSON_ARRAY: {
+    if (write_char(sink, '[') != 0)
+      return 1;
 
-      size_t size = v->as.array.count;
+    size_t size = v->as.array.count;
 
-      // Check for NULL elems pointer (defensive)
-      if (size > 0 && !v->as.array.elems) {
-        return 1; // Invalid array state
-      }
-
-      // Determine if we should format inline (based on threshold)
-      int should_inline = 0;
-      if (opts->pretty) {
-        int threshold = opts->inline_array_threshold;
-        if (threshold < 0) {
-          should_inline = 0; // -1 means always pretty (never inline)
-        } else if (threshold == 0) {
-          should_inline = 0; // 0 means always pretty
-        } else {
-          should_inline = (size <= (size_t)threshold);
-        }
-      }
-
-      for (size_t i = 0; i < size; i++) {
-        if (i > 0) {
-          if (write_char(sink, ',') != 0) return 1;
-          if (opts->space_after_comma) {
-            if (write_char(sink, ' ') != 0) return 1;
-          }
-        }
-
-        if (opts->pretty && !should_inline) {
-          if (write_indent(sink, depth + 1, opts) != 0) return 1;
-        } else if (should_inline && i > 0) {
-          // Inline formatting: add space after comma
-          if (write_char(sink, ' ') != 0) return 1;
-        }
-
-        // Bounds check: i < size already checked, but verify elems[i] is valid
-        if (!v->as.array.elems || i >= v->as.array.capacity) {
-          return 1; // Out of bounds
-        }
-
-        if (write_value_recursive(sink, v->as.array.elems[i], opts, depth + 1) != 0) {
-          return 1;
-        }
-      }
-
-      if (opts->pretty && size > 0 && !should_inline) {
-        if (write_indent(sink, depth, opts) != 0) return 1;
-      }
-
-      return write_char(sink, ']');
+    // Check for NULL elems pointer (defensive)
+    if (size > 0 && !v->as.array.elems) {
+      return 1; // Invalid array state
     }
 
-    case TEXT_JSON_OBJECT: {
-      if (write_char(sink, '{') != 0) return 1;
-
-      size_t size = v->as.object.count;
-
-      // Check for NULL pairs pointer (defensive)
-      if (size > 0 && !v->as.object.pairs) {
-        return 1; // Invalid object state
+    // Determine if we should format inline (based on threshold)
+    int should_inline = 0;
+    if (opts->pretty) {
+      int threshold = opts->inline_array_threshold;
+      if (threshold < 0) {
+        should_inline = 0; // -1 means always pretty (never inline)
       }
+      else if (threshold == 0) {
+        should_inline = 0; // 0 means always pretty
+      }
+      else {
+        should_inline = (size <= (size_t)threshold);
+      }
+    }
 
-      // Create index array for sorting if needed
-      size_t* indices = NULL;
-      if (opts->sort_object_keys && size > 0) {
-        // Check for integer overflow in malloc
-        if (size > SIZE_MAX / sizeof(size_t)) {
-          return 1; // Overflow
-        }
-
-        indices = (size_t*)malloc(size * sizeof(size_t));
-        if (!indices) {
-          return 1; // Out of memory
-        }
-        for (size_t i = 0; i < size; i++) {
-          indices[i] = i;
-        }
-        // Sort indices by key - use a wrapper function
-        // We need to pass the pairs array to the comparison function
-        // Since qsort doesn't support context, we'll use a different approach
-        // For now, we'll do a simple bubble sort (not optimal but works)
-        for (size_t i = 0; i < size - 1; i++) {
-          for (size_t j = 0; j < size - 1 - i; j++) {
-            size_t idx_a = indices[j];
-            size_t idx_b = indices[j + 1];
-
-            // Bounds check indices
-            if (idx_a >= size || idx_b >= size || idx_a >= v->as.object.capacity || idx_b >= v->as.object.capacity) {
-              free(indices);
-              return 1; // Out of bounds
-            }
-
-            const char* key_a = v->as.object.pairs[idx_a].key;
-            size_t len_a = v->as.object.pairs[idx_a].key_len;
-            const char* key_b = v->as.object.pairs[idx_b].key;
-            size_t len_b = v->as.object.pairs[idx_b].key_len;
-
-            // Check for NULL keys
-            if (!key_a || !key_b) {
-              free(indices);
-              return 1; // Invalid key
-            }
-
-            size_t min_len = len_a < len_b ? len_a : len_b;
-            int cmp = memcmp(key_a, key_b, min_len);
-            if (cmp > 0 || (cmp == 0 && len_a > len_b)) {
-              size_t tmp = indices[j];
-              indices[j] = indices[j + 1];
-              indices[j + 1] = tmp;
-            }
-          }
+    for (size_t i = 0; i < size; i++) {
+      if (i > 0) {
+        if (write_char(sink, ',') != 0)
+          return 1;
+        if (opts->space_after_comma) {
+          if (write_char(sink, ' ') != 0)
+            return 1;
         }
       }
 
-      // Determine if we should format inline (based on threshold)
-      int should_inline = 0;
-      if (opts->pretty) {
-        int threshold = opts->inline_object_threshold;
-        if (threshold < 0) {
-          should_inline = 0; // -1 means always pretty (never inline)
-        } else if (threshold == 0) {
-          should_inline = 0; // 0 means always pretty
-        } else {
-          should_inline = (size <= (size_t)threshold);
-        }
+      if (opts->pretty && !should_inline) {
+        if (write_indent(sink, depth + 1, opts) != 0)
+          return 1;
+      }
+      else if (should_inline && i > 0) {
+        // Inline formatting: add space after comma
+        if (write_char(sink, ' ') != 0)
+          return 1;
       }
 
+      // Bounds check: i < size already checked, but verify elems[i] is valid
+      if (!v->as.array.elems || i >= v->as.array.capacity) {
+        return 1; // Out of bounds
+      }
+
+      if (write_value_recursive(sink, v->as.array.elems[i], opts, depth + 1) !=
+          0) {
+        return 1;
+      }
+    }
+
+    if (opts->pretty && size > 0 && !should_inline) {
+      if (write_indent(sink, depth, opts) != 0)
+        return 1;
+    }
+
+    return write_char(sink, ']');
+  }
+
+  case GTEXT_JSON_OBJECT: {
+    if (write_char(sink, '{') != 0)
+      return 1;
+
+    size_t size = v->as.object.count;
+
+    // Check for NULL pairs pointer (defensive)
+    if (size > 0 && !v->as.object.pairs) {
+      return 1; // Invalid object state
+    }
+
+    // Create index array for sorting if needed
+    size_t * indices = NULL;
+    if (opts->sort_object_keys && size > 0) {
+      // Check for integer overflow in malloc
+      if (size > SIZE_MAX / sizeof(size_t)) {
+        return 1; // Overflow
+      }
+
+      indices = (size_t *)malloc(size * sizeof(size_t));
+      if (!indices) {
+        return 1; // Out of memory
+      }
       for (size_t i = 0; i < size; i++) {
-        size_t idx = indices ? indices[i] : i;
+        indices[i] = i;
+      }
+      // Sort indices by key - use a wrapper function
+      // We need to pass the pairs array to the comparison function
+      // Since qsort doesn't support context, we'll use a different approach
+      // For now, we'll do a simple bubble sort (not optimal but works)
+      for (size_t i = 0; i < size - 1; i++) {
+        for (size_t j = 0; j < size - 1 - i; j++) {
+          size_t idx_a = indices[j];
+          size_t idx_b = indices[j + 1];
 
-        // Bounds check index
-        if (idx >= size || idx >= v->as.object.capacity) {
-          if (indices) free(indices);
-          return 1; // Out of bounds
+          // Bounds check indices
+          if (idx_a >= size || idx_b >= size ||
+              idx_a >= v->as.object.capacity ||
+              idx_b >= v->as.object.capacity) {
+            free(indices);
+            return 1; // Out of bounds
+          }
+
+          const char * key_a = v->as.object.pairs[idx_a].key;
+          size_t len_a = v->as.object.pairs[idx_a].key_len;
+          const char * key_b = v->as.object.pairs[idx_b].key;
+          size_t len_b = v->as.object.pairs[idx_b].key_len;
+
+          // Check for NULL keys
+          if (!key_a || !key_b) {
+            free(indices);
+            return 1; // Invalid key
+          }
+
+          size_t min_len = len_a < len_b ? len_a : len_b;
+          int cmp = memcmp(key_a, key_b, min_len);
+          if (cmp > 0 || (cmp == 0 && len_a > len_b)) {
+            size_t tmp = indices[j];
+            indices[j] = indices[j + 1];
+            indices[j + 1] = tmp;
+          }
         }
+      }
+    }
 
-        if (i > 0) {
-          if (write_char(sink, ',') != 0) {
-            if (indices) free(indices);
-            return 1;
-          }
-          if (opts->space_after_comma) {
-            if (write_char(sink, ' ') != 0) {
-              if (indices) free(indices);
-              return 1;
-            }
-          }
+    // Determine if we should format inline (based on threshold)
+    int should_inline = 0;
+    if (opts->pretty) {
+      int threshold = opts->inline_object_threshold;
+      if (threshold < 0) {
+        should_inline = 0; // -1 means always pretty (never inline)
+      }
+      else if (threshold == 0) {
+        should_inline = 0; // 0 means always pretty
+      }
+      else {
+        should_inline = (size <= (size_t)threshold);
+      }
+    }
+
+    for (size_t i = 0; i < size; i++) {
+      size_t idx = indices ? indices[i] : i;
+
+      // Bounds check index
+      if (idx >= size || idx >= v->as.object.capacity) {
+        if (indices)
+          free(indices);
+        return 1; // Out of bounds
+      }
+
+      if (i > 0) {
+        if (write_char(sink, ',') != 0) {
+          if (indices)
+            free(indices);
+          return 1;
         }
-
-        if (opts->pretty && !should_inline) {
-          if (write_indent(sink, depth + 1, opts) != 0) {
-            if (indices) free(indices);
-            return 1;
-          }
-        } else if (should_inline && i > 0) {
-          // Inline formatting: add space after comma
+        if (opts->space_after_comma) {
           if (write_char(sink, ' ') != 0) {
-            if (indices) free(indices);
+            if (indices)
+              free(indices);
             return 1;
           }
         }
+      }
 
-        // Check for NULL key
-        if (!v->as.object.pairs[idx].key) {
-          if (indices) free(indices);
-          return 1; // Invalid key
-        }
-
-        // Write key
-        if (write_escaped_string(sink, v->as.object.pairs[idx].key, v->as.object.pairs[idx].key_len, opts) != 0) {
-          if (indices) free(indices);
+      if (opts->pretty && !should_inline) {
+        if (write_indent(sink, depth + 1, opts) != 0) {
+          if (indices)
+            free(indices);
           return 1;
         }
-
-        // Write colon with optional spacing
-        if (opts->pretty && !should_inline) {
-          if (write_string(sink, ": ") != 0) {
-            if (indices) free(indices);
-            return 1;
-          }
-        } else {
-          if (write_char(sink, ':') != 0) {
-            if (indices) free(indices);
-            return 1;
-          }
-          if (opts->space_after_colon) {
-            if (write_char(sink, ' ') != 0) {
-              if (indices) free(indices);
-              return 1;
-            }
-          }
-        }
-
-        // Write value
-        if (write_value_recursive(sink, v->as.object.pairs[idx].value, opts, depth + 1) != 0) {
-          if (indices) free(indices);
+      }
+      else if (should_inline && i > 0) {
+        // Inline formatting: add space after comma
+        if (write_char(sink, ' ') != 0) {
+          if (indices)
+            free(indices);
           return 1;
         }
       }
 
-      if (indices) {
-        free(indices);
+      // Check for NULL key
+      if (!v->as.object.pairs[idx].key) {
+        if (indices)
+          free(indices);
+        return 1; // Invalid key
       }
 
-      if (opts->pretty && size > 0 && !should_inline) {
-        if (write_indent(sink, depth, opts) != 0) return 1;
+      // Write key
+      if (write_escaped_string(sink, v->as.object.pairs[idx].key,
+              v->as.object.pairs[idx].key_len, opts) != 0) {
+        if (indices)
+          free(indices);
+        return 1;
       }
 
-      return write_char(sink, '}');
+      // Write colon with optional spacing
+      if (opts->pretty && !should_inline) {
+        if (write_string(sink, ": ") != 0) {
+          if (indices)
+            free(indices);
+          return 1;
+        }
+      }
+      else {
+        if (write_char(sink, ':') != 0) {
+          if (indices)
+            free(indices);
+          return 1;
+        }
+        if (opts->space_after_colon) {
+          if (write_char(sink, ' ') != 0) {
+            if (indices)
+              free(indices);
+            return 1;
+          }
+        }
+      }
+
+      // Write value
+      if (write_value_recursive(
+              sink, v->as.object.pairs[idx].value, opts, depth + 1) != 0) {
+        if (indices)
+          free(indices);
+        return 1;
+      }
     }
 
-    default:
-      return 1; // Unknown type
+    if (indices) {
+      free(indices);
+    }
+
+    if (opts->pretty && size > 0 && !should_inline) {
+      if (write_indent(sink, depth, opts) != 0)
+        return 1;
+    }
+
+    return write_char(sink, '}');
+  }
+
+  default:
+    return 1; // Unknown type
   }
 }
 
-text_json_status text_json_write_value(
-  text_json_sink* sink,
-  const text_json_write_options* opt,
-  const text_json_value* v,
-  text_json_error* err
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_write_value(GTEXT_JSON_Sink * sink,
+    const GTEXT_JSON_Write_Options * opt, const GTEXT_JSON_Value * v,
+    GTEXT_JSON_Error * err) {
   if (!sink || !v) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_INVALID,
-                      .message = "Invalid arguments: sink and value must not be NULL"
-                  };
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "Invalid arguments: sink and value must not be NULL"};
     }
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (!sink->write) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_INVALID,
-                      .message = "Invalid sink: write callback is NULL"
-                  };
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "Invalid sink: write callback is NULL"};
     }
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   int result = write_value_recursive(sink, v, opt, 0);
   if (result != 0) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_WRITE,
-                      .message = "Write operation failed"
-                  };
+      *err = (GTEXT_JSON_Error){
+          .code = GTEXT_JSON_E_WRITE, .message = "Write operation failed"};
     }
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Add trailing newline if requested
-  const text_json_write_options* opts = opt ? opt : &(text_json_write_options){0};
+  const GTEXT_JSON_Write_Options * opts =
+      opt ? opt : &(GTEXT_JSON_Write_Options){0};
   if (opts->trailing_newline) {
-    const char* newline = opts->newline ? opts->newline : "\n";
+    const char * newline = opts->newline ? opts->newline : "\n";
     if (write_string(sink, newline) != 0) {
       if (err) {
-        *err = (text_json_error){
-                                    .code = TEXT_JSON_E_WRITE,
-                                    .message = "Failed to write trailing newline"
-                                };
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_WRITE,
+            .message = "Failed to write trailing newline"};
       }
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
 // ============================================================================
 // Streaming Writer Implementation
 // ============================================================================
 
-// Stack entry type for tracking nesting
-typedef enum {
-  JSON_WRITER_STACK_OBJECT,
-  JSON_WRITER_STACK_ARRAY
-} json_writer_stack_type;
-
-// Stack entry for tracking nesting
-typedef struct {
-  json_writer_stack_type type;  // Object or array
-  int has_elements;              // Whether any elements have been written
-  int expecting_key;             // For objects: 1 if expecting key, 0 if expecting value
-} json_writer_stack_entry;
-
-// Streaming writer structure
-struct text_json_writer {
-  text_json_sink sink;                    // Output sink
-  text_json_write_options opts;          // Write options (copy)
-  json_writer_stack_entry* stack;         // Stack for tracking nesting
-  size_t stack_capacity;                  // Stack capacity
-  size_t stack_size;                      // Current stack depth
-  int error;                              // Error flag (1 if error occurred)
-};
-
 // Default stack capacity
 #define JSON_WRITER_DEFAULT_STACK_CAPACITY 32
 
 // Helper to write bytes through writer's sink
-static int writer_write_bytes(text_json_writer* w, const char* bytes, size_t len) {
+static int writer_write_bytes(
+    GTEXT_JSON_Writer * w, const char * bytes, size_t len) {
   if (!w || !w->sink.write || !bytes) {
     return 1;
   }
@@ -950,12 +972,12 @@ static int writer_write_bytes(text_json_writer* w, const char* bytes, size_t len
 }
 
 // Helper to write a single character
-static int writer_write_char(text_json_writer* w, char c) {
+static int writer_write_char(GTEXT_JSON_Writer * w, char c) {
   return writer_write_bytes(w, &c, 1);
 }
 
 // Helper to write a string
-static int writer_write_string(text_json_writer* w, const char* s) {
+static int writer_write_string(GTEXT_JSON_Writer * w, const char * s) {
   if (!s) {
     return 0;
   }
@@ -963,12 +985,12 @@ static int writer_write_string(text_json_writer* w, const char* s) {
 }
 
 // Write indentation for pretty printing
-static int writer_write_indent(text_json_writer* w, int depth) {
+static int writer_write_indent(GTEXT_JSON_Writer * w, int depth) {
   if (!w->opts.pretty) {
     return 0;
   }
 
-  const char* newline = w->opts.newline ? w->opts.newline : "\n";
+  const char * newline = w->opts.newline ? w->opts.newline : "\n";
   if (writer_write_string(w, newline) != 0) {
     return 1;
   }
@@ -991,11 +1013,11 @@ static int writer_write_indent(text_json_writer* w, int depth) {
 }
 
 // Ensure stack has capacity for at least one more entry
-static int writer_ensure_stack(text_json_writer* w) {
+static int writer_ensure_stack(GTEXT_JSON_Writer * w) {
   if (w->stack_size >= w->stack_capacity) {
     size_t new_capacity = w->stack_capacity == 0
-      ? JSON_WRITER_DEFAULT_STACK_CAPACITY
-      : w->stack_capacity * 2;
+        ? JSON_WRITER_DEFAULT_STACK_CAPACITY
+        : w->stack_capacity * 2;
 
     // Check for overflow
     if (new_capacity < w->stack_capacity) {
@@ -1007,16 +1029,15 @@ static int writer_ensure_stack(text_json_writer* w) {
       return 1;
     }
 
-    // Check for overflow in multiplication: new_capacity * sizeof(json_writer_stack_entry)
+    // Check for overflow in multiplication: new_capacity *
+    // sizeof(json_writer_stack_entry)
     size_t entry_size = sizeof(json_writer_stack_entry);
     if (entry_size > 0 && new_capacity > SIZE_MAX / entry_size) {
       return 1; // Overflow
     }
 
-    json_writer_stack_entry* new_stack = (json_writer_stack_entry*)realloc(
-      w->stack,
-      new_capacity * entry_size
-    );
+    json_writer_stack_entry * new_stack =
+        (json_writer_stack_entry *)realloc(w->stack, new_capacity * entry_size);
     if (!new_stack) {
       return 1; // Out of memory
     }
@@ -1028,23 +1049,22 @@ static int writer_ensure_stack(text_json_writer* w) {
 }
 
 // Push a stack entry
-static int writer_push_stack(text_json_writer* w, json_writer_stack_type type) {
+static int writer_push_stack(
+    GTEXT_JSON_Writer * w, json_writer_stack_type type) {
   if (writer_ensure_stack(w) != 0) {
     return 1;
   }
 
-  json_writer_stack_entry entry = {
-    .type = type,
-    .has_elements = 0,
-    .expecting_key = (type == JSON_WRITER_STACK_OBJECT) ? 1 : 0
-  };
+  json_writer_stack_entry entry = {.type = type,
+      .has_elements = 0,
+      .expecting_key = (type == JSON_WRITER_STACK_OBJECT) ? 1 : 0};
 
   w->stack[w->stack_size++] = entry;
   return 0;
 }
 
 // Pop a stack entry
-static int writer_pop_stack(text_json_writer* w) {
+static int writer_pop_stack(GTEXT_JSON_Writer * w) {
   if (w->stack_size == 0) {
     return 1; // Stack underflow
   }
@@ -1053,7 +1073,7 @@ static int writer_pop_stack(text_json_writer* w) {
 }
 
 // Get top stack entry (or NULL if empty)
-static json_writer_stack_entry* writer_top_stack(text_json_writer* w) {
+static json_writer_stack_entry * writer_top_stack(GTEXT_JSON_Writer * w) {
   if (w->stack_size == 0) {
     return NULL;
   }
@@ -1061,8 +1081,8 @@ static json_writer_stack_entry* writer_top_stack(text_json_writer* w) {
 }
 
 // Write comma if needed (before next element)
-static int writer_write_comma_if_needed(text_json_writer* w) {
-  json_writer_stack_entry* top = writer_top_stack(w);
+static int writer_write_comma_if_needed(GTEXT_JSON_Writer * w) {
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (!top) {
     return 0; // No stack, no comma needed
   }
@@ -1073,23 +1093,27 @@ static int writer_write_comma_if_needed(text_json_writer* w) {
     }
     if (w->opts.pretty) {
       // Write newline and indent for next element
-      // Check that stack_size fits in int (defensive, should always be true due to capacity limit)
+      // Check that stack_size fits in int (defensive, should always be true due
+      // to capacity limit)
       if (w->stack_size > (size_t)INT_MAX) {
         return 1; // Stack size too large
       }
       if (writer_write_indent(w, (int)w->stack_size) != 0) {
         return 1;
       }
-    } else if (w->opts.space_after_comma) {
+    }
+    else if (w->opts.space_after_comma) {
       // In compact mode, add space after comma only if explicitly requested
       if (writer_write_char(w, ' ') != 0) {
         return 1;
       }
     }
-  } else {
+  }
+  else {
     // First element - write indent if pretty
     if (w->opts.pretty) {
-      // Check that stack_size fits in int (defensive, should always be true due to capacity limit)
+      // Check that stack_size fits in int (defensive, should always be true due
+      // to capacity limit)
       if (w->stack_size > (size_t)INT_MAX) {
         return 1; // Stack size too large
       }
@@ -1101,15 +1125,14 @@ static int writer_write_comma_if_needed(text_json_writer* w) {
   return 0;
 }
 
-text_json_writer* text_json_writer_new(
-  text_json_sink sink,
-  const text_json_write_options* opt
-) {
+GTEXT_API GTEXT_JSON_Writer * gtext_json_writer_new(
+    GTEXT_JSON_Sink sink, const GTEXT_JSON_Write_Options * opt) {
   if (!sink.write) {
     return NULL;
   }
 
-  text_json_writer* w = (text_json_writer*)calloc(1, sizeof(text_json_writer));
+  GTEXT_JSON_Writer * w =
+      (GTEXT_JSON_Writer *)calloc(1, sizeof(GTEXT_JSON_Writer));
   if (!w) {
     return NULL;
   }
@@ -1117,15 +1140,14 @@ text_json_writer* text_json_writer_new(
   w->sink = sink;
   if (opt) {
     w->opts = *opt;
-  } else {
-    w->opts = text_json_write_options_default();
+  }
+  else {
+    w->opts = gtext_json_write_options_default();
   }
 
   w->stack_capacity = JSON_WRITER_DEFAULT_STACK_CAPACITY;
-  w->stack = (json_writer_stack_entry*)calloc(
-    w->stack_capacity,
-    sizeof(json_writer_stack_entry)
-  );
+  w->stack = (json_writer_stack_entry *)calloc(
+      w->stack_capacity, sizeof(json_writer_stack_entry));
   if (!w->stack) {
     free(w);
     return NULL;
@@ -1137,7 +1159,7 @@ text_json_writer* text_json_writer_new(
   return w;
 }
 
-void text_json_writer_free(text_json_writer* w) {
+GTEXT_API void gtext_json_writer_free(GTEXT_JSON_Writer * w) {
   if (!w) {
     return;
   }
@@ -1148,229 +1170,234 @@ void text_json_writer_free(text_json_writer* w) {
   free(w);
 }
 
-text_json_status text_json_writer_object_begin(text_json_writer* w) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_object_begin(
+    GTEXT_JSON_Writer * w) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
   // Check if we're in an object expecting a key (can't write value without key)
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (top && top->type == JSON_WRITER_STACK_OBJECT && top->expecting_key) {
-    return TEXT_JSON_E_STATE; // Can't start object as value - need key first
+    return GTEXT_JSON_E_STATE; // Can't start object as value - need key first
   }
 
   // Write comma if needed (for arrays) or handle first element
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write opening brace
   if (writer_write_char(w, '{') != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Push object onto stack
   if (writer_push_stack(w, JSON_WRITER_STACK_OBJECT) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_OOM;
+    return GTEXT_JSON_E_OOM;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_object_end(text_json_writer* w) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_object_end(
+    GTEXT_JSON_Writer * w) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (!top || top->type != JSON_WRITER_STACK_OBJECT) {
-    return TEXT_JSON_E_STATE; // Not in an object
+    return GTEXT_JSON_E_STATE; // Not in an object
   }
 
   if (!top->expecting_key) {
-    return TEXT_JSON_E_STATE; // Incomplete: expecting value after key
+    return GTEXT_JSON_E_STATE; // Incomplete: expecting value after key
   }
 
   // Write closing brace
   if (w->opts.pretty && top->has_elements) {
     // Indent to parent level (stack_size - 1)
     int indent_depth = (int)w->stack_size - 1;
-    if (indent_depth < 0) indent_depth = 0;
+    if (indent_depth < 0)
+      indent_depth = 0;
     if (writer_write_indent(w, indent_depth) != 0) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
   }
 
   if (writer_write_char(w, '}') != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Pop object from stack
   if (writer_pop_stack(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
   // Mark parent as having elements and reset expecting_key if it's an object
   top = writer_top_stack(w);
   if (top) {
     top->has_elements = 1;
-    // If parent is an object, we just finished writing a value, so reset to expecting key
+    // If parent is an object, we just finished writing a value, so reset to
+    // expecting key
     if (top->type == JSON_WRITER_STACK_OBJECT) {
       top->expecting_key = 1;
     }
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_array_begin(text_json_writer* w) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_array_begin(
+    GTEXT_JSON_Writer * w) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
   // Check if we're in an object expecting a key (can't write value without key)
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (top && top->type == JSON_WRITER_STACK_OBJECT && top->expecting_key) {
-    return TEXT_JSON_E_STATE; // Can't start array as value - need key first
+    return GTEXT_JSON_E_STATE; // Can't start array as value - need key first
   }
 
   // Write comma if needed (for arrays) or handle first element
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write opening bracket
   if (writer_write_char(w, '[') != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Push array onto stack
   if (writer_push_stack(w, JSON_WRITER_STACK_ARRAY) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_OOM;
+    return GTEXT_JSON_E_OOM;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_array_end(text_json_writer* w) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_array_end(GTEXT_JSON_Writer * w) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (!top || top->type != JSON_WRITER_STACK_ARRAY) {
-    return TEXT_JSON_E_STATE; // Not in an array
+    return GTEXT_JSON_E_STATE; // Not in an array
   }
 
   // Write closing bracket
   if (w->opts.pretty && top->has_elements) {
     // Indent to parent level (stack_size - 1)
     int indent_depth = (int)w->stack_size - 1;
-    if (indent_depth < 0) indent_depth = 0;
+    if (indent_depth < 0)
+      indent_depth = 0;
     if (writer_write_indent(w, indent_depth) != 0) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
   }
 
   if (writer_write_char(w, ']') != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Pop array from stack
   if (writer_pop_stack(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
   // Mark parent as having elements and reset expecting_key if it's an object
   top = writer_top_stack(w);
   if (top) {
     top->has_elements = 1;
-    // If parent is an object, we just finished writing a value, so reset to expecting key
+    // If parent is an object, we just finished writing a value, so reset to
+    // expecting key
     if (top->type == JSON_WRITER_STACK_OBJECT) {
       top->expecting_key = 1;
     }
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_key(
-  text_json_writer* w,
-  const char* key,
-  size_t len
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_key(
+    GTEXT_JSON_Writer * w, const char * key, size_t len) {
   if (!w || !key) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
   if (!top || top->type != JSON_WRITER_STACK_OBJECT) {
-    return TEXT_JSON_E_STATE; // Not in an object
+    return GTEXT_JSON_E_STATE; // Not in an object
   }
 
   if (!top->expecting_key) {
-    return TEXT_JSON_E_STATE; // Not expecting a key
+    return GTEXT_JSON_E_STATE; // Not expecting a key
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write key
   if (write_escaped_string(&w->sink, key, len, &w->opts) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write colon with optional spacing
   if (w->opts.pretty) {
     if (writer_write_string(w, ": ") != 0) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
-  } else {
+  }
+  else {
     if (writer_write_char(w, ':') != 0) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
     if (w->opts.space_after_colon) {
       if (writer_write_char(w, ' ') != 0) {
         w->error = 1;
-        return TEXT_JSON_E_WRITE;
+        return GTEXT_JSON_E_WRITE;
       }
     }
   }
@@ -1378,38 +1405,38 @@ text_json_status text_json_writer_key(
   // Now expecting value
   top->expecting_key = 0;
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_null(text_json_writer* w) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_null(GTEXT_JSON_Writer * w) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write null
   if (writer_write_string(w, "null") != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1422,38 +1449,39 @@ text_json_status text_json_writer_null(text_json_writer* w) {
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_bool(text_json_writer* w, bool b) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_bool(
+    GTEXT_JSON_Writer * w, bool b) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write boolean
   if (writer_write_string(w, b ? "true" : "false") != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1466,42 +1494,39 @@ text_json_status text_json_writer_bool(text_json_writer* w, bool b) {
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_number_lexeme(
-  text_json_writer* w,
-  const char* s,
-  size_t len
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_lexeme(
+    GTEXT_JSON_Writer * w, const char * s, size_t len) {
   if (!w || !s) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write number lexeme
   if (writer_write_bytes(w, s, len) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1514,48 +1539,47 @@ text_json_status text_json_writer_number_lexeme(
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_number_i64(
-  text_json_writer* w,
-  long long x
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_i64(
+    GTEXT_JSON_Writer * w, long long x) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Format number (locale-independent)
   char num_buf[64];
-  int len = format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", x);
+  int len =
+      format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1568,48 +1592,47 @@ text_json_status text_json_writer_number_i64(
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_number_u64(
-  text_json_writer* w,
-  unsigned long long x
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_u64(
+    GTEXT_JSON_Writer * w, unsigned long long x) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Format number (locale-independent)
   char num_buf[64];
-  int len = format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", x);
+  int len =
+      format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1622,75 +1645,76 @@ text_json_status text_json_writer_number_u64(
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_number_double(
-  text_json_writer* w,
-  double x
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_double(
+    GTEXT_JSON_Writer * w, double x) {
   if (!w) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Check for nonfinite numbers
   if (!isfinite(x)) {
     if (!w->opts.allow_nonfinite_numbers) {
       w->error = 1;
-      return TEXT_JSON_E_NONFINITE;
+      return GTEXT_JSON_E_NONFINITE;
     }
     if (isnan(x)) {
       if (writer_write_string(w, "NaN") != 0) {
         w->error = 1;
-        return TEXT_JSON_E_WRITE;
+        return GTEXT_JSON_E_WRITE;
       }
-    } else if (isinf(x)) {
+    }
+    else if (isinf(x)) {
       if (x < 0) {
         if (writer_write_string(w, "-Infinity") != 0) {
           w->error = 1;
-          return TEXT_JSON_E_WRITE;
+          return GTEXT_JSON_E_WRITE;
         }
-      } else {
+      }
+      else {
         if (writer_write_string(w, "Infinity") != 0) {
           w->error = 1;
-          return TEXT_JSON_E_WRITE;
+          return GTEXT_JSON_E_WRITE;
         }
       }
     }
-  } else {
+  }
+  else {
     // Format finite number (locale-independent, with configurable format)
     char num_buf[64];
-    text_json_float_format float_fmt = w->opts.float_format;
+    GTEXT_JSON_Float_Format float_fmt = w->opts.float_format;
     int float_prec = w->opts.float_precision > 0 ? w->opts.float_precision : 6;
     int len = format_double(num_buf, sizeof(num_buf), x, float_fmt, float_prec);
     if (len < 0 || (size_t)len >= sizeof(num_buf)) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
 
     if (writer_write_bytes(w, num_buf, (size_t)len) != 0) {
       w->error = 1;
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
   }
 
@@ -1704,42 +1728,39 @@ text_json_status text_json_writer_number_double(
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_string(
-  text_json_writer* w,
-  const char* s,
-  size_t len
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_string(
+    GTEXT_JSON_Writer * w, const char * s, size_t len) {
   if (!w || !s) {
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
-  json_writer_stack_entry* top = writer_top_stack(w);
+  json_writer_stack_entry * top = writer_top_stack(w);
 
   // If in object, must have written key first
   if (top && top->type == JSON_WRITER_STACK_OBJECT) {
     if (top->expecting_key) {
       w->error = 1;
-      return TEXT_JSON_E_STATE; // Must write key before value
+      return GTEXT_JSON_E_STATE; // Must write key before value
     }
   }
 
   // Write comma if needed
   if (writer_write_comma_if_needed(w) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Write escaped string
   if (write_escaped_string(&w->sink, s, len, &w->opts) != 0) {
     w->error = 1;
-    return TEXT_JSON_E_WRITE;
+    return GTEXT_JSON_E_WRITE;
   }
 
   // Mark current container as having elements
@@ -1752,58 +1773,48 @@ text_json_status text_json_writer_string(
     top->expecting_key = 1;
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }
 
-text_json_status text_json_writer_finish(
-  text_json_writer* w,
-  text_json_error* err
-) {
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_finish(
+    GTEXT_JSON_Writer * w, GTEXT_JSON_Error * err) {
   if (!w) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_INVALID,
-                      .message = "Writer is NULL"
-                  };
+      *err = (GTEXT_JSON_Error){
+          .code = GTEXT_JSON_E_INVALID, .message = "Writer is NULL"};
     }
-    return TEXT_JSON_E_INVALID;
+    return GTEXT_JSON_E_INVALID;
   }
 
   if (w->error) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_STATE,
-                      .message = "Writer is in error state"
-                  };
+      *err = (GTEXT_JSON_Error){
+          .code = GTEXT_JSON_E_STATE, .message = "Writer is in error state"};
     }
-    return TEXT_JSON_E_STATE;
+    return GTEXT_JSON_E_STATE;
   }
 
   // Check if stack is empty (structure is complete)
   if (w->stack_size != 0) {
     if (err) {
-      *err = (text_json_error){
-                      .code = TEXT_JSON_E_INCOMPLETE,
-                      .message = "Incomplete JSON structure: unclosed containers"
-                  };
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INCOMPLETE,
+          .message = "Incomplete JSON structure: unclosed containers"};
     }
-    return TEXT_JSON_E_INCOMPLETE;
+    return GTEXT_JSON_E_INCOMPLETE;
   }
 
   // Add trailing newline if requested
   if (w->opts.trailing_newline) {
-    const char* newline = w->opts.newline ? w->opts.newline : "\n";
+    const char * newline = w->opts.newline ? w->opts.newline : "\n";
     if (writer_write_string(w, newline) != 0) {
       w->error = 1;
       if (err) {
-        *err = (text_json_error){
-                                    .code = TEXT_JSON_E_WRITE,
-                                    .message = "Failed to write trailing newline"
-                                };
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_WRITE,
+            .message = "Failed to write trailing newline"};
       }
-      return TEXT_JSON_E_WRITE;
+      return GTEXT_JSON_E_WRITE;
     }
   }
 
-  return TEXT_JSON_OK;
+  return GTEXT_JSON_OK;
 }

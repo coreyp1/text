@@ -1,28 +1,32 @@
 /**
- * @file csv_stream_internal.h
- * @brief Internal definitions for CSV streaming parser
+ * @file
  *
- * This header contains internal-only definitions used by the CSV streaming parser
- * implementation. It should not be included by external code.
+ * Internal definitions for CSV streaming parser.
+ *
+ * This header contains internal-only definitions used by the CSV streaming
+ * parser implementation. It should not be included by external code.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_CSV_STREAM_INTERNAL_H
-#define GHOTI_IO_TEXT_CSV_STREAM_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H
+#define GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H
+
+#include <limits.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include "csv_internal.h"
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/csv/csv_stream.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <limits.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Forward declaration
-typedef struct text_csv_stream text_csv_stream;
+typedef struct GTEXT_CSV_Stream GTEXT_CSV_Stream;
 
 /**
  * @brief Parser state enumeration
@@ -31,14 +35,16 @@ typedef struct text_csv_stream text_csv_stream;
  * The parser transitions between these states as it processes input.
  */
 typedef enum {
-    CSV_STREAM_STATE_START_OF_RECORD,    ///< At the beginning of a new record
-    CSV_STREAM_STATE_START_OF_FIELD,     ///< At the beginning of a new field
-    CSV_STREAM_STATE_UNQUOTED_FIELD,     ///< Processing an unquoted field
-    CSV_STREAM_STATE_QUOTED_FIELD,       ///< Processing a quoted field
-    CSV_STREAM_STATE_QUOTE_IN_QUOTED,    ///< Encountered a quote character inside a quoted field
-    CSV_STREAM_STATE_ESCAPE_IN_QUOTED,   ///< Processing an escape sequence inside a quoted field
-    CSV_STREAM_STATE_COMMENT,            ///< Processing a comment line
-    CSV_STREAM_STATE_END                 ///< Parsing has ended (error or completion)
+  CSV_STREAM_STATE_START_OF_RECORD,  ///< At the beginning of a new record
+  CSV_STREAM_STATE_START_OF_FIELD,   ///< At the beginning of a new field
+  CSV_STREAM_STATE_UNQUOTED_FIELD,   ///< Processing an unquoted field
+  CSV_STREAM_STATE_QUOTED_FIELD,     ///< Processing a quoted field
+  CSV_STREAM_STATE_QUOTE_IN_QUOTED,  ///< Encountered a quote character inside a
+                                     ///< quoted field
+  CSV_STREAM_STATE_ESCAPE_IN_QUOTED, ///< Processing an escape sequence inside a
+                                     ///< quoted field
+  CSV_STREAM_STATE_COMMENT,          ///< Processing a comment line
+  CSV_STREAM_STATE_END ///< Parsing has ended (error or completion)
 } csv_stream_state;
 
 /**
@@ -72,24 +78,26 @@ typedef enum {
  * (for fields spanning chunk boundaries or requiring unescaping).
  */
 typedef struct csv_field_buffer {
-    // Data source
-    const char* data;              ///< Points to input buffer or allocated buffer
-    size_t length;                 ///< Current field length in bytes
-    bool is_quoted;                ///< Whether field is quoted
-    bool needs_unescape;           ///< Whether field needs unescaping
+  // Data source
+  const char * data;   ///< Points to input buffer or allocated buffer
+  size_t length;       ///< Current field length in bytes
+  bool is_quoted;      ///< Whether field is quoted
+  bool needs_unescape; ///< Whether field needs unescaping
 
-    // Buffer management
-    char* buffer;                  ///< Allocated buffer (NULL if using in-situ mode)
-    size_t buffer_size;            ///< Allocated buffer size in bytes
-    size_t buffer_used;            ///< Used buffer size in bytes
-    bool is_buffered;              ///< Whether data is in allocated buffer
+  // Buffer management
+  char * buffer;      ///< Allocated buffer (NULL if using in-situ mode)
+  size_t buffer_size; ///< Allocated buffer size in bytes
+  size_t buffer_used; ///< Used buffer size in bytes
+  bool is_buffered;   ///< Whether data is in allocated buffer
 
-    // In-situ mode tracking
-    const char* original_input;    ///< Original input buffer (for in-situ mode validation)
-    size_t original_input_len;     ///< Original input buffer length
+  // In-situ mode tracking
+  const char *
+      original_input; ///< Original input buffer (for in-situ mode validation)
+  size_t original_input_len; ///< Original input buffer length
 
-    // Field start tracking (for chunk boundary handling)
-    size_t start_offset;           ///< Offset in current chunk where field started (SIZE_MAX if field already buffered)
+  // Field start tracking (for chunk boundary handling)
+  size_t start_offset; ///< Offset in current chunk where field started
+                       ///< (SIZE_MAX if field already buffered)
 } csv_field_buffer;
 
 /**
@@ -99,65 +107,70 @@ typedef struct csv_field_buffer {
  * needed for incremental parsing including state machine state, buffers,
  * position tracking, and limits.
  */
-struct text_csv_stream {
-    // Configuration
-    text_csv_parse_options opts;    ///< Parse options and dialect configuration
-    text_csv_event_cb callback;     ///< Event callback function
-    void* user_data;                ///< User context passed to callback
+struct GTEXT_CSV_Stream {
+  // Configuration
+  GTEXT_CSV_Parse_Options opts; ///< Parse options and dialect configuration
+  GTEXT_CSV_Event_cb callback;  ///< Event callback function
+  void * user_data;             ///< User context passed to callback
 
-    // State machine
-    csv_stream_state state;         ///< Current parser state
-    bool in_record;                 ///< Whether currently processing a record
-    size_t field_count;             ///< Number of fields in current record
-    size_t row_count;               ///< Number of records processed
+  // State machine
+  csv_stream_state state; ///< Current parser state
+  bool in_record;         ///< Whether currently processing a record
+  size_t field_count;     ///< Number of fields in current record
+  size_t row_count;       ///< Number of records processed
 
-    // Input buffering (for fields spanning chunks)
-    char* input_buffer;             ///< Buffer for input data (when field spans chunks)
-    size_t input_buffer_size;       ///< Allocated size of input buffer
-    size_t input_buffer_used;       ///< Used size of input buffer
-    size_t input_buffer_processed;  ///< Number of bytes processed from buffer
-    size_t buffer_start_offset;     ///< Start offset of buffered data
+  // Input buffering (for fields spanning chunks)
+  char * input_buffer;      ///< Buffer for input data (when field spans chunks)
+  size_t input_buffer_size; ///< Allocated size of input buffer
+  size_t input_buffer_used; ///< Used size of input buffer
+  size_t input_buffer_processed; ///< Number of bytes processed from buffer
+  size_t buffer_start_offset;    ///< Start offset of buffered data
 
-    // Position tracking
-    csv_position pos;               ///< Current parsing position (line, column, offset)
-    size_t total_bytes_consumed;    ///< Total bytes consumed across all chunks
+  // Position tracking
+  csv_position pos; ///< Current parsing position (line, column, offset)
+  size_t total_bytes_consumed; ///< Total bytes consumed across all chunks
 
-    // Field accumulation (unified buffer management)
-    csv_field_buffer field;         ///< Unified field buffer structure
-    bool just_processed_doubled_quote; ///< Whether we just processed a doubled quote (allows delimiter to end field)
-    bool quote_in_quoted_at_chunk_boundary; ///< Whether we transitioned to QUOTE_IN_QUOTED at end of previous chunk
+  // Field accumulation (unified buffer management)
+  csv_field_buffer field;            ///< Unified field buffer structure
+  bool just_processed_doubled_quote; ///< Whether we just processed a doubled
+                                     ///< quote (allows delimiter to end field)
+  bool quote_in_quoted_at_chunk_boundary; ///< Whether we transitioned to
+                                          ///< QUOTE_IN_QUOTED at end of
+                                          ///< previous chunk
 
-    // Limits
-    size_t max_rows;                ///< Maximum number of rows allowed
-    size_t max_cols;                ///< Maximum number of columns per row
-    size_t max_field_bytes;         ///< Maximum field size in bytes
-    size_t max_record_bytes;        ///< Maximum record size in bytes
-    size_t max_total_bytes;         ///< Maximum total input size
-    size_t current_record_bytes;    ///< Current record size in bytes
+  // Limits
+  size_t max_rows;             ///< Maximum number of rows allowed
+  size_t max_cols;             ///< Maximum number of columns per row
+  size_t max_field_bytes;      ///< Maximum field size in bytes
+  size_t max_record_bytes;     ///< Maximum record size in bytes
+  size_t max_total_bytes;      ///< Maximum total input size
+  size_t current_record_bytes; ///< Current record size in bytes
 
-    // Comment handling
-    bool in_comment;                ///< Whether currently processing a comment
-    size_t comment_prefix_len;      ///< Length of comment prefix string
+  // Comment handling
+  bool in_comment;           ///< Whether currently processing a comment
+  size_t comment_prefix_len; ///< Length of comment prefix string
 
-    // In-situ mode tracking (for table parsing)
-    const char* original_input_buffer;  ///< Original input buffer (caller-owned, for in-situ mode)
-    size_t original_input_buffer_len;   ///< Length of original input buffer
+  // In-situ mode tracking (for table parsing)
+  const char * original_input_buffer; ///< Original input buffer (caller-owned,
+                                      ///< for in-situ mode)
+  size_t original_input_buffer_len;   ///< Length of original input buffer
 
-    // Error state
-    text_csv_error error;           ///< Current error state (if any)
+  // Error state
+  GTEXT_CSV_Error error; ///< Current error state (if any)
 };
 
 /**
  * @brief Get limit value with default fallback
  *
- * Returns the configured limit if non-zero, otherwise returns the default value.
+ * Returns the configured limit if non-zero, otherwise returns the default
+ * value.
  *
  * @param configured Configured limit value (0 means use default)
  * @param default_val Default limit value to use if configured is 0
  * @return Effective limit value
  */
 static inline size_t csv_get_limit(size_t configured, size_t default_val) {
-    return configured > 0 ? configured : default_val;
+  return configured > 0 ? configured : default_val;
 }
 
 // Field buffer functions (in csv_stream_buffer.c)
@@ -170,7 +183,7 @@ static inline size_t csv_get_limit(size_t configured, size_t default_val) {
  *
  * @param fb Field buffer to initialize (must not be NULL)
  */
-void csv_field_buffer_init(csv_field_buffer* fb);
+void csv_field_buffer_init(csv_field_buffer * fb);
 
 /**
  * @brief Clear a field buffer structure
@@ -180,7 +193,7 @@ void csv_field_buffer_init(csv_field_buffer* fb);
  *
  * @param fb Field buffer to clear (must not be NULL)
  */
-void csv_field_buffer_clear(csv_field_buffer* fb);
+void csv_field_buffer_clear(csv_field_buffer * fb);
 
 /**
  * @brief Set field buffer from input data
@@ -193,27 +206,24 @@ void csv_field_buffer_clear(csv_field_buffer* fb);
  * @param input_len Length of input data
  * @param is_quoted Whether the field is quoted
  * @param start_offset Offset in chunk where field started
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_field_buffer_set_from_input(
-    csv_field_buffer* fb,
-    const char* input_data,
-    size_t input_len,
-    bool is_quoted,
-    size_t start_offset
-);
+GTEXT_CSV_Status csv_field_buffer_set_from_input(csv_field_buffer * fb,
+    const char * input_data, size_t input_len, bool is_quoted,
+    size_t start_offset);
 
 /**
  * @brief Grow field buffer to accommodate needed size
  *
  * Allocates or reallocates the field buffer to at least the needed size.
- * Uses hybrid growth strategy (exponential for small buffers, linear for large).
+ * Uses hybrid growth strategy (exponential for small buffers, linear for
+ * large).
  *
  * @param fb Field buffer to grow (must not be NULL)
  * @param needed Minimum size needed in bytes
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_field_buffer_grow(csv_field_buffer* fb, size_t needed);
+GTEXT_CSV_Status csv_field_buffer_grow(csv_field_buffer * fb, size_t needed);
 
 /**
  * @brief Append data to field buffer
@@ -224,13 +234,10 @@ text_csv_status csv_field_buffer_grow(csv_field_buffer* fb, size_t needed);
  * @param fb Field buffer to append to (must not be NULL)
  * @param data Data to append (must not be NULL)
  * @param len Length of data to append
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_field_buffer_append(
-    csv_field_buffer* fb,
-    const char* data,
-    size_t len
-);
+GTEXT_CSV_Status csv_field_buffer_append(
+    csv_field_buffer * fb, const char * data, size_t len);
 
 /**
  * @brief Check if field buffer can use in-situ mode
@@ -242,7 +249,7 @@ text_csv_status csv_field_buffer_append(
  * @param fb Field buffer to check (must not be NULL)
  * @return true if in-situ mode is possible, false otherwise
  */
-bool csv_field_buffer_can_use_in_situ(csv_field_buffer* fb);
+bool csv_field_buffer_can_use_in_situ(csv_field_buffer * fb);
 
 /**
  * @brief Ensure field buffer is in buffered mode
@@ -251,9 +258,9 @@ bool csv_field_buffer_can_use_in_situ(csv_field_buffer* fb);
  * and copies the data. If already buffered, does nothing.
  *
  * @param fb Field buffer to ensure buffered (must not be NULL)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_field_buffer_ensure_buffered(csv_field_buffer* fb);
+GTEXT_CSV_Status csv_field_buffer_ensure_buffered(csv_field_buffer * fb);
 
 /**
  * @brief Set original input buffer for in-situ mode validation
@@ -265,11 +272,8 @@ text_csv_status csv_field_buffer_ensure_buffered(csv_field_buffer* fb);
  * @param original_input Original input buffer (caller-owned, must remain valid)
  * @param original_input_len Length of original input buffer
  */
-void csv_field_buffer_set_original_input(
-    csv_field_buffer* fb,
-    const char* original_input,
-    size_t original_input_len
-);
+void csv_field_buffer_set_original_input(csv_field_buffer * fb,
+    const char * original_input, size_t original_input_len);
 
 // Buffer management functions (in csv_stream_buffer.c)
 
@@ -285,15 +289,11 @@ void csv_field_buffer_set_original_input(
  * @param process_len Length of input data
  * @param field_start_offset Offset where field started in current chunk
  * @param current_offset Current processing offset
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_buffer_field_at_chunk_boundary(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t field_start_offset,
-    size_t current_offset
-);
+GTEXT_CSV_Status csv_stream_buffer_field_at_chunk_boundary(
+    GTEXT_CSV_Stream * stream, const char * process_input, size_t process_len,
+    size_t field_start_offset, size_t current_offset);
 
 /**
  * @brief Buffer unquoted field if it needs buffering
@@ -302,9 +302,10 @@ text_csv_status csv_stream_buffer_field_at_chunk_boundary(
  * and buffers it if necessary.
  *
  * @param stream Stream parser (must not be NULL)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_buffer_unquoted_field_if_needed(text_csv_stream* stream);
+GTEXT_CSV_Status csv_stream_buffer_unquoted_field_if_needed(
+    GTEXT_CSV_Stream * stream);
 
 /**
  * @brief Ensure field is buffered for chunk boundary handling
@@ -316,14 +317,10 @@ text_csv_status csv_stream_buffer_unquoted_field_if_needed(text_csv_stream* stre
  * @param process_input Input data being processed
  * @param process_len Length of input data
  * @param current_offset Current processing offset
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_ensure_field_buffered(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t current_offset
-);
+GTEXT_CSV_Status csv_stream_ensure_field_buffered(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t current_offset);
 
 /**
  * @brief Grow the stream's field buffer
@@ -333,9 +330,10 @@ text_csv_status csv_stream_ensure_field_buffered(
  *
  * @param stream Stream parser (must not be NULL)
  * @param needed Minimum size needed in bytes
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_grow_field_buffer(text_csv_stream* stream, size_t needed);
+GTEXT_CSV_Status csv_stream_grow_field_buffer(
+    GTEXT_CSV_Stream * stream, size_t needed);
 
 /**
  * @brief Append data to the stream's field buffer
@@ -345,13 +343,10 @@ text_csv_status csv_stream_grow_field_buffer(text_csv_stream* stream, size_t nee
  * @param stream Stream parser (must not be NULL)
  * @param data Data to append (must not be NULL)
  * @param data_len Length of data to append
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_append_to_field_buffer(
-    text_csv_stream* stream,
-    const char* data,
-    size_t data_len
-);
+GTEXT_CSV_Status csv_stream_append_to_field_buffer(
+    GTEXT_CSV_Stream * stream, const char * data, size_t data_len);
 
 // Field processing functions (in csv_stream_field.c)
 
@@ -363,7 +358,7 @@ text_csv_status csv_stream_append_to_field_buffer(
  *
  * @param stream Stream parser (must not be NULL)
  */
-void csv_stream_clear_field_state(text_csv_stream* stream);
+void csv_stream_clear_field_state(GTEXT_CSV_Stream * stream);
 
 /**
  * @brief Complete processing of current field
@@ -374,13 +369,10 @@ void csv_stream_clear_field_state(text_csv_stream* stream);
  * @param stream Stream parser (must not be NULL)
  * @param offset Current offset (updated on success)
  * @param emit_record_end Whether to emit RECORD_END event after field
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_complete_field(
-    text_csv_stream* stream,
-    size_t* offset,
-    bool emit_record_end
-);
+GTEXT_CSV_Status csv_stream_complete_field(
+    GTEXT_CSV_Stream * stream, size_t * offset, bool emit_record_end);
 
 /**
  * @brief Complete field at delimiter
@@ -390,12 +382,10 @@ text_csv_status csv_stream_complete_field(
  *
  * @param stream Stream parser (must not be NULL)
  * @param offset Current offset (updated to after delimiter)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_complete_field_at_delimiter(
-    text_csv_stream* stream,
-    size_t* offset
-);
+GTEXT_CSV_Status csv_stream_complete_field_at_delimiter(
+    GTEXT_CSV_Stream * stream, size_t * offset);
 
 /**
  * @brief Complete field at newline
@@ -405,12 +395,10 @@ text_csv_status csv_stream_complete_field_at_delimiter(
  *
  * @param stream Stream parser (must not be NULL)
  * @param offset Current offset (updated to after newline)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_complete_field_at_newline(
-    text_csv_stream* stream,
-    size_t* offset
-);
+GTEXT_CSV_Status csv_stream_complete_field_at_newline(
+    GTEXT_CSV_Stream * stream, size_t * offset);
 
 /**
  * @brief Handle field spanning chunk boundary
@@ -419,9 +407,9 @@ text_csv_status csv_stream_complete_field_at_newline(
  * Buffers the partial field data so it can continue in the next chunk.
  *
  * @param stream Stream parser (must not be NULL)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_handle_chunk_boundary(text_csv_stream* stream);
+GTEXT_CSV_Status csv_stream_handle_chunk_boundary(GTEXT_CSV_Stream * stream);
 
 /**
  * @brief Emit field event
@@ -431,30 +419,28 @@ text_csv_status csv_stream_handle_chunk_boundary(text_csv_stream* stream);
  *
  * @param stream Stream parser (must not be NULL)
  * @param emit_record_end Whether to emit RECORD_END event after field
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_emit_field(text_csv_stream* stream, bool emit_record_end);
+GTEXT_CSV_Status csv_stream_emit_field(
+    GTEXT_CSV_Stream * stream, bool emit_record_end);
 
 /**
  * @brief Unescape field data
  *
  * Unescapes field data according to the dialect's escape mode.
- * Returns pointers to the unescaped data (may be same as input if no unescaping needed).
+ * Returns pointers to the unescaped data (may be same as input if no unescaping
+ * needed).
  *
  * @param stream Stream parser (must not be NULL)
  * @param input_data Input field data (must not be NULL)
  * @param input_len Length of input data
  * @param output_data Output parameter for unescaped data pointer
  * @param output_len Output parameter for unescaped data length
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unescape_field(
-    text_csv_stream* stream,
-    const char* input_data,
-    size_t input_len,
-    const char** output_data,
-    size_t* output_len
-);
+GTEXT_CSV_Status csv_stream_unescape_field(GTEXT_CSV_Stream * stream,
+    const char * input_data, size_t input_len, const char ** output_data,
+    size_t * output_len);
 
 /**
  * @brief Check if field needs unescaping
@@ -468,10 +454,7 @@ text_csv_status csv_stream_unescape_field(
  * @return true if field needs unescaping, false otherwise
  */
 bool csv_stream_field_needs_unescape(
-    text_csv_stream* stream,
-    const char* input_data,
-    size_t input_len
-);
+    GTEXT_CSV_Stream * stream, const char * input_data, size_t input_len);
 
 /**
  * @brief Unescape field when no unescaping is needed
@@ -484,15 +467,11 @@ bool csv_stream_field_needs_unescape(
  * @param input_len Length of input data
  * @param output_data Output parameter for data pointer (set to input_data)
  * @param output_len Output parameter for data length (set to input_len)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unescape_field_no_unescape(
-    text_csv_stream* stream,
-    const char* input_data,
-    size_t input_len,
-    const char** output_data,
-    size_t* output_len
-);
+GTEXT_CSV_Status csv_stream_unescape_field_no_unescape(
+    GTEXT_CSV_Stream * stream, const char * input_data, size_t input_len,
+    const char ** output_data, size_t * output_len);
 
 /**
  * @brief Unescape field when unescaping is needed
@@ -505,15 +484,11 @@ text_csv_status csv_stream_unescape_field_no_unescape(
  * @param input_len Length of input data
  * @param output_data Output parameter for unescaped data pointer
  * @param output_len Output parameter for unescaped data length
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unescape_field_with_unescape(
-    text_csv_stream* stream,
-    const char* input_data,
-    size_t input_len,
-    const char** output_data,
-    size_t* output_len
-);
+GTEXT_CSV_Status csv_stream_unescape_field_with_unescape(
+    GTEXT_CSV_Stream * stream, const char * input_data, size_t input_len,
+    const char ** output_data, size_t * output_len);
 
 /**
  * @brief Scan ahead in unquoted field for special characters
@@ -531,15 +506,9 @@ text_csv_status csv_stream_unescape_field_with_unescape(
  * @param special_pos Output parameter: position of special character
  * @return Number of bytes scanned before special character or end
  */
-size_t csv_stream_scan_unquoted_field_ahead(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t start_offset,
-    bool* found_special,
-    char* special_char,
-    size_t* special_pos
-);
+size_t csv_stream_scan_unquoted_field_ahead(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t start_offset,
+    bool * found_special, char * special_char, size_t * special_pos);
 
 /**
  * @brief Validate field input data
@@ -551,14 +520,10 @@ size_t csv_stream_scan_unquoted_field_ahead(
  * @param process_input Input data to validate (must not be NULL)
  * @param process_len Length of input data
  * @param byte_pos Byte position in input for error reporting
- * @return TEXT_CSV_OK on success, error code on validation failure
+ * @return GTEXT_CSV_OK on success, error code on validation failure
  */
-text_csv_status csv_stream_validate_field_input(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t byte_pos
-);
+GTEXT_CSV_Status csv_stream_validate_field_input(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t byte_pos);
 
 /**
  * @brief Check if field can use in-situ mode
@@ -573,10 +538,7 @@ text_csv_status csv_stream_validate_field_input(
  * @return true if in-situ mode is possible, false otherwise
  */
 bool csv_stream_can_use_in_situ(
-    text_csv_stream* stream,
-    const char* field_start,
-    size_t field_len
-);
+    GTEXT_CSV_Stream * stream, const char * field_start, size_t field_len);
 
 // State machine functions (in csv_stream_state.c)
 
@@ -592,16 +554,11 @@ bool csv_stream_can_use_in_situ(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_start_of_record(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_start_of_record(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process character in START_OF_FIELD state
@@ -615,22 +572,18 @@ text_csv_status csv_stream_process_start_of_record(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_start_of_field(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_start_of_field(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process character in UNQUOTED_FIELD state
  *
  * Handles character processing when in an unquoted field.
- * May transition to START_OF_FIELD (at delimiter) or START_OF_RECORD (at newline).
+ * May transition to START_OF_FIELD (at delimiter) or START_OF_RECORD (at
+ * newline).
  *
  * @param stream Stream parser (must not be NULL)
  * @param process_input Input data being processed (must not be NULL)
@@ -638,16 +591,11 @@ text_csv_status csv_stream_process_start_of_field(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_unquoted_field(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_unquoted_field(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Handle delimiter in unquoted field
@@ -657,12 +605,10 @@ text_csv_status csv_stream_process_unquoted_field(
  *
  * @param stream Stream parser (must not be NULL)
  * @param offset Current offset (updated to after delimiter)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unquoted_handle_delimiter(
-    text_csv_stream* stream,
-    size_t* offset
-);
+GTEXT_CSV_Status csv_stream_unquoted_handle_delimiter(
+    GTEXT_CSV_Stream * stream, size_t * offset);
 
 /**
  * @brief Handle newline in unquoted field
@@ -675,15 +621,11 @@ text_csv_status csv_stream_unquoted_handle_delimiter(
  * @param process_len Length of input data
  * @param offset Current offset (updated to after newline)
  * @param byte_pos Byte position for error reporting
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unquoted_handle_newline(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos
-);
+GTEXT_CSV_Status csv_stream_unquoted_handle_newline(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos);
 
 /**
  * @brief Validate character in unquoted field
@@ -693,12 +635,10 @@ text_csv_status csv_stream_unquoted_handle_newline(
  *
  * @param stream Stream parser (must not be NULL)
  * @param c Character to validate
- * @return TEXT_CSV_OK if valid, error code if invalid
+ * @return GTEXT_CSV_OK if valid, error code if invalid
  */
-text_csv_status csv_stream_unquoted_validate_char(
-    text_csv_stream* stream,
-    char c
-);
+GTEXT_CSV_Status csv_stream_unquoted_validate_char(
+    GTEXT_CSV_Stream * stream, char c);
 
 /**
  * @brief Handle special character in unquoted field
@@ -712,16 +652,11 @@ text_csv_status csv_stream_unquoted_validate_char(
  * @param offset Current offset (updated as processing advances)
  * @param special_pos Position of special character
  * @param special_char The special character found
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unquoted_handle_special_char(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t special_pos,
-    char special_char
-);
+GTEXT_CSV_Status csv_stream_unquoted_handle_special_char(
+    GTEXT_CSV_Stream * stream, const char * process_input, size_t process_len,
+    size_t * offset, size_t special_pos, char special_char);
 
 /**
  * @brief Process bulk data in unquoted field
@@ -734,15 +669,11 @@ text_csv_status csv_stream_unquoted_handle_special_char(
  * @param process_len Length of input data
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_unquoted_process_bulk(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos
-);
+GTEXT_CSV_Status csv_stream_unquoted_process_bulk(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos);
 
 /**
  * @brief Process character in QUOTED_FIELD state
@@ -756,16 +687,11 @@ text_csv_status csv_stream_unquoted_process_bulk(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_quoted_field(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process character in QUOTE_IN_QUOTED state
@@ -779,16 +705,11 @@ text_csv_status csv_stream_process_quoted_field(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_quote_in_quoted(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_quote_in_quoted(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process character in ESCAPE_IN_QUOTED state
@@ -802,16 +723,11 @@ text_csv_status csv_stream_process_quote_in_quoted(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_escape_in_quoted(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_escape_in_quoted(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process character in COMMENT state
@@ -825,16 +741,11 @@ text_csv_status csv_stream_process_escape_in_quoted(
  * @param offset Current offset (updated as processing advances)
  * @param byte_pos Byte position for error reporting
  * @param c Current character being processed
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_comment(
-    text_csv_stream* stream,
-    const char* process_input,
-    size_t process_len,
-    size_t* offset,
-    size_t byte_pos,
-    char c
-);
+GTEXT_CSV_Status csv_stream_process_comment(GTEXT_CSV_Stream * stream,
+    const char * process_input, size_t process_len, size_t * offset,
+    size_t byte_pos, char c);
 
 /**
  * @brief Process a chunk of input data
@@ -846,13 +757,10 @@ text_csv_status csv_stream_process_comment(
  * @param stream Stream parser (must not be NULL)
  * @param input Input data chunk (must not be NULL)
  * @param input_len Length of input data
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_process_chunk(
-    text_csv_stream* stream,
-    const char* input,
-    size_t input_len
-);
+GTEXT_CSV_Status csv_stream_process_chunk(
+    GTEXT_CSV_Stream * stream, const char * input, size_t input_len);
 
 /**
  * @brief Handle newline character
@@ -866,16 +774,11 @@ text_csv_status csv_stream_process_chunk(
  * @param offset Current offset (updated to after newline)
  * @param byte_pos Byte position for error reporting
  * @param nl_out Output parameter for detected newline type
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_handle_newline(
-    text_csv_stream* stream,
-    const char* input,
-    size_t input_len,
-    size_t* offset,
-    size_t byte_pos,
-    csv_newline_type* nl_out
-);
+GTEXT_CSV_Status csv_stream_handle_newline(GTEXT_CSV_Stream * stream,
+    const char * input, size_t input_len, size_t * offset, size_t byte_pos,
+    csv_newline_type * nl_out);
 
 /**
  * @brief Advance position tracking
@@ -886,9 +789,10 @@ text_csv_status csv_stream_handle_newline(
  * @param stream Stream parser (must not be NULL)
  * @param offset Current offset (updated by bytes)
  * @param bytes Number of bytes to advance
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-text_csv_status csv_stream_advance_position(text_csv_stream* stream, size_t* offset, size_t bytes);
+GTEXT_CSV_Status csv_stream_advance_position(
+    GTEXT_CSV_Stream * stream, size_t * offset, size_t bytes);
 
 /**
  * @brief Check if position is start of comment
@@ -902,12 +806,8 @@ text_csv_status csv_stream_advance_position(text_csv_stream* stream, size_t* off
  * @param offset Offset to check
  * @return true if comment start detected, false otherwise
  */
-bool csv_stream_is_comment_start(
-    text_csv_stream* stream,
-    const char* input,
-    size_t input_len,
-    size_t offset
-);
+bool csv_stream_is_comment_start(GTEXT_CSV_Stream * stream, const char * input,
+    size_t input_len, size_t offset);
 
 // Event and error functions (in csv_stream.c)
 
@@ -921,14 +821,10 @@ bool csv_stream_is_comment_start(
  * @param type Event type to emit
  * @param data Event data (for FIELD events, NULL otherwise)
  * @param data_len Event data length (for FIELD events, 0 otherwise)
- * @return TEXT_CSV_OK on success, error code if callback returns error
+ * @return GTEXT_CSV_OK on success, error code if callback returns error
  */
-text_csv_status csv_stream_emit_event(
-    text_csv_stream* stream,
-    text_csv_event_type type,
-    const char* data,
-    size_t data_len
-);
+GTEXT_CSV_Status csv_stream_emit_event(GTEXT_CSV_Stream * stream,
+    GTEXT_CSV_Event_Type type, const char * data, size_t data_len);
 
 /**
  * @brief Set error state in stream
@@ -942,14 +838,11 @@ text_csv_status csv_stream_emit_event(
  * @param message Error message (static string, must remain valid)
  * @return The error code (same as code parameter)
  */
-text_csv_status csv_stream_set_error(
-    text_csv_stream* stream,
-    text_csv_status code,
-    const char* message
-);
+GTEXT_CSV_Status csv_stream_set_error(
+    GTEXT_CSV_Stream * stream, GTEXT_CSV_Status code, const char * message);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_CSV_STREAM_INTERNAL_H */
+#endif /* GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H */

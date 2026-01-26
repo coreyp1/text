@@ -1,18 +1,21 @@
 /**
- * @file json_writer.h
- * @brief JSON writer infrastructure and sink abstraction
+ * @file
+ *
+ * JSON writer infrastructure and sink abstraction.
  *
  * This header provides the sink abstraction for writing JSON output to
  * various destinations (buffers, files, callbacks, etc.) and helper
  * functions for common sink types.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_WRITER_H
-#define GHOTI_IO_TEXT_JSON_WRITER_H
+#ifndef GHOTI_IO_GTEXT_JSON_WRITER_H
+#define GHOTI_IO_GTEXT_JSON_WRITER_H
 
-#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_dom.h>
+#include <ghoti.io/text/macros.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -31,7 +34,8 @@ extern "C" {
  * @param len Number of bytes to write
  * @return 0 on success, non-zero on error
  */
-typedef int (*text_json_write_fn)(void* user, const char* bytes, size_t len);
+typedef int (*GTEXT_JSON_Write_Function)(
+    void * user, const char * bytes, size_t len);
 
 /**
  * @brief JSON output sink structure
@@ -41,59 +45,61 @@ typedef int (*text_json_write_fn)(void* user, const char* bytes, size_t len);
  * destinations (buffers, files, streams, etc.).
  */
 typedef struct {
-  text_json_write_fn write;  ///< Write callback function
-  void* user;                ///< User context pointer passed to callback
-} text_json_sink;
+  GTEXT_JSON_Write_Function write; ///< Write callback function
+  void * user;                     ///< User context pointer passed to callback
+} GTEXT_JSON_Sink;
 
 /**
  * @brief Growable buffer sink structure
  *
  * Internal structure for managing a growable buffer sink. Users should
- * use text_json_sink_buffer() to create a sink, not this structure directly.
+ * use GTEXT_JSON_Sink_buffer() to create a sink, not this structure directly.
  */
 typedef struct {
-  char* data;      ///< Buffer data (owned by sink)
-  size_t size;     ///< Current buffer size (bytes allocated)
-  size_t used;     ///< Bytes used in buffer
-} text_json_buffer_sink;
+  char * data; ///< Buffer data (owned by sink)
+  size_t size; ///< Current buffer size (bytes allocated)
+  size_t used; ///< Bytes used in buffer
+} GTEXT_JSON_Buffer_Sink;
 
 /**
  * @brief Fixed buffer sink structure
  *
  * Internal structure for managing a fixed-size buffer sink. Users should
- * use text_json_sink_fixed_buffer() to create a sink, not this structure directly.
+ * use GTEXT_JSON_Sink_fixed_buffer() to create a sink, not this structure
+ * directly.
  */
 typedef struct {
-  char* data;      ///< Buffer data (provided by user, not owned)
-  size_t size;     ///< Maximum buffer size
-  size_t used;     ///< Bytes written to buffer
-  bool truncated;  ///< true if truncation occurred
-} text_json_fixed_buffer_sink;
+  char * data;    ///< Buffer data (provided by user, not owned)
+  size_t size;    ///< Maximum buffer size
+  size_t used;    ///< Bytes written to buffer
+  bool truncated; ///< true if truncation occurred
+} GTEXT_JSON_Fixed_Buffer_Sink;
 
 /**
  * @brief Create a growable buffer sink
  *
  * Creates a sink that writes to a dynamically-growing buffer. The buffer
- * is allocated and managed by the sink. Use text_json_sink_buffer_data()
- * and text_json_sink_buffer_size() to access the buffer, and
- * text_json_sink_buffer_free() to free it.
+ * is allocated and managed by the sink. Use GTEXT_JSON_Sink_buffer_data()
+ * and GTEXT_JSON_Sink_buffer_size() to access the buffer, and
+ * GTEXT_JSON_Sink_buffer_free() to free it.
  *
  * @param sink Output parameter for the created sink
- * @return TEXT_JSON_OK on success, TEXT_JSON_E_OOM on allocation failure
+ * @return GTEXT_JSON_OK on success, GTEXT_JSON_E_OOM on allocation failure
  */
-TEXT_API text_json_status text_json_sink_buffer(text_json_sink* sink);
+GTEXT_API GTEXT_JSON_Status gtext_json_sink_buffer(GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Get the buffer data from a growable buffer sink
  *
  * Returns a pointer to the buffer data. The buffer is null-terminated
  * for convenience, but may contain null bytes in the middle. Use
- * text_json_sink_buffer_size() to get the actual size.
+ * GTEXT_JSON_Sink_buffer_size() to get the actual size.
  *
- * @param sink Sink created by text_json_sink_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_buffer()
  * @return Pointer to buffer data, or NULL if sink is invalid
  */
-TEXT_API const char* text_json_sink_buffer_data(const text_json_sink* sink);
+GTEXT_API const char * gtext_json_sink_buffer_data(
+    const GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Get the buffer size from a growable buffer sink
@@ -101,40 +107,38 @@ TEXT_API const char* text_json_sink_buffer_data(const text_json_sink* sink);
  * Returns the number of bytes written to the buffer (not including
  * the null terminator).
  *
- * @param sink Sink created by text_json_sink_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_buffer()
  * @return Number of bytes written, or 0 if sink is invalid
  */
-TEXT_API size_t text_json_sink_buffer_size(const text_json_sink* sink);
+GTEXT_API size_t gtext_json_sink_buffer_size(const GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Free a growable buffer sink
  *
- * Frees the buffer allocated by text_json_sink_buffer(). After calling
+ * Frees the buffer allocated by GTEXT_JSON_Sink_buffer(). After calling
  * this function, the sink is invalid and should not be used.
  *
- * @param sink Sink created by text_json_sink_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_buffer()
  */
-TEXT_API void text_json_sink_buffer_free(text_json_sink* sink);
+GTEXT_API void gtext_json_sink_buffer_free(GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Create a fixed-size buffer sink
  *
  * Creates a sink that writes to a fixed-size buffer provided by the caller.
  * If the output exceeds the buffer size, it will be truncated and the
- * truncated flag will be set. Use text_json_sink_fixed_buffer_used() to
- * get the number of bytes written, and text_json_sink_fixed_buffer_truncated()
+ * truncated flag will be set. Use GTEXT_JSON_Sink_fixed_buffer_used() to
+ * get the number of bytes written, and GTEXT_JSON_Sink_fixed_buffer_truncated()
  * to check if truncation occurred.
  *
  * @param sink Output parameter for the created sink
  * @param buffer Buffer to write to (must remain valid for sink lifetime)
  * @param size Maximum size of the buffer
- * @return TEXT_JSON_OK on success, TEXT_JSON_E_INVALID if buffer is NULL or size is 0
+ * @return GTEXT_JSON_OK on success, GTEXT_JSON_E_INVALID if buffer is NULL or
+ * size is 0
  */
-TEXT_API text_json_status text_json_sink_fixed_buffer(
-  text_json_sink* sink,
-  char* buffer,
-  size_t size
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_sink_fixed_buffer(
+    GTEXT_JSON_Sink * sink, char * buffer, size_t size);
 
 /**
  * @brief Get the number of bytes written to a fixed buffer sink
@@ -142,10 +146,11 @@ TEXT_API text_json_status text_json_sink_fixed_buffer(
  * Returns the number of bytes written to the buffer (may be less than
  * the buffer size if truncation occurred).
  *
- * @param sink Sink created by text_json_sink_fixed_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_fixed_buffer()
  * @return Number of bytes written, or 0 if sink is invalid
  */
-TEXT_API size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink);
+GTEXT_API size_t gtext_json_sink_fixed_buffer_used(
+    const GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Check if truncation occurred in a fixed buffer sink
@@ -153,21 +158,22 @@ TEXT_API size_t text_json_sink_fixed_buffer_used(const text_json_sink* sink);
  * Returns true if the output was truncated due to insufficient buffer
  * space, false otherwise.
  *
- * @param sink Sink created by text_json_sink_fixed_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_fixed_buffer()
  * @return true if truncated, false otherwise
  */
-TEXT_API bool text_json_sink_fixed_buffer_truncated(const text_json_sink* sink);
+GTEXT_API bool gtext_json_sink_fixed_buffer_truncated(
+    const GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Free a fixed buffer sink
  *
- * Frees the internal structure allocated by text_json_sink_fixed_buffer().
+ * Frees the internal structure allocated by GTEXT_JSON_Sink_fixed_buffer().
  * After calling this function, the sink is invalid and should not be used.
  * Note: This does NOT free the buffer itself (it's owned by the caller).
  *
- * @param sink Sink created by text_json_sink_fixed_buffer()
+ * @param sink Sink created by GTEXT_JSON_Sink_fixed_buffer()
  */
-TEXT_API void text_json_sink_fixed_buffer_free(text_json_sink* sink);
+GTEXT_API void gtext_json_sink_fixed_buffer_free(GTEXT_JSON_Sink * sink);
 
 /**
  * @brief Write a JSON value to a sink
@@ -180,14 +186,11 @@ TEXT_API void text_json_sink_fixed_buffer_free(text_json_sink* sink);
  * @param opt Write options (can be NULL for defaults)
  * @param v JSON value to write (must not be NULL)
  * @param err Error output structure (can be NULL if error details not needed)
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_write_value(
-  text_json_sink* sink,
-  const text_json_write_options* opt,
-  const text_json_value* v,
-  text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_write_value(GTEXT_JSON_Sink * sink,
+    const GTEXT_JSON_Write_Options * opt, const GTEXT_JSON_Value * v,
+    GTEXT_JSON_Error * err);
 
 /**
  * @brief Forward declaration of streaming writer structure
@@ -195,7 +198,7 @@ TEXT_API text_json_status text_json_write_value(
  * The streaming writer maintains internal state to enforce structural
  * correctness (e.g., preventing values without keys inside objects).
  */
-typedef struct text_json_writer text_json_writer;
+typedef struct GTEXT_JSON_Writer GTEXT_JSON_Writer;
 
 /**
  * @brief Create a new streaming JSON writer
@@ -208,10 +211,8 @@ typedef struct text_json_writer text_json_writer;
  * @param opt Write options (can be NULL for defaults)
  * @return New writer instance, or NULL on allocation failure
  */
-TEXT_API text_json_writer* text_json_writer_new(
-  text_json_sink sink,
-  const text_json_write_options* opt
-);
+GTEXT_API GTEXT_JSON_Writer * gtext_json_writer_new(
+    GTEXT_JSON_Sink sink, const GTEXT_JSON_Write_Options * opt);
 
 /**
  * @brief Free a streaming JSON writer
@@ -221,51 +222,55 @@ TEXT_API text_json_writer* text_json_writer_new(
  *
  * @param w Writer to free (can be NULL, in which case this is a no-op)
  */
-TEXT_API void text_json_writer_free(text_json_writer* w);
+GTEXT_API void gtext_json_writer_free(GTEXT_JSON_Writer * w);
 
 /**
  * @brief Begin writing an object
  *
  * Writes the opening brace `{` for a JSON object. Must be followed by
- * key-value pairs or be closed immediately with text_json_writer_object_end().
+ * key-value pairs or be closed immediately with gtext_json_writer_object_end().
  *
  * @param w Writer instance (must not be NULL)
- * @return TEXT_JSON_OK on success, error code on failure (e.g., invalid state)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., invalid state)
  */
-TEXT_API text_json_status text_json_writer_object_begin(text_json_writer* w);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_object_begin(
+    GTEXT_JSON_Writer * w);
 
 /**
  * @brief End writing an object
  *
  * Writes the closing brace `}` for a JSON object. The object must have
- * been started with text_json_writer_object_begin().
+ * been started with gtext_json_writer_object_begin().
  *
  * @param w Writer instance (must not be NULL)
- * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete object)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., incomplete
+ * object)
  */
-TEXT_API text_json_status text_json_writer_object_end(text_json_writer* w);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_object_end(GTEXT_JSON_Writer * w);
 
 /**
  * @brief Begin writing an array
  *
  * Writes the opening bracket `[` for a JSON array. Must be followed by
- * values or be closed immediately with text_json_writer_array_end().
+ * values or be closed immediately with gtext_json_writer_array_end().
  *
  * @param w Writer instance (must not be NULL)
- * @return TEXT_JSON_OK on success, error code on failure (e.g., invalid state)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., invalid state)
  */
-TEXT_API text_json_status text_json_writer_array_begin(text_json_writer* w);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_array_begin(
+    GTEXT_JSON_Writer * w);
 
 /**
  * @brief End writing an array
  *
  * Writes the closing bracket `]` for a JSON array. The array must have
- * been started with text_json_writer_array_begin().
+ * been started with gtext_json_writer_array_begin().
  *
  * @param w Writer instance (must not be NULL)
- * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete array)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., incomplete
+ * array)
  */
-TEXT_API text_json_status text_json_writer_array_end(text_json_writer* w);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_array_end(GTEXT_JSON_Writer * w);
 
 /**
  * @brief Write an object key
@@ -277,13 +282,11 @@ TEXT_API text_json_status text_json_writer_array_end(text_json_writer* w);
  * @param w Writer instance (must not be NULL)
  * @param key Key string (must not be NULL)
  * @param len Length of key string in bytes
- * @return TEXT_JSON_OK on success, error code on failure (e.g., not in object context)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., not in object
+ * context)
  */
-TEXT_API text_json_status text_json_writer_key(
-  text_json_writer* w,
-  const char* key,
-  size_t len
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_key(
+    GTEXT_JSON_Writer * w, const char * key, size_t len);
 
 /**
  * @brief Write a null value
@@ -291,9 +294,9 @@ TEXT_API text_json_status text_json_writer_key(
  * Writes the JSON null value. Can be used in arrays or as object values.
  *
  * @param w Writer instance (must not be NULL)
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_null(text_json_writer* w);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_null(GTEXT_JSON_Writer * w);
 
 /**
  * @brief Write a boolean value
@@ -302,9 +305,10 @@ TEXT_API text_json_status text_json_writer_null(text_json_writer* w);
  *
  * @param w Writer instance (must not be NULL)
  * @param b Boolean value
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_bool(text_json_writer* w, bool b);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_bool(
+    GTEXT_JSON_Writer * w, bool b);
 
 /**
  * @brief Write a number value from lexeme
@@ -315,13 +319,10 @@ TEXT_API text_json_status text_json_writer_bool(text_json_writer* w, bool b);
  * @param w Writer instance (must not be NULL)
  * @param s Number lexeme string (must not be NULL)
  * @param len Length of lexeme string in bytes
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_number_lexeme(
-  text_json_writer* w,
-  const char* s,
-  size_t len
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_lexeme(
+    GTEXT_JSON_Writer * w, const char * s, size_t len);
 
 /**
  * @brief Write a number value from int64
@@ -330,12 +331,10 @@ TEXT_API text_json_status text_json_writer_number_lexeme(
  *
  * @param w Writer instance (must not be NULL)
  * @param x Integer value to write
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_number_i64(
-  text_json_writer* w,
-  long long x
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_i64(
+    GTEXT_JSON_Writer * w, long long x);
 
 /**
  * @brief Write a number value from uint64
@@ -344,12 +343,10 @@ TEXT_API text_json_status text_json_writer_number_i64(
  *
  * @param w Writer instance (must not be NULL)
  * @param x Unsigned integer value to write
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_number_u64(
-  text_json_writer* w,
-  unsigned long long x
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_u64(
+    GTEXT_JSON_Writer * w, unsigned long long x);
 
 /**
  * @brief Write a number value from double
@@ -360,12 +357,10 @@ TEXT_API text_json_status text_json_writer_number_u64(
  *
  * @param w Writer instance (must not be NULL)
  * @param x Floating-point value to write
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_number_double(
-  text_json_writer* w,
-  double x
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_double(
+    GTEXT_JSON_Writer * w, double x);
 
 /**
  * @brief Write a string value
@@ -376,13 +371,10 @@ TEXT_API text_json_status text_json_writer_number_double(
  * @param w Writer instance (must not be NULL)
  * @param s String data (must not be NULL)
  * @param len Length of string in bytes
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_writer_string(
-  text_json_writer* w,
-  const char* s,
-  size_t len
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_string(
+    GTEXT_JSON_Writer * w, const char * s, size_t len);
 
 /**
  * @brief Finish writing and validate structure
@@ -393,15 +385,14 @@ TEXT_API text_json_status text_json_writer_string(
  *
  * @param w Writer instance (must not be NULL)
  * @param err Error output structure (can be NULL if error details not needed)
- * @return TEXT_JSON_OK on success, error code on failure (e.g., incomplete structure)
+ * @return GTEXT_JSON_OK on success, error code on failure (e.g., incomplete
+ * structure)
  */
-TEXT_API text_json_status text_json_writer_finish(
-  text_json_writer* w,
-  text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_writer_finish(
+    GTEXT_JSON_Writer * w, GTEXT_JSON_Error * err);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_WRITER_H */
+#endif /* GHOTI_IO_GTEXT_JSON_WRITER_H */

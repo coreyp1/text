@@ -1,6 +1,7 @@
 /**
- * @file json_patch.h
- * @brief JSON Patch (RFC 6902) and JSON Merge Patch (RFC 7386) operations on JSON DOM
+ * @file
+ *
+ * JSON Patch (RFC 6902) and JSON Merge Patch (RFC 7386) operations on JSON DOM.
  *
  * This header provides functions for applying JSON Patch and JSON Merge Patch
  * operations to JSON DOM trees.
@@ -10,13 +11,15 @@
  *
  * JSON Merge Patch (RFC 7386) allows modifying JSON documents by merging a
  * patch document into a target document recursively.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_PATCH_H
-#define GHOTI_IO_TEXT_JSON_PATCH_H
+#ifndef GHOTI_IO_GTEXT_JSON_PATCH_H
+#define GHOTI_IO_GTEXT_JSON_PATCH_H
 
-#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/macros.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -41,20 +44,19 @@ extern "C" {
  * - "add": Add a value at path (replaces if exists, inserts into arrays)
  * - "remove": Remove value at path (must exist)
  * - "replace": Replace value at path (must exist)
- * - "move": Move value from "from" to "path" (from must exist, from != path prefix)
+ * - "move": Move value from "from" to "path" (from must exist, from != path
+ * prefix)
  * - "copy": Copy value from "from" to "path" (from must exist)
  * - "test": Test that value at path equals "value" (fails if not equal)
  *
  * @param root Root JSON value to apply patch to (must not be NULL)
- * @param patch_array JSON array of patch operations (must not be NULL, must be TEXT_JSON_ARRAY)
+ * @param patch_array JSON array of patch operations (must not be NULL, must be
+ * GTEXT_JSON_ARRAY)
  * @param err Error output structure (can be NULL if error details not needed)
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_patch_apply(
-    text_json_value* root,
-    const text_json_value* patch_array,
-    text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_patch_apply(GTEXT_JSON_Value * root,
+    const GTEXT_JSON_Value * patch_array, GTEXT_JSON_Error * err);
 
 /**
  * @brief Apply a JSON Merge Patch to a JSON DOM tree
@@ -82,16 +84,13 @@ TEXT_API text_json_status text_json_patch_apply(
  * @param target Target JSON value to apply patch to (must not be NULL)
  * @param patch Patch JSON value to merge into target (must not be NULL)
  * @param err Error output structure (can be NULL if error details not needed)
- * @return TEXT_JSON_OK on success, error code on failure
+ * @return GTEXT_JSON_OK on success, error code on failure
  */
-TEXT_API text_json_status text_json_merge_patch(
-    text_json_value* target,
-    const text_json_value* patch,
-    text_json_error* err
-);
+GTEXT_API GTEXT_JSON_Status gtext_json_merge_patch(GTEXT_JSON_Value * target,
+    const GTEXT_JSON_Value * patch, GTEXT_JSON_Error * err);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_PATCH_H */
+#endif /* GHOTI_IO_GTEXT_JSON_PATCH_H */

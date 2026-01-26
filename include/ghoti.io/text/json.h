@@ -7,6 +7,8 @@
  *
  * For internal implementations that only need core types, use
  * <ghoti.io/text/json/json_core.h> instead to reduce compile-time dependencies.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #ifndef GHOTI_IO_TEXT_JSON_H
@@ -17,10 +19,10 @@
 
 // Include all JSON module headers
 #include <ghoti.io/text/json/json_dom.h>
-#include <ghoti.io/text/json/json_writer.h>
-#include <ghoti.io/text/json/json_stream.h>
-#include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_patch.h>
+#include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_schema.h>
+#include <ghoti.io/text/json/json_stream.h>
+#include <ghoti.io/text/json/json_writer.h>
 
 #endif /* GHOTI_IO_TEXT_JSON_H */

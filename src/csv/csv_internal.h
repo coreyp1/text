@@ -1,34 +1,38 @@
 /**
- * @file csv_internal.h
- * @brief Internal definitions for CSV module implementation
+ * @file
+ *
+ * Internal definitions for CSV module implementation.
  *
  * This header contains internal-only definitions used by the CSV module
  * implementation. It should not be included by external code.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_CSV_INTERNAL_H
-#define GHOTI_IO_TEXT_CSV_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_CSV_INTERNAL_H
+#define GHOTI_IO_GTEXT_CSV_INTERNAL_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/csv/csv_writer.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Forward declaration
-typedef struct text_csv_stream text_csv_stream;
+typedef struct GTEXT_CSV_Stream GTEXT_CSV_Stream;
 
 /**
  * @brief Default limits for CSV parsing (used when opts->max_* is 0)
  */
-#define CSV_DEFAULT_MAX_ROWS (10 * 1000 * 1000)        // 10M rows
-#define CSV_DEFAULT_MAX_COLS (100 * 1000)              // 100k columns
-#define CSV_DEFAULT_MAX_FIELD_BYTES (16 * 1024 * 1024)  // 16MB
-#define CSV_DEFAULT_MAX_RECORD_BYTES (64 * 1024 * 1024) // 64MB
+#define CSV_DEFAULT_MAX_ROWS (10 * 1000 * 1000)          // 10M rows
+#define CSV_DEFAULT_MAX_COLS (100 * 1000)                // 100k columns
+#define CSV_DEFAULT_MAX_FIELD_BYTES (16 * 1024 * 1024)   // 16MB
+#define CSV_DEFAULT_MAX_RECORD_BYTES (64 * 1024 * 1024)  // 64MB
 #define CSV_DEFAULT_MAX_TOTAL_BYTES (1024 * 1024 * 1024) // 1GB
 
 /**
@@ -40,28 +44,28 @@ typedef struct text_csv_stream text_csv_stream;
  * @brief Position tracking structure for CSV processing
  */
 typedef struct {
-    size_t offset;       ///< Byte offset from start
-    int line;            ///< Line number (1-based)
-    int column;          ///< Column number (1-based, byte-based)
+  size_t offset; ///< Byte offset from start
+  int line;      ///< Line number (1-based)
+  int column;    ///< Column number (1-based, byte-based)
 } csv_position;
 
 /**
  * @brief Newline type detected
  */
 typedef enum {
-    CSV_NEWLINE_NONE,     ///< No newline detected
-    CSV_NEWLINE_LF,       ///< LF (\n)
-    CSV_NEWLINE_CRLF,     ///< CRLF (\r\n)
-    CSV_NEWLINE_CR        ///< CR (\r)
+  CSV_NEWLINE_NONE, ///< No newline detected
+  CSV_NEWLINE_LF,   ///< LF (\n)
+  CSV_NEWLINE_CRLF, ///< CRLF (\r\n)
+  CSV_NEWLINE_CR    ///< CR (\r)
 } csv_newline_type;
 
 /**
  * @brief UTF-8 validation result
  */
 typedef enum {
-    CSV_UTF8_VALID,       ///< Valid UTF-8 sequence
-    CSV_UTF8_INVALID,    ///< Invalid UTF-8 sequence
-    CSV_UTF8_INCOMPLETE  ///< Incomplete UTF-8 sequence (needs more bytes)
+  CSV_UTF8_VALID,     ///< Valid UTF-8 sequence
+  CSV_UTF8_INVALID,   ///< Invalid UTF-8 sequence
+  CSV_UTF8_INCOMPLETE ///< Incomplete UTF-8 sequence (needs more bytes)
 } csv_utf8_result;
 
 /**
@@ -76,13 +80,9 @@ typedef enum {
  * @param dialect Dialect configuration
  * @return CSV_NEWLINE_* type if newline detected, CSV_NEWLINE_NONE otherwise
  */
-TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
-    const char* input,
-    size_t input_len,
-    csv_position* pos,
-    const text_csv_dialect* dialect,
-    text_csv_status* error_out
-);
+GTEXT_INTERNAL_API csv_newline_type csv_detect_newline(const char * input,
+    size_t input_len, csv_position * pos, const GTEXT_CSV_Dialect * dialect,
+    GTEXT_CSV_Status * error_out);
 
 /**
  * @brief Validate UTF-8 sequence
@@ -96,19 +96,15 @@ TEXT_INTERNAL_API csv_newline_type csv_detect_newline(
  * @param validate Whether to validate (if false, always returns VALID)
  * @return CSV_UTF8_VALID, CSV_UTF8_INVALID, or CSV_UTF8_INCOMPLETE
  */
-TEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(
-    const char* input,
-    size_t input_len,
-    csv_position* pos,
-    bool validate,
-    text_csv_status* error_out
-);
+GTEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(const char * input,
+    size_t input_len, csv_position * pos, bool validate,
+    GTEXT_CSV_Status * error_out);
 
 /**
  * @brief Strip UTF-8 BOM from input
  *
- * Checks if input starts with UTF-8 BOM (0xEF 0xBB 0xBF) and strips it if present.
- * Updates position accordingly.
+ * Checks if input starts with UTF-8 BOM (0xEF 0xBB 0xBF) and strips it if
+ * present. Updates position accordingly.
  *
  * @param input Input buffer
  * @param input_len Length of input buffer (updated if BOM found)
@@ -116,41 +112,61 @@ TEXT_INTERNAL_API csv_utf8_result csv_validate_utf8(
  * @param strip Whether to strip BOM (if false, does nothing)
  * @return true if BOM was stripped, false otherwise
  */
-TEXT_INTERNAL_API text_csv_status csv_strip_bom(
-    const char** input,
-    size_t* input_len,
-    csv_position* pos,
-    bool strip,
-    bool* was_stripped
-);
+GTEXT_INTERNAL_API GTEXT_CSV_Status csv_strip_bom(const char ** input,
+    size_t * input_len, csv_position * pos, bool strip, bool * was_stripped);
 
 /**
- * @brief Forward declaration of csv_arena (defined in csv_table.c)
+ * @brief Arena block structure (internal)
+ *
+ * WARNING: This struct must NEVER be passed by value or copied.
+ * It uses a flexible array member pattern and must always be used
+ * as a pointer. Copying will only copy the struct header, not the
+ * allocated data.
+ */
+typedef struct csv_arena_block {
+  struct csv_arena_block * next; ///< Next block in the arena
+  size_t used;                   ///< Bytes used in this block
+  size_t size;                   ///< Total size of this block
+  char data[1]; ///< Flexible array member for block data (C99 FAM, use data[1]
+                ///< for C++ compatibility)
+} csv_arena_block;
+
+/**
+ * @brief Arena allocator structure
+ *
+ * Manages a collection of blocks for efficient bulk allocation.
+ * All memory is freed when the arena is destroyed.
+ */
+struct csv_arena {
+  csv_arena_block * first;   ///< First block in the arena
+  csv_arena_block * current; ///< Current block being used
+  size_t block_size;         ///< Size of each new block
+};
+
+/**
+ * @brief Typedef for csv_arena
  */
 typedef struct csv_arena csv_arena;
 
 /**
  * @brief Set error structure with common defaults
  *
- * Macro to standardize error initialization. Sets code, message, line, and column.
- * Defaults line and column to 1. All other fields are zero-initialized.
+ * Macro to standardize error initialization. Sets code, message, line, and
+ * column. Defaults line and column to 1. All other fields are zero-initialized.
  * Additional fields can be set after the macro call if needed.
  *
- * @param err Error structure pointer (can be NULL, in which case this is a no-op)
- * @param err_code Error code (text_csv_status)
- * @param err_msg Error message (const char*)
+ * @param err Error structure pointer (can be NULL, in which case this is a
+ * no-op)
+ * @param err_code Error code (GTEXT_CSV_Status)
+ * @param err_msg Error message (const char *)
  */
-#define CSV_SET_ERROR(err, err_code, err_msg) \
-    do { \
-        if (err) { \
-            *(err) = (text_csv_error){ \
-                .code = (err_code), \
-                .message = (err_msg), \
-                .line = 1, \
-                .column = 1 \
-            }; \
-        } \
-    } while (0)
+#define CSV_SET_ERROR(err, err_code, err_msg)                                  \
+  do {                                                                         \
+    if (err) {                                                                 \
+      *(err) = (GTEXT_CSV_Error){                                              \
+          .code = (err_code), .message = (err_msg), .line = 1, .column = 1};   \
+    }                                                                          \
+  } while (0)
 
 /**
  * @brief CSV context structure
@@ -159,9 +175,10 @@ typedef struct csv_arena csv_arena;
  * for a CSV table.
  */
 typedef struct csv_context {
-    csv_arena* arena;                ///< Arena allocator for this table
-    const char* input_buffer;        ///< Original input buffer (for in-situ mode, caller-owned)
-    size_t input_buffer_len;         ///< Length of input buffer (for in-situ mode)
+  csv_arena * arena; ///< Arena allocator for this table
+  const char *
+      input_buffer; ///< Original input buffer (for in-situ mode, caller-owned)
+  size_t input_buffer_len; ///< Length of input buffer (for in-situ mode)
 } csv_context;
 
 /**
@@ -171,19 +188,21 @@ typedef struct csv_context {
  *
  * @return New context, or NULL on failure
  */
-TEXT_INTERNAL_API csv_context* csv_context_new(void);
+GTEXT_INTERNAL_API csv_context * csv_context_new(void);
 
 /**
  * @brief Set input buffer for in-situ mode
  *
  * Internal function for storing a reference to the input buffer in the context.
- * The buffer is caller-owned and must remain valid for the lifetime of the table.
+ * The buffer is caller-owned and must remain valid for the lifetime of the
+ * table.
  *
  * @param ctx Context to set input buffer on (must not be NULL)
  * @param input_buffer Original input buffer (caller-owned, must remain valid)
  * @param input_buffer_len Length of input buffer
  */
-TEXT_INTERNAL_API void csv_context_set_input_buffer(csv_context* ctx, const char* input_buffer, size_t input_buffer_len);
+GTEXT_INTERNAL_API void csv_context_set_input_buffer(
+    csv_context * ctx, const char * input_buffer, size_t input_buffer_len);
 
 /**
  * @brief Free a CSV context and its arena
@@ -193,7 +212,7 @@ TEXT_INTERNAL_API void csv_context_set_input_buffer(csv_context* ctx, const char
  *
  * @param ctx Context to free (can be NULL)
  */
-TEXT_INTERNAL_API void csv_context_free(csv_context* ctx);
+GTEXT_INTERNAL_API void csv_context_free(csv_context * ctx);
 
 /**
  * @brief Allocate memory from a context's arena
@@ -206,7 +225,8 @@ TEXT_INTERNAL_API void csv_context_free(csv_context* ctx);
  * @param align Alignment requirement (must be power of 2)
  * @return Pointer to allocated memory, or NULL on failure
  */
-TEXT_INTERNAL_API void* csv_arena_alloc_for_context(csv_context* ctx, size_t size, size_t align);
+GTEXT_INTERNAL_API void * csv_arena_alloc_for_context(
+    csv_context * ctx, size_t size, size_t align);
 
 /**
  * @brief Write a field with proper quoting and escaping
@@ -222,14 +242,11 @@ TEXT_INTERNAL_API void* csv_arena_alloc_for_context(csv_context* ctx, size_t siz
  * @param field_data Field data (may be NULL if field_len is 0)
  * @param field_len Field length in bytes
  * @param opts Write options
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-TEXT_INTERNAL_API text_csv_status csv_write_field(
-    const text_csv_sink* sink,
-    const char* field_data,
-    size_t field_len,
-    const text_csv_write_options* opts
-);
+GTEXT_INTERNAL_API GTEXT_CSV_Status csv_write_field(const GTEXT_CSV_Sink * sink,
+    const char * field_data, size_t field_len,
+    const GTEXT_CSV_Write_Options * opts);
 
 /**
  * @brief Set original input buffer for in-situ mode
@@ -241,39 +258,32 @@ TEXT_INTERNAL_API text_csv_status csv_write_field(
  * @param input_buffer Original input buffer (caller-owned, must remain valid)
  * @param input_buffer_len Length of input buffer
  */
-TEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
-    text_csv_stream* stream,
-    const char* input_buffer,
-    size_t input_buffer_len
-);
+GTEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
+    GTEXT_CSV_Stream * stream, const char * input_buffer,
+    size_t input_buffer_len);
 
 /**
  * @brief Generate a context snippet around an error position
  *
- * Extracts a snippet of text around the error position for better error reporting.
- * The snippet includes context before and after the error position, with a caret
- * offset indicating the exact error location.
+ * Extracts a snippet of text around the error position for better error
+ * reporting. The snippet includes context before and after the error position,
+ * with a caret offset indicating the exact error location.
  *
  * @param input Input buffer containing the CSV data
  * @param input_len Length of input buffer
  * @param error_offset Byte offset of the error (0-based)
  * @param context_before Number of bytes of context before the error
  * @param context_after Number of bytes of context after the error
- * @param snippet_out Output parameter for the allocated snippet (caller must free)
+ * @param snippet_out Output parameter for the allocated snippet (caller must
+ * free)
  * @param snippet_len_out Output parameter for snippet length
  * @param caret_offset_out Output parameter for caret offset within snippet
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-TEXT_INTERNAL_API text_csv_status csv_error_generate_context_snippet(
-    const char* input,
-    size_t input_len,
-    size_t error_offset,
-    size_t context_before,
-    size_t context_after,
-    char** snippet_out,
-    size_t* snippet_len_out,
-    size_t* caret_offset_out
-);
+GTEXT_INTERNAL_API GTEXT_CSV_Status csv_error_generate_context_snippet(
+    const char * input, size_t input_len, size_t error_offset,
+    size_t context_before, size_t context_after, char ** snippet_out,
+    size_t * snippet_len_out, size_t * caret_offset_out);
 
 /**
  * @brief Copy an error structure, deep-copying the context snippet
@@ -284,9 +294,10 @@ TEXT_INTERNAL_API text_csv_status csv_error_generate_context_snippet(
  *
  * @param dst Destination error structure (must not be NULL)
  * @param src Source error structure (must not be NULL)
- * @return TEXT_CSV_OK on success, error code on failure
+ * @return GTEXT_CSV_OK on success, error code on failure
  */
-TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text_csv_error* src);
+GTEXT_INTERNAL_API GTEXT_CSV_Status csv_error_copy(
+    GTEXT_CSV_Error * dst, const GTEXT_CSV_Error * src);
 
 // ============================================================================
 // Memory Management Design Notes
@@ -300,7 +311,7 @@ TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text
  * **Arena Allocation (csv_arena_alloc_for_context):**
  * - Used for all permanent table data structures
  * - Row structures (csv_table_row)
- * - Field arrays (csv_table_field*)
+ * - Field arrays (csv_table_field *)
  * - Field data (string content)
  * - Header map entries
  * - All data that lives with the table for its entire lifetime
@@ -315,15 +326,16 @@ TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text
  *
  * **Rationale:**
  * Temporary arrays use malloc() instead of arena allocation because:
- * 1. **Lifetime**: They are freed immediately after use, not when the table is destroyed
- * 2. **Memory efficiency**: Keeping temporary data in the arena would waste memory
- *    until table destruction
+ * 1. **Lifetime**: They are freed immediately after use, not when the table is
+ * destroyed
+ * 2. **Memory efficiency**: Keeping temporary data in the arena would waste
+ * memory until table destruction
  * 3. **Error handling**: Immediate cleanup on error paths is simpler and safer
  * 4. **Separation of concerns**: Temporary organizational data is distinct from
  *    permanent table structures
  *
- * This design maintains atomicity: all allocations (both arena and malloc) happen
- * before any state updates, allowing clean rollback on failure.
+ * This design maintains atomicity: all allocations (both arena and malloc)
+ * happen before any state updates, allowing clean rollback on failure.
  */
 
 // ============================================================================
@@ -334,52 +346,219 @@ TEXT_INTERNAL_API text_csv_status csv_error_copy(text_csv_error* dst, const text
  * @brief Field structure (stored in arena)
  */
 typedef struct {
-    const char* data;       ///< Field data (pointer into input or arena)
-    size_t length;          ///< Field length
-    bool is_in_situ;        ///< Whether field references input buffer directly
+  const char * data; ///< Field data (pointer into input or arena)
+  size_t length;     ///< Field length
+  bool is_in_situ;   ///< Whether field references input buffer directly
 } csv_table_field;
 
 /**
  * @brief Row structure (stored in arena)
  */
 typedef struct {
-    csv_table_field* fields; ///< Array of fields
-    size_t field_count;      ///< Number of fields
+  csv_table_field * fields; ///< Array of fields
+  size_t field_count;       ///< Number of fields
 } csv_table_row;
 
 /**
  * @brief Header map entry (for column name lookup)
  */
 typedef struct csv_header_entry {
-    const char* name;        ///< Column name (in arena or input buffer)
-    size_t name_len;        ///< Column name length
-    size_t index;           ///< Column index
-    struct csv_header_entry* next;  ///< Next entry (for hash table chaining)
+  const char * name;              ///< Column name (in arena or input buffer)
+  size_t name_len;                ///< Column name length
+  size_t index;                   ///< Column index
+  struct csv_header_entry * next; ///< Next entry (for hash table chaining)
 } csv_header_entry;
+
+/**
+ * @brief Temporary arrays for column operations
+ */
+typedef struct {
+  csv_table_field **
+      new_field_arrays;        ///< Array of pointers to new field arrays
+  size_t * old_field_counts;   ///< Array of old field counts per row
+  char ** field_data_array;    ///< Array of field data pointers (from
+                               ///< csv_preallocate_column_field_data)
+  size_t * field_data_lengths; ///< Array of field data lengths (from
+                               ///< csv_preallocate_column_field_data)
+} csv_column_op_temp_arrays;
+
+/**
+ * @brief Structures for table compaction
+ */
+typedef struct {
+  csv_context * new_ctx;               ///< New context with arena
+  csv_table_row * new_rows;            ///< New rows array
+  csv_table_field ** new_field_arrays; ///< Array of field arrays
+  char *** new_field_data_ptrs;        ///< Array of field data pointer arrays
+} csv_compact_structures;
 
 /**
  * @brief Table structure (internal)
  *
- * This is the internal representation of text_csv_table.
- * External code should use the opaque text_csv_table type.
+ * This is the internal representation of GTEXT_CSV_Table.
+ * External code should use the opaque GTEXT_CSV_Table type.
  * This structure definition must match the one in csv_table.c.
  */
-struct text_csv_table {
-    csv_context* ctx;            ///< Context with arena
-    csv_table_row* rows;         ///< Array of rows
-    size_t row_count;            ///< Number of rows
-    size_t row_capacity;         ///< Allocated row capacity
-    size_t column_count;         ///< Expected column count (set by first row, 0 if empty)
+struct GTEXT_CSV_Table {
+  csv_context * ctx;    ///< Context with arena
+  csv_table_row * rows; ///< Array of rows
+  size_t row_count;     ///< Number of rows
+  size_t row_capacity;  ///< Allocated row capacity
+  size_t column_count; ///< Expected column count (set by first row, 0 if empty)
 
-    // Header map (optional, only if header processing enabled)
-    csv_header_entry** header_map;  ///< Hash table for header lookup
-    size_t header_map_size;         ///< Size of hash table
-    bool has_header;                ///< Whether header was processed
-    bool require_unique_headers;    ///< Whether to enforce unique headers for mutation operations (default: false)
+  // Header map (optional, only if header processing enabled)
+  csv_header_entry ** header_map; ///< Hash table for header lookup
+  size_t header_map_size;         ///< Size of hash table
+  bool has_header;                ///< Whether header was processed
+  bool require_unique_headers;    ///< Whether to enforce unique headers for
+                                  ///< mutation operations (default: false)
+
+  // Reverse mapping for O(1) lookup by column index
+  csv_header_entry ** index_to_entry; ///< Array mapping column index to header
+                                      ///< entry (NULL if no header)
+  size_t index_to_entry_capacity;     ///< Capacity of index_to_entry array
 };
+
+/**
+ * @brief CSV parser state machine states
+ */
+typedef enum {
+  CSV_STATE_START_OF_RECORD,  ///< Start of a new record
+  CSV_STATE_START_OF_FIELD,   ///< Start of a new field
+  CSV_STATE_UNQUOTED_FIELD,   ///< Accumulating unquoted field
+  CSV_STATE_QUOTED_FIELD,     ///< Accumulating quoted field
+  CSV_STATE_QUOTE_IN_QUOTED,  ///< Quote character encountered in quoted field
+                              ///< (may be escape)
+  CSV_STATE_ESCAPE_IN_QUOTED, ///< Backslash encountered in quoted field
+                              ///< (backslash-escape mode)
+  CSV_STATE_COMMENT,          ///< Processing comment line
+  CSV_STATE_END               ///< Parsing complete
+} csv_parser_state;
+
+/**
+ * @brief Field data structure for accumulating field content
+ */
+typedef struct {
+  const char * start; ///< Start of field data (pointer into input or buffer)
+  size_t length;      ///< Length of field data
+  bool is_quoted;     ///< Whether field was quoted
+  bool needs_copy;    ///< Whether field needs to be copied (for
+                      ///< escaping/unescaping)
+} csv_field_data;
+
+/**
+ * @brief CSV parser structure (internal)
+ */
+typedef struct {
+  // Configuration
+  const GTEXT_CSV_Dialect * dialect;
+  const GTEXT_CSV_Parse_Options * opts;
+
+  // Input tracking
+  const char * input;          ///< Current input buffer
+  size_t input_len;            ///< Length of current input buffer
+  size_t input_offset;         ///< Offset into current input buffer
+  size_t total_bytes_consumed; ///< Total bytes consumed across all feeds
+
+  // Position tracking
+  csv_position pos; ///< Current position (byte offset, line, column)
+
+  // State machine
+  csv_parser_state state; ///< Current parser state
+  bool in_record;         ///< Whether we're currently in a record
+  size_t field_count;     ///< Number of fields in current record
+
+  // Field accumulation
+  csv_field_data current_field; ///< Current field being accumulated
+  char *
+      field_buffer; ///< Buffer for field data (when escaping/unescaping needed)
+  size_t field_buffer_size; ///< Allocated size of field buffer
+  size_t field_buffer_used; ///< Used size of field buffer
+
+  // Limits tracking
+  size_t row_count;            ///< Number of rows processed
+  size_t max_rows;             ///< Effective max rows limit
+  size_t max_cols;             ///< Effective max cols limit
+  size_t max_field_bytes;      ///< Effective max field bytes limit
+  size_t max_record_bytes;     ///< Effective max record bytes limit
+  size_t max_total_bytes;      ///< Effective max total bytes limit
+  size_t current_record_bytes; ///< Bytes in current record
+
+  // Error reporting
+  GTEXT_CSV_Error * error_out; ///< Error output structure (if provided)
+
+  // Comment handling
+  bool in_comment;           ///< Whether we're currently in a comment line
+  size_t comment_prefix_len; ///< Length of comment prefix
+} csv_parser;
+
+/**
+ * @brief CSV writer state enumeration
+ */
+typedef enum {
+  CSV_WRITER_STATE_INITIAL,  ///< Initial state (no record open)
+  CSV_WRITER_STATE_IN_RECORD, ///< Record is open (fields can be written)
+  CSV_WRITER_STATE_FINISHED   ///< Writer has been finished (no more writes)
+} csv_writer_state;
+
+/**
+ * @brief CSV writer structure
+ */
+struct GTEXT_CSV_Writer {
+  GTEXT_CSV_Sink sink;          ///< Output sink (not owned)
+  GTEXT_CSV_Write_Options opts; ///< Write options (copy)
+  csv_writer_state state;       ///< Current writer state
+  bool has_fields_in_record;    ///< Whether current record has any fields
+  GTEXT_CSV_Status last_error;  ///< Last error status (if any)
+};
+
+/**
+ * @brief Parse context for table building
+ */
+typedef struct {
+  GTEXT_CSV_Table * table;
+  csv_table_row * current_row;
+  size_t current_field_index;
+  size_t current_field_capacity;
+  const GTEXT_CSV_Parse_Options * opts;
+  GTEXT_CSV_Error * err;
+  GTEXT_CSV_Status status;
+} csv_table_parse_context;
+
+/**
+ * @brief Structure to hold header map pre-allocated structures
+ */
+typedef struct {
+  csv_header_entry ** new_header_map; ///< New header map array
+  csv_header_entry ** new_entry_ptrs; ///< Temporary array of entry pointers
+  char ** new_name_ptrs;              ///< Temporary array of name pointers
+  size_t total_header_entries;        ///< Total number of header entries
+} csv_compact_header_map;
+
+/**
+ * @brief Structure to hold pre-allocated clone structures
+ */
+typedef struct {
+  csv_context * new_ctx;               ///< New context with arena
+  GTEXT_CSV_Table * new_table;         ///< New table structure
+  csv_table_row * new_rows;            ///< New rows array
+  csv_table_field ** new_field_arrays; ///< Array of field array pointers
+  char *** new_field_data_ptrs;        ///< Array of field data pointer arrays
+} csv_clone_structures;
+
+/**
+ * @brief Structure to hold pre-allocated header map structures
+ */
+typedef struct {
+  csv_header_entry ** new_header_map; ///< New header map array
+  csv_header_entry **
+      new_entry_ptrs;          ///< Temporary array to store all new entries
+  char ** new_name_ptrs;       ///< Temporary array to store all name strings
+  size_t total_header_entries; ///< Total number of header entries
+} csv_clone_header_map;
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_CSV_INTERNAL_H */
+#endif /* GHOTI_IO_GTEXT_CSV_INTERNAL_H */

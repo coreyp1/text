@@ -32,7 +32,7 @@ DOM parsing builds a complete in-memory tree structure of the JSON document. Thi
 - Access values multiple times
 - Work with the entire document at once
 
-The DOM is allocated from an arena, making cleanup simple with a single `text_json_free()` call.
+The DOM is allocated from an arena, making cleanup simple with a single `gtext_json_free()` call.
 
 ### 2.2 Streaming Parsing
 
@@ -56,7 +56,7 @@ The parser correctly handles values (strings, numbers) that span multiple chunks
   - Number: `12345` (chunk 1) + `.678` (chunk 2) → correctly parses as `12345.678`
   - Escape sequences and Unicode escapes also work correctly across chunks
 
-**Important:** Always call `text_json_stream_finish()` after feeding all input chunks. The last value may not be emitted until `finish()` is called, especially if it was incomplete at the end of the final chunk. This ensures all values are processed and the JSON structure is validated as complete.
+**Important:** Always call `gtext_json_stream_finish()` after feeding all input chunks. The last value may not be emitted until `finish()` is called, especially if it was incomplete at the end of the final chunk. This ensures all values are processed and the JSON structure is validated as complete.
 
 ---
 
@@ -93,10 +93,10 @@ The library provides extensive configuration options for parsing behavior:
 
 ### 4.3 Duplicate Key Handling
 
-- **`TEXT_JSON_DUPKEY_ERROR`**: Fail parsing when duplicate keys are encountered — **Default**
-- **`TEXT_JSON_DUPKEY_FIRST_WINS`**: Use the first occurrence of a duplicate key
-- **`TEXT_JSON_DUPKEY_LAST_WINS`**: Use the last occurrence of a duplicate key
-- **`TEXT_JSON_DUPKEY_COLLECT`**: Store all values for duplicate keys in an array
+- **`GTEXT_JSON_DUPKEY_ERROR`**: Fail parsing when duplicate keys are encountered — **Default**
+- **`GTEXT_JSON_DUPKEY_FIRST_WINS`**: Use the first occurrence of a duplicate key
+- **`GTEXT_JSON_DUPKEY_LAST_WINS`**: Use the last occurrence of a duplicate key
+- **`GTEXT_JSON_DUPKEY_COLLECT`**: Store all values for duplicate keys in an array
 
 ### 4.4 Resource Limits
 
@@ -149,9 +149,9 @@ The library provides extensive configuration options for output formatting:
 ### 5.4 Floating-Point Formatting
 
 - **`float_format`**: Formatting strategy:
-  - `TEXT_JSON_FLOAT_SHORTEST`: Shortest representation (default)
-  - `TEXT_JSON_FLOAT_FIXED`: Fixed-point notation
-  - `TEXT_JSON_FLOAT_SCIENTIFIC`: Scientific notation
+  - `GTEXT_JSON_FLOAT_SHORTEST`: Shortest representation (default)
+  - `GTEXT_JSON_FLOAT_FIXED`: Fixed-point notation
+  - `GTEXT_JSON_FLOAT_SCIENTIFIC`: Scientific notation
 - **`float_precision`**: Precision for fixed/scientific format (default: 6)
 
 ### 5.5 Extensions
@@ -176,10 +176,10 @@ The writer supports multiple output destinations through a sink abstraction:
 
 The DOM provides type-safe accessors for all JSON value types:
 
-- **Scalars**: `text_json_get_bool()`, `text_json_get_string()`
+- **Scalars**: `gtext_json_get_bool()`, `gtext_json_get_string()`
 - **Numbers**: Multiple representations available (`get_i64()`, `get_u64()`, `get_double()`, `get_number_lexeme()`)
-- **Arrays**: `text_json_array_size()`, `text_json_array_get()`
-- **Objects**: `text_json_object_size()`, `text_json_object_get()`, `text_json_object_key()`, `text_json_object_value()`
+- **Arrays**: `gtext_json_array_size()`, `gtext_json_array_get()`
+- **Objects**: `gtext_json_object_size()`, `gtext_json_object_get()`, `gtext_json_object_key()`, `gtext_json_object_value()`
 
 ### 7.2 Value Creation and Mutation
 
@@ -274,7 +274,7 @@ The library provides comprehensive error information:
   - Caret positioning within the snippet
   - Expected vs actual token descriptions
 
-Error context snippets are dynamically allocated and must be freed via `text_json_error_free()`.
+Error context snippets are dynamically allocated and must be freed via `gtext_json_error_free()`.
 
 ---
 
@@ -396,8 +396,8 @@ All array and buffer accesses are protected with defensive bounds checking:
 - **String operations**: String operations validate lengths and offsets before access
 
 **Examples:**
-- `text_json_array_get()` validates index against array size before access
-- `text_json_object_key()` validates index against object size before access
+- `gtext_json_array_get()` validates index against array size before access
+- `gtext_json_object_key()` validates index against object size before access
 - Lexer and parser validate buffer offsets before reading
 - Stream operations validate stack indices before access
 
@@ -411,9 +411,9 @@ All functions implement comprehensive NULL pointer checks:
 - **Resource cleanup**: Cleanup functions handle NULL gracefully (no-op for NULL pointers)
 
 **Examples:**
-- `text_json_parse()` returns NULL and sets error if input buffer is NULL
-- `text_json_stream_new()` returns NULL if callback is NULL
-- `text_json_stream_free()` safely handles NULL (no-op)
+- `gtext_json_parse()` returns NULL and sets error if input buffer is NULL
+- `gtext_json_stream_new()` returns NULL if callback is NULL
+- `gtext_json_stream_free()` safely handles NULL (no-op)
 - All accessor functions validate value pointers before access
 
 ### 15.4 Input Validation
@@ -426,8 +426,8 @@ Comprehensive input validation is performed at all API boundaries:
 - **Option validation**: Parse options are validated (limits checked via `json_get_limit()`)
 
 **Examples:**
-- `text_json_parse()` validates input size before parsing
-- `text_json_stream_feed()` validates input size and stream state
+- `gtext_json_parse()` validates input size before parsing
+- `gtext_json_stream_feed()` validates input size and stream state
 - String length limits are enforced during parsing
 - Container element limits are enforced during parsing
 
@@ -457,9 +457,9 @@ The library implements safe resource management patterns:
 - **Context snippet cleanup**: Error context snippets are properly freed
 
 **Examples:**
-- DOM values are freed via single `text_json_free()` call
-- Stream resources are freed via `text_json_stream_free()`
-- Error context snippets are freed via `text_json_error_free()`
+- DOM values are freed via single `gtext_json_free()` call
+- Stream resources are freed via `gtext_json_stream_free()`
+- Error context snippets are freed via `gtext_json_error_free()`
 - All cleanup functions handle NULL gracefully
 
 ### 15.7 Testing and Validation
@@ -499,18 +499,18 @@ if (input_len > SIZE_MAX / 2) {
 }
 
 // Parse with error handling
-text_json_error err = {0};
-text_json_value* value = text_json_parse(input, input_len, NULL, &err);
+gtext_json_error err = {0};
+gtext_json_value* value = gtext_json_parse(input, input_len, NULL, &err);
 if (value == NULL) {
     // Handle error - check err.code and err.message
-    text_json_error_free(&err);
+    gtext_json_error_free(&err);
     return;
 }
 
 // Use value...
 
 // Free resources
-text_json_free(value);
+gtext_json_free(value);
 ```
 
 ---
