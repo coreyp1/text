@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file csv_write.c
  * @brief Writing CSV programmatically
  *
@@ -11,6 +6,8 @@
  * - Creating CSV data programmatically using the streaming writer
  * - Building records and fields incrementally
  * - Writing to a buffer sink
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/csv.h>

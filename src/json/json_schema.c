@@ -16,9 +16,6 @@
 #include <ghoti.io/text/json/json_dom.h>
 #include <ghoti.io/text/json/json_schema.h>
 
-/**
- * @brief Free a schema node recursively
- */
 static void json_schema_node_free(json_schema_node * node) {
   if (!node) {
     return;
@@ -53,9 +50,6 @@ static void json_schema_node_free(json_schema_node * node) {
   free(node);
 }
 
-/**
- * @brief Parse type keyword
- */
 static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
     const GTEXT_JSON_Value * type_value, GTEXT_JSON_Error * err) {
   if (type_value->type == GTEXT_JSON_STRING) {
@@ -127,9 +121,6 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
   return GTEXT_JSON_OK;
 }
 
-/**
- * @brief Compile a schema node from a JSON value
- */
 static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     const GTEXT_JSON_Value * schema_doc, json_context * ctx,
     GTEXT_JSON_Error * err) {
@@ -589,9 +580,6 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
 }
 
 
-/**
- * @brief Validate a value against a schema node
- */
 static GTEXT_JSON_Status json_schema_validate_node(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     GTEXT_JSON_Error * err) {

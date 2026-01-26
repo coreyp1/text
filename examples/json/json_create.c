@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_create.c
  * @brief Creating JSON values programmatically
  *
@@ -11,6 +6,8 @@
  * - Creating JSON values from scratch
  * - Building arrays and objects
  * - Mutating the DOM
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>

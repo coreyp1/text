@@ -14,12 +14,6 @@
 #include "json_internal.h"
 
 #include <ghoti.io/text/json/json_core.h>
-/**
- * @brief Decode a standard escape sequence
- *
- * @param c Escape character (e.g., 'n', 't', 'r')
- * @return Decoded character, or 0 if invalid
- */
 static int json_decode_escape(char c) {
   switch (c) {
   case '"':
@@ -43,12 +37,6 @@ static int json_decode_escape(char c) {
   }
 }
 
-/**
- * @brief Decode a hex digit to its value
- *
- * @param c Hex digit character
- * @return Value (0-15), or -1 if invalid
- */
 static int json_hex_digit(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -62,14 +50,6 @@ static int json_hex_digit(char c) {
   return -1;
 }
 
-/**
- * @brief Decode a \uXXXX Unicode escape sequence
- *
- * @param input Pointer to the 'u' character
- * @param len Remaining length in input
- * @param out_codepoint Output codepoint value
- * @return Number of bytes consumed (6 if valid, 0 if invalid)
- */
 static size_t json_decode_unicode_escape(
     const char * input, size_t len, uint32_t * out_codepoint) {
   if (len < 5 || input[0] != 'u') {
@@ -90,34 +70,14 @@ static size_t json_decode_unicode_escape(
   return 5; // 'u' + 4 hex digits
 }
 
-/**
- * @brief Check if a codepoint is a high surrogate
- *
- * @param codepoint Unicode codepoint
- * @return 1 if high surrogate, 0 otherwise
- */
 static int json_is_high_surrogate(uint32_t codepoint) {
   return codepoint >= 0xD800 && codepoint <= 0xDBFF;
 }
 
-/**
- * @brief Check if a codepoint is a low surrogate
- *
- * @param codepoint Unicode codepoint
- * @return 1 if low surrogate, 0 otherwise
- */
 static int json_is_low_surrogate(uint32_t codepoint) {
   return codepoint >= 0xDC00 && codepoint <= 0xDFFF;
 }
 
-/**
- * @brief Decode a surrogate pair to a UTF-32 codepoint
- *
- * @param high High surrogate (0xD800-0xDBFF)
- * @param low Low surrogate (0xDC00-0xDFFF)
- * @param out_codepoint Output UTF-32 codepoint
- * @return 1 if valid, 0 if invalid
- */
 static int json_decode_surrogate_pair(
     uint32_t high, uint32_t low, uint32_t * out_codepoint) {
   if (!json_is_high_surrogate(high) || !json_is_low_surrogate(low)) {
@@ -129,13 +89,6 @@ static int json_decode_surrogate_pair(
   return 1;
 }
 
-/**
- * @brief Encode a UTF-32 codepoint to UTF-8
- *
- * @param codepoint UTF-32 codepoint
- * @param out Output buffer (must have at least 4 bytes)
- * @return Number of bytes written (1-4)
- */
 static size_t json_encode_utf8(uint32_t codepoint, unsigned char * out) {
   if (codepoint < 0x80) {
     out[0] = (unsigned char)codepoint;
@@ -162,13 +115,6 @@ static size_t json_encode_utf8(uint32_t codepoint, unsigned char * out) {
   return 0; // Invalid codepoint
 }
 
-/**
- * @brief Validate UTF-8 sequence
- *
- * @param bytes Pointer to UTF-8 bytes
- * @param len Length in bytes
- * @return 1 if valid, 0 if invalid
- */
 static int json_validate_utf8(const unsigned char * bytes, size_t len) {
   size_t i = 0;
   while (i < len) {

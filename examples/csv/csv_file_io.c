@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file csv_file_io.c
  * @brief CSV file I/O example demonstrating option changes and mutations
  *
@@ -15,6 +10,8 @@
  * - Printing CSV with different options (different formatting)
  *
  * This code is cross-platform and uses standard C file I/O.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/csv.h>

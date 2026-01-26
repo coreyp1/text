@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_stream.c
  * @brief Streaming parser example
  *
@@ -11,6 +6,8 @@
  * - Using the streaming parser for incremental parsing
  * - Handling events from the streaming parser
  * - Processing large JSON documents without building a full DOM
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>

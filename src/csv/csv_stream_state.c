@@ -86,9 +86,6 @@ GTEXT_CSV_Status csv_stream_handle_newline(GTEXT_CSV_Stream * stream,
 
   return GTEXT_CSV_OK;
 }
-/**
- * @brief Check if at start of comment line
- */
 bool csv_stream_is_comment_start(GTEXT_CSV_Stream * stream, const char * input,
     size_t input_len, size_t offset) {
   if (!stream->opts.dialect.allow_comments || stream->comment_prefix_len == 0) {

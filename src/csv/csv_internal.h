@@ -371,6 +371,13 @@ typedef struct csv_header_entry {
 
 /**
  * @brief Temporary arrays for column operations
+ *
+ * Holds all temporary arrays allocated during column operations.
+ * These arrays are allocated with malloc() and must be freed when done.
+ *
+ * @note See "Memory Management Design Notes" section in this file for
+ *       detailed explanation of why temporary arrays use malloc() instead
+ *       of arena allocation.
  */
 typedef struct {
   csv_table_field **

@@ -1,15 +1,12 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_patch.c
  * @brief JSON Patch (RFC 6902) and Merge Patch (RFC 7386) example
  *
  * This example demonstrates:
  * - Applying JSON Patch operations
  * - Applying JSON Merge Patch
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>

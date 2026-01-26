@@ -1,15 +1,12 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_pointer.c
  * @brief JSON Pointer (RFC 6901) example
  *
  * This example demonstrates:
  * - Using JSON Pointers to access nested values
  * - Reading and modifying values via pointers
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>

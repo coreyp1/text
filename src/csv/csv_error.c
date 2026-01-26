@@ -22,24 +22,6 @@ GTEXT_API void gtext_csv_error_free(GTEXT_CSV_Error * err) {
   }
 }
 
-/**
- * @brief Generate a context snippet around an error position
- *
- * Extracts a snippet of text around the error position for better error
- * reporting. The snippet includes context before and after the error position,
- * with a caret offset indicating the exact error location.
- *
- * @param input Input buffer containing the CSV data
- * @param input_len Length of input buffer
- * @param error_offset Byte offset of the error (0-based)
- * @param context_before Number of bytes of context before the error
- * @param context_after Number of bytes of context after the error
- * @param snippet_out Output parameter for the allocated snippet (caller must
- * free)
- * @param snippet_len_out Output parameter for snippet length
- * @param caret_offset_out Output parameter for caret offset within snippet
- * @return GTEXT_CSV_OK on success, error code on failure
- */
 GTEXT_INTERNAL_API GTEXT_CSV_Status csv_error_generate_context_snippet(
     const char * input, size_t input_len, size_t error_offset,
     size_t context_before, size_t context_after, char ** snippet_out,
@@ -125,17 +107,6 @@ GTEXT_INTERNAL_API GTEXT_CSV_Status csv_error_generate_context_snippet(
   return GTEXT_CSV_OK;
 }
 
-/**
- * @brief Copy an error structure, deep-copying the context snippet
- *
- * Copies an error structure from source to destination, including a deep copy
- * of the context snippet if present. The destination's existing context snippet
- * (if any) is freed before copying.
- *
- * @param dst Destination error structure (must not be NULL)
- * @param src Source error structure (must not be NULL)
- * @return GTEXT_CSV_OK on success, error code on failure
- */
 GTEXT_INTERNAL_API GTEXT_CSV_Status csv_error_copy(
     GTEXT_CSV_Error * dst, const GTEXT_CSV_Error * src) {
   if (!dst || !src) {

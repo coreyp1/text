@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file csv_headers.c
  * @brief CSV header processing example
  *
@@ -11,6 +6,8 @@
  * - Parsing CSV with header row
  * - Looking up columns by header name
  * - Accessing data using header names
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/csv.h>

@@ -259,19 +259,6 @@ GTEXT_API void gtext_csv_sink_fixed_buffer_free(GTEXT_CSV_Sink * sink) {
 // Field Escaping and Quoting Logic
 // ============================================================================
 
-/**
- * @brief Determine if a field needs to be quoted
- *
- * Checks the write options to determine if a field should be quoted:
- * - quote_all_fields: always quote
- * - quote_empty_fields: quote if field is empty
- * - quote_if_needed: quote if field contains delimiter, quote char, or newline
- *
- * @param field_data Field data (may be NULL if field_len is 0)
- * @param field_len Field length in bytes (0 for empty field)
- * @param opts Write options
- * @return true if field should be quoted, false otherwise
- */
 static bool csv_field_needs_quoting(const char * field_data, size_t field_len,
     const GTEXT_CSV_Write_Options * opts) {
   if (!opts) {
@@ -320,18 +307,6 @@ static bool csv_field_needs_quoting(const char * field_data, size_t field_len,
   return false;
 }
 
-/**
- * @brief Calculate the escaped length of a field
- *
- * Calculates how many bytes the field will take after escaping quotes
- * according to the escape mode.
- *
- * @param field_data Field data
- * @param field_len Field length in bytes
- * @param escape_mode Escape mode
- * @param quote_char Quote character
- * @return Escaped length in bytes
- */
 static size_t csv_field_escaped_length(const char * field_data,
     size_t field_len, GTEXT_CSV_Escape_Mode escape_mode, char quote_char) {
   if (!field_data || field_len == 0) {
@@ -382,23 +357,6 @@ static size_t csv_field_escaped_length(const char * field_data,
   return escaped_len;
 }
 
-/**
- * @brief Escape a field into a buffer
- *
- * Escapes quotes in a field according to the escape mode and writes
- * the result to the output buffer. The output buffer must be large
- * enough to hold the escaped field (use csv_field_escaped_length to
- * calculate the required size).
- *
- * @param field_data Field data to escape
- * @param field_len Field length in bytes
- * @param output_buffer Output buffer (must be large enough)
- * @param output_buffer_size Size of output buffer
- * @param escape_mode Escape mode
- * @param quote_char Quote character
- * @param output_len Output parameter: number of bytes written
- * @return GTEXT_CSV_OK on success, GTEXT_CSV_E_INVALID if buffer too small
- */
 static GTEXT_CSV_Status csv_field_escape(const char * field_data,
     size_t field_len, char * output_buffer, size_t output_buffer_size,
     GTEXT_CSV_Escape_Mode escape_mode, char quote_char, size_t * output_len) {
@@ -488,18 +446,6 @@ static GTEXT_CSV_Status csv_field_escape(const char * field_data,
   return GTEXT_CSV_OK;
 }
 
-/**
- * @brief Write a field with proper quoting and escaping
- *
- * Writes a field to the sink with appropriate quoting and escaping
- * according to the write options and dialect.
- *
- * @param sink Output sink
- * @param field_data Field data (may be NULL if field_len is 0)
- * @param field_len Field length in bytes
- * @param opts Write options
- * @return GTEXT_CSV_OK on success, error code on failure
- */
 GTEXT_INTERNAL_API GTEXT_CSV_Status csv_write_field(const GTEXT_CSV_Sink * sink,
     const char * field_data, size_t field_len,
     const GTEXT_CSV_Write_Options * opts) {
@@ -814,15 +760,6 @@ GTEXT_API void gtext_csv_writer_free(GTEXT_CSV_Writer * writer) {
 // Table Serialization Implementation
 // ============================================================================
 
-/**
- * @brief Find the last non-empty field in a row
- *
- * Iterates backwards through fields to find the index of the last non-empty
- * field. A field is considered empty if its length is 0.
- *
- * @param row Row structure (must not be NULL)
- * @return Index of last non-empty field, or SIZE_MAX if all fields are empty
- */
 static size_t csv_find_last_non_empty_field(const csv_table_row * row) {
   if (!row || !row->fields || row->field_count == 0) {
     return SIZE_MAX;

@@ -1,12 +1,6 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
- * @file
- *
- * Basic JSON parsing and writing example.
+ * @file json_basic.c
+ * @brief Basic JSON parsing and writing example
  *
  * This example demonstrates:
  * - Parsing JSON from a string

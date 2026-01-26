@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_file_io.c
  * @brief JSON file I/O example demonstrating option changes between steps
  *
@@ -18,6 +13,8 @@
  * Note: Trailing commas are a parse-time extension only. The JSON writer
  * outputs valid JSON without trailing commas, as trailing commas are not
  * valid in standard JSON.
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>

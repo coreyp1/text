@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file csv_dialects.c
  * @brief CSV dialect examples
  *
@@ -11,6 +6,8 @@
  * - Using different CSV dialects (TSV, semicolon-delimited, etc.)
  * - Configuring dialect options
  * - Parsing and writing with custom dialects
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/csv.h>

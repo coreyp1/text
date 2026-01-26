@@ -1,9 +1,4 @@
 /**
- * @file
- *
- * Copyright 2026 by Corey Pennycuff
- */
-/**
  * @file json_schema.c
  * @brief JSON Schema validation example
  *
@@ -11,6 +6,8 @@
  * - Compiling a JSON Schema
  * - Validating JSON values against a schema
  * - Handling validation errors
+ *
+ * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/text/json.h>
