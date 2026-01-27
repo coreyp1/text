@@ -36,6 +36,11 @@ sudo make install
 
 See the examples directory for usage examples.
 
+## Documentation
+
+- [Modules](@ref modules) - Detailed documentation for JSON and CSV modules
+- [Function Index](@ref functions_index) - Complete API reference
+
 ## Macros and Utilities
 
 The library provides cross-compiler macros in `include/ghoti.io/text/macros.h`:

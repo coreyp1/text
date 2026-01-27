@@ -1,3 +1,5 @@
+@page functions_index Function Index
+
 # Function Index
 
 ## Overview

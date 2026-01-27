@@ -1,3 +1,5 @@
+@page json_module JSON Module Documentation
+
 # JSON Module Documentation (ghoti.io)
 
 This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform**, **dependency‑free** (libc only), and prioritizes **correctness** and **spec compliance** over simplicity.

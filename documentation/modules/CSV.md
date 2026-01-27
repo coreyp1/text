@@ -1,3 +1,5 @@
+@page csv_module CSV Module Documentation
+
 # CSV Module Documentation (ghoti.io)
 
 This document describes the **full‑featured CSV parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform**, **dependency‑free** (libc only), and prioritizes **correctness** and **predictability** over convenience shortcuts.
