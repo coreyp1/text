@@ -78,7 +78,7 @@ typedef enum {
  * @brief Forward declaration of JSON value structure
  *
  * The actual structure is defined internally. Values are allocated from
- * an arena and freed via text_json_free().
+ * an arena and freed via gtext_json_free().
  */
 typedef struct text_json_value text_json_value;
 
@@ -196,7 +196,7 @@ typedef struct {
  *
  * @return Initialized parse options structure
  */
-TEXT_API text_json_parse_options text_json_parse_options_default(void);
+GTEXT_API text_json_parse_options gtext_json_parse_options_default(void);
 
 /**
  * @brief Initialize write options with compact output defaults
@@ -208,7 +208,7 @@ TEXT_API text_json_parse_options text_json_parse_options_default(void);
  *
  * @return Initialized write options structure
  */
-TEXT_API text_json_write_options text_json_write_options_default(void);
+GTEXT_API text_json_write_options gtext_json_write_options_default(void);
 
 /**
  * @brief Free a JSON value and its entire DOM tree
@@ -219,7 +219,7 @@ TEXT_API text_json_write_options text_json_write_options_default(void);
  *
  * @param v Value to free (can be NULL, in which case this is a no-op)
  */
-TEXT_API void text_json_free(text_json_value * v);
+GTEXT_API void gtext_json_free(text_json_value * v);
 
 #ifdef __cplusplus
 }
