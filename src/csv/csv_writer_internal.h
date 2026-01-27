@@ -30,7 +30,8 @@ extern "C" {
  * - quote_empty_fields: quote if field is empty
  * - quote_if_needed: quote if field contains delimiter, quote char, or newline
  *
- * @fn static bool csv_field_needs_quoting(const char * field_data, size_t field_len, const GTEXT_CSV_Write_Options * opts)
+ * @fn static bool csv_field_needs_quoting(const char * field_data, size_t
+ * field_len, const GTEXT_CSV_Write_Options * opts)
  *
  * @param field_data Field data (may be NULL if field_len is 0)
  * @param field_len Field length in bytes (0 for empty field)
@@ -46,7 +47,8 @@ extern "C" {
  * Calculates how many bytes the field will take after escaping quotes
  * according to the escape mode.
  *
- * @fn static size_t csv_field_escaped_length(const char * field_data, size_t field_len, GTEXT_CSV_Escape_Mode escape_mode, char quote_char)
+ * @fn static size_t csv_field_escaped_length(const char * field_data, size_t
+ * field_len, GTEXT_CSV_Escape_Mode escape_mode, char quote_char)
  *
  * @param field_data Field data
  * @param field_len Field length in bytes
@@ -65,7 +67,9 @@ extern "C" {
  * enough to hold the escaped field (use csv_field_escaped_length to
  * calculate the required size).
  *
- * @fn static GTEXT_CSV_Status csv_field_escape(const char * field_data, size_t field_len, char * output_buffer, size_t output_buffer_size, GTEXT_CSV_Escape_Mode escape_mode, char quote_char, size_t * output_len)
+ * @fn static GTEXT_CSV_Status csv_field_escape(const char * field_data, size_t
+ * field_len, char * output_buffer, size_t output_buffer_size,
+ * GTEXT_CSV_Escape_Mode escape_mode, char quote_char, size_t * output_len)
  *
  * @param field_data Field data to escape
  * @param field_len Field length in bytes

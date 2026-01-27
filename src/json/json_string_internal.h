@@ -47,7 +47,8 @@ extern "C" {
 /**
  * @brief Decode a \uXXXX Unicode escape sequence
  *
- * @fn static size_t json_decode_unicode_escape(const char * input, size_t len, uint32_t * out_codepoint)
+ * @fn static size_t json_decode_unicode_escape(const char * input, size_t len,
+ * uint32_t * out_codepoint)
  *
  * @param input Pointer to the 'u' character
  * @param len Remaining length in input
@@ -86,7 +87,8 @@ extern "C" {
 /**
  * @brief Decode a surrogate pair to a UTF-32 codepoint
  *
- * @fn static int json_decode_surrogate_pair(uint32_t high, uint32_t low, uint32_t * out_codepoint)
+ * @fn static int json_decode_surrogate_pair(uint32_t high, uint32_t low,
+ * uint32_t * out_codepoint)
  *
  * @param high High surrogate (0xD800-0xDBFF)
  * @param low Low surrogate (0xDC00-0xDFFF)

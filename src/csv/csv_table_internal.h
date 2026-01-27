@@ -26,7 +26,8 @@ extern "C" {
  * @brief Calculate field length from field_data and optional field_lengths
  * array
  *
- * @fn static size_t csv_calculate_field_length(const char * field_data, const size_t * field_lengths, size_t field_index)
+ * @fn static size_t csv_calculate_field_length(const char * field_data, const
+ * size_t * field_lengths, size_t field_index)
  *
  * @param field_data Field data (may be NULL for empty fields)
  * @param field_lengths Array of field lengths, or NULL if all fields are
@@ -58,12 +59,14 @@ extern "C" {
  * The formatted message is stored in context_snippet and message points to it,
  * so it can be freed via gtext_csv_error_free().
  *
- * @fn static void csv_set_field_count_error(GTEXT_CSV_Error * err, size_t expected_count, size_t actual_count, size_t row_index)
+ * @fn static void csv_set_field_count_error(GTEXT_CSV_Error * err, size_t
+ * expected_count, size_t actual_count, size_t row_index)
  *
  * @param err Error structure to populate (can be NULL)
  * @param expected_count Expected field count
  * @param actual_count Actual field count provided
- * @param row_index Row index where error occurred (0-based for data rows, SIZE_MAX for append)
+ * @param row_index Row index where error occurred (0-based for data rows,
+ * SIZE_MAX for append)
  *
  * @note This is a static function defined in csv_table.c
  */
@@ -74,7 +77,8 @@ extern "C" {
  * Allocates memory from the arena and copies the field data.
  * Handles overflow checks and allocation failures.
  *
- * @fn static GTEXT_CSV_Status csv_allocate_and_copy_field(csv_context * ctx, const char * field_data, size_t field_len, csv_table_field * field_out)
+ * @fn static GTEXT_CSV_Status csv_allocate_and_copy_field(csv_context * ctx,
+ * const char * field_data, size_t field_len, csv_table_field * field_out)
  *
  * @param ctx Context with arena
  * @param field_data Field data to copy (must not be NULL)
@@ -96,7 +100,8 @@ extern "C" {
  * Optionally excludes a specific column index from the check (useful for rename
  * operations).
  *
- * @fn static GTEXT_CSV_Status csv_check_header_uniqueness(const GTEXT_CSV_Table * table, const char * name, size_t name_len, size_t exclude_index)
+ * @fn static GTEXT_CSV_Status csv_check_header_uniqueness(const GTEXT_CSV_Table
+ * * table, const char * name, size_t name_len, size_t exclude_index)
  *
  * @param table Table with header map
  * @param name Header name to check
@@ -115,7 +120,9 @@ extern "C" {
  * Grows the index_to_entry array if needed to accommodate the given index.
  * Allocates in the arena for permanent storage.
  *
- * @fn static GTEXT_CSV_Status csv_ensure_index_to_entry_capacity(GTEXT_CSV_Table * table, size_t required_index)
+ * @fn static GTEXT_CSV_Status
+ * csv_ensure_index_to_entry_capacity(GTEXT_CSV_Table * table, size_t
+ * required_index)
  *
  * @param table Table with header map
  * @param required_index Minimum index that must be supported
@@ -130,7 +137,8 @@ extern "C" {
  * Updates the reverse mapping to point from column index to header entry.
  * Automatically grows the array if needed.
  *
- * @fn static GTEXT_CSV_Status csv_set_index_to_entry(GTEXT_CSV_Table * table, size_t col_idx, csv_header_entry * entry)
+ * @fn static GTEXT_CSV_Status csv_set_index_to_entry(GTEXT_CSV_Table * table,
+ * size_t col_idx, csv_header_entry * entry)
  *
  * @param table Table with header map
  * @param col_idx Column index
@@ -147,7 +155,9 @@ extern "C" {
  * Falls back to O(n) search if reverse mapping is not available or entry not
  * found.
  *
- * @fn static bool csv_find_header_entry_by_index(const GTEXT_CSV_Table * table, size_t col_idx, csv_header_entry ** entry_out, csv_header_entry *** prev_ptr_out)
+ * @fn static bool csv_find_header_entry_by_index(const GTEXT_CSV_Table * table,
+ * size_t col_idx, csv_header_entry ** entry_out, csv_header_entry ***
+ * prev_ptr_out)
  *
  * @param table Table with header map
  * @param col_idx Column index to find
@@ -166,7 +176,8 @@ extern "C" {
  * entries. This is needed after operations that rebuild the header map
  * (compact, clone).
  *
- * @fn static GTEXT_CSV_Status csv_rebuild_index_to_entry(GTEXT_CSV_Table * table)
+ * @fn static GTEXT_CSV_Status csv_rebuild_index_to_entry(GTEXT_CSV_Table *
+ * table)
  *
  * @param table Table with header map (must not be NULL)
  * @return GTEXT_CSV_OK on success, error code on failure
@@ -180,7 +191,8 @@ extern "C" {
  * Increments the index of all header map entries with index >= start_index.
  * Used when inserting columns to shift existing column indices.
  *
- * @fn static void csv_header_map_reindex_increment(GTEXT_CSV_Table * table, size_t start_index)
+ * @fn static void csv_header_map_reindex_increment(GTEXT_CSV_Table * table,
+ * size_t start_index)
  *
  * @param table Table (must not be NULL)
  * @param start_index Starting index - entries with index >= this are
@@ -195,7 +207,8 @@ extern "C" {
  * Decrements the index of all header map entries with index > start_index.
  * Used when removing columns to shift remaining column indices.
  *
- * @fn static void csv_header_map_reindex_decrement(GTEXT_CSV_Table * table, size_t start_index)
+ * @fn static void csv_header_map_reindex_decrement(GTEXT_CSV_Table * table,
+ * size_t start_index)
  *
  * @param table Table (must not be NULL)
  * @param start_index Starting index - entries with index > this are decremented
@@ -214,7 +227,10 @@ extern "C" {
  * This is the common logic shared by gtext_csv_row_append and
  * gtext_csv_row_insert.
  *
- * @fn static GTEXT_CSV_Status csv_row_prepare_fields(GTEXT_CSV_Table * table, const char * const * fields, const size_t * field_lengths, size_t field_count, const char ** allocated_data, size_t * allocated_lengths, char ** bulk_arena_data_out)
+ * @fn static GTEXT_CSV_Status csv_row_prepare_fields(GTEXT_CSV_Table * table,
+ * const char * const * fields, const size_t * field_lengths, size_t
+ * field_count, const char ** allocated_data, size_t * allocated_lengths, char
+ * ** bulk_arena_data_out)
  *
  * @param table Table (must not be NULL)
  * @param fields Array of field data pointers (must not be NULL)
@@ -239,7 +255,9 @@ extern "C" {
  * This is the common logic shared by gtext_csv_row_append and
  * gtext_csv_row_insert.
  *
- * @fn static GTEXT_CSV_Status csv_row_allocate_structures(GTEXT_CSV_Table * table, size_t field_count, csv_table_field ** new_fields_out, csv_table_row ** new_rows_out, size_t * new_capacity_out)
+ * @fn static GTEXT_CSV_Status csv_row_allocate_structures(GTEXT_CSV_Table *
+ * table, size_t field_count, csv_table_field ** new_fields_out, csv_table_row
+ * ** new_rows_out, size_t * new_capacity_out)
  *
  * @param table Table (must not be NULL)
  * @param field_count Number of fields (must be > 0)
@@ -266,7 +284,8 @@ extern "C" {
  * by csv_preallocate_column_field_data and should be set in temp_arrays
  * after allocation.
  *
- * @fn static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(size_t rows_to_modify, csv_column_op_temp_arrays * temp_arrays_out)
+ * @fn static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(size_t
+ * rows_to_modify, csv_column_op_temp_arrays * temp_arrays_out)
  *
  * @param rows_to_modify Number of rows to modify
  * @param temp_arrays_out Output parameter for allocated structure (must not be
@@ -282,7 +301,8 @@ extern "C" {
  * Safely frees all temporary arrays. Safe to call with partially allocated
  * structure.
  *
- * @fn static void csv_column_op_cleanup_temp_arrays(csv_column_op_temp_arrays * temp_arrays)
+ * @fn static void csv_column_op_cleanup_temp_arrays(csv_column_op_temp_arrays *
+ * temp_arrays)
  *
  * @param temp_arrays Temporary arrays structure to clean up (can be NULL)
  *
@@ -295,7 +315,9 @@ extern "C" {
  * Helper function for callers that have individual pointers instead of a
  * structure. Safely frees all provided pointers.
  *
- * @fn static void csv_column_op_cleanup_individual(csv_table_field ** new_field_arrays, size_t * old_field_counts, char ** field_data_array, size_t * field_data_lengths)
+ * @fn static void csv_column_op_cleanup_individual(csv_table_field **
+ * new_field_arrays, size_t * old_field_counts, char ** field_data_array, size_t
+ * * field_data_lengths)
  *
  * @param new_field_arrays Array of field array pointers to free (can be NULL)
  * @param old_field_counts Array of field counts to free (can be NULL)
@@ -311,7 +333,8 @@ extern "C" {
  * Validates that the values array has the correct number of entries
  * matching the table's row count.
  *
- * @fn static GTEXT_CSV_Status csv_validate_column_values(const GTEXT_CSV_Table * table, const char * const * values)
+ * @fn static GTEXT_CSV_Status csv_validate_column_values(const GTEXT_CSV_Table
+ * * table, const char * const * values)
  *
  * @param table Table (must not be NULL)
  * @param values Values array (must not be NULL)
@@ -327,7 +350,11 @@ extern "C" {
  * based on whether the column is empty or has values, and whether the
  * table has headers.
  *
- * @fn static GTEXT_CSV_Status csv_determine_header_value(const GTEXT_CSV_Table * table, bool is_empty_column, const char * header_name, size_t header_name_len, const char * const * values, const size_t * value_lengths, const char ** header_value_out, size_t * header_value_len_out, const char ** header_map_name_out, size_t * header_map_name_len_out, size_t * name_len_out)
+ * @fn static GTEXT_CSV_Status csv_determine_header_value(const GTEXT_CSV_Table
+ * * table, bool is_empty_column, const char * header_name, size_t
+ * header_name_len, const char * const * values, const size_t * value_lengths,
+ * const char ** header_value_out, size_t * header_value_len_out, const char **
+ * header_map_name_out, size_t * header_map_name_len_out, size_t * name_len_out)
  *
  * @param table Table (must not be NULL)
  * @param is_empty_column Whether this is an empty column (values is NULL)
@@ -351,7 +378,10 @@ extern "C" {
  * Pre-allocates all field data for the new column. Handles empty fields
  * by setting them to NULL (will use csv_empty_field_string).
  *
- * @fn static GTEXT_CSV_Status csv_preallocate_column_field_data(GTEXT_CSV_Table * table, bool is_empty_column, size_t rows_to_modify, const char * const * values, const size_t * value_lengths, char *** field_data_array_out, size_t ** field_data_lengths_out)
+ * @fn static GTEXT_CSV_Status csv_preallocate_column_field_data(GTEXT_CSV_Table
+ * * table, bool is_empty_column, size_t rows_to_modify, const char * const *
+ * values, const size_t * value_lengths, char *** field_data_array_out, size_t
+ * ** field_data_lengths_out)
  *
  * @param table Table (must not be NULL)
  * @param is_empty_column Whether this is an empty column (values is NULL)
@@ -376,7 +406,15 @@ extern "C" {
  * (use SIZE_MAX for append operations). Can optionally handle provided
  * values for all fields (when values is not NULL).
  *
- * @fn static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table, size_t col_idx, const char * header_name, size_t header_name_len, const char * const * values, const size_t * value_lengths, csv_table_field *** new_field_arrays_out, size_t ** old_field_counts_out, size_t * rows_to_modify_out, char ** header_field_data_out, size_t * header_field_data_len_out, csv_header_entry ** new_entry_out, size_t * header_hash_out, csv_table_field ** new_header_fields_out, size_t * old_header_field_count_out, char *** field_data_array_out, size_t ** field_data_lengths_out)
+ * @fn static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table *
+ * table, size_t col_idx, const char * header_name, size_t header_name_len,
+ * const char * const * values, const size_t * value_lengths, csv_table_field
+ * *** new_field_arrays_out, size_t ** old_field_counts_out, size_t *
+ * rows_to_modify_out, char ** header_field_data_out, size_t *
+ * header_field_data_len_out, csv_header_entry ** new_entry_out, size_t *
+ * header_hash_out, csv_table_field ** new_header_fields_out, size_t *
+ * old_header_field_count_out, char *** field_data_array_out, size_t **
+ * field_data_lengths_out)
  *
  * @param table Table (must not be NULL)
  * @param col_idx Column index where to insert (SIZE_MAX for append, must be <=
@@ -423,7 +461,8 @@ extern "C" {
  * This is useful when irregular rows are allowed and we need to
  * update column_count to reflect the current maximum.
  *
- * @fn static size_t csv_recalculate_max_column_count(const GTEXT_CSV_Table * table)
+ * @fn static size_t csv_recalculate_max_column_count(const GTEXT_CSV_Table *
+ * table)
  *
  * @param table Table (must not be NULL)
  * @return Maximum field_count across all rows, or 0 if table is empty
@@ -491,7 +530,8 @@ extern "C" {
  * - Header map entries and names
  * - Overhead for alignment and safety margin
  *
- * @fn static GTEXT_CSV_Status csv_calculate_compact_size(const GTEXT_CSV_Table * table, size_t * total_size_out)
+ * @fn static GTEXT_CSV_Status csv_calculate_compact_size(const GTEXT_CSV_Table
+ * * table, size_t * total_size_out)
  *
  * @param table Table to compact (must not be NULL)
  * @param total_size_out Output parameter for calculated size
@@ -506,7 +546,9 @@ extern "C" {
  * Pre-allocates rows array, field arrays, and field data blocks in the new
  * arena. All allocations happen before any state changes to preserve atomicity.
  *
- * @fn static GTEXT_CSV_Status csv_preallocate_compact_structures(const GTEXT_CSV_Table * table, csv_context * new_ctx, csv_compact_structures * structures_out)
+ * @fn static GTEXT_CSV_Status csv_preallocate_compact_structures(const
+ * GTEXT_CSV_Table * table, csv_context * new_ctx, csv_compact_structures *
+ * structures_out)
  *
  * @param table Table to compact (must not be NULL)
  * @param new_ctx New context with arena (must not be NULL)
@@ -522,7 +564,8 @@ extern "C" {
  * Copies all row and field data to the pre-allocated structures in the new
  * arena. Handles empty fields, in-situ fields, and arena-allocated fields.
  *
- * @fn static GTEXT_CSV_Status csv_copy_data_to_new_arena(const GTEXT_CSV_Table * table, const csv_compact_structures * structures)
+ * @fn static GTEXT_CSV_Status csv_copy_data_to_new_arena(const GTEXT_CSV_Table
+ * * table, const csv_compact_structures * structures)
  *
  * @param table Table to compact (must not be NULL)
  * @param structures Pre-allocated structures (must not be NULL)
@@ -537,7 +580,9 @@ extern "C" {
  * Pre-allocates and copies all header map entries and names to the new arena.
  * Rebuilds the hash table structure.
  *
- * @fn static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table, const csv_context * old_ctx, csv_context * new_ctx, csv_compact_header_map * header_map_out)
+ * @fn static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table *
+ * table, const csv_context * old_ctx, csv_context * new_ctx,
+ * csv_compact_header_map * header_map_out)
  *
  * @param table Table to compact (must not be NULL)
  * @param old_ctx Old context (for input_buffer reference, must not be NULL)
@@ -563,7 +608,8 @@ extern "C" {
  * - Header map entries and names (including in-situ ones)
  * - Overhead for alignment and safety margin
  *
- * @fn static GTEXT_CSV_Status csv_clone_calculate_size(const GTEXT_CSV_Table * source, size_t * total_size_out)
+ * @fn static GTEXT_CSV_Status csv_clone_calculate_size(const GTEXT_CSV_Table *
+ * source, size_t * total_size_out)
  *
  * @param source Source table to clone (must not be NULL)
  * @param total_size_out Output parameter for calculated size
@@ -579,7 +625,9 @@ extern "C" {
  * and header map structures in the new arena. All allocations happen before
  * any state changes to preserve atomicity.
  *
- * @fn static GTEXT_CSV_Status csv_clone_preallocate_structures(const GTEXT_CSV_Table * source, csv_context * new_ctx, csv_clone_structures * structures_out, csv_clone_header_map * header_map_out)
+ * @fn static GTEXT_CSV_Status csv_clone_preallocate_structures(const
+ * GTEXT_CSV_Table * source, csv_context * new_ctx, csv_clone_structures *
+ * structures_out, csv_clone_header_map * header_map_out)
  *
  * @param source Source table to clone (must not be NULL)
  * @param new_ctx New context with arena (must not be NULL)
@@ -596,7 +644,8 @@ extern "C" {
  * Copies all row data, field data, and header map data to the pre-allocated
  * structures. No allocations are performed - all memory is already allocated.
  *
- * @fn static GTEXT_CSV_Status csv_clone_copy_data(const GTEXT_CSV_Table * source, csv_clone_structures * structures, csv_clone_header_map * header_map)
+ * @fn static GTEXT_CSV_Status csv_clone_copy_data(const GTEXT_CSV_Table *
+ * source, csv_clone_structures * structures, csv_clone_header_map * header_map)
  *
  * @param source Source table to clone (must not be NULL)
  * @param structures Pre-allocated structures (must not be NULL)

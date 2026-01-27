@@ -33,7 +33,8 @@ extern "C" {
 /**
  * @brief Parse type keyword
  *
- * @fn static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node, const GTEXT_JSON_Value * type_value, GTEXT_JSON_Error * err)
+ * @fn static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
+ * const GTEXT_JSON_Value * type_value, GTEXT_JSON_Error * err)
  *
  * @note This is a static function defined in json_schema.c
  */
@@ -41,7 +42,9 @@ extern "C" {
 /**
  * @brief Compile a schema node from a JSON value
  *
- * @fn static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node, const GTEXT_JSON_Value * schema_doc, json_context * ctx, GTEXT_JSON_Error * err)
+ * @fn static GTEXT_JSON_Status json_schema_compile_node(json_schema_node *
+ * node, const GTEXT_JSON_Value * schema_doc, json_context * ctx,
+ * GTEXT_JSON_Error * err)
  *
  * @note This is a static function defined in json_schema.c
  */
@@ -49,7 +52,8 @@ extern "C" {
 /**
  * @brief Validate a value against a schema node
  *
- * @fn static GTEXT_JSON_Status json_schema_validate_node(const json_schema_node * node, const GTEXT_JSON_Value * instance, GTEXT_JSON_Error * err)
+ * @fn static GTEXT_JSON_Status json_schema_validate_node(const json_schema_node
+ * * node, const GTEXT_JSON_Value * instance, GTEXT_JSON_Error * err)
  *
  * @note This is a static function defined in json_schema.c
  */
