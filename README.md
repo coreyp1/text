@@ -39,6 +39,7 @@ See the examples directory for usage examples.
 ## Documentation
 
 - [Modules](@ref modules) - Detailed documentation for JSON and CSV modules
+- [Examples](@ref examples) - Example programs demonstrating library usage
 - [Function Index](@ref functions_index) - Complete API reference
 
 ## Macros and Utilities

@@ -4,6 +4,8 @@
 
 This section contains detailed documentation for each module in the Ghoti.io Text library.
 
+@subpage core_module
+
 @subpage json_module
 
 @subpage csv_module
