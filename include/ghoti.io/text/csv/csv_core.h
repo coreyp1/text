@@ -233,4 +233,4 @@ GTEXT_API void gtext_csv_error_free(GTEXT_CSV_Error * err);
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_CSV_CORE_H */
+#endif // GHOTI_IO_TEXT_CSV_CORE_H

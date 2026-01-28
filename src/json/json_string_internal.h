@@ -130,4 +130,4 @@ extern "C" {
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_STRING_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_JSON_STRING_INTERNAL_H

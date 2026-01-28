@@ -885,4 +885,4 @@ struct GTEXT_JSON_Schema {
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_JSON_INTERNAL_H

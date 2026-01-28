@@ -93,4 +93,4 @@ GTEXT_API GTEXT_JSON_Status gtext_json_schema_validate(
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_SCHEMA_H */
+#endif // GHOTI_IO_GTEXT_JSON_SCHEMA_H

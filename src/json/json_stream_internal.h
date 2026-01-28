@@ -258,4 +258,4 @@ struct GTEXT_JSON_Stream {
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H

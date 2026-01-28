@@ -111,4 +111,4 @@ GTEXT_API void gtext_csv_stream_free(GTEXT_CSV_Stream * stream);
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_STREAM_H */
+#endif // GHOTI_IO_GTEXT_CSV_STREAM_H

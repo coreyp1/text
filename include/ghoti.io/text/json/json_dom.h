@@ -580,4 +580,4 @@ GTEXT_API GTEXT_JSON_Status gtext_json_object_merge(GTEXT_JSON_Value * target,
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_DOM_H */
+#endif // GHOTI_IO_GTEXT_JSON_DOM_H

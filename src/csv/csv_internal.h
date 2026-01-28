@@ -571,4 +571,4 @@ typedef struct {
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_CSV_INTERNAL_H

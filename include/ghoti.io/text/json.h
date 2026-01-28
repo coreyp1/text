@@ -25,4 +25,4 @@
 #include <ghoti.io/text/json/json_stream.h>
 #include <ghoti.io/text/json/json_writer.h>
 
-#endif /* GHOTI_IO_TEXT_JSON_H */
+#endif // GHOTI_IO_TEXT_JSON_H

@@ -105,4 +105,4 @@ extern "C" {
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_WRITER_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_CSV_WRITER_INTERNAL_H

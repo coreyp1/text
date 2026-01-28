@@ -395,4 +395,4 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_finish(
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_WRITER_H */
+#endif // GHOTI_IO_GTEXT_JSON_WRITER_H

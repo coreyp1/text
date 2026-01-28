@@ -225,4 +225,4 @@ GTEXT_API void gtext_json_free(text_json_value * v);
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_H */
+#endif // GHOTI_IO_TEXT_JSON_H

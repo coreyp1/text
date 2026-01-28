@@ -297,4 +297,4 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_WRITER_H */
+#endif // GHOTI_IO_GTEXT_CSV_WRITER_H

@@ -159,4 +159,4 @@ typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_MACROS_H */
+#endif // GHOTI_IO_TEXT_MACROS_H

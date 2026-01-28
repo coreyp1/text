@@ -845,4 +845,4 @@ GTEXT_CSV_Status csv_stream_set_error(
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H */
+#endif // GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H

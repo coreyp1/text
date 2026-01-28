@@ -77,4 +77,4 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_pointer_get_mut(
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_JSON_POINTER_H */
+#endif // GHOTI_IO_TEXT_JSON_POINTER_H

@@ -46,4 +46,4 @@ GTEXT_API uint32_t gtext_version_patch(void);
  */
 GTEXT_API const char * gtext_version_string(void);
 
-#endif /* GHOTI_IO_TEXT_H */
+#endif // GHOTI_IO_TEXT_H

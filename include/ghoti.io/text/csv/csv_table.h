@@ -873,4 +873,4 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_clone(const GTEXT_CSV_Table * source);
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_CSV_TABLE_H */
+#endif // GHOTI_IO_GTEXT_CSV_TABLE_H

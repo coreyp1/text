@@ -230,4 +230,4 @@ GTEXT_API void gtext_json_stream_free(GTEXT_JSON_Stream * st);
 }
 #endif
 
-#endif /* GHOTI_IO_GTEXT_JSON_STREAM_H */
+#endif // GHOTI_IO_GTEXT_JSON_STREAM_H
