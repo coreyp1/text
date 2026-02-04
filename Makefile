@@ -140,9 +140,9 @@ all: $(APP_DIR)/$(TARGET) ## Build the shared library
 # Dependency Inclusion
 ####################################################################
 
-# Automatically include all generated dependency files.
--include $(wildcard $(OBJ_DIR)/*.d)
--include $(wildcard $(APP_DIR)/test*.d)
+# Explicit list of dependency files (no wildcard: same set on all platforms, faster make startup).
+DEPFILES := $(LIBOBJECTS:.o=.d) $(APP_DIR)/testJson.d $(APP_DIR)/testCsv.d $(APP_DIR)/testText.d
+-include $(DEPFILES)
 
 
 ####################################################################
