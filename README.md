@@ -1,14 +1,15 @@
 # Ghoti.io Text Library
 
-A C library for parsing and serializing text-based file formats, including JSON, CSV, and configuration formats.
+A C library for parsing and serializing text-based file formats, including JSON, CSV, YAML, and configuration formats.
 
 ## Overview
 
 The `text` library provides:
-- JSON parsing and serialization
-- CSV reader/writer
-- Config format support (INI/TOML-like)
-- Text encoding helpers
+- **JSON** - Fast, spec-compliant JSON parsing and serialization
+- **CSV** - RFC 4180 compliant CSV reader/writer
+- **YAML** - Streaming YAML 1.2 parser (DOM builder in progress)
+- **Config** - INI/TOML-like configuration format support
+- **Text encoding** - UTF-8 validation and encoding helpers
 
 ## Dependencies
 
@@ -38,9 +39,37 @@ See the examples directory for usage examples.
 
 ## Documentation
 
-- [Modules](@ref modules) - Detailed documentation for JSON and CSV modules
+- [Modules](@ref modules) - Detailed documentation for JSON, CSV, and YAML modules
 - [Examples](@ref examples) - Example programs demonstrating library usage
 - [Function Index](@ref functions_index) - Complete API reference
+
+## Module Status
+
+### JSON (Production Ready)
+- ✅ Complete DOM parser and serializer
+- ✅ Streaming parser and writer
+- ✅ Comprehensive test coverage (100+ tests)
+- ✅ Zero memory leaks verified with valgrind
+- ✅ Full JSON spec compliance
+
+### CSV (Production Ready)
+- ✅ RFC 4180 compliant reader and writer
+- ✅ Configurable delimiters and quoting
+- ✅ Comprehensive test coverage
+- ✅ Memory safe and validated
+
+### YAML (Alpha - In Active Development)
+- ✅ Streaming parser with event callbacks
+- ✅ UTF-8 validation
+- ✅ Anchor/alias resolution with cycle detection
+- ✅ Multi-document stream support
+- ✅ Security limits (depth, bytes, alias expansion)
+- ✅ Memory safe (781 tests pass valgrind with zero leaks)
+- ⏳ DOM builder (planned)
+- ⏳ Writer/serializer (planned)
+- ⏳ Full YAML 1.2 spec compliance (in progress)
+
+See [YAML Module Documentation](@ref yaml_module) for detailed status and usage.
 
 ## Macros and Utilities
 

@@ -10,6 +10,8 @@ This section contains detailed documentation for each module in the Ghoti.io Tex
 
 @subpage csv_module
 
+@subpage yaml_module
+
 ## Quick Links
 
 - [Function Index](@ref functions_index) - Browse all library functions

@@ -12,6 +12,7 @@ The examples are organized by module:
 
 - **JSON Examples** - Demonstrate JSON parsing, writing, streaming, and advanced features
 - **CSV Examples** - Demonstrate CSV reading, writing, streaming, and dialect handling
+- **YAML Examples** - Demonstrate YAML streaming parser, security limits, and config parsing
 
 All examples are located in the `examples/` directory and can be built using the Makefile.
 
@@ -54,6 +55,18 @@ The CSV examples are located in `examples/csv/` and demonstrate various aspects 
 @subpage example_csv_headers
 
 @subpage example_csv_irregular_rows
+
+---
+
+## YAML Module Examples
+
+The YAML examples demonstrate the streaming parser API with practical applications.
+
+**Note:** The YAML module is in active development (February 2026). These examples focus on the implemented streaming parser. DOM and writer examples will be added as those features are completed.
+
+@subpage yaml_examples
+
+For detailed YAML examples, see the [YAML Examples](@ref yaml_examples) page.
 
 ---
 
