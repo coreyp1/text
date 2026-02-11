@@ -73,6 +73,40 @@ static void test_umbrella(void) {
   (void)opt;
 }
 
+// --- YAML header smoke tests (compile-only) ---
+#include <ghoti.io/text/yaml/yaml_core.h>
+static void test_yaml_core(void) {
+  GTEXT_YAML_Parse_Options opt = gtext_yaml_parse_options_default();
+  GTEXT_YAML_Write_Options wopt = gtext_yaml_write_options_default();
+  (void)opt;
+  (void)wopt;
+}
+
+#include <ghoti.io/text/yaml/yaml_dom.h>
+static void test_yaml_dom(void) {
+  const char * s = "";
+  (void)s;
+}
+
+#include <ghoti.io/text/yaml/yaml_writer.h>
+static void test_yaml_writer(void) {
+  /* Verify writer symbol available */
+  (void)gtext_yaml_write_options_default;
+}
+
+#include <ghoti.io/text/yaml/yaml_stream.h>
+static void test_yaml_stream(void) {
+  /* Verify stream types */
+  (void)GTEXT_YAML_OK;
+}
+
+// umbrella
+#include <ghoti.io/text/yaml.h>
+static void test_yaml_umbrella(void) {
+  GTEXT_YAML_Parse_Options opt = gtext_yaml_parse_options_default();
+  (void)opt;
+}
+
 int main(void) {
   test_json_core();
   test_json_dom();

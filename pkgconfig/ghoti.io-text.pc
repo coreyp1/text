@@ -2,6 +2,6 @@ Name: Ghoti.io Text(BRANCH)
 Description: C library providing text-based file format parsing and serialization (JSON, CSV, config formats)
 Version: (VERSION)
 URL: https://github.com/Ghoti-io/text
-Libs: -L(LIB)/(SUITE) -l(SUITE)-(PROJECT)(BRANCH)
-CFlags: -I(INCLUDE)/(SUITE)/(PROJECT)(BRANCH)
+Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
+CFlags: -I(PC_INCLUDE_DIR)
 Requires: ghoti.io-cutil-dev

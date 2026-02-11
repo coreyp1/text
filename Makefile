@@ -29,6 +29,8 @@ ifeq ($(UNAME_S), Linux)
 	PKG_CONFIG_PATH := /usr/local/share/pkgconfig
 	INCLUDE_INSTALL_PATH := /usr/local/include
 	LIB_INSTALL_PATH := /usr/local/lib
+	PC_INCLUDE_DIR := $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)
+	PC_LIB_DIR := $(LIB_INSTALL_PATH)/$(SUITE)
 	BUILD := linux/$(BUILD)
 
 else ifeq ($(UNAME_S), Darwin)
@@ -39,6 +41,11 @@ else ifeq ($(UNAME_S), Darwin)
 	TARGET := $(BASE_NAME_PREFIX).dylib
 	EXE_EXTENSION :=
 	# Additional macOS-specific variables
+	PKG_CONFIG_PATH := /usr/local/share/pkgconfig
+	INCLUDE_INSTALL_PATH := /usr/local/include
+	LIB_INSTALL_PATH := /usr/local/lib
+	PC_INCLUDE_DIR := $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)
+	PC_LIB_DIR := $(LIB_INSTALL_PATH)/$(SUITE)
 	BUILD := mac/$(BUILD)
 
 else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)  # 32-bit Windows
@@ -54,6 +61,9 @@ else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)  # 32-bit Windows
 	INCLUDE_INSTALL_PATH := /mingw32/include
 	LIB_INSTALL_PATH := /mingw32/lib
 	BIN_INSTALL_PATH := /mingw32/bin
+	# Windows paths for .pc so gcc invoked by mingw can resolve -I/-L (cygpath for MSYS2)
+	PC_INCLUDE_DIR = $(shell cygpath -m $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH))
+	PC_LIB_DIR = $(shell cygpath -m $(LIB_INSTALL_PATH)/$(SUITE))
 	BUILD := win32/$(BUILD)
 
 else ifeq ($(findstring MINGW64_NT,$(UNAME_S)),MINGW64_NT)  # 64-bit Windows
@@ -69,6 +79,9 @@ else ifeq ($(findstring MINGW64_NT,$(UNAME_S)),MINGW64_NT)  # 64-bit Windows
 	INCLUDE_INSTALL_PATH := /mingw64/include
 	LIB_INSTALL_PATH := /mingw64/lib
 	BIN_INSTALL_PATH := /mingw64/bin
+	# Windows paths for .pc so gcc invoked by mingw can resolve -I/-L (cygpath for MSYS2)
+	PC_INCLUDE_DIR = $(shell cygpath -m $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH))
+	PC_LIB_DIR = $(shell cygpath -m $(LIB_INSTALL_PATH)/$(SUITE))
 	BUILD := win64/$(BUILD)
 
 else
@@ -122,6 +135,49 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags gtes
 
 
 TEXTLIBRARY := -L $(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)
+
+# Valgrind configuration for memory checking
+VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 --suppressions=tools/valgrind.supp
+
+# Sanitizer flags (ASan + UBSan)
+ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+
+# Sanitizer build directory
+ASAN_BUILD_DIR := $(BUILD_DIR)-asan
+ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
+ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
+
+# Sanitizer target names
+ASAN_TARGET := $(BASE_NAME_PREFIX)-asan.$(LIB_EXTENSION)
+ASAN_STATIC_TARGET := $(BASE_NAME_PREFIX)-asan.a
+
+# Sanitizer object files and library
+ASAN_LIBOBJECTS := $(patsubst src/%.c,$(ASAN_OBJ_DIR)/%.o,$(SOURCES))
+
+# Test executables list
+TEST_EXECUTABLES := \
+	$(APP_DIR)/testText$(EXE_EXTENSION) \
+	$(APP_DIR)/testJson$(EXE_EXTENSION) \
+	$(APP_DIR)/testCsv$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlUtf8$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlScanner$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlReader$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlLimits$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlDepth$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlAlias$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlEscapes$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlNestedStructures$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlScalarStyles$(EXE_EXTENSION) \
+	$(APP_DIR)/testYamlUtf8Comprehensive$(EXE_EXTENSION)
+
+# ASan test executables
+ASAN_TEST_EXECUTABLES := $(patsubst $(APP_DIR)/%,$(ASAN_APP_DIR)/%,$(TEST_EXECUTABLES))
 
 # Automatically collect all example .c files under examples/json and examples/csv directories.
 JSON_EXAMPLE_SOURCES := $(shell find examples/json -type f -name '*.c' 2>/dev/null)
@@ -195,6 +251,124 @@ $(APP_DIR)/testCsv$(EXE_EXTENSION): \
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testCsv.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
 
+
+$(APP_DIR)/testYamlUtf8$(EXE_EXTENSION): \
+	tests/yaml/test-yaml-utf8.cpp src/yaml/utf8.c \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML UTF8 Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlUtf8.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
+$(APP_DIR)/testYamlEscapes$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-escapes.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Escapes Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlEscapes.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-resolver-cleanup.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Resolver Cleanup Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlResolverCleanup.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
+$(APP_DIR)/testYamlNestedStructures$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-nested-structures.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Nested Structures Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlNestedStructures.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
+$(APP_DIR)/testYamlScalarStyles$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-scalar-styles.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Scalar Styles Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScalarStyles.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
+$(APP_DIR)/testYamlUtf8Comprehensive$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-utf8-comprehensive.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML UTF8 Comprehensive Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlUtf8Comprehensive.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
+$(APP_DIR)/testYamlDepth$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-depth.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Depth Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlDepth.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+$(APP_DIR)/testYamlAlias$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-alias.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Alias Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAlias.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-alias-expansion.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Alias Expansion Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasExpansion.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-alias-cycle.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Alias Cycle Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasCycle.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-alias-exponential.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Alias Exponential Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasExponential.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlScanner$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-scanner.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Scanner Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScanner.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-scanner-chunked.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Scanner Chunked Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScannerChunked.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlReader$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-reader.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Reader Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlReader.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlLimits$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-limits.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Limits Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlLimits.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+$(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION): \
+		tests/yaml/test-yaml-block-chomp.cpp \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling YAML Block Chomp Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlBlockChomp.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
+
+
 $(APP_DIR)/testText$(EXE_EXTENSION): \
 		tests/test.cpp \
 		| $(APP_DIR)/$(TARGET)
@@ -219,15 +393,125 @@ $(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c $(APP_DIR)/$(TARGET)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
 
 ####################################################################
+# Sanitizer Builds (ASan + UBSan)
+####################################################################
+
+# Compile flags for ASan builds (include UBSan for comprehensive checking)
+ASAN_CFLAGS := $(CFLAGS) $(ASAN_UBSAN_FLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD
+ASAN_CXXFLAGS := $(CXXFLAGS) $(ASAN_UBSAN_FLAGS)
+ASAN_LDFLAGS := $(LDFLAGS) $(ASAN_UBSAN_FLAGS)
+ASAN_TEXTLIBRARY := -L $(ASAN_APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)-asan
+
+# Add PIC on Linux
+ifeq ($(UNAME_S), Linux)
+	ASAN_CFLAGS += -fPIC
+endif
+
+# Pattern rule for ASan-instrumented C object files
+$(ASAN_OBJ_DIR)/%.o: src/%.c
+	@printf "\n### Compiling (ASan+UBSan instrumented): $< ###\n"
+	@mkdir -p $(@D)
+	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
+
+# ASan-instrumented shared library
+$(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
+	@printf "\n### Compiling ASan+UBSan-instrumented Shared Library ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
+
+# Pattern rule for ASan test executables
+$(ASAN_APP_DIR)/testJson$(EXE_EXTENSION): tests/test-json.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan JSON Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
+
+$(ASAN_APP_DIR)/testCsv$(EXE_EXTENSION): tests/test-csv.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan CSV Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
+
+$(ASAN_APP_DIR)/testYamlUtf8$(EXE_EXTENSION): tests/yaml/test-yaml-utf8.cpp src/yaml/utf8.c | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML UTF8 Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlScanner$(EXE_EXTENSION): tests/yaml/test-yaml-scanner.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Scanner Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION): tests/yaml/test-yaml-scanner-chunked.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Scanner Chunked Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlReader$(EXE_EXTENSION): tests/yaml/test-yaml-reader.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Reader Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlLimits$(EXE_EXTENSION): tests/yaml/test-yaml-limits.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Limits Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlDepth$(EXE_EXTENSION): tests/yaml/test-yaml-depth.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Depth Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlAlias$(EXE_EXTENSION): tests/yaml/test-yaml-alias.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Alias Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION): tests/yaml/test-yaml-alias-expansion.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Alias Expansion Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION): tests/yaml/test-yaml-alias-cycle.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Alias Cycle Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION): tests/yaml/test-yaml-alias-exponential.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Alias Exponential Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION): tests/yaml/test-yaml-block-chomp.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Block Chomp Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlEscapes$(EXE_EXTENSION): tests/yaml/test-yaml-escapes.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Escapes Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION): tests/yaml/test-yaml-resolver-cleanup.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan YAML Resolver Cleanup Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
+
+$(ASAN_APP_DIR)/testText$(EXE_EXTENSION): tests/test.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan Text Test ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
+
+####################################################################
 # Commands
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples
+.PHONY: clean cloc docs docs-pdf examples help
 # Release build commands
-.PHONY: all install test test-watch uninstall watch
+.PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
 .PHONY: all-debug install-debug test-debug test-watch-debug uninstall-debug watch-debug
+# Sanitizer commands
+.PHONY: test-asan test-asan-quiet test-ubsan sanitizer-help
 
 
 watch: ## Watch the file directory for changes and compile the target
@@ -291,13 +575,9 @@ else ifeq ($(OS_NAME), Windows)
 endif
 	@printf "\n"
 
-test: ## Make and run the Unit tests
-test: \
-		$(APP_DIR)/$(TARGET) \
-		$(APP_DIR)/testText$(EXE_EXTENSION) \
-		$(APP_DIR)/testJson$(EXE_EXTENSION) \
-		$(APP_DIR)/testCsv$(EXE_EXTENSION)
 
+test: ## Make and run the Unit tests
+test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 	@printf "\033[0;30;43m\n"
 	@printf "############################\n"
 	@printf "### Running Text tests   ###\n"
@@ -318,6 +598,234 @@ test: \
 	@printf "############################\n"
 	@printf "\033[0m\n\n"
 	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testCsv$(EXE_EXTENSION) --gtest_brief=1
+
+	@printf "\n############################\n"
+	@printf "### Running YAML tests   ###\n"
+	@printf "############################\n\n"
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlUtf8$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlScanner$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlReader$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlLimits$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlDepth$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAlias$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION) --gtest_brief=1 || true
+	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlEscapes$(EXE_EXTENSION) --gtest_brief=1 || true
+
+test-quiet: ## Run tests with minimal output (one line per test suite)
+test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
+	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
+	printf "\n\033[1;36m%-30s %8s %10s %s\033[0m\n" "Test Suite" "Tests" "Time" "Status"; \
+	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	for test_exe in $(TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		output=$$(LD_LIBRARY_PATH="$(APP_DIR)" $$test_exe --gtest_brief=1 2>&1); \
+		exit_code=$$?; \
+		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
+		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
+		[ -z "$$num_tests" ] && num_tests=0; \
+		[ -z "$$time_ms" ] && time_ms=0; \
+		total_tests=$$((total_tests + num_tests)); \
+		total_time=$$((total_time + time_ms)); \
+		if [ $$exit_code -eq 0 ]; then \
+			total_passed=$$((total_passed + num_tests)); \
+			printf "%-30s %8d %8dms \033[0;32mPASS\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+		else \
+			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
+			[ -z "$$failures" ] && failures=$$num_tests; \
+			total_failed=$$((total_failed + failures)); \
+			total_passed=$$((total_passed + num_tests - failures)); \
+			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
+		fi; \
+	done; \
+	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	if [ $$total_failed -eq 0 ]; then \
+		printf "\033[0;32m%-30s %8d %6dms PASS\033[0m\n\n" "TOTAL" "$$total_tests" "$$total_time"; \
+	else \
+		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed"; \
+		printf "$$failed_suites\n"; \
+		exit 1; \
+	fi
+
+test-valgrind: ## Run all tests under valgrind (Linux only)
+test-valgrind: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
+ifeq ($(OS_NAME), Linux)
+	@for test_exe in $(TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		printf "\033[0;30;43m\n"; \
+		printf "############################\n"; \
+		printf "### Running %s tests under Valgrind ###\n" "$$test_name"; \
+		printf "############################"; \
+		printf "\033[0m\n\n"; \
+		LD_LIBRARY_PATH="$(APP_DIR)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1; \
+	done
+else
+	@printf "\033[0;31m\n"
+	@printf "Valgrind is only available on Linux\n"
+	@printf "\033[0m\n"
+	@exit 1
+endif
+
+test-valgrind-quiet: ## Run tests under valgrind with minimal output (Linux only)
+test-valgrind-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
+ifeq ($(OS_NAME), Linux)
+	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
+	printf "\n\033[1;35m%-30s %8s %10s %s\033[0m\n" "Test Suite (Valgrind)" "Tests" "Time" "Status"; \
+	printf "\033[1;35m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	for test_exe in $(TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		output=$$(LD_LIBRARY_PATH="$(APP_DIR)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1 2>&1); \
+		exit_code=$$?; \
+		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
+		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
+		[ -z "$$num_tests" ] && num_tests=0; \
+		[ -z "$$time_ms" ] && time_ms=0; \
+		total_tests=$$((total_tests + num_tests)); \
+		total_time=$$((total_time + time_ms)); \
+		has_leak=$$(echo "$$output" | grep -c "are definitely lost\|are indirectly lost\|are possibly lost" || true); \
+		if [ $$exit_code -eq 0 ] && [ $$has_leak -eq 0 ]; then \
+			total_passed=$$((total_passed + num_tests)); \
+			printf "%-30s %8d %8dms \033[0;32mPASS\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+		else \
+			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
+			[ -z "$$failures" ] && failures=0; \
+			if [ $$has_leak -gt 0 ]; then \
+				total_failed=$$((total_failed + num_tests)); \
+				printf "%-30s %8d %8dms \033[0;31mLEAK\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+			else \
+				total_failed=$$((total_failed + failures)); \
+				total_passed=$$((total_passed + num_tests - failures)); \
+				printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+			fi; \
+			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES/LEAKS ===\033[0m\n$$output\n"; \
+		fi; \
+	done; \
+	printf "\033[1;35m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	if [ $$total_failed -eq 0 ]; then \
+		printf "\033[0;32m%-30s %8d %6dms PASS\033[0m\n\n" "TOTAL" "$$total_tests" "$$total_time"; \
+	else \
+		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed"; \
+		printf "$$failed_suites\n"; \
+		exit 1; \
+	fi
+else
+	@printf "\033[0;31m\n"
+	@printf "Valgrind is only available on Linux\n"
+	@printf "\033[0m\n"
+	@exit 1
+endif
+
+test-asan: ## Run all tests with AddressSanitizer + UndefinedBehaviorSanitizer (Linux only)
+test-asan: $(ASAN_APP_DIR)/$(ASAN_TARGET) $(ASAN_TEST_EXECUTABLES)
+ifeq ($(OS_NAME), Linux)
+	@printf "\033[0;36m\n"
+	@printf "###########################################\n"
+	@printf "### Running tests with ASan + UBSan    ###\n"
+	@printf "###########################################\n"
+	@printf "\033[0m\n"
+	@for test_exe in $(ASAN_TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		printf "\033[0;30;43m\n"; \
+		printf "############################\n"; \
+		printf "### Running %s tests (ASan+UBSan) ###\n" "$$test_name"; \
+		printf "############################"; \
+		printf "\033[0m\n\n"; \
+		LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
+	done
+	@printf "\033[0;32m\n"
+	@printf "###########################################\n"
+	@printf "### All tests passed with ASan + UBSan ###\n"
+	@printf "###########################################\n"
+	@printf "\033[0m\n"
+else
+	@printf "\033[0;31m\n"
+	@printf "Sanitizer builds are currently only supported on Linux\n"
+	@printf "\033[0m\n"
+	@exit 1
+endif
+
+test-ubsan: ## Alias for test-asan (ASan+UBSan are run together)
+test-ubsan: test-asan
+
+test-asan-quiet: ## Run ASan+UBSan tests with minimal output (Linux only)
+test-asan-quiet: $(ASAN_APP_DIR)/$(ASAN_TARGET) $(ASAN_TEST_EXECUTABLES)
+ifeq ($(OS_NAME), Linux)
+	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
+	printf "\n\033[1;33m%-30s %8s %10s %s\033[0m\n" "Test Suite (ASan+UBSan)" "Tests" "Time" "Status"; \
+	printf "\033[1;33m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	for test_exe in $(ASAN_TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		output=$$(LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
+		exit_code=$$?; \
+		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
+		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
+		[ -z "$$num_tests" ] && num_tests=0; \
+		[ -z "$$time_ms" ] && time_ms=0; \
+		total_tests=$$((total_tests + num_tests)); \
+		total_time=$$((total_time + time_ms)); \
+		if [ $$exit_code -eq 0 ]; then \
+			total_passed=$$((total_passed + num_tests)); \
+			printf "%-30s %8d %8dms \033[0;32mPASS\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+		else \
+			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
+			[ -z "$$failures" ] && failures=$$num_tests; \
+			total_failed=$$((total_failed + failures)); \
+			total_passed=$$((total_passed + num_tests - failures)); \
+			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
+		fi; \
+	done; \
+	printf "\033[1;33m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
+	if [ $$total_failed -eq 0 ]; then \
+		printf "\033[0;32m%-30s %8d %6dms PASS\033[0m\n\n" "TOTAL" "$$total_tests" "$$total_time"; \
+	else \
+		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed"; \
+		printf "$$failed_suites\n"; \
+		exit 1; \
+	fi
+else
+	@printf "\033[0;31m\n"
+	@printf "Sanitizer builds are currently only supported on Linux\n"
+	@printf "\033[0m\n"
+	@exit 1
+endif
+
+sanitizer-help: ## Show help for sanitizer usage
+	@printf "\033[1;36m\n"
+	@printf "##############################################\n"
+	@printf "### Sanitizer Testing (ASan + UBSan)      ###\n"
+	@printf "##############################################\n"
+	@printf "\033[0m\n"
+	@printf "AddressSanitizer (ASan) detects:\n"
+	@printf "  - Memory leaks\n"
+	@printf "  - Use-after-free\n"
+	@printf "  - Buffer overflows\n"
+	@printf "  - Stack/heap corruption\n"
+	@printf "\n"
+	@printf "UndefinedBehaviorSanitizer (UBSan) detects:\n"
+	@printf "  - Integer overflow/underflow\n"
+	@printf "  - Null pointer dereference\n"
+	@printf "  - Unaligned memory access\n"
+	@printf "  - Division by zero\n"
+	@printf "\n"
+	@printf "Usage:\n"
+	@printf "  make test-asan         - Run all tests with sanitizers (verbose)\n"
+	@printf "  make test-asan-quiet   - Run all tests with sanitizers (summary)\n"
+	@printf "  make test-ubsan        - Alias for test-asan\n"
+	@printf "\n"
+	@printf "Sanitizers build a separate instrumented library in:\n"
+	@printf "  $(ASAN_APP_DIR)/\n"
+	@printf "\n"
+	@printf "Note: Sanitizer builds are slower but catch more bugs.\n"
+	@printf "      Use them before commits or releases.\n"
+	@printf "\n"
+
+# Removed duplicated run block and empty target stubs that previously caused
+# "overriding recipe" warnings. The YAML test targets are defined above.
 
 clean: ## Remove all contents of the build directories.
 	-@rm -rvf $(BUILD_DIR)
@@ -361,7 +869,7 @@ endif
 	fi
 	# Installing the pkg-config files.
 	@mkdir -p $(PKG_CONFIG_PATH)
-	@cat pkgconfig/$(SUITE)-$(PROJECT).pc | sed 's/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g; s/(VERSION)/$(VERSION)/g; s|(LIB)|$(LIB_INSTALL_PATH)|g; s|(INCLUDE)|$(INCLUDE_INSTALL_PATH)|g' > $(PKG_CONFIG_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).pc
+	@cat pkgconfig/$(SUITE)-$(PROJECT).pc | sed 's/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g; s/(VERSION)/$(VERSION)/g; s|(PC_LIB_DIR)|$(PC_LIB_DIR)|g; s|(PC_INCLUDE_DIR)|$(PC_INCLUDE_DIR)|g' > $(PKG_CONFIG_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).pc
 ifeq ($(OS_NAME), Linux)
 	# Running ldconfig.
 	@ldconfig >> /dev/null 2>&1
