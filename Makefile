@@ -154,27 +154,22 @@ ASAN_STATIC_TARGET := $(BASE_NAME_PREFIX)-asan.a
 # Sanitizer object files and library
 ASAN_LIBOBJECTS := $(patsubst src/%.c,$(ASAN_OBJ_DIR)/%.o,$(SOURCES))
 
-# Test executables list
-TEST_EXECUTABLES := \
-	$(APP_DIR)/testText$(EXE_EXTENSION) \
-	$(APP_DIR)/testJson$(EXE_EXTENSION) \
-	$(APP_DIR)/testCsv$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlUtf8$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlScanner$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlReader$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlLimits$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlDepth$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlAlias$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlEscapes$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlNestedStructures$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlScalarStyles$(EXE_EXTENSION) \
-	$(APP_DIR)/testYamlUtf8Comprehensive$(EXE_EXTENSION)
+####################################################################
+# Test discovery
+####################################################################
+
+TEXTLIBRARY := -L $(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)
+
+# Single shell: discover test sources and compute executable name for each (path|name per line).
+# test.cpp -> testText; test-yaml-*.cpp -> testYaml*. Avoids hundreds of $(call test-name) / CreateProcess.
+TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
+	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
+	else echo "$$f|$$(basename "$$f" .cpp | sed 's/test-/test/g; s/test_/test/g; s/-\([a-z]\)/\U\1/g; s/_\([a-z]\)/\U\1/g; s/^test\([a-z]\)/test\U\1/')"; fi; done)
+TEST_SOURCES := $(foreach pair,$(TEST_PAIRS),$(word 1,$(subst |, ,$(pair))))
+TEST_NAMES := $(foreach pair,$(TEST_PAIRS),$(word 2,$(subst |, ,$(pair))))
+
+# Generate list of test executables (no $(call test-name) - use precomputed TEST_NAMES)
+TEST_EXECUTABLES := $(addprefix $(APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
 
 # ASan test executables
 ASAN_TEST_EXECUTABLES := $(patsubst $(APP_DIR)/%,$(ASAN_APP_DIR)/%,$(TEST_EXECUTABLES))
@@ -237,144 +232,19 @@ endif
 # Unit Tests
 ####################################################################
 
-$(APP_DIR)/testJson$(EXE_EXTENSION): \
-		tests/test-json.cpp \
+# Compile each test .cpp directly to executable. Fewer targets = faster make graph.
+# Args: $1 = source path, $2 = executable name (from TEST_PAIRS).
+define test-executable-rule
+$(APP_DIR)/$2$(EXE_EXTENSION): \
+		$1 \
 		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling JSON Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testJson.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
+	@printf "\n### Compiling %s Test ###\n" "$2"
+	@mkdir -p $$(@D)
+	$$(CXX) $$(CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(APP_DIR)/$2.d -o $$@ $$< $$(LDFLAGS) $$(TESTFLAGS) -lgtest_main $$(APP_DIR)/$$(TARGET)
+endef
 
-$(APP_DIR)/testCsv$(EXE_EXTENSION): \
-		tests/test-csv.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling CSV Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testCsv.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
-
-
-$(APP_DIR)/testYamlUtf8$(EXE_EXTENSION): \
-	tests/yaml/test-yaml-utf8.cpp src/yaml/utf8.c \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML UTF8 Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlUtf8.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testYamlEscapes$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-escapes.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Escapes Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlEscapes.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-resolver-cleanup.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Resolver Cleanup Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlResolverCleanup.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testYamlNestedStructures$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-nested-structures.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Nested Structures Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlNestedStructures.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testYamlScalarStyles$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-scalar-styles.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Scalar Styles Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScalarStyles.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testYamlUtf8Comprehensive$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-utf8-comprehensive.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML UTF8 Comprehensive Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlUtf8Comprehensive.d -o $@ $< $(LDFLAGS) -lgtest_main $(TESTFLAGS) $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testYamlDepth$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-depth.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Depth Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlDepth.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-$(APP_DIR)/testYamlAlias$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-alias.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Alias Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAlias.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-alias-expansion.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Alias Expansion Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasExpansion.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-alias-cycle.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Alias Cycle Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasCycle.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-alias-exponential.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Alias Exponential Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlAliasExponential.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlScanner$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-scanner.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Scanner Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScanner.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-scanner-chunked.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Scanner Chunked Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlScannerChunked.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlReader$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-reader.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Reader Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlReader.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlLimits$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-limits.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Limits Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlLimits.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-$(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION): \
-		tests/yaml/test-yaml-block-chomp.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling YAML Block Chomp Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testYamlBlockChomp.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) -lgtest_main $(APP_DIR)/libghoti.io-text-dev.so.0.0.0
-
-
-$(APP_DIR)/testText$(EXE_EXTENSION): \
-		tests/test.cpp \
-		| $(APP_DIR)/$(TARGET)
-	@printf "\n### Compiling Text Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testText.d -o $@ $< $(LDFLAGS) $(TESTFLAGS) $(TEXTLIBRARY)
+# Generate build rules from TEST_PAIRS (one pair = source|name)
+$(foreach pair,$(TEST_PAIRS),$(eval $(call test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
 
 ####################################################################
 # Examples
@@ -419,86 +289,18 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
 
-# Pattern rule for ASan test executables
-$(ASAN_APP_DIR)/testJson$(EXE_EXTENSION): tests/test-json.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan JSON Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
+# Pattern rule for ASan test executables - uses same TEST_PAIRS
+define asan-test-executable-rule
+$(ASAN_APP_DIR)/$2$(EXE_EXTENSION): \
+		$1 \
+		| $(ASAN_APP_DIR)/$(ASAN_TARGET)
+	@printf "\n### Compiling ASan+UBSan %s Test ###\n" "$2"
+	@mkdir -p $$(@D)
+	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) -lgtest_main $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
+endef
 
-$(ASAN_APP_DIR)/testCsv$(EXE_EXTENSION): tests/test-csv.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan CSV Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
-
-$(ASAN_APP_DIR)/testYamlUtf8$(EXE_EXTENSION): tests/yaml/test-yaml-utf8.cpp src/yaml/utf8.c | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML UTF8 Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlScanner$(EXE_EXTENSION): tests/yaml/test-yaml-scanner.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Scanner Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION): tests/yaml/test-yaml-scanner-chunked.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Scanner Chunked Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlReader$(EXE_EXTENSION): tests/yaml/test-yaml-reader.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Reader Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlLimits$(EXE_EXTENSION): tests/yaml/test-yaml-limits.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Limits Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlDepth$(EXE_EXTENSION): tests/yaml/test-yaml-depth.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Depth Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlAlias$(EXE_EXTENSION): tests/yaml/test-yaml-alias.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Alias Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION): tests/yaml/test-yaml-alias-expansion.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Alias Expansion Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION): tests/yaml/test-yaml-alias-cycle.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Alias Cycle Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION): tests/yaml/test-yaml-alias-exponential.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Alias Exponential Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION): tests/yaml/test-yaml-block-chomp.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Block Chomp Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlEscapes$(EXE_EXTENSION): tests/yaml/test-yaml-escapes.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Escapes Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testYamlResolverCleanup$(EXE_EXTENSION): tests/yaml/test-yaml-resolver-cleanup.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan YAML Resolver Cleanup Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) -lgtest_main $(ASAN_APP_DIR)/$(ASAN_TARGET)
-
-$(ASAN_APP_DIR)/testText$(EXE_EXTENSION): tests/test.cpp | $(ASAN_APP_DIR)/$(ASAN_TARGET)
-	@printf "\n### Compiling ASan+UBSan Text Test ###\n"
-	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -o $@ $< $(ASAN_LDFLAGS) $(TESTFLAGS) $(ASAN_TEXTLIBRARY)
+# Generate ASAN build rules from TEST_PAIRS
+$(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
 
 ####################################################################
 # Commands
@@ -600,20 +402,13 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testCsv$(EXE_EXTENSION) --gtest_brief=1
 
 	@printf "\n############################\n"
-	@printf "### Running YAML tests   ###\n"
+	@printf "### Running All Tests    ###\n"
 	@printf "############################\n\n"
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlUtf8$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlScanner$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlScannerChunked$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlReader$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlLimits$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlDepth$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAlias$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasExpansion$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasCycle$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlAliasExponential$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlBlockChomp$(EXE_EXTENSION) --gtest_brief=1 || true
-	LD_LIBRARY_PATH="$(APP_DIR)" $(APP_DIR)/testYamlEscapes$(EXE_EXTENSION) --gtest_brief=1 || true
+	@for test_exe in $(TEST_EXECUTABLES); do \
+		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
+		printf "\n### Running $$test_name ###\n"; \
+		LD_LIBRARY_PATH="$(APP_DIR)" $$test_exe --gtest_brief=1 || true; \
+	done
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
