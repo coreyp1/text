@@ -18,6 +18,36 @@ extern "C" {
 #endif
 
 /**
+ * @brief Parse a YAML string into a DOM document.
+ *
+ * Parses the input string and builds an in-memory tree representation.
+ * On success, returns a document that must be freed with gtext_yaml_free().
+ * On failure, returns NULL and populates the error structure (if provided).
+ *
+ * @param input Input YAML string (must remain valid for document lifetime if in-situ mode is enabled)
+ * @param length Length of input string in bytes
+ * @param options Parse options (NULL for defaults)
+ * @param error Error output (may be NULL)
+ * @return Document on success, NULL on error
+ */
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse(
+	const char * input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Error * error
+);
+
+/**
+ * @brief Get the root node of a YAML document.
+ *
+ * Returns NULL if the document is NULL or empty.
+ *
+ * @param doc Document to query
+ * @return Root node, or NULL
+ */
+GTEXT_API const GTEXT_YAML_Node * gtext_yaml_document_root(const GTEXT_YAML_Document * doc);
+
+/**
  * @brief Return the node type for @p n.
  *
  * The returned value is one of @ref GTEXT_YAML_Node_Type.

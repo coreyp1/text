@@ -10,6 +10,7 @@
 #include <stdlib.h>
 
 #include <ghoti.io/text/yaml/yaml_core.h>
+#include "yaml_internal.h"
 
 GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
 {
@@ -51,6 +52,11 @@ GTEXT_API void gtext_yaml_error_free(GTEXT_YAML_Error *err)
 
 GTEXT_API void gtext_yaml_free(GTEXT_YAML_Document *doc)
 {
-  /* Placeholder: real implementation will free arena and nodes. */
-  (void)doc;
+  if (!doc) return;
+  
+  /* Free context (which frees arena, resolver, and all nodes) */
+  yaml_context_free(doc->ctx);
+  
+  /* Note: doc itself was allocated from the arena, so it's freed by
+   * yaml_context_free(). We don't need to free it separately. */
 }
