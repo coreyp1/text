@@ -12,6 +12,9 @@
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
+/* Forward declarations */
+typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
+
 /* Internal structures for the scanner, reader, and parser. */
 
 typedef struct GTEXT_YAML_Reader GTEXT_YAML_Reader;
@@ -181,6 +184,13 @@ typedef struct {
 	yaml_mapping_pair pairs[1]; /* Flexible array member */
 } yaml_node_mapping;
 
+/* Alias node (references another node by anchor name) */
+typedef struct {
+	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_ALIAS */
+	const char *anchor_name;    /* Name of the referenced anchor (arena-allocated) */
+	GTEXT_YAML_Node *target;    /* Resolved target node (NULL until resolved) */
+} yaml_node_alias;
+
 /* Union node type (public type is opaque pointer to this) */
 struct GTEXT_YAML_Node {
 	GTEXT_YAML_Node_Type type;
@@ -188,6 +198,7 @@ struct GTEXT_YAML_Node {
 		yaml_node_scalar scalar;
 		yaml_node_sequence sequence;
 		yaml_node_mapping mapping;
+		yaml_node_alias alias;
 		/* Note: We use the full structs in the union to avoid pointer chasing,
 		 * but this means the union size is determined by the largest member.
 		 * For now, we accept this tradeoff for simpler allocation. */
@@ -252,5 +263,13 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_mapping(
 	const char *tag,
 	const char *anchor
 );
+
+GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
+	yaml_context *ctx,
+	const char *anchor_name
+);
+
+/* Stream internal API */
+GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(GTEXT_YAML_Stream *s, bool sync);
 
 #endif /* TEXT_SRC_YAML_YAML_INTERNAL_H */

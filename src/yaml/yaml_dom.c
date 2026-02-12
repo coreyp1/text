@@ -11,6 +11,7 @@
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_dom.h>
 #include <string.h>
+#include <stdio.h>
 
 /* ============================================================================
  * Node Factory Functions (Internal)
@@ -147,6 +148,37 @@ GTEXT_YAML_Node *yaml_node_new_mapping(
 	return node;
 }
 
+/**
+ * @brief Create alias node
+ *
+ * Creates an alias node that references an anchor. The target is not
+ * resolved at creation time - it must be resolved in a separate pass.
+ *
+ * @param ctx Context (must not be NULL)
+ * @param anchor_name Name of the referenced anchor
+ * @return New alias node, or NULL on failure
+ */
+GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
+	yaml_context *ctx,
+	const char *anchor_name
+) {
+	if (!ctx || !anchor_name) return NULL;
+	
+	GTEXT_YAML_Node *node = (GTEXT_YAML_Node *)yaml_context_alloc(ctx, sizeof(GTEXT_YAML_Node), 8);
+	if (!node) return NULL;
+	
+	/* Initialize alias fields */
+	node->type = GTEXT_YAML_ALIAS;
+	node->as.alias.type = GTEXT_YAML_ALIAS;
+	node->as.alias.anchor_name = arena_strdup(ctx, anchor_name, strlen(anchor_name));
+	node->as.alias.target = NULL;  /* Will be resolved later */
+	
+	if (!node->as.alias.anchor_name) return NULL;
+	
+	ctx->node_count++;
+	return node;
+}
+
 /* ============================================================================
  * Public DOM Accessor Functions
  * ============================================================================ */
@@ -166,14 +198,14 @@ GTEXT_YAML_Document *gtext_yaml_parse(
 /**
  * @brief Get the root node of a document.
  */
-const GTEXT_YAML_Node *gtext_yaml_document_root(const GTEXT_YAML_Document *doc) {
+GTEXT_API const GTEXT_YAML_Node *gtext_yaml_document_root(const GTEXT_YAML_Document *doc) {
 	return doc ? doc->root : NULL;
 }
 
 /**
  * @brief Get the type of a YAML node.
  */
-GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node *n) {
+GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node *n) {
 	return n ? n->type : GTEXT_YAML_NULL;
 }
 
@@ -292,7 +324,7 @@ const char *gtext_yaml_node_tag(const GTEXT_YAML_Node *node) {
 	}
 }
 
-const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
+GTEXT_API const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
 	if (!node) return NULL;
 	
 	switch (node->type) {
@@ -305,4 +337,18 @@ const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
 		default:
 			return NULL;
 	}
+}
+
+/* ============================================================================
+ * Alias Accessors (Phase 4.4)
+ * ============================================================================ */
+
+GTEXT_API const GTEXT_YAML_Node *gtext_yaml_alias_target(const GTEXT_YAML_Node *node) {
+	if (!node) return NULL;
+	
+	if (node->type == GTEXT_YAML_ALIAS) {
+		return node->as.alias.target;
+	}
+	
+	return node;
 }

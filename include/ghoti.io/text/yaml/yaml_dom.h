@@ -222,6 +222,23 @@ GTEXT_API const char * gtext_yaml_node_tag(const GTEXT_YAML_Node * node);
  */
 GTEXT_API const char * gtext_yaml_node_anchor(const GTEXT_YAML_Node * node);
 
+/* ============================================================================
+ * Alias Accessors (Phase 4.4)
+ * ============================================================================ */
+
+/**
+ * @brief Resolve an alias node to its target.
+ *
+ * If the node is an alias, returns the target node it references.
+ * If the node is not an alias, returns the node itself.
+ * 
+ * Note: YAML allows cycles. Callers must detect cycles if needed.
+ *
+ * @param node Node to resolve
+ * @return Target node if alias, or the node itself otherwise; NULL if node is NULL
+ */
+GTEXT_API const GTEXT_YAML_Node * gtext_yaml_alias_target(const GTEXT_YAML_Node * node);
+
 #ifdef __cplusplus
 }
 #endif

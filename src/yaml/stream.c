@@ -6,6 +6,8 @@
  * streaming event callback. It supports emitting scalar and indicator events.
  */
 
+#define _POSIX_C_SOURCE 200809L  /* for strdup */
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -28,6 +30,8 @@ struct GTEXT_YAML_Stream {
   size_t current_depth;
   size_t alias_expansion_count;
   ResolverState *resolver;
+  char *pending_anchor;  /* Anchor name to attach to next node (malloc'd, NULL if none) */
+  bool sync_mode; /* If true, call scanner_finish after each feed */
 };
 
 /* Helper: parse a node (simple flow sequence/map or scalar) from the scanner,
@@ -231,10 +235,16 @@ GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s)
   if (!s) return;
   if (s->scanner) gtext_yaml_scanner_free(s->scanner);
   if (s->resolver) gtext_yaml_resolver_free(s->resolver);
+  if (s->pending_anchor) free(s->pending_anchor);
   free(s);
 }
 
-GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream * s, const char * data, size_t len)
+/* Internal: Set synchronous mode (for use by gtext_yaml_parse) */
+GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(GTEXT_YAML_Stream *s, bool sync) {
+  if (s) s->sync_mode = sync;
+}
+
+GTEXT_API GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream * s, const char * data, size_t len)
 {
   if (!s) return GTEXT_YAML_E_INVALID;
   /* Enforce total-bytes limit if set (0 means use library default already applied in opts) */
@@ -244,6 +254,11 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream * s, const 
   }
 
   if (!gtext_yaml_scanner_feed(s->scanner, data, len)) return GTEXT_YAML_E_OOM;
+  
+  /* In sync mode, mark scanner as finished immediately so we can process aliases */
+  if (s->sync_mode) {
+    gtext_yaml_scanner_finish(s->scanner);
+  }
 
   GTEXT_YAML_Token tok;
   GTEXT_YAML_Error err;
@@ -269,70 +284,109 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream * s, const 
         if (s->opts.max_depth > 0 && s->current_depth > s->opts.max_depth) {
           return GTEXT_YAML_E_DEPTH;
         }
+        /* Emit collection START event instead of INDICATOR */
+        GTEXT_YAML_Event start_ev;
+        memset(&start_ev, 0, sizeof(start_ev));
+        start_ev.type = (tok.u.c == '[') ? GTEXT_YAML_EVENT_SEQUENCE_START : GTEXT_YAML_EVENT_MAPPING_START;
+        start_ev.anchor = s->pending_anchor;  /* Attach pending anchor if any */
+        start_ev.offset = tok.offset;
+        start_ev.line = tok.line;
+        start_ev.col = tok.col;
+        
+        if (s->cb) {
+          GTEXT_YAML_Status rc = s->cb(s, &start_ev, s->user);
+          if (rc != GTEXT_YAML_OK) return rc;
+        }
+        
+        /* Clear pending anchor after attaching */
+        if (s->pending_anchor) {
+          free(s->pending_anchor);
+          s->pending_anchor = NULL;
+        }
+        continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
         if (s->current_depth > 0) s->current_depth--;
+        /* Emit collection END event instead of INDICATOR */
+        GTEXT_YAML_Event end_ev;
+        memset(&end_ev, 0, sizeof(end_ev));
+        end_ev.type = (tok.u.c == ']') ? GTEXT_YAML_EVENT_SEQUENCE_END : GTEXT_YAML_EVENT_MAPPING_END;
+        end_ev.offset = tok.offset;
+        end_ev.line = tok.line;
+        end_ev.col = tok.col;
+        
+        if (s->cb) {
+          GTEXT_YAML_Status rc = s->cb(s, &end_ev, s->user);
+          if (rc != GTEXT_YAML_OK) return rc;
+        }
+        continue;
       } else if (tok.u.c == '&') {
-        /* Anchor definition: next token is the anchor name (scalar), followed by the node.
-          We'll read the name, then parse the following node (scalar or flow container)
-          to compute base_size and referenced anchors, then register via resolver. */
+        /* Anchor definition: read anchor name and store it.
+           The next token (handled by subsequent iteration) will pick it up. */
         GTEXT_YAML_Token name_tok;
         GTEXT_YAML_Error name_err;
         GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
-        if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data for anchor name */
+        if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
         if (nst != GTEXT_YAML_OK) return nst;
         if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+        
         size_t namelen = name_tok.u.scalar.len;
-        char buf[256]; if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
-        memcpy(buf, name_tok.u.scalar.ptr, namelen); buf[namelen] = '\0';
-        free((void *)name_tok.u.scalar.ptr);
-
-        /* Now parse the following node and collect base_size and refs */
-        GTEXT_YAML_Token node_first;
-        GTEXT_YAML_Error node_err;
-        nst = gtext_yaml_scanner_next(s->scanner, &node_first, &node_err);
-        if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data for node */
-        if (nst != GTEXT_YAML_OK) return nst;
-
-        size_t base_size = 0;
-        char **refs = NULL; size_t ref_count = 0;
-        GTEXT_YAML_Status pst = parse_node_and_collect(s, node_first, &base_size, &refs, &ref_count);
-        if (pst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data */
-        if (pst != GTEXT_YAML_OK) return pst;
-
-        /* Register anchor with resolver including refs (if any) */
-        (void)gtext_yaml_resolver_register_anchor_with_refs(s->resolver, buf, base_size, (const char **)refs, ref_count);
-        /* free refs list */
-        for (size_t i = 0; i < ref_count; ++i) free(refs[i]);
-        free(refs);
-      } else if (tok.u.c == '*') {
-        /* Alias emission: consult resolver to compute expansion size, then
-         * increment the stream's alias_expansion_count accordingly. */
-        /* For simplicity, the next token is expected to be a scalar with the anchor name. */
-        GTEXT_YAML_Token next_tok;
-        GTEXT_YAML_Error next_err;
-  GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &next_tok, &next_err);
-  if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data for alias name */
-  if (nst != GTEXT_YAML_OK) return nst;
-        if (next_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
-        char *name = (char *)next_tok.u.scalar.ptr; size_t namelen = next_tok.u.scalar.len;
-        /* Null-terminate anchor name into a small buffer */
         char buf[256];
         if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
-        memcpy(buf, name, namelen); buf[namelen] = '\0';
-        free(name);
-
-        size_t expansion = 0;
-        GTEXT_YAML_Status rc = gtext_yaml_resolver_compute_expansion(s->resolver, buf, s->opts.max_alias_expansion, &expansion);
-        if (rc == GTEXT_YAML_E_LIMIT) return GTEXT_YAML_E_LIMIT;
-        if (rc != GTEXT_YAML_OK) {
-          /* treat unknown anchor conservatively as 1 */
-          expansion = 1;
+        memcpy(buf, name_tok.u.scalar.ptr, namelen);
+        buf[namelen] = '\0';
+        
+        /* Store anchor name - it will be attached to the next node event */
+        if (s->pending_anchor) free(s->pending_anchor);
+        s->pending_anchor = strdup(buf);
+        
+        free((void *)name_tok.u.scalar.ptr);
+        continue;
+      } else if (tok.u.c == '*') {
+        /* In sync mode, handle alias here; otherwise skip for finish() */
+        if (!s->sync_mode) {
+          /* Async mode: can't read ahead, emit as indicator */
+          ev.type = GTEXT_YAML_EVENT_INDICATOR;
+          ev.data.indicator = '*';
+          if (s->cb) {
+            GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+            if (rc != GTEXT_YAML_OK) return rc;
+          }
+          continue;
         }
-        /* accumulate with saturation on overflow */
-  size_t prev = s->alias_expansion_count;
-  if ((size_t)-1 - prev < expansion) s->alias_expansion_count = (size_t)-1; else s->alias_expansion_count = prev + expansion;
-        if (s->opts.max_alias_expansion > 0 && s->alias_expansion_count > s->opts.max_alias_expansion) return GTEXT_YAML_E_LIMIT;
+        
+        /* Sync mode: process alias immediately */
+        GTEXT_YAML_Token next_tok;
+        GTEXT_YAML_Error next_err;
+        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &next_tok, &next_err);
+        if (nst != GTEXT_YAML_OK) return nst;
+        if (next_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+        
+        char *name = (char *)next_tok.u.scalar.ptr;
+        size_t namelen = next_tok.u.scalar.len;
+        char buf[256];
+        if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
+        memcpy(buf, name, namelen);
+        buf[namelen] = '\0';
+        
+        /* Emit ALIAS event */
+        GTEXT_YAML_Event alias_ev;
+        memset(&alias_ev, 0, sizeof(alias_ev));
+        alias_ev.type = GTEXT_YAML_EVENT_ALIAS;
+        alias_ev.data.alias_name = buf;
+        alias_ev.offset = next_tok.offset;
+        alias_ev.line = next_tok.line;
+        alias_ev.col = next_tok.col;
+        
+        if (s->cb) {
+          GTEXT_YAML_Status cb_rc = s->cb(s, &alias_ev, s->user);
+          free(name);
+          if (cb_rc != GTEXT_YAML_OK) return cb_rc;
+        } else {
+          free(name);
+        }
+        continue;
       }
+      /* Emit remaining indicators (commas, colons, etc.) */
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) return rc;
@@ -345,12 +399,19 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream * s, const 
   ev.type = GTEXT_YAML_EVENT_SCALAR;
   ev.data.scalar.ptr = tok.u.scalar.ptr;
   ev.data.scalar.len = tok.u.scalar.len;
+  /* Attach pending anchor if any */
+  ev.anchor = s->pending_anchor;
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
           free((void *)tok.u.scalar.ptr);
           return rc;
         }
+      }
+      /* Clear pending anchor after attaching */
+      if (s->pending_anchor) {
+        free(s->pending_anchor);
+        s->pending_anchor = NULL;
       }
       free((void *)tok.u.scalar.ptr);
       continue;
@@ -370,6 +431,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
   for (;;) {
     GTEXT_YAML_Token tok;
     GTEXT_YAML_Error err;
+    
   GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, &tok, &err);
   if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
   if (st != GTEXT_YAML_OK) return st;
@@ -384,6 +446,62 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
+      
+      /* Handle anchor definition */
+      if (tok.u.c == '&') {
+        GTEXT_YAML_Token name_tok;
+        GTEXT_YAML_Error name_err;
+        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
+        if (nst != GTEXT_YAML_OK) return nst;
+        if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+        
+        size_t namelen = name_tok.u.scalar.len;
+        char buf[256];
+        if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
+        memcpy(buf, name_tok.u.scalar.ptr, namelen);
+        buf[namelen] = '\0';
+        
+        if (s->pending_anchor) free(s->pending_anchor);
+        s->pending_anchor = strdup(buf);
+        
+        free((void *)name_tok.u.scalar.ptr);
+        continue;
+      }
+      
+      /* Handle alias reference */
+      if (tok.u.c == '*') {
+        GTEXT_YAML_Token next_tok;
+        GTEXT_YAML_Error next_err;
+        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &next_tok, &next_err);
+        if (nst != GTEXT_YAML_OK) return nst;
+        if (next_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+        
+        char *name = (char *)next_tok.u.scalar.ptr; 
+        size_t namelen = next_tok.u.scalar.len;
+        char buf[256];
+        if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
+        memcpy(buf, name, namelen); 
+        buf[namelen] = '\0';
+        
+        /* Emit ALIAS event */
+        GTEXT_YAML_Event alias_ev;
+        memset(&alias_ev, 0, sizeof(alias_ev));
+        alias_ev.type = GTEXT_YAML_EVENT_ALIAS;
+        alias_ev.data.alias_name = buf;
+        alias_ev.offset = next_tok.offset;
+        alias_ev.line = next_tok.line;
+        alias_ev.col = next_tok.col;
+        
+        if (s->cb) {
+          GTEXT_YAML_Status cb_rc = s->cb(s, &alias_ev, s->user);
+          free(name);
+          if (cb_rc != GTEXT_YAML_OK) return cb_rc;
+        } else {
+          free(name);
+        }
+        continue;
+      }
+      
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) return rc;
@@ -395,12 +513,18 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       ev.type = GTEXT_YAML_EVENT_SCALAR;
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
+      ev.anchor = s->pending_anchor;  /* Attach pending anchor */
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
           free((void *)tok.u.scalar.ptr);
           return rc;
         }
+      }
+      /* Clear pending anchor after use */
+      if (s->pending_anchor) {
+        free(s->pending_anchor);
+        s->pending_anchor = NULL;
       }
       free((void *)tok.u.scalar.ptr);
       continue;

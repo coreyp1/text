@@ -52,6 +52,12 @@ typedef enum {
  *
  * For scalar events the `scalar` field is valid. For indicator events,
  * the `indicator` field holds the single-character indicator.
+ * 
+ * The `anchor` field contains the anchor name if this event has an anchor
+ * (from & marker), otherwise NULL. The `tag` field contains the tag if 
+ * this event has an explicit tag (from !! marker), otherwise NULL.
+ * 
+ * For ALIAS events, the `alias_name` field contains the referenced anchor name.
  */
 typedef struct {
 	GTEXT_YAML_Event_Type type;
@@ -60,8 +66,11 @@ typedef struct {
 			const char * ptr;
 			size_t len;
 		} scalar;
+		const char * alias_name;  /* For GTEXT_YAML_EVENT_ALIAS */
 		char indicator;
 	} data;
+	const char * anchor;  /* Anchor name for this node (NULL if none) */
+	const char * tag;     /* Explicit tag for this node (NULL if none) */
 	size_t offset;
 	int line;
 	int col;
