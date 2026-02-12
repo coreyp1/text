@@ -62,8 +62,169 @@ GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node * n);
  */
 GTEXT_API const char * gtext_yaml_node_as_string(const GTEXT_YAML_Node * n);
 
+/* ============================================================================
+ * Sequence Accessors (Phase 4.3)
+ * ============================================================================ */
+
+/**
+ * @brief Get the number of items in a sequence.
+ *
+ * Returns 0 if the node is not a sequence or is empty.
+ *
+ * @param node Sequence node to query
+ * @return Number of items in the sequence
+ */
+GTEXT_API size_t gtext_yaml_sequence_length(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Get a child node from a sequence by index.
+ *
+ * Returns NULL if the node is not a sequence or the index is out of bounds.
+ * Indexing is zero-based.
+ *
+ * @param node Sequence node to query
+ * @param index Zero-based index of child to retrieve
+ * @return Child node at the given index, or NULL
+ */
+GTEXT_API const GTEXT_YAML_Node * gtext_yaml_sequence_get(const GTEXT_YAML_Node * node, size_t index);
+
+/**
+ * @brief Iterator callback for sequence traversal.
+ *
+ * @param node Child node
+ * @param index Zero-based index of the child
+ * @param user User data passed to gtext_yaml_sequence_iterate()
+ * @return true to continue iteration, false to stop
+ */
+typedef bool (*GTEXT_YAML_Sequence_Iterator)(
+	const GTEXT_YAML_Node * node,
+	size_t index,
+	void * user
+);
+
+/**
+ * @brief Iterate over all children in a sequence.
+ *
+ * Calls the provided callback for each child in order. Iteration stops
+ * if the callback returns false or all children have been visited.
+ *
+ * @param node Sequence node to iterate
+ * @param callback Function to call for each child
+ * @param user User data passed to callback
+ * @return Number of children visited
+ */
+GTEXT_API size_t gtext_yaml_sequence_iterate(
+	const GTEXT_YAML_Node * node,
+	GTEXT_YAML_Sequence_Iterator callback,
+	void * user
+);
+
+/* ============================================================================
+ * Mapping Accessors (Phase 4.3)
+ * ============================================================================ */
+
+/**
+ * @brief Get the number of key-value pairs in a mapping.
+ *
+ * Returns 0 if the node is not a mapping or is empty.
+ *
+ * @param node Mapping node to query
+ * @return Number of key-value pairs
+ */
+GTEXT_API size_t gtext_yaml_mapping_size(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Look up a value in a mapping by string key.
+ *
+ * Performs a linear search through the mapping's keys, comparing each
+ * key as a string. Returns the first matching value, or NULL if not found
+ * or if the node is not a mapping.
+ *
+ * @param node Mapping node to search
+ * @param key String key to look up
+ * @return Value node associated with the key, or NULL if not found
+ */
+GTEXT_API const GTEXT_YAML_Node * gtext_yaml_mapping_get(const GTEXT_YAML_Node * node, const char * key);
+
+/**
+ * @brief Get a key-value pair from a mapping by index.
+ *
+ * Returns false if the node is not a mapping or the index is out of bounds.
+ * Indexing is zero-based and reflects insertion order.
+ *
+ * @param node Mapping node to query
+ * @param index Zero-based index of the pair
+ * @param key Output pointer for key node (may be NULL)
+ * @param value Output pointer for value node (may be NULL)
+ * @return true if the pair was retrieved, false otherwise
+ */
+GTEXT_API bool gtext_yaml_mapping_get_at(
+	const GTEXT_YAML_Node * node,
+	size_t index,
+	const GTEXT_YAML_Node ** key,
+	const GTEXT_YAML_Node ** value
+);
+
+/**
+ * @brief Iterator callback for mapping traversal.
+ *
+ * @param key Key node
+ * @param value Value node
+ * @param index Zero-based index of the pair
+ * @param user User data passed to gtext_yaml_mapping_iterate()
+ * @return true to continue iteration, false to stop
+ */
+typedef bool (*GTEXT_YAML_Mapping_Iterator)(
+	const GTEXT_YAML_Node * key,
+	const GTEXT_YAML_Node * value,
+	size_t index,
+	void * user
+);
+
+/**
+ * @brief Iterate over all key-value pairs in a mapping.
+ *
+ * Calls the provided callback for each pair in insertion order. Iteration
+ * stops if the callback returns false or all pairs have been visited.
+ *
+ * @param node Mapping node to iterate
+ * @param callback Function to call for each pair
+ * @param user User data passed to callback
+ * @return Number of pairs visited
+ */
+GTEXT_API size_t gtext_yaml_mapping_iterate(
+	const GTEXT_YAML_Node * node,
+	GTEXT_YAML_Mapping_Iterator callback,
+	void * user
+);
+
+/* ============================================================================
+ * Node Metadata Accessors (Phase 4.3)
+ * ============================================================================ */
+
+/**
+ * @brief Get the YAML tag associated with a node.
+ *
+ * Returns NULL if the node has no tag.
+ *
+ * @param node Node to query
+ * @return Tag string, or NULL
+ */
+GTEXT_API const char * gtext_yaml_node_tag(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Get the YAML anchor associated with a node.
+ *
+ * Returns NULL if the node has no anchor.
+ *
+ * @param node Node to query
+ * @return Anchor string, or NULL
+ */
+GTEXT_API const char * gtext_yaml_node_anchor(const GTEXT_YAML_Node * node);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // GHOTI_IO_TEXT_YAML_DOM_H
+

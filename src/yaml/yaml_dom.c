@@ -9,6 +9,7 @@
  */
 
 #include "yaml_internal.h"
+#include <ghoti.io/text/yaml/yaml_dom.h>
 #include <string.h>
 
 /* ============================================================================
@@ -185,4 +186,123 @@ const char *gtext_yaml_node_as_string(const GTEXT_YAML_Node *n) {
 	if (!n) return NULL;
 	if (n->type != GTEXT_YAML_STRING) return NULL;
 	return n->as.scalar.value;
+}
+
+/* ============================================================================
+ * Sequence Accessors (Phase 4.3)
+ * ============================================================================ */
+
+size_t gtext_yaml_sequence_length(const GTEXT_YAML_Node *node) {
+	if (!node || node->type != GTEXT_YAML_SEQUENCE) return 0;
+	return node->as.sequence.count;
+}
+
+const GTEXT_YAML_Node *gtext_yaml_sequence_get(const GTEXT_YAML_Node *node, size_t index) {
+	if (!node || node->type != GTEXT_YAML_SEQUENCE) return NULL;
+	if (index >= node->as.sequence.count) return NULL;
+	return node->as.sequence.children[index];
+}
+
+size_t gtext_yaml_sequence_iterate(
+	const GTEXT_YAML_Node *node,
+	GTEXT_YAML_Sequence_Iterator callback,
+	void *user
+) {
+	if (!node || node->type != GTEXT_YAML_SEQUENCE || !callback) return 0;
+	
+	for (size_t i = 0; i < node->as.sequence.count; i++) {
+		if (!callback(node->as.sequence.children[i], i, user)) {
+			return i + 1;  /* Stopped early - return count of items visited */
+		}
+	}
+	return node->as.sequence.count;
+}
+
+/* ============================================================================
+ * Mapping Accessors (Phase 4.3)
+ * ============================================================================ */
+
+size_t gtext_yaml_mapping_size(const GTEXT_YAML_Node *node) {
+	if (!node || node->type != GTEXT_YAML_MAPPING) return 0;
+	return node->as.mapping.count;
+}
+
+const GTEXT_YAML_Node *gtext_yaml_mapping_get(const GTEXT_YAML_Node *node, const char *key) {
+	if (!node || node->type != GTEXT_YAML_MAPPING || !key) return NULL;
+	
+	/* Linear search through key-value pairs */
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		const GTEXT_YAML_Node *k = node->as.mapping.pairs[i].key;
+		if (k && k->type == GTEXT_YAML_STRING) {
+			if (strcmp(k->as.scalar.value, key) == 0) {
+				return node->as.mapping.pairs[i].value;
+			}
+		}
+	}
+	return NULL;
+}
+
+bool gtext_yaml_mapping_get_at(
+	const GTEXT_YAML_Node *node,
+	size_t index,
+	const GTEXT_YAML_Node **key,
+	const GTEXT_YAML_Node **value
+) {
+	if (!node || node->type != GTEXT_YAML_MAPPING) return false;
+	if (index >= node->as.mapping.count) return false;
+	
+	if (key) *key = node->as.mapping.pairs[index].key;
+	if (value) *value = node->as.mapping.pairs[index].value;
+	return true;
+}
+
+size_t gtext_yaml_mapping_iterate(
+	const GTEXT_YAML_Node *node,
+	GTEXT_YAML_Mapping_Iterator callback,
+	void *user
+) {
+	if (!node || node->type != GTEXT_YAML_MAPPING || !callback) return 0;
+	
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		const GTEXT_YAML_Node *k = node->as.mapping.pairs[i].key;
+		const GTEXT_YAML_Node *v = node->as.mapping.pairs[i].value;
+		if (!callback(k, v, i, user)) {
+			return i + 1;  /* Stopped early - return count of items visited */
+		}
+	}
+	return node->as.mapping.count;
+}
+
+/* ============================================================================
+ * Node Metadata Accessors (Phase 4.3)
+ * ============================================================================ */
+
+const char *gtext_yaml_node_tag(const GTEXT_YAML_Node *node) {
+	if (!node) return NULL;
+	
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+			return node->as.scalar.tag;
+		case GTEXT_YAML_SEQUENCE:
+			return node->as.sequence.tag;
+		case GTEXT_YAML_MAPPING:
+			return node->as.mapping.tag;
+		default:
+			return NULL;
+	}
+}
+
+const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
+	if (!node) return NULL;
+	
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+			return node->as.scalar.anchor;
+		case GTEXT_YAML_SEQUENCE:
+			return node->as.sequence.anchor;
+		case GTEXT_YAML_MAPPING:
+			return node->as.mapping.anchor;
+		default:
+			return NULL;
+	}
 }

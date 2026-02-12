@@ -1,9 +1,9 @@
 /**
  * @file yaml_parser.c
- * @brief DOM parser - converts SCALAR and INDICATOR events to DOM
+ * @brief DOM parser - converts streaming events to DOM tree
  *
- * The streaming parser emits SCALAR and INDICATOR events only (no collection events).
- * We track indicators like [ ] { } , : - to build collections.
+ * Implements gtext_yaml_parse() by using the streaming parser internally
+ * and building a DOM tree from events. Uses a stack to track nesting.
  *
  * Copyright 2026 by Corey Pennycuff
  */
@@ -12,380 +12,648 @@
 #include <ghoti.io/text/yaml/yaml_stream.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
+/* Saved temp state for a nesting level */
 typedef struct {
-yaml_context *ctx;
-GTEXT_YAML_Document *doc;
-GTEXT_YAML_Error *error;
+	GTEXT_YAML_Node **items;
+	size_t count;
+	size_t capacity;
+} saved_temp;
 
-/* Stack: each level tracks type and collected items */
-struct {
-char *types;                    /* '[', '{', or '-' per level */
-GTEXT_YAML_Node ***items;       /* Items collected at each level */
-size_t *counts, *capacities;    /* Count/capacity per level */
-size_t capacity, depth;
-} stack;
-
-GTEXT_YAML_Node *pending;           /* Last scalar parsed */
-bool expecting_value;               /* In mapping, after ':' */
-GTEXT_YAML_Node *key;               /* Mapping key waiting for value */
-GTEXT_YAML_Node *root;
-bool failed;
+/* Parser state for building DOM from events */
+typedef struct {
+	yaml_context *ctx;                  /* Context owns arena */
+	GTEXT_YAML_Document *doc;           /* Document being built */
+	GTEXT_YAML_Error *error;            /* Error output */
+	
+	/* Stack for tracking nesting (sequences/mappings in progress) */
+	struct {
+		GTEXT_YAML_Node **nodes;        /* Stack of nodes being built */
+		int *states;                    /* State per level: 0=seq, 1=map_key, 2=map_value */
+		saved_temp *temps;              /* Saved temp state per level */
+		size_t capacity;
+		size_t depth;
+	} stack;
+	
+	/* Temporary storage for building collections */
+	struct {
+		GTEXT_YAML_Node **items;        /* Child nodes */
+		size_t count;
+		size_t capacity;
+	} temp;
+	
+	GTEXT_YAML_Node *root;              /* Root node once complete */
+	bool failed;                        /* True if error occurred */
 } parser_state;
 
-static bool parser_init(parser_state *ps, yaml_context *ctx, GTEXT_YAML_Document *doc, GTEXT_YAML_Error *error) {
-memset(ps, 0, sizeof(*ps));
-ps->ctx = ctx;
-ps->doc = doc;
-ps->error = error;
-ps->stack.capacity = 16;
-ps->stack.types = malloc(ps->stack.capacity);
-ps->stack.items = malloc(ps->stack.capacity * sizeof(GTEXT_YAML_Node **));
-ps->stack.counts = malloc(ps->stack.capacity * sizeof(size_t));
-ps->stack.capacities = malloc(ps->stack.capacity * sizeof(size_t));
-if (!ps->stack.types || !ps->stack.items || !ps->stack.counts || !ps->stack.capacities) {
-free(ps->stack.types);
-free(ps->stack.items);
-free(ps->stack.counts);
-free(ps->stack.capacities);
-return false;
-}
-return true;
+/* Stack states */
+#define STATE_SEQUENCE 0
+#define STATE_MAPPING_KEY 1
+#define STATE_MAPPING_VALUE 2
+
+/**
+ * @brief Initialize parser state.
+ */
+static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *error) {
+	memset(p, 0, sizeof(*p));
+	p->ctx = ctx;
+	p->error = error;
+	
+	/* Allocate initial stack capacity */
+	p->stack.capacity = 32;
+	p->stack.nodes = (GTEXT_YAML_Node **)malloc(p->stack.capacity * sizeof(GTEXT_YAML_Node *));
+	p->stack.states = (int *)malloc(p->stack.capacity * sizeof(int));
+	p->stack.temps = (saved_temp *)calloc(p->stack.capacity, sizeof(saved_temp));
+	
+	if (!p->stack.nodes || !p->stack.states || !p->stack.temps) {
+		free(p->stack.nodes);
+		free(p->stack.states);
+		free(p->stack.temps);
+		return false;
+	}
+	
+	/* Allocate temporary storage for collection children */
+	p->temp.capacity = 16;
+	p->temp.items = (GTEXT_YAML_Node **)malloc(p->temp.capacity * sizeof(GTEXT_YAML_Node *));
+	if (!p->temp.items) {
+		free(p->stack.nodes);
+		free(p->stack.states);
+		free(p->stack.temps);
+		return false;
+	}
+	
+	return true;
 }
 
-static void parser_free(parser_state *ps) {
-for (size_t i = 0; i < ps->stack.depth; i++) {
-free(ps->stack.items[i]);
-}
-free(ps->stack.types);
-free(ps->stack.items);
-free(ps->stack.counts);
-free(ps->stack.capacities);
-}
-
-static bool stack_push(parser_state *ps, char type) {
-if (ps->stack.depth >= ps->stack.capacity) {
-size_t new_cap = ps->stack.capacity * 2;
-char *new_types = realloc(ps->stack.types, new_cap);
-GTEXT_YAML_Node ***new_items = realloc(ps->stack.items, new_cap * sizeof(GTEXT_YAML_Node **));
-size_t *new_counts = realloc(ps->stack.counts, new_cap * sizeof(size_t));
-size_t *new_capacities = realloc(ps->stack.capacities, new_cap * sizeof(size_t));
-if (!new_types || !new_items || !new_counts || !new_capacities) {
-return false;
-}
-ps->stack.types = new_types;
-ps->stack.items = new_items;
-ps->stack.counts = new_counts;
-ps->stack.capacities = new_capacities;
-ps->stack.capacity = new_cap;
-}
-size_t idx = ps->stack.depth++;
-ps->stack.types[idx] = type;
-ps->stack.counts[idx] = 0;
-ps->stack.capacities[idx] = 8;
-ps->stack.items[idx] = malloc(8 * sizeof(GTEXT_YAML_Node *));
-return ps->stack.items[idx] != NULL;
+/**
+ * @brief Free parser state.
+ */
+static void parser_free(parser_state *p) {
+	/* Free saved temp arrays */
+	for (size_t i = 0; i < p->stack.depth; i++) {
+		free(p->stack.temps[i].items);
+	}
+	free(p->stack.nodes);
+	free(p->stack.states);
+	free(p->stack.temps);
+	free(p->temp.items);
 }
 
-static bool stack_add(parser_state *ps, GTEXT_YAML_Node *node) {
-if (ps->stack.depth == 0) {
-ps->root = node;
-return true;
-}
-size_t idx = ps->stack.depth - 1;
-if (ps->stack.counts[idx] >= ps->stack.capacities[idx]) {
-size_t new_cap = ps->stack.capacities[idx] * 2;
-GTEXT_YAML_Node **new_items = realloc(ps->stack.items[idx], new_cap * sizeof(GTEXT_YAML_Node *));
-if (!new_items) return false;
-ps->stack.items[idx] = new_items;
-ps->stack.capacities[idx] = new_cap;
-}
-ps->stack.items[idx][ps->stack.counts[idx]++] = node;
-return true;
-}
-
-static GTEXT_YAML_Node *stack_pop_sequence(parser_state *ps) {
-if (ps->stack.depth == 0) return NULL;
-size_t idx = --ps->stack.depth;
-size_t count = ps->stack.counts[idx];
-GTEXT_YAML_Node **items = ps->stack.items[idx];
-GTEXT_YAML_Node *seq = yaml_node_new_sequence(ps->ctx, count, NULL, NULL);
-if (seq) {
-for (size_t i = 0; i < count; i++) {
-seq->as.sequence.children[i] = items[i];
-}
-}
-free(items);
-return seq;
-}
-
-static GTEXT_YAML_Node *stack_pop_mapping(parser_state *ps) {
-if (ps->stack.depth == 0) return NULL;
-size_t idx = --ps->stack.depth;
-size_t count = ps->stack.counts[idx];
-GTEXT_YAML_Node **items = ps->stack.items[idx];
-size_t pair_count = count / 2;
-GTEXT_YAML_Node *map = yaml_node_new_mapping(ps->ctx, pair_count, NULL, NULL);
-if (map) {
-for (size_t i = 0; i < pair_count; i++) {
-map->as.mapping.pairs[i].key = items[i * 2];
-map->as.mapping.pairs[i].value = items[i * 2 + 1];
-map->as.mapping.pairs[i].key_tag = NULL;
-map->as.mapping.pairs[i].value_tag = NULL;
-}
-}
-free(items);
-return map;
-}
-
-static GTEXT_YAML_Status parse_callback(GTEXT_YAML_Stream *s, const void *event_payload, void *user) {
-(void)s;
-parser_state *ps = (parser_state *)user;
-const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
-if (ps->failed) return GTEXT_YAML_E_INVALID;
-
-switch (event->type) {
-case GTEXT_YAML_EVENT_SCALAR: {
-GTEXT_YAML_Node *node = yaml_node_new_scalar(ps->ctx, event->data.scalar.ptr, event->data.scalar.len, NULL, NULL);
-if (!node) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = node;
-if (ps->expecting_value) {
-if (!stack_add(ps, ps->key) || !stack_add(ps, node)) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->expecting_value = false;
-ps->key = NULL;
-ps->pending = NULL;
-}
-return GTEXT_YAML_OK;
+/**
+ * @brief Push a node onto the stack (for tracking nesting).
+ * Saves the current temp state and clears temp for the new level.
+ */
+static bool stack_push(parser_state *p, GTEXT_YAML_Node *node, int state) {
+	if (p->stack.depth >= p->stack.capacity) {
+		/* Grow stack */
+		size_t new_cap = p->stack.capacity * 2;
+		GTEXT_YAML_Node **new_nodes = (GTEXT_YAML_Node **)realloc(
+			p->stack.nodes, new_cap * sizeof(GTEXT_YAML_Node *)
+		);
+		int *new_states = (int *)realloc(p->stack.states, new_cap * sizeof(int));
+		saved_temp *new_temps = (saved_temp *)realloc(p->stack.temps, new_cap * sizeof(saved_temp));
+		
+		if (!new_nodes || !new_states || !new_temps) {
+			free(new_nodes);
+			free(new_states);
+			free(new_temps);
+			return false;
+		}
+		
+		/* Zero-initialize new slots */
+		memset(new_temps + p->stack.capacity, 0, (new_cap - p->stack.capacity) * sizeof(saved_temp));
+		
+		p->stack.nodes = new_nodes;
+		p->stack.states = new_states;
+		p->stack.temps = new_temps;
+		p->stack.capacity = new_cap;
+	}
+	
+	/* Save current temp state to the stack */
+	p->stack.temps[p->stack.depth].items = p->temp.items;
+	p->stack.temps[p->stack.depth].count = p->temp.count;
+	p->stack.temps[p->stack.depth].capacity = p->temp.capacity;
+	
+	/* Allocate new temp storage for this level */
+	p->temp.capacity = 16;
+	p->temp.items = (GTEXT_YAML_Node **)malloc(p->temp.capacity * sizeof(GTEXT_YAML_Node *));
+	if (!p->temp.items) {
+		/* Restore old temp on failure */
+		p->temp.items = p->stack.temps[p->stack.depth].items;
+		p->temp.count = p->stack.temps[p->stack.depth].count;
+		p->temp.capacity = p->stack.temps[p->stack.depth].capacity;
+		return false;
+	}
+	p->temp.count = 0;
+	
+	p->stack.nodes[p->stack.depth] = node;
+	p->stack.states[p->stack.depth] = state;
+	p->stack.depth++;
+	return true;
 }
 
-case GTEXT_YAML_EVENT_INDICATOR: {
-char indicator = event->data.indicator;
-switch (indicator) {
-case '[':
-if (!stack_push(ps, '[')) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = NULL;
-break;
-case ']':
-if (ps->pending) {
-if (!stack_add(ps, ps->pending)) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = NULL;
-}
-{
-GTEXT_YAML_Node *seq = stack_pop_sequence(ps);
-if (!seq) {
-ps->failed = true;
-return GTEXT_YAML_E_INVALID;
-}
-if (ps->stack.depth == 0) {
-ps->root = seq;
-} else {
-ps->pending = seq;
-}
-}
-break;
-case '{':
-if (!stack_push(ps, '{')) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = NULL;
-break;
-case '}':
-if (ps->pending) {
-if (!stack_add(ps, ps->pending)) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = NULL;
-}
-{
-GTEXT_YAML_Node *map = stack_pop_mapping(ps);
-if (!map) {
-ps->failed = true;
-return GTEXT_YAML_E_INVALID;
-}
-if (ps->stack.depth == 0) {
-ps->root = map;
-} else {
-ps->pending = map;
-}
-}
-break;
-case ':':
-if (ps->pending) {
-ps->key = ps->pending;
-ps->pending = NULL;
-ps->expecting_value = true;
-} else if (ps->stack.depth == 0 || ps->stack.types[ps->stack.depth - 1] != '{') {
-if (ps->stack.depth == 0) {
-if (!stack_push(ps, '{')) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-}
-}
-break;
-case ',':
-if (ps->pending) {
-if (!stack_add(ps, ps->pending)) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-ps->pending = NULL;
-}
-break;
-case '-':
-if (ps->stack.depth == 0 || ps->stack.types[ps->stack.depth - 1] != '-') {
-if (!stack_push(ps, '-')) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-}
-break;
-default:
-break;
-}
-return GTEXT_YAML_OK;
+/**
+ * @brief Pop a node from the stack.
+ * Restores the saved temp state from the previous level.
+ */
+static void stack_pop(parser_state *p) {
+	if (p->stack.depth > 0) {
+		p->stack.depth--;
+		
+		/* Free current temp and restore saved temp state */
+		free(p->temp.items);
+		p->temp.items = p->stack.temps[p->stack.depth].items;
+		p->temp.count = p->stack.temps[p->stack.depth].count;
+		p->temp.capacity = p->stack.temps[p->stack.depth].capacity;
+		
+		/* Clear the saved slot */
+		p->stack.temps[p->stack.depth].items = NULL;
+		p->stack.temps[p->stack.depth].count = 0;
+		p->stack.temps[p->stack.depth].capacity = 0;
+	}
 }
 
-case GTEXT_YAML_EVENT_DOCUMENT_END:
-if (ps->pending) {
-if (ps->stack.depth == 0) {
-ps->root = ps->pending;
-} else {
-if (!stack_add(ps, ps->pending)) {
-ps->failed = true;
-return GTEXT_YAML_E_OOM;
-}
-}
-ps->pending = NULL;
-}
-while (ps->stack.depth > 0) {
-char type = ps->stack.types[ps->stack.depth - 1];
-GTEXT_YAML_Node *node;
-if (type == '[' || type == '-') {
-node = stack_pop_sequence(ps);
-} else {
-node = stack_pop_mapping(ps);
-}
-if (!node) {
-ps->failed = true;
-return GTEXT_YAML_E_INVALID;
-}
-if (ps->stack.depth == 0) {
-ps->root = node;
-} else {
-ps->pending = node;
-}
-}
-break;
-
-case GTEXT_YAML_EVENT_STREAM_START:
-case GTEXT_YAML_EVENT_STREAM_END:
-case GTEXT_YAML_EVENT_DOCUMENT_START:
-case GTEXT_YAML_EVENT_SEQUENCE_START:
-case GTEXT_YAML_EVENT_SEQUENCE_END:
-case GTEXT_YAML_EVENT_MAPPING_START:
-case GTEXT_YAML_EVENT_MAPPING_END:
-break;
-case GTEXT_YAML_EVENT_ALIAS:
-ps->failed = true;
-return GTEXT_YAML_E_INVALID;
-}
-return GTEXT_YAML_OK;
+/**
+ * @brief Add a node to the temporary collection being built.
+ */
+static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
+	if (p->temp.count >= p->temp.capacity) {
+		/* Grow temp storage */
+		size_t new_cap = p->temp.capacity * 2;
+		GTEXT_YAML_Node **new_items = (GTEXT_YAML_Node **)realloc(
+			p->temp.items, new_cap * sizeof(GTEXT_YAML_Node *)
+		);
+		if (!new_items) return false;
+		
+		p->temp.items = new_items;
+		p->temp.capacity = new_cap;
+	}
+	
+	p->temp.items[p->temp.count++] = node;
+	return true;
 }
 
-GTEXT_YAML_Document *yaml_parse_document(const char *input, size_t length, const GTEXT_YAML_Parse_Options *options, GTEXT_YAML_Error *error) {
-yaml_context *ctx = yaml_context_new();
-if (!ctx) {
-if (error) {
-error->code = GTEXT_YAML_E_OOM;
-error->message = "Failed to create context";
-}
-return NULL;
-}
-GTEXT_YAML_Document *doc = yaml_context_alloc(ctx, sizeof(GTEXT_YAML_Document), _Alignof(GTEXT_YAML_Document));
-if (!doc) {
-yaml_context_free(ctx);
-if (error) {
-error->code = GTEXT_YAML_E_OOM;
-error->message = "Failed to allocate document";
-}
-return NULL;
-}
-memset(doc, 0, sizeof(*doc));
-doc->ctx = ctx;
-if (options) {
-doc->options = *options;
-}
-parser_state parser;
-if (!parser_init(&parser, ctx, doc, error)) {
-yaml_context_free(ctx);
-if (error) {
-error->code = GTEXT_YAML_E_OOM;
-error->message = "Failed to init parser";
-}
-return NULL;
-}
-GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(options, parse_callback, &parser);
-if (!stream) {
-parser_free(&parser);
-yaml_context_free(ctx);
-if (error) {
-error->code = GTEXT_YAML_E_OOM;
-error->message = "Failed to create stream";
-}
-return NULL;
-}
-GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, input, length);
-if (status == GTEXT_YAML_OK) {
-status = gtext_yaml_stream_finish(stream);
-}
-gtext_yaml_stream_free(stream);
-
-/* Finalize: if no DOCUMENT_END, handle pending/stack */
-if (status == GTEXT_YAML_OK && !parser.failed && parser.pending && !parser.root) {
-parser.root = parser.pending;
-parser.pending = NULL;
-}
-if (status == GTEXT_YAML_OK && !parser.failed && !parser.root && parser.stack.depth > 0) {
-while (parser.stack.depth > 0) {
-char type = parser.stack.types[parser.stack.depth - 1];
-GTEXT_YAML_Node *node = (type == '[' || type == '-') ? stack_pop_sequence(&parser) : stack_pop_mapping(&parser);
-if (!node) {
-parser.failed = true;
-break;
-}
-if (parser.stack.depth == 0) {
-parser.root = node;
-} else {
-parser.pending = node;
-}
-}
+/**
+ * @brief Clear temporary storage.
+ */
+static void temp_clear(parser_state *p) {
+	p->temp.count = 0;
 }
 
-parser_free(&parser);
-if (status != GTEXT_YAML_OK || parser.failed) {
-yaml_context_free(ctx);
-if (error && error->code == GTEXT_YAML_OK) {
-error->code = status;
-error->message = "Parse error";
+/**
+ * @brief Streaming parser callback - builds DOM from events.
+ */
+static GTEXT_YAML_Status parse_callback(
+	GTEXT_YAML_Stream *s,
+	const void *event_payload,
+	void *user_data
+) {
+	(void)s;  /* Unused */
+	parser_state *p = (parser_state *)user_data;
+	if (p->failed) return GTEXT_YAML_E_STATE;
+	
+	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
+	GTEXT_YAML_Event_Type type = event->type;
+	
+	switch (type) {
+		case GTEXT_YAML_EVENT_STREAM_START:
+		case GTEXT_YAML_EVENT_DOCUMENT_START:
+			/* Nothing to do - we're building a single document */
+			break;
+			
+		case GTEXT_YAML_EVENT_SCALAR: {
+			/* Create scalar node */
+			GTEXT_YAML_Node *node = yaml_node_new_scalar(
+				p->ctx,
+				event->data.scalar.ptr,
+				event->data.scalar.len,
+				NULL,  /* TODO: extract tag from event */
+				NULL   /* TODO: extract anchor from event */
+			);
+			
+			if (!node) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_OOM;
+					p->error->message = "Out of memory creating scalar node";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			
+			/* Add to parent or set as root */
+			if (p->stack.depth == 0) {
+				p->root = node;
+			} else {
+				if (!temp_add(p, node)) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory adding child node";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+			break;
+		}
+		
+		case GTEXT_YAML_EVENT_SEQUENCE_START: {
+			/* Start building a sequence - we don't know the size yet */
+			
+			/* Push placeholder (we'll create the actual node on SEQUENCE_END) */
+			if (!stack_push(p, NULL, STATE_SEQUENCE)) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_OOM;
+					p->error->message = "Out of memory tracking sequence";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			break;
+		}
+		
+		case GTEXT_YAML_EVENT_SEQUENCE_END: {
+			/* Create sequence node with collected children */
+			GTEXT_YAML_Node *node = yaml_node_new_sequence(
+				p->ctx,
+				p->temp.count,
+				NULL,  /* TODO: track tag from sequence_start event */
+				NULL   /* TODO: track anchor */
+			);
+			
+			if (!node) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_OOM;
+					p->error->message = "Out of memory creating sequence node";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			
+			/* Copy children into node */
+			for (size_t i = 0; i < p->temp.count; i++) {
+				node->as.sequence.children[i] = p->temp.items[i];
+			}
+			node->as.sequence.count = p->temp.count;
+			
+			/* Pop sequence from stack (restores parent temp) */
+			stack_pop(p);
+			
+			/* Add to parent or set as root */
+			if (p->stack.depth == 0) {
+				p->root = node;
+			} else {
+				/* Add to parent's temp */
+				if (!temp_add(p, node)) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory nesting sequence";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+			
+			break;
+		}
+		
+		case GTEXT_YAML_EVENT_MAPPING_START: {
+			/* Start building a mapping */
+			
+			if (!stack_push(p, NULL, STATE_MAPPING_KEY)) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_OOM;
+					p->error->message = "Out of memory tracking mapping";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			break;
+		}
+		
+		case GTEXT_YAML_EVENT_MAPPING_END: {
+			/* Create mapping node with collected key-value pairs */
+			/* temp.items should have [key0, val0, key1, val1, ...] */
+			size_t pair_count = p->temp.count / 2;
+			
+			GTEXT_YAML_Node *node = yaml_node_new_mapping(
+				p->ctx,
+				pair_count,
+				NULL,  /* TODO: track tag */
+				NULL   /* TODO: track anchor */
+			);
+			
+			if (!node) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_OOM;
+					p->error->message = "Out of memory creating mapping node";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			
+			/* Copy pairs into node */
+			for (size_t i = 0; i < pair_count; i++) {
+				node->as.mapping.pairs[i].key = p->temp.items[i * 2];
+				node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
+				node->as.mapping.pairs[i].key_tag = NULL;
+				node->as.mapping.pairs[i].value_tag = NULL;
+			}
+			node->as.mapping.count = pair_count;
+			
+			/* Pop mapping from stack (restores parent temp) */
+			stack_pop(p);
+			
+			/* Add to parent or set as root */
+			if (p->stack.depth == 0) {
+				p->root = node;
+			} else {
+				if (!temp_add(p, node)) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory nesting mapping";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+			
+			break;
+		}
+		
+		case GTEXT_YAML_EVENT_STREAM_END:
+		case GTEXT_YAML_EVENT_DOCUMENT_END:
+			/* Document complete */
+			break;
+			
+		case GTEXT_YAML_EVENT_ALIAS:
+			/* TODO: Handle aliases in Phase 4.4 */
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_INVALID;
+				p->error->message = "Aliases not yet supported in DOM parser";
+			}
+			return GTEXT_YAML_E_INVALID;
+			
+		case GTEXT_YAML_EVENT_INDICATOR: {
+			/* Handle structural indicators: [ ] { } , : - */
+			char ch = event->data.indicator;
+			
+			switch (ch) {
+				case '[':
+					/* Start flow sequence */
+					if (!stack_push(p, NULL, STATE_SEQUENCE)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory tracking sequence";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					break;
+					
+				case ']': {
+					/* End flow sequence - create node with collected items */
+					if (p->stack.depth == 0 || p->stack.states[p->stack.depth - 1] != STATE_SEQUENCE) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Unexpected ] without matching [";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+					
+					GTEXT_YAML_Node *node = yaml_node_new_sequence(
+						p->ctx, p->temp.count, NULL, NULL
+					);
+					if (!node) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory creating sequence";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					
+					/* Set the count */
+					node->as.sequence.count = p->temp.count;
+					
+					/* Copy collected items */
+					for (size_t i = 0; i < p->temp.count; i++) {
+						node->as.sequence.children[i] = p->temp.items[i];
+					}
+					
+					stack_pop(p);
+					
+					/* Add to parent or set as root */
+					if (p->stack.depth == 0) {
+						p->root = node;
+					} else {
+						if (!temp_add(p, node)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory nesting sequence";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+					}
+					break;
+				}
+				
+				case '{':
+					/* Start flow mapping */
+					if (!stack_push(p, NULL, STATE_MAPPING_KEY)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory tracking mapping";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					break;
+					
+				case '}': {
+					/* End flow mapping - create node with collected pairs */
+					if (p->stack.depth == 0 || 
+					    (p->stack.states[p->stack.depth - 1] != STATE_MAPPING_KEY &&
+					     p->stack.states[p->stack.depth - 1] != STATE_MAPPING_VALUE)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Unexpected } without matching {";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+					
+					/* temp.count should be even (key-value pairs) */
+					size_t pair_count = p->temp.count / 2;
+					GTEXT_YAML_Node *node = yaml_node_new_mapping(
+						p->ctx, pair_count, NULL, NULL
+					);
+					if (!node) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory creating mapping";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					
+					/* Set the count */
+					node->as.mapping.count = pair_count;
+					
+					/* Copy key-value pairs */
+					for (size_t i = 0; i < pair_count; i++) {
+						node->as.mapping.pairs[i].key = p->temp.items[i * 2];
+						node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
+					}
+					
+					stack_pop(p);
+					
+					/* Add to parent or set as root */
+					if (p->stack.depth == 0) {
+						p->root = node;
+					} else {
+						if (!temp_add(p, node)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory nesting mapping";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+					}
+					break;
+				}
+				
+				case ':':
+					/* Mapping key-value separator - flip state */
+					if (p->stack.depth > 0 && p->stack.states[p->stack.depth - 1] == STATE_MAPPING_KEY) {
+						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
+					}
+					break;
+					
+				case ',':
+					/* Item separator - handle mapping state flip */
+					if (p->stack.depth > 0 && p->stack.states[p->stack.depth - 1] == STATE_MAPPING_VALUE) {
+						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+					}
+					break;
+					
+				case '-':
+					/* Block sequence indicator - TODO: implement block style parsing */
+					break;
+					
+				default:
+					/* Unknown indicator - ignore */
+					break;
+			}
+			break;
+		}
+	}
+	
+	return GTEXT_YAML_OK;
 }
-return NULL;
-}
-doc->root = parser.root;
-doc->node_count = 1;
-return doc;
+
+/**
+ * @brief Parse YAML string into DOM document (internal implementation).
+ */
+GTEXT_YAML_Document *yaml_parse_document(
+	const char *input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+) {
+	if (!input) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Input string is NULL";
+		}
+		return NULL;
+	}
+	
+	/* Use default options if none provided */
+	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
+	if (!options) options = &default_opts;
+	
+	/* Create context */
+	yaml_context *ctx = yaml_context_new();
+	if (!ctx) {
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating context";
+		}
+		return NULL;
+	}
+	
+	/* Store input buffer reference (for future in-situ optimization) */
+	yaml_context_set_input_buffer(ctx, input, length);
+	
+	/* Create document */
+	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)yaml_context_alloc(
+		ctx, sizeof(GTEXT_YAML_Document), 8
+	);
+	if (!doc) {
+		yaml_context_free(ctx);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating document";
+		}
+		return NULL;
+	}
+	
+	memset(doc, 0, sizeof(*doc));
+	doc->ctx = ctx;
+	doc->options = *options;
+	
+	/* Initialize parser state */
+	parser_state parser;
+	if (!parser_init(&parser, ctx, error)) {
+		yaml_context_free(ctx);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory initializing parser";
+		}
+		return NULL;
+	}
+	parser.doc = doc;
+	
+	/* Create streaming parser */
+	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(options, parse_callback, &parser);
+	if (!stream) {
+		parser_free(&parser);
+		yaml_context_free(ctx);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating stream parser";
+		}
+		return NULL;
+	}
+	
+	/* Feed input to streaming parser */
+	GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, input, length);
+	if (status == GTEXT_YAML_OK) {
+		status = gtext_yaml_stream_finish(stream);
+	}
+	
+	gtext_yaml_stream_free(stream);
+	
+	/* Check if parsing succeeded */
+	if (status != GTEXT_YAML_OK || parser.failed) {
+		parser_free(&parser);
+		yaml_context_free(ctx);
+		if (error && error->code == GTEXT_YAML_OK) {
+			error->code = status;
+			error->message = "Parse error";
+		}
+		return NULL;
+	}
+	
+	/* Set document root */
+	doc->root = parser.root;
+	doc->node_count = 1;  /* TODO: track actual count */
+	
+	parser_free(&parser);
+	return doc;
 }
