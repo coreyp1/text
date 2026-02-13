@@ -18,24 +18,13 @@ TEST(YamlDomDebug, ParseScalar) {
 	
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
 	
-	if (!doc) {
-		std::cout << "Parse failed:\n";
-		std::cout << "  Code: " << error.code << "\n";
-		std::cout << "  Message: " << (error.message ? error.message : "NULL") << "\n";
-		std::cout << "  Offset: " << error.offset << "\n";
-		std::cout << "  Line: " << error.line << ", Col: " << error.col << "\n";
-	} else {
-		std::cout << "Parse succeeded\n";
-		const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
-		if (root) {
-			std::cout << "  Root type: " << gtext_yaml_node_type(root) << "\n";
-		} else {
-			std::cout << "  Root is NULL\n";
-		}
-		gtext_yaml_free(doc);
-	}
-	
 	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	ASSERT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_STRING);
+	
+	gtext_yaml_free(doc);
 }
 
 TEST(YamlDomDebug, ParseSequence) {
@@ -46,18 +35,16 @@ TEST(YamlDomDebug, ParseSequence) {
 	
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
 	
-	if (!doc) {
-		std::cout << "Parse failed:\n";
-		std::cout << "  Code: " << error.code << "\n";
-		std::cout << "  Message: " << (error.message ? error.message : "NULL") << "\n";
-	} else {
-		std::cout << "Parse succeeded\n";
-		const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
-		if (root) {
-			std::cout << "  Root type: " << gtext_yaml_node_type(root) << "\n";
-		} else {
-			std::cout << "  Root is NULL\n";
-		}
-		gtext_yaml_free(doc);
-	}
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	ASSERT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SEQUENCE);
+	
+	gtext_yaml_free(doc);
+}
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

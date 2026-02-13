@@ -69,6 +69,9 @@ typedef struct {
 	
 	GTEXT_YAML_Node *root;              /* Root node once complete */
 	bool failed;                        /* True if error occurred */
+	size_t document_count;              /* Number of documents seen (0-based) */
+	bool document_started;              /* True if inside a document */
+	bool first_document_complete;       /* True when first document is done */
 } parser_state;
 
 /* Stack states */
@@ -389,10 +392,26 @@ static GTEXT_YAML_Status parse_callback(
 	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
 	GTEXT_YAML_Event_Type type = event->type;
 	
+	/* Skip events if first document already complete (multi-doc streams) */
+	if (p->first_document_complete) {
+		return GTEXT_YAML_OK;
+	}
+	
 	switch (type) {
 		case GTEXT_YAML_EVENT_STREAM_START:
+			/* Start of stream - nothing to do */
+			break;
+			
 		case GTEXT_YAML_EVENT_DOCUMENT_START:
-			/* Nothing to do - we're building a single document */
+			/* Start of a document */
+			if (!p->document_started) {
+				p->document_started = true;
+				/* This is the first (or only) document, parse it */
+			} else {
+				/* We've already started a document, this is a second one */
+				/* Stop parsing - we only want the first document */
+				p->first_document_complete = true;
+			}
 			break;
 			
 		case GTEXT_YAML_EVENT_SCALAR: {
@@ -598,8 +617,16 @@ static GTEXT_YAML_Status parse_callback(
 		}
 		
 		case GTEXT_YAML_EVENT_STREAM_END:
+			/* End of stream */
+			break;
+			
 		case GTEXT_YAML_EVENT_DOCUMENT_END:
-			/* Document complete */
+			/* End of document */
+			if (p->document_started && !p->first_document_complete) {
+				/* First document is complete */
+				p->first_document_complete = true;
+				p->document_count = 1;
+			}
 			break;
 			
 		case GTEXT_YAML_EVENT_ALIAS: {
@@ -861,6 +888,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	memset(doc, 0, sizeof(*doc));
 	doc->ctx = ctx;
 	doc->options = *options;
+	doc->document_index = 0;  /* Always parsing first document */
 	
 	/* Initialize parser state */
 	parser_state parser;

@@ -479,3 +479,8 @@ TEST(YamlRealWorld, MixedStyles) {
     EXPECT_EQ(st, GTEXT_YAML_OK);
     gtext_yaml_stream_free(s);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

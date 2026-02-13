@@ -288,6 +288,122 @@ TEST(YamlScalarStyles, MultiLinePlain) {
 }
 
 //
+// Test: Literal scalar with strip chomping (|-)
+//
+TEST(YamlScalarStyles, LiteralScalarStrip) {
+  const char *input = "|-\n  line1\n  line2\n\n\n";
+  reset_scalar();
+  
+  GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, capture_cb, NULL);
+  ASSERT_NE(s, nullptr);
+  
+  GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  st = gtext_yaml_stream_finish(s);
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  gtext_yaml_stream_free(s);
+  
+  ASSERT_NE(last_scalar, nullptr);
+  // Strip chomping should remove all trailing newlines
+  // Content should be "line1\nline2" without trailing newlines
+  EXPECT_TRUE(strstr(last_scalar, "line1") != NULL);
+  EXPECT_TRUE(strstr(last_scalar, "line2") != NULL);
+  // Should NOT end with multiple newlines
+  if (last_len > 0) {
+    EXPECT_NE(last_scalar[last_len - 1], '\n');
+  }
+  
+  reset_scalar();
+}
+
+//
+// Test: Literal scalar with keep chomping (|+)
+//
+TEST(YamlScalarStyles, LiteralScalarKeep) {
+  const char *input = "|+\n  line1\n  line2\n\n\n";
+  reset_scalar();
+  
+  GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, capture_cb, NULL);
+  ASSERT_NE(s, nullptr);
+  
+  GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  st = gtext_yaml_stream_finish(s);
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  gtext_yaml_stream_free(s);
+  
+  ASSERT_NE(last_scalar, nullptr);
+  // Keep chomping should preserve all trailing newlines
+  EXPECT_TRUE(strstr(last_scalar, "line1") != NULL);
+  EXPECT_TRUE(strstr(last_scalar, "line2") != NULL);
+  // Should have multiple trailing newlines preserved
+  EXPECT_GT(last_len, 12); // At least "line1\nline2\n" + extra newlines
+  
+  reset_scalar();
+}
+
+//
+// Test: Folded scalar with strip chomping (>-)
+//
+TEST(YamlScalarStyles, FoldedScalarStrip) {
+  const char *input = ">-\n  line1\n  line2\n\n\n";
+  reset_scalar();
+  
+  GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, capture_cb, NULL);
+  ASSERT_NE(s, nullptr);
+  
+  GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  st = gtext_yaml_stream_finish(s);
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  gtext_yaml_stream_free(s);
+  
+  ASSERT_NE(last_scalar, nullptr);
+  // Strip chomping should remove trailing newlines
+  EXPECT_TRUE(strstr(last_scalar, "line1") != NULL);
+  EXPECT_TRUE(strstr(last_scalar, "line2") != NULL);
+  if (last_len > 0) {
+    EXPECT_NE(last_scalar[last_len - 1], '\n');
+  }
+  
+  reset_scalar();
+}
+
+//
+// Test: Folded scalar with keep chomping (>+)
+//
+TEST(YamlScalarStyles, FoldedScalarKeep) {
+  const char *input = ">+\n  line1\n  line2\n\n\n";
+  reset_scalar();
+  
+  GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, capture_cb, NULL);
+  ASSERT_NE(s, nullptr);
+  
+  GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  st = gtext_yaml_stream_finish(s);
+  EXPECT_EQ(st, GTEXT_YAML_OK);
+  
+  gtext_yaml_stream_free(s);
+  
+  ASSERT_NE(last_scalar, nullptr);
+  // Keep chomping should preserve trailing newlines
+  EXPECT_TRUE(strstr(last_scalar, "line1") != NULL);
+  EXPECT_TRUE(strstr(last_scalar, "line2") != NULL);
+  // Should have some content
+  EXPECT_GT(last_len, 10);
+  
+  reset_scalar();
+}
+
+//
 // Cleanup
 //
 class ScalarStylesCleanup : public ::testing::Environment {
@@ -301,3 +417,8 @@ public:
 // Register cleanup
 static ::testing::Environment* const scalar_styles_env =
     ::testing::AddGlobalTestEnvironment(new ScalarStylesCleanup);
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

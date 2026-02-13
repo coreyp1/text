@@ -24,3 +24,8 @@ TEST(YamlReader, PositionTracking) {
   EXPECT_EQ(line, 2);
   EXPECT_EQ(col, 1);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

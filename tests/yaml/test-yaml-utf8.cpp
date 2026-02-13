@@ -21,3 +21,8 @@ TEST(YamlUtf8, ValidateVarious) {
     const char bad3[] = { (char)0xED, (char)0xA0, (char)0x80, 0 };
     EXPECT_EQ(gtext_utf8_validate(bad3, 3), 0);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

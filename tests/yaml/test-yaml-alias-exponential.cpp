@@ -32,3 +32,8 @@ TEST(YamlAliasExponential, DFSLimit) {
 
   gtext_yaml_resolver_free(r);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

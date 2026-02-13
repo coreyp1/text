@@ -180,22 +180,21 @@ TEST(YamlEscapes, DoubleQuoteEscape) {
 
 //
 // TODO: The following escape sequences are defined in YAML 1.2.2 but not yet implemented in the scanner:
-// - \0 (null, 0x00)
-// - \a (bell, 0x07)
-// - \b (backspace, 0x08)
-// - \f (form feed, 0x0C)
-// - \v (vertical tab, 0x0B)
-// - \e (escape, 0x1B)
 // - \  (non-breaking space, 0xA0)
 // - \_ (non-breaking space, 0xA0)
 // - \N (next line, 0x85)
 // - \L (line separator, 0x2028)
 // - \P (paragraph separator, 0x2029)
 //
-// These tests are commented out until the scanner is updated to support them.
+// The following are now implemented:
+// - \0 (null, 0x00) ✅
+// - \a (bell, 0x07) ✅
+// - \b (backspace, 0x08) ✅
+// - \f (form feed, 0x0C) ✅
+// - \v (vertical tab, 0x0B) ✅
+// - \e (escape, 0x1B) ✅
 //
 
-/*
 //
 // Test: Null escape (\0)
 //
@@ -342,7 +341,6 @@ TEST(YamlEscapes, EscapeEscape) {
     
     reset_scalar();
 }
-*/
 
 //
 // Test: Hexadecimal escape (\xHH)
@@ -443,4 +441,9 @@ TEST(YamlEscapes, SpaceEscape) {
     EXPECT_STREQ(last_scalar, " ");
     
     reset_scalar();
+}
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

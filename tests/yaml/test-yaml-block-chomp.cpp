@@ -67,3 +67,8 @@ TEST(YamlBlockChomp, ChompingModes) {
 
     if (last_scalar) free(last_scalar);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

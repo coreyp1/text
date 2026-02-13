@@ -408,7 +408,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
             break;
           }
           int esc = (unsigned char)s->input.data[s->cursor + look + 1];
-          if (esc == 'n' || esc == 'r' || esc == 't' || esc == '"' || esc == '\\') {
+          if (esc == 'n' || esc == 'r' || esc == 't' || esc == '"' || esc == '\\' ||
+              esc == '0' || esc == 'a' || esc == 'b' || esc == 'f' || esc == 'v' || esc == 'e') {
             char outc;
             switch (esc) {
               case 'n': outc = '\n'; break;
@@ -416,6 +417,12 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
               case 't': outc = '\t'; break;
               case '"': outc = '"'; break;
               case '\\': outc = '\\'; break;
+              case '0': outc = '\0'; break;
+              case 'a': outc = '\a'; break;
+              case 'b': outc = '\b'; break;
+              case 'f': outc = '\f'; break;
+              case 'v': outc = '\v'; break;
+              case 'e': outc = '\x1B'; break;  /* ESC character */
               default: outc = (char)esc; break;
             }
             if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }

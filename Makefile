@@ -240,7 +240,7 @@ $(APP_DIR)/$2$(EXE_EXTENSION): \
 		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling %s Test ###\n" "$2"
 	@mkdir -p $$(@D)
-	$$(CXX) $$(CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(APP_DIR)/$2.d -o $$@ $$< $$(LDFLAGS) $$(TESTFLAGS) -lgtest_main $$(APP_DIR)/$$(TARGET)
+	$$(CXX) $$(CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(APP_DIR)/$2.d -o $$@ $$< $$(LDFLAGS) $$(TESTFLAGS) $$(APP_DIR)/$$(TARGET)
 endef
 
 # Generate build rules from TEST_PAIRS (one pair = source|name)
@@ -296,7 +296,7 @@ $(ASAN_APP_DIR)/$2$(EXE_EXTENSION): \
 		| $(ASAN_APP_DIR)/$(ASAN_TARGET)
 	@printf "\n### Compiling ASan+UBSan %s Test ###\n" "$2"
 	@mkdir -p $$(@D)
-	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) -lgtest_main $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
+	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
 endef
 
 # Generate ASAN build rules from TEST_PAIRS

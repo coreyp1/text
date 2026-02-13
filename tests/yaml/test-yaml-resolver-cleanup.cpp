@@ -111,3 +111,8 @@ TEST(YamlResolverCleanup, ManyAnchors) {
   gtext_yaml_resolver_free(r);
   // Run under valgrind - should show zero leaks
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

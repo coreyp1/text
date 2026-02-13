@@ -203,6 +203,14 @@ GTEXT_API const GTEXT_YAML_Node *gtext_yaml_document_root(const GTEXT_YAML_Docum
 }
 
 /**
+ * @brief Get document index (0-based) from multi-document stream.
+ */
+GTEXT_API size_t gtext_yaml_document_index(const GTEXT_YAML_Document *doc) {
+	if (!doc) return 0;
+	return doc->document_index;
+}
+
+/**
  * @brief Get the type of a YAML node.
  */
 GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node *n) {

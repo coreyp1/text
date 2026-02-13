@@ -445,3 +445,8 @@ TEST(YamlDomParser, MultipleDocumentParsing) {
 	gtext_yaml_free(doc2);
 	gtext_yaml_free(doc3);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

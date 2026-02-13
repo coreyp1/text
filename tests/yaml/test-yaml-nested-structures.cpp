@@ -18,10 +18,11 @@ extern "C" {
 struct EventCounts {
   int scalars;
   int indicators;
+  int structures;  // SEQUENCE/MAPPING START/END events
   int total;
 };
 
-static EventCounts counts = {0, 0, 0};
+static EventCounts counts = {0, 0, 0, 0};
 
 static GTEXT_YAML_Status counting_cb(GTEXT_YAML_Stream *s, const void *evp, void *user) {
   (void)s; (void)user;
@@ -29,12 +30,17 @@ static GTEXT_YAML_Status counting_cb(GTEXT_YAML_Stream *s, const void *evp, void
   counts.total++;
   if (e->type == GTEXT_YAML_EVENT_SCALAR) counts.scalars++;
   if (e->type == GTEXT_YAML_EVENT_INDICATOR) counts.indicators++;
+  if (e->type == GTEXT_YAML_EVENT_SEQUENCE_START || e->type == GTEXT_YAML_EVENT_SEQUENCE_END ||
+      e->type == GTEXT_YAML_EVENT_MAPPING_START || e->type == GTEXT_YAML_EVENT_MAPPING_END) {
+    counts.structures++;
+  }
   return GTEXT_YAML_OK;
 }
 
 static void reset_counts() {
   counts.scalars = 0;
   counts.indicators = 0;
+  counts.structures = 0;
   counts.total = 0;
 }
 
@@ -57,10 +63,11 @@ TEST(YamlNested, SimpleNestedSequence) {
   gtext_yaml_stream_free(s);
   
   // Should have: [ [ 1 , 2 ] , [ 3 , 4 ] ]
-  // Indicators: [ [ ] , [ ] ]  = 8
+  // Structures: 4 SEQUENCE_START + 4 SEQUENCE_END = 8
+  // Indicators: 3 commas
   // Scalars: 1 2 3 4 = 4
   EXPECT_EQ(counts.scalars, 4);
-  EXPECT_GE(counts.indicators, 8);
+  EXPECT_GE(counts.structures + counts.indicators, 8);
 }
 
 //
@@ -82,10 +89,11 @@ TEST(YamlNested, NestedMappings) {
   gtext_yaml_stream_free(s);
   
   // Should have: { a : { b : { c : 1 } } }
-  // Indicators: { } { } { } : : : = 9
+  // Structures: 3 MAPPING_START + 3 MAPPING_END = 6
+  // Indicators: 3 colons
   // Scalars: a b c 1 = 4
   EXPECT_EQ(counts.scalars, 4);
-  EXPECT_GE(counts.indicators, 9);
+  EXPECT_GE(counts.structures + counts.indicators, 9);
 }
 
 //
@@ -130,9 +138,9 @@ TEST(YamlNested, DepthLevel5) {
   
   gtext_yaml_stream_free(s);
   
-  // Should have 1 scalar "hello" and 10 brackets
+  // Should have 1 scalar "hello" and 10 brackets (5 START + 5 END = 10 structure events)
   EXPECT_EQ(counts.scalars, 1);
-  EXPECT_GE(counts.indicators, 10);
+  EXPECT_GE(counts.structures, 10);
 }
 
 //
@@ -156,9 +164,9 @@ TEST(YamlNested, DepthLevel10WithinLimits) {
   
   gtext_yaml_stream_free(s);
   
-  // Should succeed with 1 scalar and 20 brackets
+  // Should succeed with 1 scalar and 20 brackets (10 START + 10 END = 20 structure events)
   EXPECT_EQ(counts.scalars, 1);
-  EXPECT_GE(counts.indicators, 20);
+  EXPECT_GE(counts.structures, 20);
 }
 
 //
@@ -200,8 +208,10 @@ TEST(YamlNested, EmptyNestedStructures) {
   gtext_yaml_stream_free(s);
   
   // Empty structures, no scalars
+  // [[],[[]],{}] has: outer [], first [], nested [[]], and {}
+  // Structures: 2+2+4+2 = 10 structure events, plus 2 commas
   EXPECT_EQ(counts.scalars, 0);
-  EXPECT_GE(counts.indicators, 10);  // Many brackets
+  EXPECT_GE(counts.structures + counts.indicators, 10);
 }
 
 //
@@ -225,4 +235,9 @@ TEST(YamlNested, ComplexStructure) {
   // Scalars: users, name, alice, age, 30, name, bob, age, 25, count, 2 = 11
   EXPECT_EQ(counts.scalars, 11);
   EXPECT_GE(counts.total, 20);
+}
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

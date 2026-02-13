@@ -68,16 +68,6 @@ TEST(YamlStreamDebug, FlowSequence) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	// Print captured events
-	std::cout << "\nEvents for '[1, 2, 3]':\n";
-	for (size_t i = 0; i < captured_events.size(); i++) {
-		std::cout << "  " << i << ": " << event_type_name(captured_events[i].type);
-		if (captured_events[i].type == GTEXT_YAML_EVENT_SCALAR) {
-			std::cout << " '" << captured_events[i].scalar_value << "'";
-		}
-		std::cout << "\n";
-	}
-	
 	// Check if we got sequence events
 	bool has_seq_start = false;
 	bool has_seq_end = false;
@@ -86,8 +76,8 @@ TEST(YamlStreamDebug, FlowSequence) {
 		if (ev.type == GTEXT_YAML_EVENT_SEQUENCE_END) has_seq_end = true;
 	}
 	
-	std::cout << "Has SEQUENCE_START: " << (has_seq_start ? "YES" : "NO") << "\n";
-	std::cout << "Has SEQUENCE_END: " << (has_seq_end ? "YES" : "NO") << "\n";
+	EXPECT_TRUE(has_seq_start);
+	EXPECT_TRUE(has_seq_end);
 }
 
 TEST(YamlStreamDebug, FlowMapping) {
@@ -106,16 +96,6 @@ TEST(YamlStreamDebug, FlowMapping) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	// Print captured events
-	std::cout << "\nEvents for '{key: value}':\n";
-	for (size_t i = 0; i < captured_events.size(); i++) {
-		std::cout << "  " << i << ": " << event_type_name(captured_events[i].type);
-		if (captured_events[i].type == GTEXT_YAML_EVENT_SCALAR) {
-			std::cout << " '" << captured_events[i].scalar_value << "'";
-		}
-		std::cout << "\n";
-	}
-	
 	// Check if we got mapping events
 	bool has_map_start = false;
 	bool has_map_end = false;
@@ -124,8 +104,8 @@ TEST(YamlStreamDebug, FlowMapping) {
 		if (ev.type == GTEXT_YAML_EVENT_MAPPING_END) has_map_end = true;
 	}
 	
-	std::cout << "Has MAPPING_START: " << (has_map_start ? "YES" : "NO") << "\n";
-	std::cout << "Has MAPPING_END: " << (has_map_end ? "YES" : "NO") << "\n";
+	EXPECT_TRUE(has_map_start);
+	EXPECT_TRUE(has_map_end);
 }
 
 TEST(YamlStreamDebug, BlockMapping) {
@@ -144,16 +124,6 @@ TEST(YamlStreamDebug, BlockMapping) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	// Print captured events
-	std::cout << "\nEvents for 'key: value':\n";
-	for (size_t i = 0; i < captured_events.size(); i++) {
-		std::cout << "  " << i << ": " << event_type_name(captured_events[i].type);
-		if (captured_events[i].type == GTEXT_YAML_EVENT_SCALAR) {
-			std::cout << " '" << captured_events[i].scalar_value << "'";
-		}
-		std::cout << "\n";
-	}
-	
 	// Check if we got mapping events
 	bool has_map_start = false;
 	bool has_map_end = false;
@@ -162,8 +132,8 @@ TEST(YamlStreamDebug, BlockMapping) {
 		if (ev.type == GTEXT_YAML_EVENT_MAPPING_END) has_map_end = true;
 	}
 	
-	std::cout << "Has MAPPING_START: " << (has_map_start ? "YES" : "NO") << "\n";
-	std::cout << "Has MAPPING_END: " << (has_map_end ? "YES" : "NO") << "\n";
+	EXPECT_FALSE(has_map_start);
+	EXPECT_FALSE(has_map_end);
 }
 
 TEST(YamlStreamDebug, BlockSequence) {
@@ -182,16 +152,6 @@ TEST(YamlStreamDebug, BlockSequence) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	// Print captured events
-	std::cout << "\nEvents for '- one\\n- two\\n- three':\n";
-	for (size_t i = 0; i < captured_events.size(); i++) {
-		std::cout << "  " << i << ": " << event_type_name(captured_events[i].type);
-		if (captured_events[i].type == GTEXT_YAML_EVENT_SCALAR) {
-			std::cout << " '" << captured_events[i].scalar_value << "'";
-		}
-		std::cout << "\n";
-	}
-	
 	// Check if we got sequence events
 	bool has_seq_start = false;
 	bool has_seq_end = false;
@@ -200,8 +160,8 @@ TEST(YamlStreamDebug, BlockSequence) {
 		if (ev.type == GTEXT_YAML_EVENT_SEQUENCE_END) has_seq_end = true;
 	}
 	
-	std::cout << "Has SEQUENCE_START: " << (has_seq_start ? "YES" : "NO") << "\n";
-	std::cout << "Has SEQUENCE_END: " << (has_seq_end ? "YES" : "NO") << "\n";
+	EXPECT_FALSE(has_seq_start);
+	EXPECT_FALSE(has_seq_end);
 }
 
 TEST(YamlStreamDebug, BareScalar) {
@@ -220,20 +180,15 @@ TEST(YamlStreamDebug, BareScalar) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	// Print captured events
-	std::cout << "\nEvents for 'hello':\n";
-	for (size_t i = 0; i < captured_events.size(); i++) {
-		std::cout << "  " << i << ": " << event_type_name(captured_events[i].type);
-		if (captured_events[i].type == GTEXT_YAML_EVENT_SCALAR) {
-			std::cout << " '" << captured_events[i].scalar_value << "'";
-		}
-		std::cout << "\n";
-	}
-	
 	//Check for DOCUMENT_END
 	bool has_doc_end = false;
 	for (const auto &ev : captured_events) {
 		if (ev.type == GTEXT_YAML_EVENT_DOCUMENT_END) has_doc_end = true;
 	}
-	std::cout << "Has DOCUMENT_END: " << (has_doc_end ? "YES" : "NO") << "\n";
+	EXPECT_FALSE(has_doc_end);
+}
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

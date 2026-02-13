@@ -40,3 +40,8 @@ TEST(YamlScannerChunked, OneByteFeed) {
     gtext_yaml_stream_free(s);
     EXPECT_GE(cb_count, 3);
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

@@ -211,6 +211,7 @@ struct GTEXT_YAML_Document {
 	GTEXT_YAML_Node *root;      /* Root node of the document */
 	GTEXT_YAML_Parse_Options options; /* Parse options used */
 	size_t node_count;          /* Total nodes allocated (statistics) */
+	size_t document_index;      /* Index in multi-document stream (0-based) */
 	bool has_directives;        /* True if %YAML or %TAG directives present */
 	int yaml_version_major;     /* YAML version from %YAML directive (0 if none) */
 	int yaml_version_minor;

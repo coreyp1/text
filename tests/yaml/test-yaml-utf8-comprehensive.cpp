@@ -284,3 +284,8 @@ TEST(YamlUtf8Comprehensive, ChineseCharacters) {
   
   reset_scalar();
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

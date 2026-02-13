@@ -284,3 +284,8 @@ TEST(YamlContext, NullSafety) {
 	
 	yaml_context_set_input_buffer(nullptr, "test", 4);  // Should not crash
 }
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

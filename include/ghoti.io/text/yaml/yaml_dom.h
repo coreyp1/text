@@ -46,7 +46,16 @@ GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse(
  * @return Root node, or NULL
  */
 GTEXT_API const GTEXT_YAML_Node * gtext_yaml_document_root(const GTEXT_YAML_Document * doc);
-
+/**
+ * @brief Get the document index in a multi-document stream.
+ *
+ * For multi-document streams, this returns the 0-based index of the document.
+ * The current implementation only parses the first document, so this always returns 0.
+ *
+ * @param doc Document to query
+ * @return Document index (0-based)
+ */
+GTEXT_API size_t gtext_yaml_document_index(const GTEXT_YAML_Document * doc);
 /**
  * @brief Return the node type for @p n.
  *
