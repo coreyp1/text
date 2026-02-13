@@ -250,9 +250,8 @@ TEST(YamlDomParser, FlowMappingWithQuotedKeys) {
 // Block-Style Tests
 // ============================================================================
 
-TEST(YamlDomParser, DISABLED_BlockSequence) {
-	// TODO: Block-style sequences not yet fully supported
-	// The parser creates a scalar node for the first item instead of a sequence
+TEST(YamlDomParser, BlockSequence) {
+	// Block-style sequences now supported!
 	const char *yaml = "- one\n- two\n- three";
 	GTEXT_YAML_Error error;
 	memset(&error, 0, sizeof(error));
@@ -267,8 +266,8 @@ TEST(YamlDomParser, DISABLED_BlockSequence) {
 	gtext_yaml_free(doc);
 }
 
-TEST(YamlDomParser, DISABLED_BlockMapping) {
-	// TODO: Block-style mappings not yet fully supported  
+TEST(YamlDomParser, BlockMapping) {
+	// Block-style mappings now supported!
 	const char *yaml = "name: Alice\nage: 30\ncity: NYC";
 	GTEXT_YAML_Error error;
 	memset(&error, 0, sizeof(error));
@@ -283,8 +282,8 @@ TEST(YamlDomParser, DISABLED_BlockMapping) {
 	gtext_yaml_free(doc);
 }
 
-TEST(YamlDomParser, DISABLED_BlockMappingSinglePair) {
-	// TODO: Block-style mappings not yet fully supported
+TEST(YamlDomParser, BlockMappingSinglePair) {
+	// Block-style mappings now supported!
 	const char *yaml = "key: value";
 	GTEXT_YAML_Error error;
 	memset(&error, 0, sizeof(error));
