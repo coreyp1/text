@@ -343,6 +343,43 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     return GTEXT_YAML_OK;
   }
 
+  /* Check for document markers: "---" and "..." */
+  if (c == '-' || c == '.') {
+    /* Need to peek ahead for 3 characters total */
+    if (s->cursor + 2 < s->input.len) {
+      int c1 = (unsigned char)s->input.data[s->cursor + 1];
+      int c2 = (unsigned char)s->input.data[s->cursor + 2];
+      
+      if (c1 == c && c2 == c) {
+        /* We have three identical '-' or '.' chars. Check if followed by whitespace or EOF. */
+        int c3 = (s->cursor + 3 < s->input.len) ? (unsigned char)s->input.data[s->cursor + 3] : -1;
+        
+        /* If c3 is -1 and we're not finished, we need more data to decide */
+        if (c3 == -1 && !s->finished) {
+          return GTEXT_YAML_E_INCOMPLETE;
+        }
+        
+        /* Document markers must be followed by whitespace, newline, or EOF */
+        if (c3 == -1 || c3 == ' ' || c3 == '\t' || c3 == '\r' || c3 == '\n') {
+          /* Consume all three characters */
+          scanner_consume(s);
+          scanner_consume(s);
+          scanner_consume(s);
+          
+          tok->type = (c == '-') ? GTEXT_YAML_TOKEN_DOCUMENT_START : GTEXT_YAML_TOKEN_DOCUMENT_END;
+          tok->offset = off;
+          tok->line = line;
+          tok->col = col;
+          return GTEXT_YAML_OK;
+        }
+        /* Otherwise, it's not a document marker (e.g., "---abc"), fall through to indicator handling */
+      }
+    } else if (!s->finished) {
+      /* Need more data to determine if this is a document marker */
+      return GTEXT_YAML_E_INCOMPLETE;
+    }
+  }
+
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
   if (is_indicator_char(c)) {
     scanner_consume(s);

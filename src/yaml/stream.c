@@ -274,6 +274,24 @@ GTEXT_API GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(GTEXT_YAML_Stream *
     ev.line = tok.line;
     ev.col = tok.col;
 
+    if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
+      ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
+      if (s->cb) {
+        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+        if (rc != GTEXT_YAML_OK) return rc;
+      }
+      continue;
+    }
+
+    if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
+      ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
+      if (s->cb) {
+        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+        if (rc != GTEXT_YAML_OK) return rc;
+      }
+      continue;
+    }
+
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
