@@ -25,6 +25,9 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.resolve_tags = true;
   opts.retain_comments = false;
   opts.yaml_1_1 = false;
+  opts.enable_custom_tags = false;
+  opts.custom_tags = NULL;
+  opts.custom_tag_count = 0;
   return opts;
 }
 
@@ -39,6 +42,9 @@ GTEXT_API GTEXT_YAML_Write_Options gtext_yaml_write_options_default(void)
   opts.canonical = false;
   opts.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   opts.flow_style = GTEXT_YAML_FLOW_STYLE_AUTO;
+  opts.enable_custom_tags = false;
+  opts.custom_tags = NULL;
+  opts.custom_tag_count = 0;
   return opts;
 }
 

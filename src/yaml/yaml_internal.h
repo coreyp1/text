@@ -181,6 +181,9 @@ typedef struct {
 	int timestamp_second;
 	int timestamp_nsec;         /* Fractional seconds in nanoseconds */
 	int timestamp_tz_offset;    /* Offset in minutes from UTC */
+	bool has_binary;            /* True if binary data was parsed */
+	const unsigned char *binary_data; /* Binary payload (arena-allocated) */
+	size_t binary_len;          /* Length of binary payload */
 	const char *tag;            /* Optional tag (e.g., "!!str"), NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
 } yaml_node_scalar;

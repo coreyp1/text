@@ -12,10 +12,12 @@
  * eventually replace this.
  */
 
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <limits.h>
+
+#include <ghoti.io/text/yaml/yaml_resolver.h>
 
 #include "yaml_internal.h"
 
@@ -36,12 +38,12 @@ typedef struct AnchorRefs {
 /* Stack entry used by DFS; declared at file scope so prototypes can use it. */
 struct StackEntry { AnchorRefs *node; struct StackEntry *next; };
 
-typedef struct {
+struct ResolverState {
   AnchorEntry *anchors;
   size_t total_expanded;
   GTEXT_YAML_Parse_Options opts;
   AnchorRefs *anchor_defs;
-} ResolverState;
+};
 
 static AnchorEntry *anchor_find(AnchorEntry *head, const char *name) {
   for (AnchorEntry *e = head; e; e = e->next) {

@@ -73,6 +73,9 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	node->as.scalar.timestamp_second = 0;
 	node->as.scalar.timestamp_nsec = 0;
 	node->as.scalar.timestamp_tz_offset = 0;
+	node->as.scalar.has_binary = false;
+	node->as.scalar.binary_data = NULL;
+	node->as.scalar.binary_len = 0;
 	
 	/* Copy value into arena */
 	node->as.scalar.value = arena_strdup(ctx, value, length);
@@ -296,6 +299,57 @@ GTEXT_API bool gtext_yaml_node_as_timestamp(
 	out->second = n->as.scalar.timestamp_second;
 	out->nsec = n->as.scalar.timestamp_nsec;
 	out->tz_offset = n->as.scalar.timestamp_tz_offset;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_as_binary(
+	const GTEXT_YAML_Node *n,
+	const unsigned char **out_data,
+	size_t *out_len
+) {
+	if (!n || !out_data || !out_len) return false;
+	if (!n->as.scalar.has_binary) return false;
+	*out_data = n->as.scalar.binary_data;
+	*out_len = n->as.scalar.binary_len;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_set_bool(GTEXT_YAML_Node *n, bool value) {
+	if (!n) return false;
+	if (n->type != GTEXT_YAML_STRING && n->type != GTEXT_YAML_BOOL &&
+		n->type != GTEXT_YAML_INT && n->type != GTEXT_YAML_FLOAT &&
+		n->type != GTEXT_YAML_NULL) {
+		return false;
+	}
+	n->type = GTEXT_YAML_BOOL;
+	n->as.scalar.type = GTEXT_YAML_BOOL;
+	n->as.scalar.bool_value = value;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_set_int(GTEXT_YAML_Node *n, int64_t value) {
+	if (!n) return false;
+	if (n->type != GTEXT_YAML_STRING && n->type != GTEXT_YAML_BOOL &&
+		n->type != GTEXT_YAML_INT && n->type != GTEXT_YAML_FLOAT &&
+		n->type != GTEXT_YAML_NULL) {
+		return false;
+	}
+	n->type = GTEXT_YAML_INT;
+	n->as.scalar.type = GTEXT_YAML_INT;
+	n->as.scalar.int_value = value;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_set_float(GTEXT_YAML_Node *n, double value) {
+	if (!n) return false;
+	if (n->type != GTEXT_YAML_STRING && n->type != GTEXT_YAML_BOOL &&
+		n->type != GTEXT_YAML_INT && n->type != GTEXT_YAML_FLOAT &&
+		n->type != GTEXT_YAML_NULL) {
+		return false;
+	}
+	n->type = GTEXT_YAML_FLOAT;
+	n->as.scalar.type = GTEXT_YAML_FLOAT;
+	n->as.scalar.float_value = value;
 	return true;
 }
 
@@ -639,6 +693,19 @@ static GTEXT_YAML_Node *clone_node(
 			clone->as.scalar.timestamp_second = node->as.scalar.timestamp_second;
 			clone->as.scalar.timestamp_nsec = node->as.scalar.timestamp_nsec;
 			clone->as.scalar.timestamp_tz_offset = node->as.scalar.timestamp_tz_offset;
+			clone->as.scalar.has_binary = node->as.scalar.has_binary;
+			clone->as.scalar.binary_len = node->as.scalar.binary_len;
+			clone->as.scalar.binary_data = NULL;
+			if (node->as.scalar.has_binary && node->as.scalar.binary_data && node->as.scalar.binary_len > 0) {
+				unsigned char *data = (unsigned char *)yaml_context_alloc(
+					ctx,
+					node->as.scalar.binary_len,
+					1
+				);
+				if (!data) return NULL;
+				memcpy(data, node->as.scalar.binary_data, node->as.scalar.binary_len);
+				clone->as.scalar.binary_data = data;
+			}
 			if (!clone_map_add(map, node, clone)) return NULL;
 			return clone;
 		case GTEXT_YAML_SEQUENCE: {

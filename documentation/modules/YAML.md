@@ -694,13 +694,10 @@ All tests pass with zero memory leaks (valgrind-verified).
 
 ### Planned Features
 
-- **DOM Parsing Model**: Build in-memory tree for navigation and modification
-- **Writer/Serialization**: Convert data structures to YAML text
-- **Directives**: Support `%YAML 1.2` and `%TAG` directives
-- **Binary Scalars**: Support `!!binary` tag for base64-encoded binary data
-- **Custom Tags**: Extensible tag system with type constructors
 - **Comment Preservation**: Maintain comments for round-trip editing
 - **Source Location Tracking**: Attach line/column info to DOM nodes
+- **Scalar Style Preservation**: Preserve scalar styles during round-trip
+- **YAML to JSON Conversion**: Provide a lossless conversion utility
 
 ### Compatibility
 
@@ -711,6 +708,35 @@ All tests pass with zero memory leaks (valgrind-verified).
 ---
 
 ## 15. API Reference
+
+### Custom Tags
+
+Custom tags are opt-in and configured through parse/write options. Set
+`enable_custom_tags=true` and provide a `custom_tags` array with
+`custom_tag_count`. The parser calls the `construct` callback for matching
+explicit tags. The writer calls the `represent` callback to choose the tag
+to emit.
+
+```c
+GTEXT_YAML_Custom_Tag handlers[] = {
+  {
+    .tag = "!example",
+    .construct = my_construct,
+    .represent = my_represent,
+    .user = my_context,
+  },
+};
+
+GTEXT_YAML_Parse_Options parse_opts = gtext_yaml_parse_options_default();
+parse_opts.enable_custom_tags = true;
+parse_opts.custom_tags = handlers;
+parse_opts.custom_tag_count = 1;
+
+GTEXT_YAML_Write_Options write_opts = gtext_yaml_write_options_default();
+write_opts.enable_custom_tags = true;
+write_opts.custom_tags = handlers;
+write_opts.custom_tag_count = 1;
+```
 
 ### Core Functions
 

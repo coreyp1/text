@@ -141,15 +141,17 @@ See [Known Bugs](#known-bugs) section below for specific issues.
 ### ❌ Not Yet Implemented
 
 #### Tag System (Phase 5.1)
-Status: Partially implemented
+Status: Implemented with limitations
 
 - ✅ Core schema implicit typing (`true`, `null`, `123`, `3.14`)
 - ✅ Tag directives (`%YAML`, `%TAG`) and tag handle expansion
-- ❌ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`)
-- ❌ Custom tag resolution for application-defined types
-- ❌ Binary scalars (`!!binary`)
+- ✅ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`) with
+   limitations (see below)
+- ✅ Custom tag resolution for application-defined types (opt-in)
+- ✅ Binary scalars (`!!binary`)
 
-**Impact:** Core schema typing works, but standard tags and custom tag handling are incomplete.
+**Impact:** Core schema typing, `!!binary`, and custom tags are supported.
+Standard tags have implementation-specific limitations.
 
 #### Standard Type Tags (Phase 5.5)
 Status: Implemented with limitations
@@ -174,15 +176,16 @@ Status: Not started
 **Impact:** Merge keys are not recognized or processed.
 
 #### Advanced Features (Phase 7)
-Status: Designed, not started
+Status: Partially implemented
 
-- ❌ Pull-model parser (optional)
+- ✅ Pull-model parser (optional)
 - ❌ Comment preservation
 - ❌ Scalar style preservation (round-trip fidelity)
 - ❌ YAML → JSON conversion utility
-- ❌ Directive handling (`%YAML 1.2`)
+- ✅ Directive handling (`%YAML`, `%TAG`)
 
-**Impact:** Advanced use cases not supported.
+**Impact:** Advanced use cases are partially supported; round-trip fidelity
+features remain incomplete.
 
 #### Spec Compliance Testing (Phase 8)
 Status: Not started

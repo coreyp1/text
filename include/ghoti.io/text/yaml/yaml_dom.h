@@ -188,6 +188,43 @@ GTEXT_API bool gtext_yaml_node_as_timestamp(
 	GTEXT_YAML_Timestamp * out
 );
 
+/**
+ * @brief Return scalar value as binary payload.
+ *
+ * Returns false if the node is NULL, not a binary scalar, or outputs are NULL.
+ *
+ * @param n Scalar node to query
+ * @param out_data Output pointer to binary data
+ * @param out_len Output length of binary data
+ * @return true on success, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_as_binary(
+	const GTEXT_YAML_Node * n,
+	const unsigned char ** out_data,
+	size_t * out_len
+);
+
+/**
+ * @brief Set a scalar node to a boolean value.
+ *
+ * Returns false if the node is NULL or not a scalar.
+ */
+GTEXT_API bool gtext_yaml_node_set_bool(GTEXT_YAML_Node * n, bool value);
+
+/**
+ * @brief Set a scalar node to an integer value.
+ *
+ * Returns false if the node is NULL or not a scalar.
+ */
+GTEXT_API bool gtext_yaml_node_set_int(GTEXT_YAML_Node * n, int64_t value);
+
+/**
+ * @brief Set a scalar node to a floating-point value.
+ *
+ * Returns false if the node is NULL or not a scalar.
+ */
+GTEXT_API bool gtext_yaml_node_set_float(GTEXT_YAML_Node * n, double value);
+
 /* ============================================================================
  * Sequence Accessors (Phase 4.3)
  * ============================================================================ */

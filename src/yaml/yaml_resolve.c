@@ -341,6 +341,163 @@ static bool parse_null_value(const char *s, size_t len, bool json_only) {
 	return str_eq_ci_len(s, len, "null");
 }
 
+static bool is_base64_space(unsigned char c) {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static int base64_value(unsigned char c) {
+	if (c >= 'A' && c <= 'Z') return c - 'A';
+	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+	if (c >= '0' && c <= '9') return c - '0' + 52;
+	if (c == '+') return 62;
+	if (c == '/') return 63;
+	return -1;
+}
+
+static bool base64_decode(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	size_t len,
+	const unsigned char **out_data,
+	size_t *out_len
+) {
+	if (!doc || !value || !out_data || !out_len) return false;
+
+	char *filtered = (char *)malloc(len + 1);
+	if (!filtered) return false;
+	size_t count = 0;
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)value[i];
+		if (is_base64_space(c)) continue;
+		if (c == '=' || base64_value(c) >= 0) {
+			filtered[count++] = (char)c;
+			continue;
+		}
+		free(filtered);
+		return false;
+	}
+	filtered[count] = '\0';
+
+	if (count == 0 || (count % 4) != 0) {
+		free(filtered);
+		return false;
+	}
+
+	size_t padding = 0;
+	if (count >= 1 && filtered[count - 1] == '=') padding++;
+	if (count >= 2 && filtered[count - 2] == '=') padding++;
+	if (padding > 2) {
+		free(filtered);
+		return false;
+	}
+
+	size_t decoded_len = (count / 4) * 3;
+	if (padding > 0) decoded_len -= padding;
+	unsigned char *decoded = (unsigned char *)yaml_context_alloc(doc->ctx, decoded_len, 1);
+	if (!decoded) {
+		free(filtered);
+		return false;
+	}
+
+	size_t out = 0;
+	for (size_t i = 0; i < count; i += 4) {
+		char c0 = filtered[i];
+		char c1 = filtered[i + 1];
+		char c2 = filtered[i + 2];
+		char c3 = filtered[i + 3];
+
+		if (c0 == '=' || c1 == '=') {
+			free(filtered);
+			return false;
+		}
+
+		int v0 = base64_value((unsigned char)c0);
+		int v1 = base64_value((unsigned char)c1);
+		if (v0 < 0 || v1 < 0) {
+			free(filtered);
+			return false;
+		}
+
+		if (c2 == '=') {
+			if (c3 != '=' || i + 4 != count) {
+				free(filtered);
+				return false;
+			}
+			decoded[out++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+			break;
+		}
+
+		int v2 = base64_value((unsigned char)c2);
+		if (v2 < 0) {
+			free(filtered);
+			return false;
+		}
+
+		if (c3 == '=') {
+			if (i + 4 != count) {
+				free(filtered);
+				return false;
+			}
+			decoded[out++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+			decoded[out++] = (unsigned char)(((v1 & 0x0F) << 4) | (v2 >> 2));
+			break;
+		}
+
+		int v3 = base64_value((unsigned char)c3);
+		if (v3 < 0) {
+			free(filtered);
+			return false;
+		}
+
+		decoded[out++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+		decoded[out++] = (unsigned char)(((v1 & 0x0F) << 4) | (v2 >> 2));
+		decoded[out++] = (unsigned char)(((v2 & 0x03) << 6) | v3);
+	}
+
+	free(filtered);
+	*out_data = decoded;
+	*out_len = decoded_len;
+	return true;
+}
+
+static const char *base64_encode(
+	GTEXT_YAML_Document *doc,
+	const unsigned char *data,
+	size_t len,
+	size_t *out_len
+) {
+	static const char alphabet[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	if (!doc || (!data && len != 0)) return NULL;
+	size_t enc_len = ((len + 2) / 3) * 4;
+	char *out = (char *)yaml_context_alloc(doc->ctx, enc_len + 1, 1);
+	if (!out) return NULL;
+
+	size_t idx = 0;
+	for (size_t i = 0; i < len; i += 3) {
+		unsigned int b0 = data[i];
+		unsigned int b1 = (i + 1 < len) ? data[i + 1] : 0;
+		unsigned int b2 = (i + 2 < len) ? data[i + 2] : 0;
+
+		out[idx++] = alphabet[(b0 >> 2) & 0x3F];
+		out[idx++] = alphabet[((b0 & 0x03) << 4) | ((b1 >> 4) & 0x0F)];
+		if (i + 1 < len) {
+			out[idx++] = alphabet[((b1 & 0x0F) << 2) | ((b2 >> 6) & 0x03)];
+		} else {
+			out[idx++] = '=';
+		}
+		if (i + 2 < len) {
+			out[idx++] = alphabet[b2 & 0x3F];
+		} else {
+			out[idx++] = '=';
+		}
+	}
+
+	out[idx] = '\0';
+	if (out_len) *out_len = enc_len;
+	return out;
+}
+
 static bool yaml_use_1_1(const GTEXT_YAML_Document *doc, const GTEXT_YAML_Parse_Options *opts) {
 	if (opts && opts->yaml_1_1) return true;
 	if (doc && doc->yaml_version_major == 1 && doc->yaml_version_minor == 1) return true;
@@ -1046,6 +1203,33 @@ static const char *resolve_tag_handle(
 	return resolved;
 }
 
+static const GTEXT_YAML_Custom_Tag *find_custom_tag(
+	const GTEXT_YAML_Parse_Options *opts,
+	const char *tag
+) {
+	if (!opts || !tag || !opts->enable_custom_tags) return NULL;
+	if (!opts->custom_tags || opts->custom_tag_count == 0) return NULL;
+	for (size_t i = 0; i < opts->custom_tag_count; i++) {
+		if (!opts->custom_tags[i].tag) continue;
+		if (strcmp(opts->custom_tags[i].tag, tag) == 0) {
+			return &opts->custom_tags[i];
+		}
+	}
+	return NULL;
+}
+
+static GTEXT_YAML_Status apply_custom_tag_constructor(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	const char *tag,
+	GTEXT_YAML_Error *error
+) {
+	const GTEXT_YAML_Custom_Tag *handler = find_custom_tag(opts, tag);
+	if (!handler || !handler->construct) return GTEXT_YAML_OK;
+	return handler->construct(doc, node, tag, handler->user, error);
+}
+
 static GTEXT_YAML_Status resolve_scalar(
 	GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Node *node,
@@ -1173,11 +1357,51 @@ static GTEXT_YAML_Status resolve_scalar(
 			node->as.scalar.length = strlen(formatted);
 			return GTEXT_YAML_OK;
 		}
+		if (strcmp(suffix, "binary") == 0) {
+			const unsigned char *data = NULL;
+			size_t data_len = 0;
+			if (!base64_decode(doc, value, len, &data, &data_len)) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid base64 binary scalar";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
+			size_t encoded_len = 0;
+			const char *encoded = base64_encode(doc, data, data_len, &encoded_len);
+			if (!encoded) {
+				if (error) {
+					error->code = GTEXT_YAML_E_OOM;
+					error->message = "Out of memory encoding binary scalar";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			node->as.scalar.has_binary = true;
+			node->as.scalar.binary_data = data;
+			node->as.scalar.binary_len = data_len;
+			node->as.scalar.value = encoded;
+			node->as.scalar.length = encoded_len;
+			node->type = GTEXT_YAML_STRING;
+			node->as.scalar.type = GTEXT_YAML_STRING;
+			return GTEXT_YAML_OK;
+		}
 
+		if (opts && opts->enable_custom_tags) {
+			GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+				doc,
+				node,
+				opts,
+				tag,
+				error
+			);
+			if (custom != GTEXT_YAML_OK) return custom;
+		}
 		return GTEXT_YAML_OK;
 	}
 
 	if (tag && tag[0] != '\0') {
+		GTEXT_YAML_Status custom = apply_custom_tag_constructor(doc, node, opts, tag, error);
+		if (custom != GTEXT_YAML_OK) return custom;
 		return GTEXT_YAML_OK;
 	}
 
@@ -1318,6 +1542,17 @@ static GTEXT_YAML_Status resolve_node(
 					}
 				}
 			}
+			{
+				const char *tag = node->as.sequence.tag;
+				GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+					doc,
+					node,
+					opts,
+					tag,
+					error
+				);
+				if (custom != GTEXT_YAML_OK) return custom;
+			}
 			return GTEXT_YAML_OK;
 		case GTEXT_YAML_MAPPING:
 			if (node->as.mapping.tag) {
@@ -1399,6 +1634,17 @@ static GTEXT_YAML_Status resolve_node(
 						}
 					}
 				}
+			}
+			{
+				const char *tag = node->as.mapping.tag;
+				GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+					doc,
+					node,
+					opts,
+					tag,
+					error
+				);
+				if (custom != GTEXT_YAML_OK) return custom;
 			}
 			return apply_dupkey_policy(doc, node, opts, error);
 		case GTEXT_YAML_ALIAS:

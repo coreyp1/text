@@ -132,6 +132,38 @@ typedef enum {
 } GTEXT_YAML_Flow_Style;
 
 /**
+ * @brief Custom tag constructor callback.
+ */
+typedef GTEXT_YAML_Status (*GTEXT_YAML_Custom_Tag_Constructor)(
+  GTEXT_YAML_Document * doc,
+  GTEXT_YAML_Node * node,
+  const char * tag,
+  void * user,
+  GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Custom tag representer callback.
+ */
+typedef GTEXT_YAML_Status (*GTEXT_YAML_Custom_Tag_Representer)(
+  const GTEXT_YAML_Node * node,
+  const char * tag,
+  void * user,
+  const char ** out_tag,
+  GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Custom tag handler registration.
+ */
+typedef struct {
+  const char * tag;
+  GTEXT_YAML_Custom_Tag_Constructor construct;
+  GTEXT_YAML_Custom_Tag_Representer represent;
+  void * user;
+} GTEXT_YAML_Custom_Tag;
+
+/**
  * @struct GTEXT_YAML_Parse_Options
  * @brief Options that control parsing behavior and limits.
  *
@@ -150,6 +182,9 @@ typedef struct {
   bool resolve_tags;
   bool retain_comments;
   bool yaml_1_1;
+  bool enable_custom_tags;
+  const GTEXT_YAML_Custom_Tag * custom_tags;
+  size_t custom_tag_count;
 } GTEXT_YAML_Parse_Options;
 
 /**
@@ -165,6 +200,9 @@ typedef struct {
   bool canonical;
   GTEXT_YAML_Scalar_Style scalar_style;
   GTEXT_YAML_Flow_Style flow_style;
+  bool enable_custom_tags;
+  const GTEXT_YAML_Custom_Tag * custom_tags;
+  size_t custom_tag_count;
 } GTEXT_YAML_Write_Options;
 
 /**

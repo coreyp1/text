@@ -347,6 +347,16 @@ static const char *default_tag_for_type(GTEXT_YAML_Node_Type type) {
   }
 }
 
+static bool tag_is_binary(const char *tag) {
+  static const char yaml_prefix[] = "tag:yaml.org,2002:";
+  if (!tag) return false;
+  if (strcmp(tag, "!!binary") == 0) return true;
+  if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0) {
+    return strcmp(tag + (sizeof(yaml_prefix) - 1), "binary") == 0;
+  }
+  return false;
+}
+
 static bool scalar_needs_quotes(const char *value) {
   if (!value || value[0] == '\0') return true;
   for (const unsigned char *p = (const unsigned char *)value; *p; p++) {
@@ -546,27 +556,76 @@ static GTEXT_YAML_Status write_node_prefix(
   return GTEXT_YAML_OK;
 }
 
+static GTEXT_YAML_Status resolve_custom_write_tag(
+    const yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    const char * tag_override,
+    const char ** out_tag_override) {
+  const char *tag = tag_override ? tag_override : node_tag(node);
+  if (out_tag_override) {
+    *out_tag_override = tag_override;
+  }
+  if (!state || !state->opts || !state->opts->enable_custom_tags) {
+    return GTEXT_YAML_OK;
+  }
+  if (!state->opts->custom_tags || state->opts->custom_tag_count == 0) {
+    return GTEXT_YAML_OK;
+  }
+  if (!tag) {
+    return GTEXT_YAML_OK;
+  }
+
+  for (size_t i = 0; i < state->opts->custom_tag_count; i++) {
+    const GTEXT_YAML_Custom_Tag *handler = &state->opts->custom_tags[i];
+    if (!handler->tag || !handler->represent) continue;
+    if (strcmp(handler->tag, tag) != 0) continue;
+
+    const char *custom_tag = NULL;
+    GTEXT_YAML_Status st = handler->represent(node, tag, handler->user, &custom_tag, NULL);
+    if (st != GTEXT_YAML_OK) return st;
+    if (custom_tag && out_tag_override) {
+      *out_tag_override = custom_tag;
+    }
+    return GTEXT_YAML_OK;
+  }
+
+  return GTEXT_YAML_OK;
+}
+
 static GTEXT_YAML_Status write_scalar_node(
     yaml_writer_state * state,
     const GTEXT_YAML_Node * node,
     size_t indent,
     bool flow,
     const char * tag_override) {
-  GTEXT_YAML_Status status = write_node_prefix(state, node, tag_override);
+  const char *resolved_tag = tag_override;
+  GTEXT_YAML_Status status = resolve_custom_write_tag(
+      state, node, tag_override, &resolved_tag);
+  if (status != GTEXT_YAML_OK) return status;
+  status = write_node_prefix(state, node, resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
 
   const char *value = node->as.scalar.value;
+  bool is_binary = false;
   bool canonical = state->opts && state->opts->canonical;
   GTEXT_YAML_Scalar_Style style = state->opts
       ? state->opts->scalar_style
       : GTEXT_YAML_SCALAR_STYLE_PLAIN;
+
+  if (node->type == GTEXT_YAML_STRING && node->as.scalar.has_binary) {
+    is_binary = true;
+  }
+  if (!is_binary) {
+    const char *tag = resolved_tag ? resolved_tag : node_tag(node);
+    is_binary = tag_is_binary(tag);
+  }
 
   if (canonical) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   }
 
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
-    if (scalar_needs_quotes(value)) {
+    if (!is_binary && scalar_needs_quotes(value)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     } else if (!flow && state->opts && state->opts->pretty) {
       int line_width = writer_line_width(state->opts);
@@ -624,7 +683,10 @@ static GTEXT_YAML_Status write_sequence_node(
     flow = true;
   }
 
-  status = write_node_prefix(state, node, tag_override);
+  const char *resolved_tag = tag_override;
+  status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
+  if (status != GTEXT_YAML_OK) return status;
+  status = write_node_prefix(state, node, resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
 
   if (flow || !pretty) {
@@ -718,7 +780,10 @@ static GTEXT_YAML_Status write_mapping_node(
     flow = true;
   }
 
-  status = write_node_prefix(state, node, tag_override);
+  const char *resolved_tag = tag_override;
+  status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
+  if (status != GTEXT_YAML_OK) return status;
+  status = write_node_prefix(state, node, resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
 
   if (flow || !pretty) {
