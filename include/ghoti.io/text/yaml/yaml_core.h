@@ -99,6 +99,7 @@ typedef enum {
 
 typedef struct GTEXT_YAML_Node GTEXT_YAML_Node;
 typedef struct GTEXT_YAML_Document GTEXT_YAML_Document;
+typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
 
 typedef enum { GTEXT_YAML_DUPKEY_ERROR, GTEXT_YAML_DUPKEY_FIRST_WINS, GTEXT_YAML_DUPKEY_LAST_WINS } GTEXT_YAML_Dupkey_Mode;
 
@@ -157,12 +158,24 @@ typedef GTEXT_YAML_Status (*GTEXT_YAML_Custom_Tag_Representer)(
 );
 
 /**
+ * @brief Custom tag JSON conversion callback.
+ */
+typedef GTEXT_YAML_Status (*GTEXT_YAML_Custom_Tag_Json_Converter)(
+  const GTEXT_YAML_Node * node,
+  const char * tag,
+  void * user,
+  GTEXT_JSON_Value ** out_json,
+  GTEXT_YAML_Error * out_err
+);
+
+/**
  * @brief Custom tag handler registration.
  */
 typedef struct {
   const char * tag;
   GTEXT_YAML_Custom_Tag_Constructor construct;
   GTEXT_YAML_Custom_Tag_Representer represent;
+  GTEXT_YAML_Custom_Tag_Json_Converter to_json;
   void * user;
 } GTEXT_YAML_Custom_Tag;
 

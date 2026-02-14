@@ -11,6 +11,70 @@
 #include <ghoti.io/text/json/json_dom.h>
 #include <ghoti.io/text/macros.h>
 #include <string.h>
+#include <stdio.h>
+
+static bool json_converter_called = false;
+
+static GTEXT_YAML_Status custom_tag_json_converter(
+	const GTEXT_YAML_Node * node,
+	const char * tag,
+	void * user,
+	GTEXT_JSON_Value ** out_json,
+	GTEXT_YAML_Error * out_err
+) {
+	(void)tag;
+	if (user) {
+		bool *flag = (bool *)user;
+		*flag = true;
+	}
+	if (!node || !out_json) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_INVALID;
+			out_err->message = "custom tag JSON converter: invalid arguments";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	const char *value = gtext_yaml_node_as_string(node);
+	if (!value) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_INVALID;
+			out_err->message = "custom tag JSON converter: expected string scalar";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	char buffer[128];
+	int written = snprintf(buffer, sizeof(buffer), "custom:%s", value);
+	if (written < 0) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_INVALID;
+			out_err->message = "custom tag JSON converter: format error";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	*out_json = gtext_json_new_string(buffer, strlen(buffer));
+	if (!*out_json) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_OOM;
+			out_err->message = "custom tag JSON converter: out of memory";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Custom_Tag json_custom_tags[] = {
+	{
+		.tag = "tag:example.com,2026:upper",
+		.construct = NULL,
+		.represent = NULL,
+		.to_json = custom_tag_json_converter,
+		.user = &json_converter_called
+	}
+};
 
 /**
  * @test YamlToJsonBasicTypes
@@ -247,6 +311,91 @@ TEST(YamlToJson, IncompatibleAnchors) {
 }
 
 /**
+ * @test YamlToJsonAllowAnchorsOption
+ * @brief Test that aliases can be resolved when allowed via options
+ */
+TEST(YamlToJson, AllowAnchorsOption) {
+	const char * yaml_input = "anchor: &anchor_name value\nalias: *anchor_name";
+	GTEXT_YAML_Document * yaml_doc = NULL;
+	GTEXT_YAML_To_JSON_Options options = gtext_yaml_to_json_options_default();
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	const GTEXT_JSON_Value * alias_val = NULL;
+
+	memset(&err, 0, sizeof(err));
+	yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, NULL);
+	ASSERT_NE(yaml_doc, nullptr);
+
+	options.allow_resolved_aliases = true;
+	status = gtext_yaml_to_json_with_options(
+		yaml_doc,
+		&json_val,
+		&options,
+		&err
+	);
+
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	EXPECT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_OBJECT);
+
+	alias_val = gtext_json_object_get(json_val, "alias", 5);
+	ASSERT_NE(alias_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(alias_val), GTEXT_JSON_STRING);
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(yaml_doc);
+}
+
+/**
+ * @test YamlToJsonCustomTagConverter
+ * @brief Test custom tag conversion via JSON converter callback
+ */
+TEST(YamlToJson, CustomTagConverter) {
+	const char * yaml_input =
+		"%TAG !e! tag:example.com,2026:\n"
+		"---\n"
+		"!e!upper hello\n";
+	GTEXT_YAML_Document * yaml_doc = NULL;
+	GTEXT_YAML_To_JSON_Options options = gtext_yaml_to_json_options_default();
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	const GTEXT_JSON_Value * value = NULL;
+	const char * str = NULL;
+	size_t len = 0;
+
+	json_converter_called = false;
+	memset(&err, 0, sizeof(err));
+	yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, &err);
+	ASSERT_NE(yaml_doc, nullptr) << (err.message ? err.message : "parse failed");
+
+	options.enable_custom_tags = true;
+	options.custom_tags = json_custom_tags;
+	options.custom_tag_count = 1;
+	status = gtext_yaml_to_json_with_options(
+		yaml_doc,
+		&json_val,
+		&options,
+		&err
+	);
+
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	ASSERT_NE(json_val, nullptr);
+	EXPECT_TRUE(json_converter_called);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_STRING);
+
+	value = json_val;
+	EXPECT_EQ(gtext_json_get_string(value, &str, &len), GTEXT_JSON_OK);
+	EXPECT_STREQ(str, "custom:hello");
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(yaml_doc);
+}
+
+/**
  * @test YamlToJsonIncompatibleTags
  * @brief Test that YAML-specific types like OMAP are rejected
  * Note: This test uses flow-style !!omap which produces a GTEXT_YAML_OMAP node.
@@ -268,6 +417,60 @@ TEST(YamlToJson, IncompatibleTags) {
 	
 	gtext_yaml_error_free(&err);
 	gtext_yaml_free(yaml_doc);
+}
+
+/**
+ * @test YamlToJsonStreamingTagValidation
+ * @brief Test that explicit custom tags are rejected via streaming validation
+ */
+TEST(YamlToJson, StreamingTagValidation) {
+	const char * yaml_input = "value: !custom 1";
+	GTEXT_YAML_Parse_Options parse_options = gtext_yaml_parse_options_default();
+	GTEXT_YAML_To_JSON_Options json_options = gtext_yaml_to_json_options_default();
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	const GTEXT_JSON_Value * value = NULL;
+	int64_t num = 0;
+
+	memset(&err, 0, sizeof(err));
+	status = gtext_yaml_to_json_with_tags(
+		yaml_input,
+		strlen(yaml_input),
+		&parse_options,
+		&json_options,
+		&json_val,
+		&err
+	);
+
+	EXPECT_NE(status, GTEXT_YAML_OK);
+	EXPECT_EQ(json_val, nullptr);
+	EXPECT_NE(err.message, nullptr);
+	gtext_yaml_error_free(&err);
+
+	yaml_input = "value: !!int 12";
+	memset(&err, 0, sizeof(err));
+	json_val = NULL;
+	status = gtext_yaml_to_json_with_tags(
+		yaml_input,
+		strlen(yaml_input),
+		&parse_options,
+		&json_options,
+		&json_val,
+		&err
+	);
+
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	ASSERT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_OBJECT);
+
+	value = gtext_json_object_get(json_val, "value", 5);
+	ASSERT_NE(value, nullptr);
+	EXPECT_EQ(gtext_json_get_i64(value, &num), GTEXT_JSON_OK);
+	EXPECT_EQ(num, 12);
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
 }
 
 /**
@@ -302,6 +505,43 @@ TEST(YamlToJson, IncompatibleKeys) {
 }
 
 /**
+ * @test YamlToJsonCoerceKeysOption
+ * @brief Test that non-string scalar keys can be coerced to strings
+ */
+TEST(YamlToJson, CoerceKeysOption) {
+	const char * yaml_input = "{!!int 1: one}";
+	GTEXT_YAML_Document * yaml_doc = NULL;
+	GTEXT_YAML_To_JSON_Options options = gtext_yaml_to_json_options_default();
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	const GTEXT_JSON_Value * val = NULL;
+
+	memset(&err, 0, sizeof(err));
+	yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, NULL);
+	ASSERT_NE(yaml_doc, nullptr);
+	options.coerce_keys_to_strings = true;
+	status = gtext_yaml_to_json_with_options(
+		yaml_doc,
+		&json_val,
+		&options,
+		&err
+	);
+
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	EXPECT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_OBJECT);
+
+	val = gtext_json_object_get(json_val, "1", 1);
+	ASSERT_NE(val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(val), GTEXT_JSON_STRING);
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(yaml_doc);
+}
+
+/**
  * @test YamlToJsonEmptyDocument
  * @brief Test conversion of empty YAML document
  */
@@ -318,6 +558,44 @@ TEST(YamlToJson, EmptyDocument) {
 	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_NULL);
 	
 	gtext_json_free(json_val);
+	gtext_yaml_free(yaml_doc);
+}
+
+/**
+ * @test YamlToJsonMergeKeysOption
+ * @brief Test that merge keys can be allowed via options
+ */
+TEST(YamlToJson, MergeKeysOption) {
+	const char * yaml_input = "base: &base {a: 1}\nmerged: {<<: *base, b: 2}";
+	GTEXT_YAML_Document * yaml_doc = NULL;
+	GTEXT_YAML_To_JSON_Options options = gtext_yaml_to_json_options_default();
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	const GTEXT_JSON_Value * merged = NULL;
+
+	memset(&err, 0, sizeof(err));
+	yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, NULL);
+	ASSERT_NE(yaml_doc, nullptr);
+	options.allow_merge_keys = true;
+	options.allow_resolved_aliases = true;
+	status = gtext_yaml_to_json_with_options(
+		yaml_doc,
+		&json_val,
+		&options,
+		&err
+	);
+
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	EXPECT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_OBJECT);
+
+	merged = gtext_json_object_get(json_val, "merged", 6);
+	ASSERT_NE(merged, nullptr);
+	EXPECT_EQ(gtext_json_typeof(merged), GTEXT_JSON_OBJECT);
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
 	gtext_yaml_free(yaml_doc);
 }
 
@@ -382,5 +660,52 @@ TEST(YamlToJson, InvalidArguments) {
 		EXPECT_NE(status, GTEXT_YAML_OK);
 	}
 	
+	gtext_yaml_free(yaml_doc);
+}
+
+/**
+ * @test YamlToJsonLargeIntPolicy
+ * @brief Test large integer handling options
+ */
+TEST(YamlToJson, LargeIntPolicy) {
+	const char * yaml_input = "!!int 9007199254740993";
+	GTEXT_YAML_Document * yaml_doc = NULL;
+	GTEXT_JSON_Value * json_val = NULL;
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+	GTEXT_YAML_To_JSON_Options options = gtext_yaml_to_json_options_default();
+	const char * str = NULL;
+	size_t len = 0;
+	double double_val = 0.0;
+
+	memset(&err, 0, sizeof(err));
+	yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, NULL);
+	ASSERT_NE(yaml_doc, nullptr);
+	status = gtext_yaml_to_json(yaml_doc, &json_val, &err);
+	EXPECT_NE(status, GTEXT_YAML_OK);
+	EXPECT_EQ(json_val, nullptr);
+	EXPECT_NE(err.message, nullptr);
+	gtext_yaml_error_free(&err);
+	memset(&err, 0, sizeof(err));
+	options.large_int_policy = GTEXT_YAML_JSON_LARGE_INT_STRING;
+	status = gtext_yaml_to_json_with_options(yaml_doc, &json_val, &options, &err);
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	ASSERT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_STRING);
+	EXPECT_EQ(gtext_json_get_string(json_val, &str, &len), GTEXT_JSON_OK);
+	EXPECT_STREQ(str, "9007199254740993");
+	gtext_json_free(json_val);
+	json_val = NULL;
+
+	options.large_int_policy = GTEXT_YAML_JSON_LARGE_INT_DOUBLE;
+	status = gtext_yaml_to_json_with_options(yaml_doc, &json_val, &options, &err);
+	EXPECT_EQ(status, GTEXT_YAML_OK);
+	ASSERT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_NUMBER);
+	EXPECT_EQ(gtext_json_get_double(json_val, &double_val), GTEXT_JSON_OK);
+	EXPECT_NE(double_val, 0.0);
+
+	gtext_json_free(json_val);
+	gtext_yaml_error_free(&err);
 	gtext_yaml_free(yaml_doc);
 }

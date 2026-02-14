@@ -91,6 +91,7 @@ static GTEXT_YAML_Custom_Tag custom_tags[] = {
 		.tag = "tag:example.com,2026:bool",
 		.construct = custom_bool_constructor,
 		.represent = custom_tag_representer,
+		.to_json = NULL,
 		.user = &parse_called
 	}
 };

@@ -894,6 +894,20 @@ GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_clone(
  * - Complex keys (only string keys allowed in JSON objects)
  * - Merge keys (<<)
  *
+ * For opt-in conversions that relax these constraints, use
+ * gtext_yaml_to_json_with_options().
+ *
+ * Custom tags can be converted by registering a GTEXT_YAML_Custom_Tag with
+ * a JSON converter callback and enabling custom tags in the conversion
+ * options.
+ *
+ * Limitations:
+ * - Custom tags are not preserved in the DOM; use the streaming API for tag-aware validation.
+ * - Merge keys are resolved before the DOM is exposed; use the merge key flag or streaming API
+ *   if you need to detect their presence.
+ * - Only the first document in a multi-document stream is converted.
+ * - Large integers outside JSON safe range require an explicit large-int policy.
+ *
  * The JSON value and all its descendants are owned by the caller and
  * must be freed with gtext_json_free().
  *
@@ -912,6 +926,75 @@ GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_clone(
  */
 GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json(
 	const GTEXT_YAML_Document * yaml_doc,
+	GTEXT_JSON_Value ** out_json,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @enum GTEXT_YAML_JSON_Large_Int_Policy
+ * @brief Controls handling of integers outside JSON safe range.
+ */
+typedef enum {
+	GTEXT_YAML_JSON_LARGE_INT_ERROR,
+	GTEXT_YAML_JSON_LARGE_INT_STRING,
+	GTEXT_YAML_JSON_LARGE_INT_DOUBLE
+} GTEXT_YAML_JSON_Large_Int_Policy;
+
+/**
+ * @struct GTEXT_YAML_To_JSON_Options
+ * @brief Options controlling YAML to JSON conversion behavior.
+ */
+typedef struct {
+	bool allow_resolved_aliases;    /* Resolve alias nodes to targets. */
+	bool allow_merge_keys;          /* Allow merge-expanded mappings. */
+	bool coerce_keys_to_strings;    /* Convert scalar keys to strings. */
+	GTEXT_YAML_JSON_Large_Int_Policy large_int_policy;
+	bool enable_custom_tags;        /* Enable custom tag JSON conversions. */
+	const GTEXT_YAML_Custom_Tag * custom_tags;
+	size_t custom_tag_count;
+} GTEXT_YAML_To_JSON_Options;
+
+/**
+ * @brief Return YAML to JSON options initialized to strict defaults.
+ */
+GTEXT_API GTEXT_YAML_To_JSON_Options gtext_yaml_to_json_options_default(void);
+
+/**
+ * @brief Convert a YAML DOM to a JSON DOM with conversion options.
+ *
+ * @param yaml_doc YAML document to convert
+ * @param out_json Pointer to store converted JSON value
+ * @param options Conversion options (NULL for defaults)
+ * @param out_err Error output (may be NULL)
+ * @return GTEXT_YAML_OK on success, error code if document contains incompatible features
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_options(
+	const GTEXT_YAML_Document * yaml_doc,
+	GTEXT_JSON_Value ** out_json,
+	const GTEXT_YAML_To_JSON_Options * options,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Convert YAML input to JSON while validating explicit tags.
+ *
+ * Uses the streaming parser to detect explicit tags and rejects tags
+ * that are not JSON-compatible before converting the first document
+ * into a JSON DOM.
+ *
+ * @param input Input YAML string
+ * @param length Length of input string in bytes
+ * @param parse_options Parse options (NULL for defaults)
+ * @param json_options Conversion options (NULL for defaults)
+ * @param out_json Pointer to store converted JSON value
+ * @param out_err Error output (may be NULL)
+ * @return GTEXT_YAML_OK on success, error code if tag validation or conversion fails
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_tags(
+	const char * input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options * parse_options,
+	const GTEXT_YAML_To_JSON_Options * json_options,
 	GTEXT_JSON_Value ** out_json,
 	GTEXT_YAML_Error * out_err
 );
