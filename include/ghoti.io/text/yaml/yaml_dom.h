@@ -148,6 +148,46 @@ GTEXT_API bool gtext_yaml_node_as_int(const GTEXT_YAML_Node * n, int64_t * out);
  */
 GTEXT_API bool gtext_yaml_node_as_float(const GTEXT_YAML_Node * n, double * out);
 
+/**
+ * @brief Return true if the node is a null scalar.
+ *
+ * @param n Node to query
+ * @return true if node is a null scalar, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_is_null(const GTEXT_YAML_Node * n);
+
+/**
+ * @struct GTEXT_YAML_Timestamp
+ * @brief Parsed timestamp fields for !!timestamp scalars.
+ */
+typedef struct {
+	bool has_time;
+	bool tz_specified;
+	bool tz_utc;
+	int year;
+	int month;
+	int day;
+	int hour;
+	int minute;
+	int second;
+	int nsec;
+	int tz_offset;
+} GTEXT_YAML_Timestamp;
+
+/**
+ * @brief Return scalar value as a timestamp.
+ *
+ * Returns false if the node is NULL, not a timestamp scalar, or @p out is NULL.
+ *
+ * @param n Scalar node to query
+ * @param out Output timestamp fields
+ * @return true on success, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_as_timestamp(
+	const GTEXT_YAML_Node * n,
+	GTEXT_YAML_Timestamp * out
+);
+
 /* ============================================================================
  * Sequence Accessors (Phase 4.3)
  * ============================================================================ */

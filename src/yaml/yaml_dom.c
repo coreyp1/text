@@ -272,6 +272,33 @@ GTEXT_API bool gtext_yaml_node_as_float(const GTEXT_YAML_Node *n, double *out) {
 	return true;
 }
 
+GTEXT_API bool gtext_yaml_node_is_null(const GTEXT_YAML_Node *n) {
+	if (!n) return false;
+	return n->type == GTEXT_YAML_NULL;
+}
+
+GTEXT_API bool gtext_yaml_node_as_timestamp(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Timestamp *out
+) {
+	if (!n || !out) return false;
+	if (n->type != GTEXT_YAML_STRING) return false;
+	if (!n->as.scalar.has_timestamp) return false;
+
+	out->has_time = n->as.scalar.timestamp_has_time;
+	out->tz_specified = n->as.scalar.timestamp_tz_specified;
+	out->tz_utc = n->as.scalar.timestamp_tz_utc;
+	out->year = n->as.scalar.timestamp_year;
+	out->month = n->as.scalar.timestamp_month;
+	out->day = n->as.scalar.timestamp_day;
+	out->hour = n->as.scalar.timestamp_hour;
+	out->minute = n->as.scalar.timestamp_minute;
+	out->second = n->as.scalar.timestamp_second;
+	out->nsec = n->as.scalar.timestamp_nsec;
+	out->tz_offset = n->as.scalar.timestamp_tz_offset;
+	return true;
+}
+
 /* ============================================================================
  * Sequence Accessors (Phase 4.3)
  * ============================================================================ */

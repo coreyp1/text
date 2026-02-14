@@ -78,6 +78,43 @@ TEST(YamlDomAccessors, ScalarAccessorWrongType) {
 	gtext_yaml_free(doc);
 }
 
+TEST(YamlDomAccessors, ScalarNullAccessor) {
+	const char *yaml = "~";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	EXPECT_TRUE(gtext_yaml_node_is_null(root));
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, ScalarTimestampAccessor) {
+	const char *yaml = "!!timestamp 2025-02-14T10:30:45Z";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	GTEXT_YAML_Timestamp ts = {};
+	EXPECT_TRUE(gtext_yaml_node_as_timestamp(root, &ts));
+	EXPECT_EQ(ts.year, 2025);
+	EXPECT_EQ(ts.month, 2);
+	EXPECT_EQ(ts.day, 14);
+	EXPECT_TRUE(ts.has_time);
+	EXPECT_EQ(ts.hour, 10);
+	EXPECT_EQ(ts.minute, 30);
+	EXPECT_EQ(ts.second, 45);
+	EXPECT_TRUE(ts.tz_specified);
+	EXPECT_TRUE(ts.tz_utc);
+	EXPECT_EQ(ts.tz_offset, 0);
+
+	gtext_yaml_free(doc);
+}
+
 /* ============================================================================
  * Sequence Accessor Tests
  * ============================================================================ */
