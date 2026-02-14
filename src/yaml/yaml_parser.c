@@ -1114,3 +1114,345 @@ GTEXT_YAML_Document *yaml_parse_document(
 	parser_free(&parser);
 	return doc;
 }
+
+/* ============================================================================
+ * Multi-Document Parser (gtext_yaml_parse_all)
+ * ============================================================================ */
+
+/**
+ * @brief State for multi-document parsing.
+ */
+typedef struct {
+	GTEXT_YAML_Document **documents;    /* Array of parsed documents */
+	size_t count;                        /* Number of documents parsed */
+	size_t capacity;                     /* Capacity of documents array */
+	
+	parser_state *current_parser;        /* Current document parser */
+	yaml_context *current_context;       /* Current document context */
+	GTEXT_YAML_Document *current_doc;    /* Current document being built */
+	size_t current_doc_index;            /* Index of current document */
+	
+	const char *input;                   /* Input buffer (for context setup) */
+	size_t input_length;                 /* Input buffer length */
+	
+	const GTEXT_YAML_Parse_Options *options;
+	GTEXT_YAML_Error *error;
+	bool failed;
+} multidoc_state;
+
+/**
+ * @brief Finalize the current document and add it to the array.
+ */
+static bool multidoc_finalize_document(multidoc_state *state) {
+	parser_state *p = NULL;
+
+	if (!state->current_parser || !state->current_doc) {
+		return true;  /* Nothing to finalize */
+	}
+	
+	/* Finalize any open block collections */
+	p = state->current_parser;
+	if (p->in_block_sequence && p->stack.depth > 0) {
+		GTEXT_YAML_Node *node = yaml_node_new_sequence(p->ctx, p->temp.count, NULL, NULL);
+		if (!node) {
+			state->failed = true;
+			if (state->error) {
+				state->error->code = GTEXT_YAML_E_OOM;
+				state->error->message = "Out of memory creating block sequence";
+			}
+			return false;
+		}
+		for (size_t i = 0; i < p->temp.count; i++) {
+			node->as.sequence.children[i] = p->temp.items[i];
+		}
+		node->as.sequence.count = p->temp.count;
+		stack_pop(p);
+		p->root = node;
+		p->in_block_sequence = false;
+	} else if (p->in_block_mapping && p->stack.depth > 0) {
+		size_t pair_count = p->temp.count / 2;
+		GTEXT_YAML_Node *node = yaml_node_new_mapping(p->ctx, pair_count, NULL, NULL);
+		if (!node) {
+			state->failed = true;
+			if (state->error) {
+				state->error->code = GTEXT_YAML_E_OOM;
+				state->error->message = "Out of memory creating block mapping";
+			}
+			return false;
+		}
+		for (size_t i = 0; i < pair_count; i++) {
+			node->as.mapping.pairs[i].key = p->temp.items[i * 2];
+			node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
+			node->as.mapping.pairs[i].key_tag = NULL;
+			node->as.mapping.pairs[i].value_tag = NULL;
+		}
+		node->as.mapping.count = pair_count;
+		stack_pop(p);
+		p->root = node;
+		p->in_block_mapping = false;
+	}
+	
+	/* Resolve aliases */
+	GTEXT_YAML_Status status = resolve_aliases(p);
+	if (status != GTEXT_YAML_OK) {
+		state->failed = true;
+		return false;
+	}
+	
+	/* Set document root */
+	state->current_doc->root = p->root;
+	state->current_doc->node_count = 1;
+	
+	/* Add to documents array */
+	if (state->count >= state->capacity) {
+		size_t new_capacity = state->capacity == 0 ? 4 : state->capacity * 2;
+		GTEXT_YAML_Document **new_docs = (GTEXT_YAML_Document **)realloc(
+			state->documents, new_capacity * sizeof(GTEXT_YAML_Document *)
+		);
+		if (!new_docs) {
+			state->failed = true;
+			if (state->error) {
+				state->error->code = GTEXT_YAML_E_OOM;
+				state->error->message = "Out of memory growing documents array";
+			}
+			return false;
+		}
+		state->documents = new_docs;
+		state->capacity = new_capacity;
+	}
+	
+	state->documents[state->count++] = state->current_doc;
+	
+	/* Clean up parser state (but not context - it's owned by document) */
+	parser_free(state->current_parser);
+	free(state->current_parser);
+	state->current_parser = NULL;
+	state->current_context = NULL;
+	state->current_doc = NULL;
+	
+	return true;
+}
+
+/**
+ * @brief Start a new document in the multi-document stream.
+ */
+static bool multidoc_start_document(multidoc_state *state, const char *input, size_t length) {
+	/* Create context for this document */
+	yaml_context *ctx = yaml_context_new();
+	if (!ctx) {
+		state->failed = true;
+		if (state->error) {
+			state->error->code = GTEXT_YAML_E_OOM;
+			state->error->message = "Out of memory creating context";
+		}
+		return false;
+	}
+	
+	/* Store input buffer reference */
+	yaml_context_set_input_buffer(ctx, input, length);
+	
+	/* Create document */
+	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)yaml_context_alloc(
+		ctx, sizeof(GTEXT_YAML_Document), 8
+	);
+	if (!doc) {
+		yaml_context_free(ctx);
+		state->failed = true;
+		if (state->error) {
+			state->error->code = GTEXT_YAML_E_OOM;
+			state->error->message = "Out of memory creating document";
+		}
+		return false;
+	}
+	
+	memset(doc, 0, sizeof(*doc));
+	doc->ctx = ctx;
+	doc->options = *state->options;
+	doc->document_index = state->current_doc_index++;
+	
+	/* Initialize parser state */
+	parser_state *parser = (parser_state *)malloc(sizeof(parser_state));
+	if (!parser) {
+		yaml_context_free(ctx);
+		state->failed = true;
+		if (state->error) {
+			state->error->code = GTEXT_YAML_E_OOM;
+			state->error->message = "Out of memory creating parser";
+		}
+		return false;
+	}
+	
+	if (!parser_init(parser, ctx, state->error)) {
+		free(parser);
+		yaml_context_free(ctx);
+		state->failed = true;
+		if (state->error) {
+			state->error->code = GTEXT_YAML_E_OOM;
+			state->error->message = "Out of memory initializing parser";
+		}
+		return false;
+	}
+	parser->doc = doc;
+	parser->document_started = true;  /* Mark as started */
+	
+	state->current_context = ctx;
+	state->current_doc = doc;
+	state->current_parser = parser;
+	
+	return true;
+}
+
+/**
+ * @brief Event callback for multi-document parsing.
+ */
+static GTEXT_YAML_Status multidoc_callback(
+	GTEXT_YAML_Stream *s,
+	const void *event_payload,
+	void *user_data
+) {
+	multidoc_state *state = (multidoc_state *)user_data;
+	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
+	GTEXT_YAML_Event_Type type = event->type;
+
+	if (state->failed) return GTEXT_YAML_E_STATE;
+	
+	/* Handle document boundaries */
+	if (type == GTEXT_YAML_EVENT_DOCUMENT_START) {
+		/* If we already have a document started, finalize it */
+		if (state->current_parser && state->current_parser->document_started) {
+			if (!multidoc_finalize_document(state)) {
+				return GTEXT_YAML_E_OOM;
+			}
+		}
+		
+		/* Start new document */
+		if (!multidoc_start_document(state, state->input, state->input_length)) {
+			return GTEXT_YAML_E_OOM;
+		}
+		
+		/* Don't pass DOCUMENT_START to the single-doc parser callback */
+		/* as it's already marked as started */
+		return GTEXT_YAML_OK;
+	}
+	
+	if (type == GTEXT_YAML_EVENT_DOCUMENT_END) {
+		/* Finalize current document */
+		if (!multidoc_finalize_document(state)) {
+			return GTEXT_YAML_E_OOM;
+		}
+		return GTEXT_YAML_OK;
+	}
+	
+	if (type == GTEXT_YAML_EVENT_STREAM_END) {
+		/* Finalize any remaining document */
+		if (state->current_parser) {
+			if (!multidoc_finalize_document(state)) {
+				return GTEXT_YAML_E_OOM;
+			}
+		}
+		return GTEXT_YAML_OK;
+	}
+	
+	/* If no document started yet, start one (implicit document) */
+	if (!state->current_parser) {
+		if (!multidoc_start_document(state, state->input, state->input_length)) {
+			return GTEXT_YAML_E_OOM;
+		}
+	}
+	
+	/* Pass event to current document's parser */
+	return parse_callback(s, event_payload, state->current_parser);
+}
+
+/**
+ * @brief Parse all documents in a YAML stream.
+ */
+GTEXT_YAML_Document **gtext_yaml_parse_all(
+	const char *input,
+	size_t length,
+	size_t *document_count,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+) {
+	if (!input) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Input string is NULL";
+		}
+		return NULL;
+	}
+	
+	if (!document_count) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "document_count parameter is NULL";
+		}
+		return NULL;
+	}
+	
+	/* Use default options if none provided */
+	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
+	if (!options) options = &default_opts;
+	
+	/* Initialize multidoc state */
+	multidoc_state state = {0};
+	state.options = options;
+	state.error = error;
+	state.input = input;
+	state.input_length = length;
+	
+	/* Create streaming parser */
+	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(options, multidoc_callback, &state);
+	if (!stream) {
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating stream parser";
+		}
+		return NULL;
+	}
+	
+	/* Enable synchronous mode so aliases can be processed immediately */
+	gtext_yaml_stream_set_sync_mode(stream, true);
+	
+	/* Feed input to streaming parser */
+	GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, input, length);
+	if (status == GTEXT_YAML_OK) {
+		status = gtext_yaml_stream_finish(stream);
+	}
+	
+	gtext_yaml_stream_free(stream);
+	
+	/* Finalize any remaining document (stream doesn't emit STREAM_END) */
+	if (status == GTEXT_YAML_OK && !state.failed && state.current_parser) {
+		if (!multidoc_finalize_document(&state)) {
+			status = GTEXT_YAML_E_OOM;
+		}
+	}
+	
+	/* Check if parsing succeeded */
+	if (status != GTEXT_YAML_OK || state.failed) {
+		/* Clean up any documents that were created */
+		for (size_t i = 0; i < state.count; i++) {
+			gtext_yaml_free(state.documents[i]);
+		}
+		free(state.documents);
+		
+		/* Clean up current parser if still active */
+		if (state.current_parser) {
+			parser_free(state.current_parser);
+			free(state.current_parser);
+		}
+		if (state.current_context) {
+			yaml_context_free(state.current_context);
+		}
+		
+		if (error && error->code == GTEXT_YAML_OK) {
+			error->code = status;
+			error->message = "Parse error";
+		}
+		return NULL;
+	}
+	
+	*document_count = state.count;
+	return state.documents;
+}

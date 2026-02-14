@@ -24,6 +24,9 @@ extern "C" {
  * On success, returns a document that must be freed with gtext_yaml_free().
  * On failure, returns NULL and populates the error structure (if provided).
  *
+ * For multi-document streams, this function parses only the first document.
+ * Use gtext_yaml_parse_all() to parse all documents in a stream.
+ *
  * @param input Input YAML string (must remain valid for document lifetime if in-situ mode is enabled)
  * @param length Length of input string in bytes
  * @param options Parse options (NULL for defaults)
@@ -33,6 +36,44 @@ extern "C" {
 GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse(
 	const char * input,
 	size_t length,
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Error * error
+);
+
+/**
+ * @brief Parse all documents in a YAML stream.
+ *
+ * Parses the input string and builds in-memory tree representations for
+ * ALL documents in the stream. On success, returns an array of documents
+ * and sets *document_count to the number of documents.
+ *
+ * Each document must be freed individually with gtext_yaml_free(), and
+ * the array itself must be freed with free().
+ *
+ * Example:
+ * @code
+ *   size_t count;
+ *   GTEXT_YAML_Document **docs = gtext_yaml_parse_all(input, len, &count, NULL, NULL);
+ *   if (docs) {
+ *     for (size_t i = 0; i < count; i++) {
+ *       // Use docs[i]...
+ *       gtext_yaml_free(docs[i]);
+ *     }
+ *     free(docs);
+ *   }
+ * @endcode
+ *
+ * @param input Input YAML string
+ * @param length Length of input string in bytes
+ * @param document_count Output: number of documents parsed (must not be NULL)
+ * @param options Parse options (NULL for defaults)
+ * @param error Error output (may be NULL)
+ * @return Array of documents on success, NULL on error
+ */
+GTEXT_API GTEXT_YAML_Document ** gtext_yaml_parse_all(
+	const char * input,
+	size_t length,
+	size_t * document_count,
 	const GTEXT_YAML_Parse_Options * options,
 	GTEXT_YAML_Error * error
 );
@@ -50,7 +91,8 @@ GTEXT_API const GTEXT_YAML_Node * gtext_yaml_document_root(const GTEXT_YAML_Docu
  * @brief Get the document index in a multi-document stream.
  *
  * For multi-document streams, this returns the 0-based index of the document.
- * The current implementation only parses the first document, so this always returns 0.
+ * Documents returned by gtext_yaml_parse() always have index 0 (first document).
+ * Documents returned by gtext_yaml_parse_all() have indices 0, 1, 2, etc.
  *
  * @param doc Document to query
  * @return Document index (0-based)
@@ -454,6 +496,23 @@ GTEXT_API bool gtext_yaml_mapping_delete(
 GTEXT_API bool gtext_yaml_mapping_has_key(
 	const GTEXT_YAML_Node * mapping,
 	const char * key
+);
+
+/**
+ * @brief Deep-clone a node into a target document.
+ *
+ * Creates a deep copy of @p node and all of its descendants, allocating
+ * all new nodes from @p doc's arena. The clone preserves tags, anchors,
+ * and alias relationships, and handles cyclic graphs by reusing already
+ * cloned nodes.
+ *
+ * @param doc Target document to own the cloned nodes
+ * @param node Node to clone
+ * @return Cloned node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_clone(
+	GTEXT_YAML_Document * doc,
+	const GTEXT_YAML_Node * node
 );
 
 #ifdef __cplusplus

@@ -469,6 +469,150 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_mapping(
 	return yaml_node_new_mapping(doc->ctx, 0, tag, anchor);
 }
 
+typedef struct {
+	const GTEXT_YAML_Node *source;
+	GTEXT_YAML_Node *clone;
+} yaml_clone_entry;
+
+typedef struct {
+	yaml_clone_entry *entries;
+	size_t count;
+	size_t capacity;
+} yaml_clone_map;
+
+static const yaml_clone_entry *clone_map_find(
+	const yaml_clone_map *map,
+	const GTEXT_YAML_Node *source
+) {
+	if (!map || !source) return NULL;
+	for (size_t i = 0; i < map->count; i++) {
+		if (map->entries[i].source == source) {
+			return &map->entries[i];
+		}
+	}
+	return NULL;
+}
+
+static bool clone_map_add(
+	yaml_clone_map *map,
+	const GTEXT_YAML_Node *source,
+	GTEXT_YAML_Node *clone
+) {
+	if (!map || !source || !clone) return false;
+	if (map->count >= map->capacity) {
+		size_t new_capacity = map->capacity == 0 ? 16 : map->capacity * 2;
+		yaml_clone_entry *new_entries = (yaml_clone_entry *)realloc(
+			map->entries, new_capacity * sizeof(yaml_clone_entry)
+		);
+		if (!new_entries) return false;
+		map->entries = new_entries;
+		map->capacity = new_capacity;
+	}
+	map->entries[map->count].source = source;
+	map->entries[map->count].clone = clone;
+	map->count++;
+	return true;
+}
+
+static GTEXT_YAML_Node *clone_node(
+	yaml_context *ctx,
+	const GTEXT_YAML_Node *node,
+	yaml_clone_map *map
+) {
+	const yaml_clone_entry *entry = NULL;
+	GTEXT_YAML_Node *clone = NULL;
+
+	if (!ctx || !node || !map) return NULL;
+	entry = clone_map_find(map, node);
+	if (entry) return entry->clone;
+
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+			clone = yaml_node_new_scalar(
+				ctx,
+				node->as.scalar.value,
+				node->as.scalar.length,
+				node->as.scalar.tag,
+				node->as.scalar.anchor
+			);
+			if (!clone) return NULL;
+			if (!clone_map_add(map, node, clone)) return NULL;
+			return clone;
+		case GTEXT_YAML_SEQUENCE: {
+			size_t count = node->as.sequence.count;
+			clone = yaml_node_new_sequence(
+				ctx,
+				count,
+				node->as.sequence.tag,
+				node->as.sequence.anchor
+			);
+			if (!clone) return NULL;
+			if (!clone_map_add(map, node, clone)) return NULL;
+			clone->as.sequence.count = count;
+			for (size_t i = 0; i < count; i++) {
+				clone->as.sequence.children[i] = clone_node(
+					ctx,
+					node->as.sequence.children[i],
+					map
+				);
+				if (!clone->as.sequence.children[i]) return NULL;
+			}
+			return clone;
+		}
+		case GTEXT_YAML_MAPPING: {
+			size_t count = node->as.mapping.count;
+			clone = yaml_node_new_mapping(
+				ctx,
+				count,
+				node->as.mapping.tag,
+				node->as.mapping.anchor
+			);
+			if (!clone) return NULL;
+			if (!clone_map_add(map, node, clone)) return NULL;
+			clone->as.mapping.count = count;
+			for (size_t i = 0; i < count; i++) {
+				clone->as.mapping.pairs[i].key_tag =
+					node->as.mapping.pairs[i].key_tag
+						? arena_strdup(ctx,
+							node->as.mapping.pairs[i].key_tag,
+							strlen(node->as.mapping.pairs[i].key_tag))
+						: NULL;
+				clone->as.mapping.pairs[i].value_tag =
+					node->as.mapping.pairs[i].value_tag
+						? arena_strdup(ctx,
+							node->as.mapping.pairs[i].value_tag,
+							strlen(node->as.mapping.pairs[i].value_tag))
+						: NULL;
+				clone->as.mapping.pairs[i].key = clone_node(
+					ctx,
+					node->as.mapping.pairs[i].key,
+					map
+				);
+				clone->as.mapping.pairs[i].value = clone_node(
+					ctx,
+					node->as.mapping.pairs[i].value,
+					map
+				);
+				if (!clone->as.mapping.pairs[i].key || !clone->as.mapping.pairs[i].value) {
+					return NULL;
+				}
+			}
+			return clone;
+		}
+		case GTEXT_YAML_ALIAS:
+			clone = yaml_node_new_alias(ctx, node->as.alias.anchor_name);
+			if (!clone) return NULL;
+			if (!clone_map_add(map, node, clone)) return NULL;
+			if (node->as.alias.target) {
+				clone->as.alias.target = clone_node(ctx, node->as.alias.target, map);
+				if (!clone->as.alias.target) return NULL;
+			}
+			return clone;
+		default:
+			return NULL;
+	}
+}
+
 /**
  * @brief Helper function to get the document context from a node.
  * 
@@ -709,4 +853,18 @@ GTEXT_API bool gtext_yaml_mapping_has_key(
 		}
 	}
 	return false;
+}
+
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_clone(
+	GTEXT_YAML_Document *doc,
+	const GTEXT_YAML_Node *node
+) {
+	yaml_clone_map map = {0};
+	GTEXT_YAML_Node *clone = NULL;
+
+	if (!doc || !doc->ctx || !node) return NULL;
+
+	clone = clone_node(doc->ctx, node, &map);
+	free(map.entries);
+	return clone;
 }

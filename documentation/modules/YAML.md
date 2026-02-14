@@ -101,16 +101,36 @@ The parser correctly handles values (strings, numbers, collections) that span mu
 
 **Important:** Always call `gtext_yaml_stream_finish()` after feeding all input chunks. The last value may not be emitted until `finish()` is called, especially if it was incomplete at the end of the final chunk.
 
-### 2.2 DOM Parsing (Planned)
+### 2.2 DOM Parsing (Implemented)
 
-DOM parsing will build a complete in-memory tree structure of the YAML document. This mode will be ideal when you need to:
+DOM parsing builds a complete in-memory tree structure of the YAML document. This mode is ideal when you need to:
 
 - Navigate and query the YAML structure
 - Modify the YAML structure
 - Access values multiple times
 - Work with the entire document at once
 
-*Status: Planned for future implementation.*
+**Example: Clone a subtree into a new document**
+
+```c
+#include <ghoti.io/text/yaml.h>
+
+const char *yaml = "root: {items: [one, two]}\n";
+GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, NULL);
+if (!doc) {
+  // Handle parse error
+}
+
+const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+const GTEXT_YAML_Node *items = gtext_yaml_mapping_get(root, "root");
+
+GTEXT_YAML_Document *clone_doc = gtext_yaml_document_new(NULL, NULL);
+GTEXT_YAML_Node *clone = gtext_yaml_node_clone(clone_doc, items);
+gtext_yaml_document_set_root(clone_doc, clone);
+
+gtext_yaml_free(doc);
+gtext_yaml_free(clone_doc);
+```
 
 ---
 
