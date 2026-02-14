@@ -20,8 +20,8 @@ The YAML module has a **functional streaming parser** with:
 - All scalar styles (plain, quoted, literal, folded)
 - All escape sequences including Unicode
 - Security limits (depth, bytes, alias expansion)
-- Memory safety (880+ tests pass valgrind with zero leaks)
-- Comprehensive test coverage (880+ tests passing, 2 failing due to known bug)
+- Memory safety (889+ tests pass valgrind with zero leaks)
+- Comprehensive test coverage (889 tests passing - 100% pass rate)
 
 ### ⏳ What's Planned
 
@@ -45,7 +45,7 @@ See [Known Bugs](#known-bugs) section below for specific issues.
 - ✅ Event-based parsing with callbacks
 - ✅ Chunked input handling (arbitrary boundaries)
 - ✅ Basic indicators (`:`, `-`, `?`, `{`, `}`, `[`, `]`, `,`, `#`, `&`, `*`)
-- ✅ Plain scalars (unquoted strings) - ⚠️ **Bug: space-delimited tokens, see Known Bugs #1**
+- ✅ Plain scalars (unquoted strings) with context-aware parsing
 - ✅ Single-quoted scalars with escape support
 - ✅ Double-quoted scalars with all escape sequences
 - ✅ Literal scalars (`|`) with chomping indicators
@@ -79,7 +79,7 @@ See [Known Bugs](#known-bugs) section below for specific issues.
 - ✅ Use-after-free bugs fixed
 
 #### Testing (Phase 9)
-- ✅ 880+ comprehensive tests (2 failing due to known plain scalar bug)
+- ✅ 889 comprehensive tests (100% pass rate)
 - ✅ All tests pass valgrind with zero leaks
 - ✅ All tests pass AddressSanitizer
 - ✅ Nested structures, all scalar styles, UTF-8, error conditions
@@ -107,11 +107,9 @@ See [Known Bugs](#known-bugs) section below for specific issues.
 - Multi-document DOM parsing ready but not yet implemented
 - Cannot programmatically build/modify DOM (add/remove/modify nodes)
 - No deep copy functionality for nodes
-- Plain scalar bug (Task 2.3.6) causes 2 DOM tests to fail
 
-#### Scalar Styles (Phase 3.3 - Mostly Complete)
-#### Scalar Styles (Phase 3.3 - Mostly Complete)
-- ✅ Plain scalars (unquoted) - ⚠️ **Bug: space-delimited, see Known Bugs #1**
+#### Scalar Styles (Phase 3.3 - Complete)
+- ✅ Plain scalars (unquoted) with context-aware parsing
 - ✅ Single-quoted scalars (complete with escape sequences)
 - ✅ Double-quoted scalars (complete with all escape sequences)
 - ✅ Literal scalars (`|`) with chomping indicators (`|-`, `|+`, `|`)
@@ -196,20 +194,11 @@ Status: Not started
 
 ### Critical
 
-None currently identified. Critical memory safety issues have been resolved.
+None currently identified. Critical memory safety issues and parsing bugs have been resolved.
 
 ### High Priority
 
-**1. Plain Scalar Tokenization is Space-Delimited (Breaking Bug)**
-- **Issue:** Scanner treats plain scalars as space-separated tokens instead of complete values
-- **Example:** `"just a string"` becomes three separate scalars: `"just"`, `"a"`, `"string"`
-- **Impact:** Multi-word plain scalars are completely broken; affects most real-world YAML
-- **Root Cause:** Scanner lacks context awareness (block vs flow); stops at any whitespace
-- **Test:** `test-yaml-dom-multidoc.cpp` - `ScalarThenComplex`, `ComplexFirstDoc` (2 failures)
-- **Status:** Task 2.3.6 created to fix
-- **Workaround:** Use quoted strings for multi-word values
-
-**2. NULL Pointer Segfault in Error Handling**
+**1. NULL Pointer Segfault in Error Handling**
 - **Issue:** Passing NULL for error parameter causes segfault in some paths
 - **Test:** `test-yaml-error-conditions.cpp` - `ErrorHandlingNullPointer` (commented out)
 - **Workaround:** Always provide valid error pointer
@@ -217,7 +206,7 @@ None currently identified. Critical memory safety issues have been resolved.
 
 ### Medium Priority
 
-**3. Generic Error Messages**
+**2. Generic Error Messages**
 - **Issue:** Error messages lack detail and context
 - **Impact:** Difficult to debug parse failures
 - **Status:** Documented in Task 9.4, implementation plan ready

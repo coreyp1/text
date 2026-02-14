@@ -34,6 +34,9 @@ struct GTEXT_YAML_Scanner {
   /* Context stack for tracking block vs flow context */
   yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
   int context_depth;      /* current depth in context stack */
+  
+  /* Track if last token was anchor/alias indicator */
+  int last_was_anchor_or_alias;
 };
 
 static int is_indicator_char(int c)
@@ -122,6 +125,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->col = 1;
   s->finished = 0;
   s->context_depth = 0; /* Start in block context */
+  s->last_was_anchor_or_alias = 0;
   return s;
 }
 
@@ -159,6 +163,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       tok->offset = s->offset;
       tok->line = s->line;
       tok->col = s->col;
+      s->last_was_anchor_or_alias = 0;
       return GTEXT_YAML_OK;
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -407,6 +412,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
           tok->offset = off;
           tok->line = line;
           tok->col = col;
+          s->last_was_anchor_or_alias = 0;
           return GTEXT_YAML_OK;
         }
         /* Otherwise, it's not a document marker (e.g., "---abc"), fall through to indicator handling */
@@ -434,6 +440,10 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->offset = off;
     tok->line = line;
     tok->col = col;
+    
+    /* Track if this is an anchor or alias indicator */
+    s->last_was_anchor_or_alias = (c == '&' || c == '*');
+    
     return GTEXT_YAML_OK;
   }
 
@@ -602,6 +612,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->offset = off;
     tok->line = line;
     tok->col = col;
+    s->last_was_anchor_or_alias = 0;
     return GTEXT_YAML_OK;
   }
 
@@ -613,6 +624,10 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
   yaml_context_type ctx = scanner_current_context(s);
   
+  /* If this scalar follows an anchor/alias indicator, it must be space-delimited
+     (anchor/alias names cannot contain spaces per YAML spec) */
+  int require_space_delimiter = s->last_was_anchor_or_alias;
+  
   size_t look = 0;
   while (1) {
     if (s->cursor + look >= s->input.len) {
@@ -623,7 +638,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     if (c == -1) break;
     
     /* Context-aware whitespace handling */
-    if (ctx == YAML_CONTEXT_BLOCK) {
+    if (ctx == YAML_CONTEXT_BLOCK && !require_space_delimiter) {
       /* In block context, plain scalars can contain spaces and tabs,
          but end at newlines or when followed by structural indicators */
       if (c == '\r' || c == '\n') break;
@@ -694,7 +709,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') break;
       if (c == '|' || c == '>' || c == '%') break;
     } else {
-      /* In flow context, plain scalars are space-delimited (original behavior) */
+      /* In flow context, plain scalars are space-delimited (original behavior)
+         Also applies to anchor/alias names which must be space-delimited */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
       if (is_indicator_char(c)) break;
     }
@@ -721,6 +737,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->offset = s->offset;
     tok->line = s->line;
     tok->col = s->col;
+    s->last_was_anchor_or_alias = 0;
     return GTEXT_YAML_OK;
   }
 
@@ -771,5 +788,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   tok->offset = off;
   tok->line = line;
   tok->col = col;
+  
+  /* Reset anchor/alias flag after emitting any scalar */
+  s->last_was_anchor_or_alias = 0;
+  
   return GTEXT_YAML_OK;
 }
