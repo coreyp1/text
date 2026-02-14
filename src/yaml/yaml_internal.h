@@ -247,6 +247,7 @@ struct GTEXT_YAML_Document {
 	size_t node_count;          /* Total nodes allocated (statistics) */
 	size_t document_index;      /* Index in multi-document stream (0-based) */
 	bool has_directives;        /* True if %YAML or %TAG directives present */
+	bool has_merge_keys;        /* True if merge keys (<<) were used */
 	int yaml_version_major;     /* YAML version from %YAML directive (0 if none) */
 	int yaml_version_minor;
 	const char *input_newline;  /* Detected line ending for input (if any) */

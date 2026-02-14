@@ -368,6 +368,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json(
 		return GTEXT_YAML_E_INVALID;
 	}
 
+	if (gtext_yaml_document_has_merge_keys(yaml_doc)) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_INVALID;
+			out_err->message = "cannot convert: YAML merge keys (<<) are not compatible with JSON";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
 	const GTEXT_YAML_Node * root = gtext_yaml_document_root(yaml_doc);
 	if (!root) {
 		/* Empty document → JSON null */

@@ -228,6 +228,11 @@ GTEXT_API size_t gtext_yaml_document_index(const GTEXT_YAML_Document *doc) {
 	return doc->document_index;
 }
 
+GTEXT_API bool gtext_yaml_document_has_merge_keys(const GTEXT_YAML_Document *doc) {
+	if (!doc) return false;
+	return doc->has_merge_keys;
+}
+
 /**
  * @brief Get the type of a YAML node.
  */

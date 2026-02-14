@@ -103,6 +103,16 @@ GTEXT_API const GTEXT_YAML_Node * gtext_yaml_document_root(const GTEXT_YAML_Docu
  * @return Document index (0-based)
  */
 GTEXT_API size_t gtext_yaml_document_index(const GTEXT_YAML_Document * doc);
+
+/**
+ * @brief Return true if the document used merge keys (<<).
+ *
+ * This flag is set when merge keys are detected during resolution.
+ *
+ * @param doc Document to query
+ * @return true if merge keys were used, false otherwise
+ */
+GTEXT_API bool gtext_yaml_document_has_merge_keys(const GTEXT_YAML_Document * doc);
 /**
  * @brief Return the node type for @p n.
  *

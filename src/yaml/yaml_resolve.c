@@ -970,6 +970,8 @@ static GTEXT_YAML_Status apply_merge_keys(
 
 	if (!has_merge) return GTEXT_YAML_OK;
 
+	doc->has_merge_keys = true;
+
 	yaml_merge_pair *merged_pairs = NULL;
 	size_t merged_count = 0;
 	size_t merged_capacity = 0;
