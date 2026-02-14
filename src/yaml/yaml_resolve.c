@@ -263,6 +263,310 @@ static bool nodes_equal(
 	}
 }
 
+typedef struct {
+	GTEXT_YAML_Node *key;
+	GTEXT_YAML_Node *value;
+	const char *key_tag;
+	const char *value_tag;
+	bool from_merge;
+} yaml_merge_pair;
+
+typedef struct {
+	GTEXT_YAML_Node *old_node;
+	GTEXT_YAML_Node *new_node;
+} yaml_merge_replacement;
+
+static bool is_merge_key(const GTEXT_YAML_Node *key) {
+	key = deref_alias(key);
+	if (!key) return false;
+	if (key->type != GTEXT_YAML_STRING) return false;
+	if (key->as.scalar.value && strcmp(key->as.scalar.value, "<<") == 0) return true;
+
+	const char *suffix = tag_suffix(key->as.scalar.tag);
+	if (suffix && strcmp(suffix, "merge") == 0) return true;
+
+	return false;
+}
+
+static bool merge_pairs_grow(
+	yaml_merge_pair **pairs,
+	size_t *count,
+	size_t *capacity
+) {
+	if (*count < *capacity) return true;
+	size_t new_cap = *capacity == 0 ? 8 : *capacity * 2;
+	yaml_merge_pair *new_pairs = (yaml_merge_pair *)realloc(
+		*pairs, new_cap * sizeof(yaml_merge_pair)
+	);
+	if (!new_pairs) return false;
+	*pairs = new_pairs;
+	*capacity = new_cap;
+	return true;
+}
+
+static long merge_pairs_find(
+	yaml_merge_pair *pairs,
+	size_t count,
+	const GTEXT_YAML_Node *key,
+	size_t max_depth
+) {
+	for (size_t i = 0; i < count; i++) {
+		if (nodes_equal(key, pairs[i].key, 0, max_depth)) return (long)i;
+	}
+	return -1;
+}
+
+static bool merge_pairs_add_or_replace(
+	yaml_merge_pair **pairs,
+	size_t *count,
+	size_t *capacity,
+	const GTEXT_YAML_Node *key,
+	GTEXT_YAML_Node *value,
+	const char *key_tag,
+	const char *value_tag,
+	size_t max_depth,
+	bool from_merge
+) {
+	long idx = merge_pairs_find(*pairs, *count, key, max_depth);
+	if (idx >= 0) {
+		yaml_merge_pair *existing = &(*pairs)[(size_t)idx];
+		if (from_merge) {
+			existing->value = value;
+			existing->key_tag = key_tag;
+			existing->value_tag = value_tag;
+			existing->from_merge = true;
+			return true;
+		}
+		if (existing->from_merge) {
+			existing->value = value;
+			existing->key_tag = key_tag;
+			existing->value_tag = value_tag;
+			existing->from_merge = false;
+			return true;
+		}
+	}
+	if (!merge_pairs_grow(pairs, count, capacity)) return false;
+	(*pairs)[*count].key = (GTEXT_YAML_Node *)key;
+	(*pairs)[*count].value = value;
+	(*pairs)[*count].key_tag = key_tag;
+	(*pairs)[*count].value_tag = value_tag;
+	(*pairs)[*count].from_merge = from_merge;
+	(*count)++;
+	return true;
+}
+
+static GTEXT_YAML_Status merge_from_mapping(
+	yaml_merge_pair **pairs,
+	size_t *count,
+	size_t *capacity,
+	const GTEXT_YAML_Node *source,
+	size_t max_depth,
+	GTEXT_YAML_Error *error
+) {
+	if (!source || source->type != GTEXT_YAML_MAPPING) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Merge source is not a mapping";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	for (size_t i = 0; i < source->as.mapping.count; i++) {
+		const yaml_mapping_pair *pair = &source->as.mapping.pairs[i];
+		if (!pair->key || is_merge_key(pair->key)) continue;
+		if (!merge_pairs_add_or_replace(
+			pairs,
+			count,
+			capacity,
+			pair->key,
+			pair->value,
+			pair->key_tag,
+			pair->value_tag,
+			max_depth,
+			true
+		)) {
+			if (error) {
+				error->code = GTEXT_YAML_E_OOM;
+				error->message = "Out of memory merging mapping";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+	}
+
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status apply_merge_keys(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Node **out_node,
+	bool *out_replaced,
+	GTEXT_YAML_Error *error
+) {
+	*out_node = node;
+	*out_replaced = false;
+	if (!node || node->type != GTEXT_YAML_MAPPING) return GTEXT_YAML_OK;
+
+	bool has_merge = false;
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		yaml_mapping_pair *pair = &node->as.mapping.pairs[i];
+		if (pair->key && is_merge_key(pair->key)) {
+			has_merge = true;
+			break;
+		}
+	}
+
+	if (!has_merge) return GTEXT_YAML_OK;
+
+	yaml_merge_pair *merged_pairs = NULL;
+	size_t merged_count = 0;
+	size_t merged_capacity = 0;
+	GTEXT_YAML_Status st = GTEXT_YAML_OK;
+
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		yaml_mapping_pair *pair = &node->as.mapping.pairs[i];
+		if (!pair->key || !is_merge_key(pair->key)) continue;
+		const GTEXT_YAML_Node *value = deref_alias(pair->value);
+		if (!value) continue;
+
+		if (value->type == GTEXT_YAML_MAPPING) {
+			st = merge_from_mapping(
+				&merged_pairs,
+				&merged_count,
+				&merged_capacity,
+				value,
+				opts ? opts->max_depth : 0,
+				error
+			);
+			if (st != GTEXT_YAML_OK) break;
+		} else if (value->type == GTEXT_YAML_SEQUENCE) {
+			for (size_t j = 0; j < value->as.sequence.count; j++) {
+				const GTEXT_YAML_Node *item = deref_alias(value->as.sequence.children[j]);
+				st = merge_from_mapping(
+					&merged_pairs,
+					&merged_count,
+					&merged_capacity,
+					item,
+					opts ? opts->max_depth : 0,
+					error
+				);
+				if (st != GTEXT_YAML_OK) break;
+			}
+			if (st != GTEXT_YAML_OK) break;
+		} else {
+			if (error) {
+				error->code = GTEXT_YAML_E_INVALID;
+				error->message = "Merge value must be mapping or sequence of mappings";
+			}
+			st = GTEXT_YAML_E_INVALID;
+			break;
+		}
+	}
+
+	if (st != GTEXT_YAML_OK) {
+		free(merged_pairs);
+		return st;
+	}
+
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		yaml_mapping_pair *pair = &node->as.mapping.pairs[i];
+		if (!pair->key || is_merge_key(pair->key)) continue;
+		if (!merge_pairs_add_or_replace(
+			&merged_pairs,
+			&merged_count,
+			&merged_capacity,
+			pair->key,
+			pair->value,
+			pair->key_tag,
+			pair->value_tag,
+			opts ? opts->max_depth : 0,
+			false
+		)) {
+			free(merged_pairs);
+			if (error) {
+				error->code = GTEXT_YAML_E_OOM;
+				error->message = "Out of memory merging mapping";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+	}
+
+	if (merged_count <= node->as.mapping.count) {
+		for (size_t i = 0; i < merged_count; i++) {
+			node->as.mapping.pairs[i].key = merged_pairs[i].key;
+			node->as.mapping.pairs[i].value = merged_pairs[i].value;
+			node->as.mapping.pairs[i].key_tag = merged_pairs[i].key_tag;
+			node->as.mapping.pairs[i].value_tag = merged_pairs[i].value_tag;
+		}
+		node->as.mapping.count = merged_count;
+		free(merged_pairs);
+		*out_node = node;
+		*out_replaced = false;
+		return GTEXT_YAML_OK;
+	}
+
+	GTEXT_YAML_Node *merged = yaml_node_new_mapping(
+		doc->ctx,
+		merged_count,
+		node->as.mapping.tag,
+		node->as.mapping.anchor
+	);
+	if (!merged) {
+		free(merged_pairs);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating merged mapping";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+
+	for (size_t i = 0; i < merged_count; i++) {
+		merged->as.mapping.pairs[i].key = merged_pairs[i].key;
+		merged->as.mapping.pairs[i].value = merged_pairs[i].value;
+		merged->as.mapping.pairs[i].key_tag = merged_pairs[i].key_tag;
+		merged->as.mapping.pairs[i].value_tag = merged_pairs[i].value_tag;
+	}
+	merged->as.mapping.count = merged_count;
+
+	free(merged_pairs);
+	*out_node = merged;
+	*out_replaced = true;
+	return GTEXT_YAML_OK;
+}
+
+static void update_alias_targets(
+	GTEXT_YAML_Node *node,
+	yaml_merge_replacement *replacements,
+	size_t replacement_count
+) {
+	if (!node) return;
+
+	if (node->type == GTEXT_YAML_ALIAS && node->as.alias.target) {
+		for (size_t i = 0; i < replacement_count; i++) {
+			if (node->as.alias.target == replacements[i].old_node) {
+				node->as.alias.target = replacements[i].new_node;
+				break;
+			}
+		}
+		return;
+	}
+
+	if (node->type == GTEXT_YAML_SEQUENCE) {
+		for (size_t i = 0; i < node->as.sequence.count; i++) {
+			update_alias_targets(node->as.sequence.children[i], replacements, replacement_count);
+		}
+		return;
+	}
+
+	if (node->type == GTEXT_YAML_MAPPING) {
+		for (size_t i = 0; i < node->as.mapping.count; i++) {
+			update_alias_targets(node->as.mapping.pairs[i].key, replacements, replacement_count);
+			update_alias_targets(node->as.mapping.pairs[i].value, replacements, replacement_count);
+		}
+	}
+}
+
 static void mapping_remove_pair(GTEXT_YAML_Node *node, size_t index) {
 	if (!node || node->type != GTEXT_YAML_MAPPING) return;
 	if (index >= node->as.mapping.count) return;
@@ -475,11 +779,15 @@ static GTEXT_YAML_Status resolve_scalar(
 
 static GTEXT_YAML_Status resolve_node(
 	GTEXT_YAML_Document *doc,
-	GTEXT_YAML_Node *node,
+	GTEXT_YAML_Node **node_ptr,
 	const GTEXT_YAML_Parse_Options *opts,
+	yaml_merge_replacement **replacements,
+	size_t *replacement_count,
+	size_t *replacement_capacity,
 	GTEXT_YAML_Error *error
 ) {
-	if (!node) return GTEXT_YAML_OK;
+	if (!node_ptr || !*node_ptr) return GTEXT_YAML_OK;
+	GTEXT_YAML_Node *node = *node_ptr;
 
 	switch (node->type) {
 		case GTEXT_YAML_STRING:
@@ -493,8 +801,18 @@ static GTEXT_YAML_Status resolve_node(
 				node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
 			}
 			for (size_t i = 0; i < node->as.sequence.count; i++) {
-				GTEXT_YAML_Status st = resolve_node(doc, node->as.sequence.children[i], opts, error);
+				GTEXT_YAML_Node *child = node->as.sequence.children[i];
+				GTEXT_YAML_Status st = resolve_node(
+					doc,
+					&child,
+					opts,
+					replacements,
+					replacement_count,
+					replacement_capacity,
+					error
+				);
 				if (st != GTEXT_YAML_OK) return st;
+				node->as.sequence.children[i] = child;
 			}
 			return GTEXT_YAML_OK;
 		case GTEXT_YAML_MAPPING:
@@ -502,10 +820,67 @@ static GTEXT_YAML_Status resolve_node(
 				node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
 			}
 			for (size_t i = 0; i < node->as.mapping.count; i++) {
-				GTEXT_YAML_Status st = resolve_node(doc, node->as.mapping.pairs[i].key, opts, error);
+				GTEXT_YAML_Node *key = node->as.mapping.pairs[i].key;
+				GTEXT_YAML_Status st = resolve_node(
+					doc,
+					&key,
+					opts,
+					replacements,
+					replacement_count,
+					replacement_capacity,
+					error
+				);
 				if (st != GTEXT_YAML_OK) return st;
-				st = resolve_node(doc, node->as.mapping.pairs[i].value, opts, error);
+				node->as.mapping.pairs[i].key = key;
+
+				GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
+				st = resolve_node(
+					doc,
+					&value,
+					opts,
+					replacements,
+					replacement_count,
+					replacement_capacity,
+					error
+				);
 				if (st != GTEXT_YAML_OK) return st;
+				node->as.mapping.pairs[i].value = value;
+			}
+			{
+				GTEXT_YAML_Node *merged_node = node;
+				bool replaced = false;
+				GTEXT_YAML_Status st = apply_merge_keys(
+					doc,
+					node,
+					opts,
+					&merged_node,
+					&replaced,
+					error
+				);
+				if (st != GTEXT_YAML_OK) return st;
+				if (replaced) {
+					if (*replacement_count >= *replacement_capacity) {
+						size_t new_cap = *replacement_capacity == 0 ? 4 : *replacement_capacity * 2;
+						yaml_merge_replacement *new_items = (yaml_merge_replacement *)realloc(
+							*replacements,
+							new_cap * sizeof(yaml_merge_replacement)
+						);
+						if (!new_items) {
+							if (error) {
+								error->code = GTEXT_YAML_E_OOM;
+								error->message = "Out of memory tracking merge replacements";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						*replacements = new_items;
+						*replacement_capacity = new_cap;
+					}
+					(*replacements)[*replacement_count].old_node = node;
+					(*replacements)[*replacement_count].new_node = merged_node;
+					(*replacement_count)++;
+					*node_ptr = merged_node;
+					node = merged_node;
+				}
 			}
 			return apply_dupkey_policy(doc, node, opts, error);
 		case GTEXT_YAML_ALIAS:
@@ -519,5 +894,31 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
 	GTEXT_YAML_Error *error
 ) {
 	if (!doc) return GTEXT_YAML_E_INVALID;
-	return resolve_node(doc, doc->root, &doc->options, error);
+	const GTEXT_YAML_Parse_Options *opts = &doc->options;
+
+	yaml_merge_replacement *replacements = NULL;
+	size_t replacement_count = 0;
+	size_t replacement_capacity = 0;
+
+	GTEXT_YAML_Node *root = doc->root;
+	GTEXT_YAML_Status st = resolve_node(
+		doc,
+		&root,
+		opts,
+		&replacements,
+		&replacement_count,
+		&replacement_capacity,
+		error
+	);
+	if (st != GTEXT_YAML_OK) {
+		free(replacements);
+		return st;
+	}
+
+	doc->root = root;
+	if (replacement_count > 0) {
+		update_alias_targets(doc->root, replacements, replacement_count);
+	}
+	free(replacements);
+	return GTEXT_YAML_OK;
 }
