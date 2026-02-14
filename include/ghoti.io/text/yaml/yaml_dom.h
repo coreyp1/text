@@ -232,7 +232,9 @@ GTEXT_API bool gtext_yaml_node_set_float(GTEXT_YAML_Node * n, double value);
 /**
  * @brief Get the number of items in a sequence.
  *
- * Returns 0 if the node is not a sequence or is empty.
+ * Returns 0 if the node is not a sequence-like node or is empty.
+ * Sequence-like nodes include GTEXT_YAML_SEQUENCE, GTEXT_YAML_OMAP, and
+ * GTEXT_YAML_PAIRS.
  *
  * @param node Sequence node to query
  * @return Number of items in the sequence
@@ -242,7 +244,9 @@ GTEXT_API size_t gtext_yaml_sequence_length(const GTEXT_YAML_Node * node);
 /**
  * @brief Get a child node from a sequence by index.
  *
- * Returns NULL if the node is not a sequence or the index is out of bounds.
+ * Returns NULL if the node is not a sequence-like node or the index is out of
+ * bounds. Sequence-like nodes include GTEXT_YAML_SEQUENCE, GTEXT_YAML_OMAP,
+ * and GTEXT_YAML_PAIRS.
  * Indexing is zero-based.
  *
  * @param node Sequence node to query
@@ -289,7 +293,8 @@ GTEXT_API size_t gtext_yaml_sequence_iterate(
 /**
  * @brief Get the number of key-value pairs in a mapping.
  *
- * Returns 0 if the node is not a mapping or is empty.
+ * Returns 0 if the node is not a mapping-like node or is empty. Mapping-like
+ * nodes include GTEXT_YAML_MAPPING and GTEXT_YAML_SET.
  *
  * @param node Mapping node to query
  * @return Number of key-value pairs
@@ -301,7 +306,7 @@ GTEXT_API size_t gtext_yaml_mapping_size(const GTEXT_YAML_Node * node);
  *
  * Performs a linear search through the mapping's keys, comparing each
  * key as a string. Returns the first matching value, or NULL if not found
- * or if the node is not a mapping.
+ * or if the node is not a mapping-like node.
  *
  * @param node Mapping node to search
  * @param key String key to look up
@@ -312,7 +317,8 @@ GTEXT_API const GTEXT_YAML_Node * gtext_yaml_mapping_get(const GTEXT_YAML_Node *
 /**
  * @brief Get a key-value pair from a mapping by index.
  *
- * Returns false if the node is not a mapping or the index is out of bounds.
+ * Returns false if the node is not a mapping-like node or the index is out of
+ * bounds. Mapping-like nodes include GTEXT_YAML_MAPPING and GTEXT_YAML_SET.
  * Indexing is zero-based and reflects insertion order.
  *
  * @param node Mapping node to query
@@ -358,6 +364,196 @@ typedef bool (*GTEXT_YAML_Mapping_Iterator)(
 GTEXT_API size_t gtext_yaml_mapping_iterate(
 	const GTEXT_YAML_Node * node,
 	GTEXT_YAML_Mapping_Iterator callback,
+	void * user
+);
+
+/* ==========================================================================
+ * Set Accessors (Phase 7.3a)
+ * ==========================================================================
+ */
+
+/**
+ * @brief Get the number of keys in a set.
+ *
+ * Returns 0 if the node is not a set.
+ *
+ * @param node Set node to query
+ * @return Number of keys in the set
+ */
+GTEXT_API size_t gtext_yaml_set_size(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Get a key node from a set by index.
+ *
+ * Returns NULL if the node is not a set or the index is out of bounds.
+ * Indexing is zero-based and reflects insertion order.
+ *
+ * @param node Set node to query
+ * @param index Zero-based index of key to retrieve
+ * @return Key node at the given index, or NULL
+ */
+GTEXT_API const GTEXT_YAML_Node * gtext_yaml_set_get_at(
+	const GTEXT_YAML_Node * node,
+	size_t index
+);
+
+/**
+ * @brief Iterator callback for set traversal.
+ *
+ * @param key Key node
+ * @param index Zero-based index of the key
+ * @param user User data passed to gtext_yaml_set_iterate()
+ * @return true to continue iteration, false to stop
+ */
+typedef bool (*GTEXT_YAML_Set_Iterator)(
+	const GTEXT_YAML_Node * key,
+	size_t index,
+	void * user
+);
+
+/**
+ * @brief Iterate over all keys in a set.
+ *
+ * Calls the provided callback for each key in order. Iteration stops
+ * if the callback returns false or all keys have been visited.
+ *
+ * @param node Set node to iterate
+ * @param callback Function to call for each key
+ * @param user User data passed to callback
+ * @return Number of keys visited
+ */
+GTEXT_API size_t gtext_yaml_set_iterate(
+	const GTEXT_YAML_Node * node,
+	GTEXT_YAML_Set_Iterator callback,
+	void * user
+);
+
+/* ==========================================================================
+ * Omap/Pairs Accessors (Phase 7.3a)
+ * ==========================================================================
+ */
+
+/**
+ * @brief Get the number of entries in an ordered map (omap).
+ *
+ * Returns 0 if the node is not an omap.
+ *
+ * @param node Omap node to query
+ * @return Number of entries in the omap
+ */
+GTEXT_API size_t gtext_yaml_omap_size(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Get a key-value pair from an omap by index.
+ *
+ * Returns false if the node is not an omap or the index is out of bounds.
+ * Indexing is zero-based and reflects insertion order.
+ *
+ * @param node Omap node to query
+ * @param index Zero-based index of the pair
+ * @param key Output pointer for key node (may be NULL)
+ * @param value Output pointer for value node (may be NULL)
+ * @return true if the pair was retrieved, false otherwise
+ */
+GTEXT_API bool gtext_yaml_omap_get_at(
+	const GTEXT_YAML_Node * node,
+	size_t index,
+	const GTEXT_YAML_Node ** key,
+	const GTEXT_YAML_Node ** value
+);
+
+/**
+ * @brief Iterator callback for omap traversal.
+ *
+ * @param key Key node
+ * @param value Value node
+ * @param index Zero-based index of the pair
+ * @param user User data passed to gtext_yaml_omap_iterate()
+ * @return true to continue iteration, false to stop
+ */
+typedef bool (*GTEXT_YAML_Omap_Iterator)(
+	const GTEXT_YAML_Node * key,
+	const GTEXT_YAML_Node * value,
+	size_t index,
+	void * user
+);
+
+/**
+ * @brief Iterate over all key-value pairs in an omap.
+ *
+ * Calls the provided callback for each pair in insertion order. Iteration
+ * stops if the callback returns false or all pairs have been visited.
+ *
+ * @param node Omap node to iterate
+ * @param callback Function to call for each pair
+ * @param user User data passed to callback
+ * @return Number of pairs visited
+ */
+GTEXT_API size_t gtext_yaml_omap_iterate(
+	const GTEXT_YAML_Node * node,
+	GTEXT_YAML_Omap_Iterator callback,
+	void * user
+);
+
+/**
+ * @brief Get the number of entries in a pairs node.
+ *
+ * Returns 0 if the node is not a pairs node.
+ *
+ * @param node Pairs node to query
+ * @return Number of entries in the pairs list
+ */
+GTEXT_API size_t gtext_yaml_pairs_size(const GTEXT_YAML_Node * node);
+
+/**
+ * @brief Get a key-value pair from a pairs node by index.
+ *
+ * Returns false if the node is not a pairs node or the index is out of bounds.
+ * Indexing is zero-based and reflects insertion order.
+ *
+ * @param node Pairs node to query
+ * @param index Zero-based index of the pair
+ * @param key Output pointer for key node (may be NULL)
+ * @param value Output pointer for value node (may be NULL)
+ * @return true if the pair was retrieved, false otherwise
+ */
+GTEXT_API bool gtext_yaml_pairs_get_at(
+	const GTEXT_YAML_Node * node,
+	size_t index,
+	const GTEXT_YAML_Node ** key,
+	const GTEXT_YAML_Node ** value
+);
+
+/**
+ * @brief Iterator callback for pairs traversal.
+ *
+ * @param key Key node
+ * @param value Value node
+ * @param index Zero-based index of the pair
+ * @param user User data passed to gtext_yaml_pairs_iterate()
+ * @return true to continue iteration, false to stop
+ */
+typedef bool (*GTEXT_YAML_Pairs_Iterator)(
+	const GTEXT_YAML_Node * key,
+	const GTEXT_YAML_Node * value,
+	size_t index,
+	void * user
+);
+
+/**
+ * @brief Iterate over all key-value pairs in a pairs node.
+ *
+ * Calls the provided callback for each pair in insertion order. Iteration
+ * stops if the callback returns false or all pairs have been visited.
+ *
+ * @param node Pairs node to iterate
+ * @param callback Function to call for each pair
+ * @param user User data passed to callback
+ * @return Number of pairs visited
+ */
+GTEXT_API size_t gtext_yaml_pairs_iterate(
+	const GTEXT_YAML_Node * node,
+	GTEXT_YAML_Pairs_Iterator callback,
 	void * user
 );
 
@@ -487,6 +683,54 @@ GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_sequence(
  * @return New mapping node, or NULL on error
  */
 GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_mapping(
+	GTEXT_YAML_Document * doc,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new empty set node.
+ *
+ * If @p tag is NULL, this defaults to "!!set".
+ *
+ * @param doc Document that will own the node
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New set node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_set(
+	GTEXT_YAML_Document * doc,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new empty ordered map (omap) node.
+ *
+ * If @p tag is NULL, this defaults to "!!omap".
+ *
+ * @param doc Document that will own the node
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New omap node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_omap(
+	GTEXT_YAML_Document * doc,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new empty pairs node.
+ *
+ * If @p tag is NULL, this defaults to "!!pairs".
+ *
+ * @param doc Document that will own the node
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New pairs node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_pairs(
 	GTEXT_YAML_Document * doc,
 	const char * tag,
 	const char * anchor

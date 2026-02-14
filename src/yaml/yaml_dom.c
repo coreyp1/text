@@ -354,16 +354,33 @@ GTEXT_API bool gtext_yaml_node_set_float(GTEXT_YAML_Node *n, double value) {
 }
 
 /* ============================================================================
+ * Sequence and Mapping Helpers
+ * ============================================================================ */
+
+static bool node_is_sequence_type(const GTEXT_YAML_Node *node) {
+	if (!node) return false;
+	return node->type == GTEXT_YAML_SEQUENCE ||
+		node->type == GTEXT_YAML_OMAP ||
+		node->type == GTEXT_YAML_PAIRS;
+}
+
+static bool node_is_mapping_type(const GTEXT_YAML_Node *node) {
+	if (!node) return false;
+	return node->type == GTEXT_YAML_MAPPING ||
+		node->type == GTEXT_YAML_SET;
+}
+
+/* ============================================================================
  * Sequence Accessors (Phase 4.3)
  * ============================================================================ */
 
 size_t gtext_yaml_sequence_length(const GTEXT_YAML_Node *node) {
-	if (!node || node->type != GTEXT_YAML_SEQUENCE) return 0;
+	if (!node_is_sequence_type(node)) return 0;
 	return node->as.sequence.count;
 }
 
 const GTEXT_YAML_Node *gtext_yaml_sequence_get(const GTEXT_YAML_Node *node, size_t index) {
-	if (!node || node->type != GTEXT_YAML_SEQUENCE) return NULL;
+	if (!node_is_sequence_type(node)) return NULL;
 	if (index >= node->as.sequence.count) return NULL;
 	return node->as.sequence.children[index];
 }
@@ -373,7 +390,7 @@ size_t gtext_yaml_sequence_iterate(
 	GTEXT_YAML_Sequence_Iterator callback,
 	void *user
 ) {
-	if (!node || node->type != GTEXT_YAML_SEQUENCE || !callback) return 0;
+	if (!node_is_sequence_type(node) || !callback) return 0;
 	
 	for (size_t i = 0; i < node->as.sequence.count; i++) {
 		if (!callback(node->as.sequence.children[i], i, user)) {
@@ -388,12 +405,12 @@ size_t gtext_yaml_sequence_iterate(
  * ============================================================================ */
 
 size_t gtext_yaml_mapping_size(const GTEXT_YAML_Node *node) {
-	if (!node || node->type != GTEXT_YAML_MAPPING) return 0;
+	if (!node_is_mapping_type(node)) return 0;
 	return node->as.mapping.count;
 }
 
 const GTEXT_YAML_Node *gtext_yaml_mapping_get(const GTEXT_YAML_Node *node, const char *key) {
-	if (!node || node->type != GTEXT_YAML_MAPPING || !key) return NULL;
+	if (!node_is_mapping_type(node) || !key) return NULL;
 	
 	/* Linear search through key-value pairs */
 	for (size_t i = 0; i < node->as.mapping.count; i++) {
@@ -413,7 +430,7 @@ bool gtext_yaml_mapping_get_at(
 	const GTEXT_YAML_Node **key,
 	const GTEXT_YAML_Node **value
 ) {
-	if (!node || node->type != GTEXT_YAML_MAPPING) return false;
+	if (!node_is_mapping_type(node)) return false;
 	if (index >= node->as.mapping.count) return false;
 	
 	if (key) *key = node->as.mapping.pairs[index].key;
@@ -426,7 +443,7 @@ size_t gtext_yaml_mapping_iterate(
 	GTEXT_YAML_Mapping_Iterator callback,
 	void *user
 ) {
-	if (!node || node->type != GTEXT_YAML_MAPPING || !callback) return 0;
+	if (!node_is_mapping_type(node) || !callback) return 0;
 	
 	for (size_t i = 0; i < node->as.mapping.count; i++) {
 		const GTEXT_YAML_Node *k = node->as.mapping.pairs[i].key;
@@ -436,6 +453,129 @@ size_t gtext_yaml_mapping_iterate(
 		}
 	}
 	return node->as.mapping.count;
+}
+
+/* ============================================================================
+ * Set Accessors (Phase 7.3a)
+ * ============================================================================ */
+
+size_t gtext_yaml_set_size(const GTEXT_YAML_Node *node) {
+	if (!node || node->type != GTEXT_YAML_SET) return 0;
+	return node->as.mapping.count;
+}
+
+const GTEXT_YAML_Node *gtext_yaml_set_get_at(
+	const GTEXT_YAML_Node *node,
+	size_t index
+) {
+	if (!node || node->type != GTEXT_YAML_SET) return NULL;
+	if (index >= node->as.mapping.count) return NULL;
+	return node->as.mapping.pairs[index].key;
+}
+
+size_t gtext_yaml_set_iterate(
+	const GTEXT_YAML_Node *node,
+	GTEXT_YAML_Set_Iterator callback,
+	void *user
+) {
+	if (!node || node->type != GTEXT_YAML_SET || !callback) return 0;
+
+	for (size_t i = 0; i < node->as.mapping.count; i++) {
+		const GTEXT_YAML_Node *key = node->as.mapping.pairs[i].key;
+		if (!callback(key, i, user)) {
+			return i + 1;
+		}
+	}
+	return node->as.mapping.count;
+}
+
+/* ============================================================================
+ * Omap/Pairs Accessors (Phase 7.3a)
+ * ============================================================================ */
+
+static bool omap_pairs_get_at_internal(
+	const GTEXT_YAML_Node *node,
+	size_t index,
+	const GTEXT_YAML_Node **key,
+	const GTEXT_YAML_Node **value
+) {
+	if (!node) return false;
+	if (index >= node->as.sequence.count) return false;
+
+	const GTEXT_YAML_Node *entry = node->as.sequence.children[index];
+	if (!entry || entry->type != GTEXT_YAML_MAPPING || entry->as.mapping.count != 1) {
+		return false;
+	}
+
+	if (key) *key = entry->as.mapping.pairs[0].key;
+	if (value) *value = entry->as.mapping.pairs[0].value;
+	return true;
+}
+
+size_t gtext_yaml_omap_size(const GTEXT_YAML_Node *node) {
+	if (!node || node->type != GTEXT_YAML_OMAP) return 0;
+	return node->as.sequence.count;
+}
+
+bool gtext_yaml_omap_get_at(
+	const GTEXT_YAML_Node *node,
+	size_t index,
+	const GTEXT_YAML_Node **key,
+	const GTEXT_YAML_Node **value
+) {
+	if (!node || node->type != GTEXT_YAML_OMAP) return false;
+	return omap_pairs_get_at_internal(node, index, key, value);
+}
+
+size_t gtext_yaml_omap_iterate(
+	const GTEXT_YAML_Node *node,
+	GTEXT_YAML_Omap_Iterator callback,
+	void *user
+) {
+	if (!node || node->type != GTEXT_YAML_OMAP || !callback) return 0;
+
+	for (size_t i = 0; i < node->as.sequence.count; i++) {
+		const GTEXT_YAML_Node *key = NULL;
+		const GTEXT_YAML_Node *value = NULL;
+		if (!omap_pairs_get_at_internal(node, i, &key, &value)) return i;
+		if (!callback(key, value, i, user)) {
+			return i + 1;
+		}
+	}
+	return node->as.sequence.count;
+}
+
+size_t gtext_yaml_pairs_size(const GTEXT_YAML_Node *node) {
+	if (!node || node->type != GTEXT_YAML_PAIRS) return 0;
+	return node->as.sequence.count;
+}
+
+bool gtext_yaml_pairs_get_at(
+	const GTEXT_YAML_Node *node,
+	size_t index,
+	const GTEXT_YAML_Node **key,
+	const GTEXT_YAML_Node **value
+) {
+	if (!node || node->type != GTEXT_YAML_PAIRS) return false;
+	return omap_pairs_get_at_internal(node, index, key, value);
+}
+
+size_t gtext_yaml_pairs_iterate(
+	const GTEXT_YAML_Node *node,
+	GTEXT_YAML_Pairs_Iterator callback,
+	void *user
+) {
+	if (!node || node->type != GTEXT_YAML_PAIRS || !callback) return 0;
+
+	for (size_t i = 0; i < node->as.sequence.count; i++) {
+		const GTEXT_YAML_Node *key = NULL;
+		const GTEXT_YAML_Node *value = NULL;
+		if (!omap_pairs_get_at_internal(node, i, &key, &value)) return i;
+		if (!callback(key, value, i, user)) {
+			return i + 1;
+		}
+	}
+	return node->as.sequence.count;
 }
 
 /* ============================================================================
@@ -453,8 +593,11 @@ const char *gtext_yaml_node_tag(const GTEXT_YAML_Node *node) {
 		case GTEXT_YAML_NULL:
 			return node->as.scalar.tag;
 		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
 			return node->as.sequence.tag;
 		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
 			return node->as.mapping.tag;
 		default:
 			return NULL;
@@ -472,8 +615,11 @@ GTEXT_API const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
 		case GTEXT_YAML_NULL:
 			return node->as.scalar.anchor;
 		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
 			return node->as.sequence.anchor;
 		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
 			return node->as.mapping.anchor;
 		default:
 			return NULL;
@@ -605,6 +751,57 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_mapping(
 	return yaml_node_new_mapping(doc->ctx, 0, tag, anchor);
 }
 
+/**
+ * @brief Create a new empty set node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_set(
+	GTEXT_YAML_Document *doc,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	const char *resolved_tag = tag ? tag : "!!set";
+	GTEXT_YAML_Node *node = yaml_node_new_mapping(doc->ctx, 0, resolved_tag, anchor);
+	if (!node) return NULL;
+	node->type = GTEXT_YAML_SET;
+	node->as.mapping.type = GTEXT_YAML_SET;
+	return node;
+}
+
+/**
+ * @brief Create a new empty ordered map node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_omap(
+	GTEXT_YAML_Document *doc,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	const char *resolved_tag = tag ? tag : "!!omap";
+	GTEXT_YAML_Node *node = yaml_node_new_sequence(doc->ctx, 0, resolved_tag, anchor);
+	if (!node) return NULL;
+	node->type = GTEXT_YAML_OMAP;
+	node->as.sequence.type = GTEXT_YAML_OMAP;
+	return node;
+}
+
+/**
+ * @brief Create a new empty pairs node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_pairs(
+	GTEXT_YAML_Document *doc,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	const char *resolved_tag = tag ? tag : "!!pairs";
+	GTEXT_YAML_Node *node = yaml_node_new_sequence(doc->ctx, 0, resolved_tag, anchor);
+	if (!node) return NULL;
+	node->type = GTEXT_YAML_PAIRS;
+	node->as.sequence.type = GTEXT_YAML_PAIRS;
+	return node;
+}
+
 typedef struct {
 	const GTEXT_YAML_Node *source;
 	GTEXT_YAML_Node *clone;
@@ -708,7 +905,9 @@ static GTEXT_YAML_Node *clone_node(
 			}
 			if (!clone_map_add(map, node, clone)) return NULL;
 			return clone;
-		case GTEXT_YAML_SEQUENCE: {
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS: {
 			size_t count = node->as.sequence.count;
 			clone = yaml_node_new_sequence(
 				ctx,
@@ -718,6 +917,8 @@ static GTEXT_YAML_Node *clone_node(
 			);
 			if (!clone) return NULL;
 			if (!clone_map_add(map, node, clone)) return NULL;
+			clone->type = node->type;
+			clone->as.sequence.type = node->type;
 			clone->as.sequence.count = count;
 			for (size_t i = 0; i < count; i++) {
 				clone->as.sequence.children[i] = clone_node(
@@ -729,7 +930,8 @@ static GTEXT_YAML_Node *clone_node(
 			}
 			return clone;
 		}
-		case GTEXT_YAML_MAPPING: {
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET: {
 			size_t count = node->as.mapping.count;
 			clone = yaml_node_new_mapping(
 				ctx,
@@ -739,6 +941,8 @@ static GTEXT_YAML_Node *clone_node(
 			);
 			if (!clone) return NULL;
 			if (!clone_map_add(map, node, clone)) return NULL;
+			clone->type = node->type;
+			clone->as.mapping.type = node->type;
 			clone->as.mapping.count = count;
 			for (size_t i = 0; i < count; i++) {
 				clone->as.mapping.pairs[i].key_tag =
@@ -791,13 +995,15 @@ static GTEXT_YAML_Node *sequence_grow(
 	GTEXT_YAML_Node *old_seq,
 	size_t new_capacity
 ) {
-	if (!ctx || !old_seq || old_seq->type != GTEXT_YAML_SEQUENCE) return NULL;
+	if (!ctx || !old_seq || !node_is_sequence_type(old_seq)) return NULL;
 	
 	/* Create new sequence with larger capacity */
 	GTEXT_YAML_Node *new_seq = yaml_node_new_sequence(
 		ctx, new_capacity, old_seq->as.sequence.tag, old_seq->as.sequence.anchor
 	);
 	if (!new_seq) return NULL;
+	new_seq->type = old_seq->type;
+	new_seq->as.sequence.type = old_seq->type;
 	
 	/* Copy existing children */
 	new_seq->as.sequence.count = old_seq->as.sequence.count;
@@ -816,7 +1022,7 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_append(
 	GTEXT_YAML_Node *sequence,
 	GTEXT_YAML_Node *child
 ) {
-	if (!doc || !doc->ctx || !sequence || sequence->type != GTEXT_YAML_SEQUENCE || !child) return NULL;
+	if (!doc || !doc->ctx || !sequence || !node_is_sequence_type(sequence) || !child) return NULL;
 	
 	/* Create new sequence with room for one more child */
 	size_t new_count = sequence->as.sequence.count + 1;
@@ -839,7 +1045,7 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_insert(
 	size_t index,
 	GTEXT_YAML_Node *child
 ) {
-	if (!doc || !doc->ctx || !sequence || sequence->type != GTEXT_YAML_SEQUENCE || !child) return NULL;
+	if (!doc || !doc->ctx || !sequence || !node_is_sequence_type(sequence) || !child) return NULL;
 	if (index > sequence->as.sequence.count) return NULL;
 	
 	/* Create new sequence with room for one more child */
@@ -848,6 +1054,8 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_insert(
 		doc->ctx, new_count, sequence->as.sequence.tag, sequence->as.sequence.anchor
 	);
 	if (!new_seq) return NULL;
+	new_seq->type = sequence->type;
+	new_seq->as.sequence.type = sequence->type;
 	
 	/* Copy children before insertion point */
 	for (size_t i = 0; i < index; i++) {
@@ -873,7 +1081,7 @@ GTEXT_API bool gtext_yaml_sequence_remove(
 	GTEXT_YAML_Node *sequence,
 	size_t index
 ) {
-	if (!sequence || sequence->type != GTEXT_YAML_SEQUENCE) return false;
+	if (!sequence || !node_is_sequence_type(sequence)) return false;
 	if (index >= sequence->as.sequence.count) return false;
 	
 	/* Shift remaining elements left */
@@ -893,13 +1101,15 @@ static GTEXT_YAML_Node *mapping_grow(
 	GTEXT_YAML_Node *old_map,
 	size_t new_capacity
 ) {
-	if (!ctx || !old_map || old_map->type != GTEXT_YAML_MAPPING) return NULL;
+	if (!ctx || !old_map || !node_is_mapping_type(old_map)) return NULL;
 	
 	/* Create new mapping with larger capacity */
 	GTEXT_YAML_Node *new_map = yaml_node_new_mapping(
 		ctx, new_capacity, old_map->as.mapping.tag, old_map->as.mapping.anchor
 	);
 	if (!new_map) return NULL;
+	new_map->type = old_map->type;
+	new_map->as.mapping.type = old_map->type;
 	
 	/* Copy existing pairs */
 	new_map->as.mapping.count = old_map->as.mapping.count;
@@ -919,7 +1129,7 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_mapping_set(
 	GTEXT_YAML_Node *key,
 	GTEXT_YAML_Node *value
 ) {
-	if (!doc || !doc->ctx || !mapping || mapping->type != GTEXT_YAML_MAPPING || !key || !value) return NULL;
+	if (!doc || !doc->ctx || !mapping || !node_is_mapping_type(mapping) || !key || !value) return NULL;
 	
 	/* Check if key already exists (for string keys) */
 	size_t existing_idx = (size_t)-1;
@@ -963,7 +1173,7 @@ GTEXT_API bool gtext_yaml_mapping_delete(
 	GTEXT_YAML_Node *mapping,
 	const char *key
 ) {
-	if (!mapping || mapping->type != GTEXT_YAML_MAPPING || !key) return false;
+	if (!mapping || !node_is_mapping_type(mapping) || !key) return false;
 	
 	/* Find the key */
 	size_t found_idx = (size_t)-1;
@@ -995,7 +1205,7 @@ GTEXT_API bool gtext_yaml_mapping_has_key(
 	const GTEXT_YAML_Node *mapping,
 	const char *key
 ) {
-	if (!mapping || mapping->type != GTEXT_YAML_MAPPING || !key) return false;
+	if (!mapping || !node_is_mapping_type(mapping) || !key) return false;
 	
 	/* Linear search through key-value pairs */
 	for (size_t i = 0; i < mapping->as.mapping.count; i++) {

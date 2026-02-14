@@ -300,8 +300,11 @@ static const char *node_tag(const GTEXT_YAML_Node *node) {
     case GTEXT_YAML_NULL:
       return node->as.scalar.tag;
     case GTEXT_YAML_SEQUENCE:
+    case GTEXT_YAML_OMAP:
+    case GTEXT_YAML_PAIRS:
       return node->as.sequence.tag;
     case GTEXT_YAML_MAPPING:
+    case GTEXT_YAML_SET:
       return node->as.mapping.tag;
     default:
       return NULL;
@@ -318,12 +321,28 @@ static const char *node_anchor(const GTEXT_YAML_Node *node) {
     case GTEXT_YAML_NULL:
       return node->as.scalar.anchor;
     case GTEXT_YAML_SEQUENCE:
+    case GTEXT_YAML_OMAP:
+    case GTEXT_YAML_PAIRS:
       return node->as.sequence.anchor;
     case GTEXT_YAML_MAPPING:
+    case GTEXT_YAML_SET:
       return node->as.mapping.anchor;
     default:
       return NULL;
   }
+}
+
+static bool node_is_sequence_type(const GTEXT_YAML_Node *node) {
+  if (!node) return false;
+  return node->type == GTEXT_YAML_SEQUENCE ||
+      node->type == GTEXT_YAML_OMAP ||
+      node->type == GTEXT_YAML_PAIRS;
+}
+
+static bool node_is_mapping_type(const GTEXT_YAML_Node *node) {
+  if (!node) return false;
+  return node->type == GTEXT_YAML_MAPPING ||
+      node->type == GTEXT_YAML_SET;
 }
 
 static const char *default_tag_for_type(GTEXT_YAML_Node_Type type) {
@@ -342,9 +361,21 @@ static const char *default_tag_for_type(GTEXT_YAML_Node_Type type) {
       return "!!seq";
     case GTEXT_YAML_MAPPING:
       return "!!map";
+    case GTEXT_YAML_SET:
+      return "!!set";
+    case GTEXT_YAML_OMAP:
+      return "!!omap";
+    case GTEXT_YAML_PAIRS:
+      return "!!pairs";
     default:
       return NULL;
   }
+}
+
+static bool node_requires_tag(GTEXT_YAML_Node_Type type) {
+  return type == GTEXT_YAML_SET ||
+      type == GTEXT_YAML_OMAP ||
+      type == GTEXT_YAML_PAIRS;
 }
 
 static bool tag_is_binary(const char *tag) {
@@ -528,6 +559,10 @@ static GTEXT_YAML_Status write_node_prefix(
   const char *tag = tag_override ? tag_override : node_tag(node);
   bool canonical = state->opts && state->opts->canonical;
 
+  if (!tag && node_requires_tag(node->type)) {
+    tag = default_tag_for_type(node->type);
+  }
+
   if (!tag && canonical) {
     tag = default_tag_for_type(node->type);
   }
@@ -624,6 +659,14 @@ static GTEXT_YAML_Status write_scalar_node(
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   }
 
+  if (!canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN &&
+      node->type == GTEXT_YAML_NULL) {
+    if (!value || value[0] == '\0') {
+      return write_str(state, "~");
+    }
+    return write_str(state, value);
+  }
+
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
     if (!is_binary && scalar_needs_quotes(value)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
@@ -686,6 +729,18 @@ static GTEXT_YAML_Status write_sequence_node(
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
+  if (!resolved_tag && !node_tag(node) &&
+      (node->type == GTEXT_YAML_OMAP || node->type == GTEXT_YAML_PAIRS)) {
+    resolved_tag = default_tag_for_type(node->type);
+  }
+  if (node->type == GTEXT_YAML_OMAP || node->type == GTEXT_YAML_PAIRS) {
+    for (size_t i = 0; i < node->as.sequence.count; i++) {
+      const GTEXT_YAML_Node *entry = node->as.sequence.children[i];
+      if (!entry || entry->type != GTEXT_YAML_MAPPING || entry->as.mapping.count != 1) {
+        return GTEXT_YAML_E_INVALID;
+      }
+    }
+  }
   status = write_node_prefix(state, node, resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
 
@@ -726,7 +781,7 @@ static GTEXT_YAML_Status write_sequence_node(
     if (status != GTEXT_YAML_OK) return status;
 
     const GTEXT_YAML_Node *child = node->as.sequence.children[i];
-    if (child && (child->type == GTEXT_YAML_SEQUENCE || child->type == GTEXT_YAML_MAPPING)) {
+    if (child && (node_is_sequence_type(child) || node_is_mapping_type(child))) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
@@ -783,6 +838,20 @@ static GTEXT_YAML_Status write_mapping_node(
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
+  if (!resolved_tag && !node_tag(node) && node->type == GTEXT_YAML_SET) {
+    resolved_tag = default_tag_for_type(node->type);
+  }
+  if (node->type == GTEXT_YAML_SET) {
+    for (size_t i = 0; i < node->as.mapping.count; i++) {
+      const GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
+      if (value && value->type == GTEXT_YAML_ALIAS) {
+        value = value->as.alias.target;
+      }
+      if (!value || value->type != GTEXT_YAML_NULL) {
+        return GTEXT_YAML_E_INVALID;
+      }
+    }
+  }
   status = write_node_prefix(state, node, resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
 
@@ -843,7 +912,7 @@ static GTEXT_YAML_Status write_mapping_node(
     if (status != GTEXT_YAML_OK) return status;
 
     const GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
-    if (value && (value->type == GTEXT_YAML_SEQUENCE || value->type == GTEXT_YAML_MAPPING)) {
+    if (value && (node_is_sequence_type(value) || node_is_mapping_type(value))) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
@@ -906,8 +975,11 @@ static GTEXT_YAML_Status write_node(
     case GTEXT_YAML_NULL:
       return write_scalar_node(state, node, indent, flow, tag_override);
     case GTEXT_YAML_SEQUENCE:
+    case GTEXT_YAML_OMAP:
+    case GTEXT_YAML_PAIRS:
       return write_sequence_node(state, node, indent, flow, tag_override, leading_newline);
     case GTEXT_YAML_MAPPING:
+    case GTEXT_YAML_SET:
       return write_mapping_node(state, node, indent, flow, tag_override, leading_newline);
     case GTEXT_YAML_ALIAS:
       return write_alias_node(state, node);
@@ -1093,6 +1165,9 @@ static int writer_write_prefix(
     const char *tag,
     GTEXT_YAML_Node_Type type,
     bool trailing_space) {
+  if (!tag && node_requires_tag(type)) {
+    tag = default_tag_for_type(type);
+  }
   if (writer->opts.canonical && !tag) {
     tag = default_tag_for_type(type);
   }

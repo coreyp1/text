@@ -627,6 +627,103 @@ memset(&error, 0, sizeof(error));
 }
 
 /* ============================================================================
+ * Set/Omap/Pairs Access Tests
+ * ============================================================================ */
+
+TEST(YamlDomAccessors, SetAccessors) {
+	const char *yaml = "!!set {a: ~, b: ~}";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SET);
+	EXPECT_EQ(gtext_yaml_set_size(root), 2);
+
+	const GTEXT_YAML_Node *first = gtext_yaml_set_get_at(root, 0);
+	ASSERT_NE(first, nullptr);
+	EXPECT_NE(gtext_yaml_node_as_string(first), nullptr);
+
+	const GTEXT_YAML_Node *second = gtext_yaml_set_get_at(root, 1);
+	ASSERT_NE(second, nullptr);
+	EXPECT_NE(gtext_yaml_node_as_string(second), nullptr);
+
+	size_t seen = gtext_yaml_set_iterate(
+		root,
+		[](const GTEXT_YAML_Node *key, size_t, void *) {
+			return key != nullptr;
+		},
+		nullptr
+	);
+	EXPECT_EQ(seen, 2u);
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, OmapAccessors) {
+	const char *yaml = "!!omap [ {a: 1}, {b: 2} ]";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_OMAP);
+	EXPECT_EQ(gtext_yaml_omap_size(root), 2);
+
+	const GTEXT_YAML_Node *key = NULL;
+	const GTEXT_YAML_Node *value = NULL;
+	EXPECT_TRUE(gtext_yaml_omap_get_at(root, 0, &key, &value));
+	ASSERT_NE(key, nullptr);
+	ASSERT_NE(value, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(key), "a");
+	EXPECT_STREQ(gtext_yaml_node_as_string(value), "1");
+
+	size_t seen = gtext_yaml_omap_iterate(
+		root,
+		[](const GTEXT_YAML_Node *, const GTEXT_YAML_Node *, size_t, void *) {
+			return true;
+		},
+		nullptr
+	);
+	EXPECT_EQ(seen, 2u);
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, PairsAccessors) {
+	const char *yaml = "!!pairs [ {a: 1}, {a: 2} ]";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_PAIRS);
+	EXPECT_EQ(gtext_yaml_pairs_size(root), 2);
+
+	const GTEXT_YAML_Node *key = NULL;
+	const GTEXT_YAML_Node *value = NULL;
+	EXPECT_TRUE(gtext_yaml_pairs_get_at(root, 1, &key, &value));
+	ASSERT_NE(key, nullptr);
+	ASSERT_NE(value, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(key), "a");
+	EXPECT_STREQ(gtext_yaml_node_as_string(value), "2");
+
+	size_t seen = gtext_yaml_pairs_iterate(
+		root,
+		[](const GTEXT_YAML_Node *, const GTEXT_YAML_Node *, size_t, void *) {
+			return true;
+		},
+		nullptr
+	);
+	EXPECT_EQ(seen, 2u);
+
+	gtext_yaml_free(doc);
+}
+
+/* ============================================================================
  * Metadata Accessor Tests
  * ============================================================================ */
 

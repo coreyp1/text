@@ -783,6 +783,8 @@ static bool nodes_equal(
 		case GTEXT_YAML_NULL:
 			return scalar_equal(a, b);
 		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
 			if (a->as.sequence.count != b->as.sequence.count) return false;
 			for (size_t i = 0; i < a->as.sequence.count; i++) {
 				if (!nodes_equal(a->as.sequence.children[i], b->as.sequence.children[i], depth + 1, max_depth)) {
@@ -791,6 +793,7 @@ static bool nodes_equal(
 			}
 			return true;
 		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
 			if (a->as.mapping.count != b->as.mapping.count) return false;
 			for (size_t i = 0; i < a->as.mapping.count; i++) {
 				const GTEXT_YAML_Node *key = a->as.mapping.pairs[i].key;
@@ -1107,7 +1110,21 @@ static void update_alias_targets(
 		return;
 	}
 
+	if (node->type == GTEXT_YAML_OMAP || node->type == GTEXT_YAML_PAIRS) {
+		for (size_t i = 0; i < node->as.sequence.count; i++) {
+			update_alias_targets(node->as.sequence.children[i], replacements, replacement_count);
+		}
+		return;
+	}
+
 	if (node->type == GTEXT_YAML_MAPPING) {
+		for (size_t i = 0; i < node->as.mapping.count; i++) {
+			update_alias_targets(node->as.mapping.pairs[i].key, replacements, replacement_count);
+			update_alias_targets(node->as.mapping.pairs[i].value, replacements, replacement_count);
+		}
+	}
+
+	if (node->type == GTEXT_YAML_SET) {
 		for (size_t i = 0; i < node->as.mapping.count; i++) {
 			update_alias_targets(node->as.mapping.pairs[i].key, replacements, replacement_count);
 			update_alias_targets(node->as.mapping.pairs[i].value, replacements, replacement_count);
@@ -1116,7 +1133,7 @@ static void update_alias_targets(
 }
 
 static void mapping_remove_pair(GTEXT_YAML_Node *node, size_t index) {
-	if (!node || node->type != GTEXT_YAML_MAPPING) return;
+	if (!node || (node->type != GTEXT_YAML_MAPPING && node->type != GTEXT_YAML_SET)) return;
 	if (index >= node->as.mapping.count) return;
 	for (size_t i = index; i + 1 < node->as.mapping.count; i++) {
 		node->as.mapping.pairs[i] = node->as.mapping.pairs[i + 1];
@@ -1133,7 +1150,7 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 	GTEXT_YAML_Error *error
 ) {
 	if (!doc || !node || !opts) return GTEXT_YAML_OK;
-	if (node->type != GTEXT_YAML_MAPPING) return GTEXT_YAML_OK;
+	if (node->type != GTEXT_YAML_MAPPING && node->type != GTEXT_YAML_SET) return GTEXT_YAML_OK;
 	if (node->as.mapping.count < 2) return GTEXT_YAML_OK;
 
 	for (size_t i = 0; i < node->as.mapping.count; i++) {
@@ -1487,6 +1504,8 @@ static GTEXT_YAML_Status resolve_node(
 		case GTEXT_YAML_NULL:
 			return resolve_scalar(doc, node, opts, error);
 		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
 			if (node->as.sequence.tag) {
 				node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
 			}
@@ -1506,7 +1525,16 @@ static GTEXT_YAML_Status resolve_node(
 			}
 			{
 				const char *seq_suffix = tag_suffix(node->as.sequence.tag);
-				if (seq_suffix && strcmp(seq_suffix, "omap") == 0) {
+				bool is_omap = seq_suffix && strcmp(seq_suffix, "omap") == 0;
+				bool is_pairs = seq_suffix && strcmp(seq_suffix, "pairs") == 0;
+				if (node->type == GTEXT_YAML_OMAP) {
+					is_omap = true;
+					is_pairs = false;
+				} else if (node->type == GTEXT_YAML_PAIRS) {
+					is_pairs = true;
+					is_omap = false;
+				}
+				if (is_omap) {
 					for (size_t i = 0; i < node->as.sequence.count; i++) {
 						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
 						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
@@ -1529,7 +1557,9 @@ static GTEXT_YAML_Status resolve_node(
 							}
 						}
 					}
-				} else if (seq_suffix && strcmp(seq_suffix, "pairs") == 0) {
+					node->type = GTEXT_YAML_OMAP;
+					node->as.sequence.type = GTEXT_YAML_OMAP;
+				} else if (is_pairs) {
 					for (size_t i = 0; i < node->as.sequence.count; i++) {
 						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
 						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
@@ -1540,6 +1570,8 @@ static GTEXT_YAML_Status resolve_node(
 							return GTEXT_YAML_E_INVALID;
 						}
 					}
+					node->type = GTEXT_YAML_PAIRS;
+					node->as.sequence.type = GTEXT_YAML_PAIRS;
 				}
 			}
 			{
@@ -1555,6 +1587,7 @@ static GTEXT_YAML_Status resolve_node(
 			}
 			return GTEXT_YAML_OK;
 		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
 			if (node->as.mapping.tag) {
 				node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
 			}
@@ -1623,7 +1656,11 @@ static GTEXT_YAML_Status resolve_node(
 			}
 			{
 				const char *map_suffix = tag_suffix(node->as.mapping.tag);
-				if (map_suffix && strcmp(map_suffix, "set") == 0) {
+				bool is_set = map_suffix && strcmp(map_suffix, "set") == 0;
+				if (node->type == GTEXT_YAML_SET) {
+					is_set = true;
+				}
+				if (is_set) {
 					for (size_t i = 0; i < node->as.mapping.count; i++) {
 						if (!node_is_null(node->as.mapping.pairs[i].value)) {
 							if (error) {
@@ -1633,6 +1670,8 @@ static GTEXT_YAML_Status resolve_node(
 							return GTEXT_YAML_E_INVALID;
 						}
 					}
+					node->type = GTEXT_YAML_SET;
+					node->as.mapping.type = GTEXT_YAML_SET;
 				}
 			}
 			{

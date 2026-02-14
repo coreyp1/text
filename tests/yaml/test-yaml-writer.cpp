@@ -200,6 +200,42 @@ TEST(YamlWriter, FoldedLineWidth) {
   gtext_yaml_free(doc);
 }
 
+TEST(YamlWriter, StandardSet) {
+  const char *yaml = "!!set {a: ~, b: ~}";
+  GTEXT_YAML_Error error = {};
+  GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), nullptr, &error);
+  ASSERT_NE(doc, nullptr);
+
+  std::string output = write_doc(doc, nullptr);
+  EXPECT_EQ(output, "!!set {a: ~, b: ~}");
+
+  gtext_yaml_free(doc);
+}
+
+TEST(YamlWriter, StandardOmap) {
+  const char *yaml = "!!omap [ {a: 1}, {b: 2} ]";
+  GTEXT_YAML_Error error = {};
+  GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), nullptr, &error);
+  ASSERT_NE(doc, nullptr);
+
+  std::string output = write_doc(doc, nullptr);
+  EXPECT_EQ(output, "!!omap [{a: 1}, {b: 2}]");
+
+  gtext_yaml_free(doc);
+}
+
+TEST(YamlWriter, StandardPairs) {
+  const char *yaml = "!!pairs [ {a: 1}, {a: 2} ]";
+  GTEXT_YAML_Error error = {};
+  GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), nullptr, &error);
+  ASSERT_NE(doc, nullptr);
+
+  std::string output = write_doc(doc, nullptr);
+  EXPECT_EQ(output, "!!pairs [{a: 1}, {a: 2}]");
+
+  gtext_yaml_free(doc);
+}
+
 TEST(YamlWriter, FlowStyleForced) {
   GTEXT_YAML_Document *doc = build_sample_mapping_doc();
   ASSERT_NE(doc, nullptr);

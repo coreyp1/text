@@ -58,7 +58,10 @@ TEST(YamlStandardTags, SetValid) {
 	const char *yaml = "!!set {a: ~, b: ~}";
 	GTEXT_YAML_Error err = {};
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
-	EXPECT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SET);
 	gtext_yaml_free(doc);
 }
 
@@ -74,7 +77,10 @@ TEST(YamlStandardTags, OmapValid) {
 	const char *yaml = "!!omap [ {a: 1}, {b: 2} ]";
 	GTEXT_YAML_Error err = {};
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
-	EXPECT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_OMAP);
 	gtext_yaml_free(doc);
 }
 
@@ -98,7 +104,10 @@ TEST(YamlStandardTags, PairsValid) {
 	const char *yaml = "!!pairs [ {a: 1}, {a: 2} ]";
 	GTEXT_YAML_Error err = {};
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
-	EXPECT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_PAIRS);
 	gtext_yaml_free(doc);
 }
 
