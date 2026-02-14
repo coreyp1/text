@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
+typedef struct GTEXT_YAML_Reader GTEXT_YAML_Reader;
 
 /**
  * @brief Event callback invoked by the streaming parser.
@@ -117,6 +118,49 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s);
  * Passing NULL is a no-op.
  */
 GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s);
+
+/**
+ * @brief Create a new pull-model YAML reader.
+ *
+ * The pull reader wraps the streaming parser and queues events for
+ * synchronous consumption via gtext_yaml_reader_next().
+ */
+GTEXT_API GTEXT_YAML_Reader * gtext_yaml_reader_new(
+	const GTEXT_YAML_Parse_Options * opts
+);
+
+/**
+ * @brief Feed input to the pull reader.
+ *
+ * To signal end-of-input, call with data=NULL and len=0, which will
+ * finalize parsing and enqueue any remaining events.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_feed(
+	GTEXT_YAML_Reader * reader,
+	const void * data,
+	size_t len,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Retrieve the next available event from the reader.
+ *
+ * Returns GTEXT_YAML_OK when an event is available, GTEXT_YAML_E_INCOMPLETE
+ * if more input is needed, or GTEXT_YAML_E_STATE if the stream has ended.
+ *
+ * The returned event's string pointers remain valid until the next
+ * call to gtext_yaml_reader_next() or gtext_yaml_reader_free().
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_next(
+	GTEXT_YAML_Reader * reader,
+	GTEXT_YAML_Event * out_event,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Free the pull reader and any queued events.
+ */
+GTEXT_API void gtext_yaml_reader_free(GTEXT_YAML_Reader * reader);
 
 #ifdef __cplusplus
 }

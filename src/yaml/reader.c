@@ -15,18 +15,20 @@
 
 #include <ghoti.io/text/yaml/yaml_internal.h>
 
-typedef struct GTEXT_YAML_Reader {
+typedef struct GTEXT_YAML_CharReader {
   const char *data;
   size_t len;
   size_t pos; /* byte offset */
   int line;
   int col;
-} GTEXT_YAML_Reader;
+} GTEXT_YAML_CharReader;
 
-GTEXT_INTERNAL_API GTEXT_YAML_Reader *gtext_yaml_reader_new(const char *data,
-                                                            size_t len)
+GTEXT_INTERNAL_API GTEXT_YAML_CharReader *gtext_yaml_char_reader_new(
+  const char *data,
+  size_t len
+)
 {
-  GTEXT_YAML_Reader *r = (GTEXT_YAML_Reader *)malloc(sizeof(*r));
+  GTEXT_YAML_CharReader *r = (GTEXT_YAML_CharReader *)malloc(sizeof(*r));
   if (!r) {
     return NULL;
   }
@@ -39,7 +41,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Reader *gtext_yaml_reader_new(const char *data,
   return r;
 }
 
-GTEXT_INTERNAL_API void gtext_yaml_reader_free(GTEXT_YAML_Reader *r)
+GTEXT_INTERNAL_API void gtext_yaml_char_reader_free(GTEXT_YAML_CharReader *r)
 {
   if (!r) {
     return;
@@ -48,7 +50,7 @@ GTEXT_INTERNAL_API void gtext_yaml_reader_free(GTEXT_YAML_Reader *r)
   free(r);
 }
 
-GTEXT_INTERNAL_API int gtext_yaml_reader_peek(GTEXT_YAML_Reader *r)
+GTEXT_INTERNAL_API int gtext_yaml_char_reader_peek(GTEXT_YAML_CharReader *r)
 {
   if (!r) {
     return -1;
@@ -61,7 +63,7 @@ GTEXT_INTERNAL_API int gtext_yaml_reader_peek(GTEXT_YAML_Reader *r)
   return (unsigned char)r->data[r->pos];
 }
 
-GTEXT_INTERNAL_API int gtext_yaml_reader_consume(GTEXT_YAML_Reader *r)
+GTEXT_INTERNAL_API int gtext_yaml_char_reader_consume(GTEXT_YAML_CharReader *r)
 {
   if (!r) {
     return -1;
@@ -82,13 +84,18 @@ GTEXT_INTERNAL_API int gtext_yaml_reader_consume(GTEXT_YAML_Reader *r)
   return c;
 }
 
-GTEXT_INTERNAL_API size_t gtext_yaml_reader_offset(const GTEXT_YAML_Reader *r)
+GTEXT_INTERNAL_API size_t gtext_yaml_char_reader_offset(
+  const GTEXT_YAML_CharReader *r
+)
 {
   return r ? r->pos : 0;
 }
 
-GTEXT_INTERNAL_API void gtext_yaml_reader_position(const GTEXT_YAML_Reader *r,
-                                                  int *line, int *col)
+GTEXT_INTERNAL_API void gtext_yaml_char_reader_position(
+  const GTEXT_YAML_CharReader *r,
+  int *line,
+  int *col
+)
 {
   if (!r) {
     if (line) {
