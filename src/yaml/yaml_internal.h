@@ -239,6 +239,7 @@ struct GTEXT_YAML_Document {
 	bool has_directives;        /* True if %YAML or %TAG directives present */
 	int yaml_version_major;     /* YAML version from %YAML directive (0 if none) */
 	int yaml_version_minor;
+	const char *input_newline;  /* Detected line ending for input (if any) */
 	yaml_tag_handle *tag_handles; /* Array of %TAG handle mappings */
 	size_t tag_handle_count;
 };

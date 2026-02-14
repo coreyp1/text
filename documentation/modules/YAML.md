@@ -128,6 +128,13 @@ DOM parsing builds a complete in-memory tree structure of the YAML document. Thi
 - Access values multiple times
 - Work with the entire document at once
 
+**DOM Accessors (selected):**
+- `gtext_yaml_node_type()`
+- `gtext_yaml_node_as_string()`, `gtext_yaml_node_as_bool()`, `gtext_yaml_node_as_int()`, `gtext_yaml_node_as_float()`
+- `gtext_yaml_node_is_null()`, `gtext_yaml_node_as_timestamp()`
+- `gtext_yaml_sequence_length()`, `gtext_yaml_sequence_get()`
+- `gtext_yaml_mapping_size()`, `gtext_yaml_mapping_get()`
+
 **Example: Clone a subtree into a new document**
 
 ```c

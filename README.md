@@ -37,6 +37,23 @@ sudo make install
 
 See the examples directory for usage examples.
 
+### YAML File I/O Example
+
+```c
+#include <ghoti.io/text/yaml.h>
+
+GTEXT_YAML_Error err = {};
+GTEXT_YAML_Document *doc = gtext_yaml_parse_file("config.yaml", NULL, &err);
+if (!doc) {
+    /* Handle parse error */
+}
+
+/* Modify doc or inspect values here */
+
+GTEXT_YAML_Status status = gtext_yaml_write_file("out.yaml", doc, NULL, &err);
+gtext_yaml_free(doc);
+```
+
 ## Documentation
 
 - [Modules](@ref modules) - Detailed documentation for JSON, CSV, and YAML modules
@@ -65,8 +82,8 @@ See the examples directory for usage examples.
 - ✅ Multi-document stream support
 - ✅ Security limits (depth, bytes, alias expansion)
 - ✅ Memory safe (781 tests pass valgrind with zero leaks)
-- ⏳ DOM builder (planned)
-- ⏳ Writer/serializer (planned)
+- ✅ DOM builder with accessors and mutation
+- ✅ Writer/serializer for DOM and streaming events
 - ⏳ Full YAML 1.2 spec compliance (in progress)
 
 See [YAML Module Documentation](@ref yaml_module) for detailed status and usage.

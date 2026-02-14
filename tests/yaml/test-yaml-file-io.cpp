@@ -95,6 +95,62 @@ TEST(YamlFileIO, WriteFile) {
   remove(path.c_str());
 }
 
+TEST(YamlFileIO, ParseFileNullPath) {
+  GTEXT_YAML_Error err = {};
+  GTEXT_YAML_Document *doc = gtext_yaml_parse_file(nullptr, nullptr, &err);
+  EXPECT_EQ(doc, nullptr);
+  EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID);
+}
+
+TEST(YamlFileIO, ParseFileAllInvalidArgs) {
+  GTEXT_YAML_Error err = {};
+  GTEXT_YAML_Status status = gtext_yaml_parse_file_all(nullptr, nullptr, nullptr, nullptr, &err);
+  EXPECT_EQ(status, GTEXT_YAML_E_INVALID);
+  EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID);
+}
+
+TEST(YamlFileIO, WriteFileInvalidArgs) {
+  GTEXT_YAML_Error err = {};
+  GTEXT_YAML_Status status = gtext_yaml_write_file(nullptr, nullptr, nullptr, &err);
+  EXPECT_EQ(status, GTEXT_YAML_E_INVALID);
+  EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID);
+}
+
+TEST(YamlFileIO, PreserveLineEndingsOnWrite) {
+  std::string input_path = make_temp_path("newline_in");
+  std::string output_path = make_temp_path("newline_out");
+  const char *contents = "a: 1\r\nb: 2\r\n";
+
+  FILE *file = fopen(input_path.c_str(), "wb");
+  ASSERT_NE(file, nullptr);
+  fwrite(contents, 1, strlen(contents), file);
+  fclose(file);
+
+  GTEXT_YAML_Document *doc = gtext_yaml_parse_file(input_path.c_str(), nullptr, nullptr);
+  ASSERT_NE(doc, nullptr);
+
+  GTEXT_YAML_Write_Options opts = gtext_yaml_write_options_default();
+  opts.pretty = true;
+  opts.newline = NULL;
+
+  GTEXT_YAML_Status status = gtext_yaml_write_file(output_path.c_str(), doc, &opts, nullptr);
+  EXPECT_EQ(status, GTEXT_YAML_OK);
+
+  FILE *out = fopen(output_path.c_str(), "rb");
+  ASSERT_NE(out, nullptr);
+  char buffer[128];
+  size_t read_bytes = fread(buffer, 1, sizeof(buffer) - 1, out);
+  buffer[read_bytes] = '\0';
+  fclose(out);
+
+  std::string output(buffer);
+  EXPECT_NE(output.find("\r\n"), std::string::npos);
+
+  gtext_yaml_free(doc);
+  remove(input_path.c_str());
+  remove(output_path.c_str());
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -486,6 +486,7 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 	doc->has_directives = false;
 	doc->yaml_version_major = 0;
 	doc->yaml_version_minor = 0;
+	doc->input_newline = NULL;
 	doc->tag_handles = NULL;
 	doc->tag_handle_count = 0;
 	
