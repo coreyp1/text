@@ -292,6 +292,17 @@ static GTEXT_YAML_Status convert_node(
 				return GTEXT_YAML_E_INVALID;
 			}
 
+			/* Reject merge keys (YAML 1.1 extension not compatible with JSON) */
+			if (strcmp(key, "<<") == 0) {
+				if (out_err) {
+					out_err->code = GTEXT_YAML_E_INVALID;
+					out_err->message = "cannot convert: YAML merge keys (<<) are not compatible with JSON";
+				}
+				gtext_json_free(*out_json);
+				*out_json = NULL;
+				return GTEXT_YAML_E_INVALID;
+			}
+
 			GTEXT_JSON_Value * value = NULL;
 			GTEXT_YAML_Status status = convert_node(value_node, &value, out_err);
 			if (status != GTEXT_YAML_OK) {

@@ -298,6 +298,66 @@ TEST(YamlDomParser, BlockMappingSinglePair) {
 	gtext_yaml_free(doc);
 }
 
+TEST(YamlDomParser, BlockNestedMapping) {
+	const char *yaml = "person:\n  name: Bob\n  age: 25";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_MAPPING);
+
+	const GTEXT_YAML_Node *person = gtext_yaml_mapping_get(root, "person");
+	ASSERT_NE(person, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(person), GTEXT_YAML_MAPPING);
+	EXPECT_EQ(gtext_yaml_mapping_size(person), 2);
+	
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomParser, BlockNestedSequenceInMapping) {
+	const char *yaml = "items:\n  - a\n  - b";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_MAPPING);
+
+	const GTEXT_YAML_Node *items = gtext_yaml_mapping_get(root, "items");
+	ASSERT_NE(items, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(items), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(items), 2);
+	
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomParser, BlockNestedMappingInSequence) {
+	const char *yaml = "- name: Bob\n  age: 25\n- name: Alice\n  age: 30";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(root), 2);
+	
+	const GTEXT_YAML_Node *first = gtext_yaml_sequence_get(root, 0);
+	ASSERT_NE(first, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(first), GTEXT_YAML_MAPPING);
+	
+	gtext_yaml_free(doc);
+}
+
 // ============================================================================
 // Nested Structure Tests
 // ============================================================================

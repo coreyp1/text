@@ -46,6 +46,8 @@ typedef struct {
 	struct {
 		GTEXT_YAML_Node **nodes;        /* Stack of nodes being built */
 		int *states;                    /* State per level: 0=seq, 1=map_key, 2=map_value */
+		int *indents;                   /* Indent level for block collections */
+		bool *is_block;                 /* True if this level is block-style */
 		saved_temp *temps;              /* Saved temp state per level */
 		size_t capacity;
 		size_t depth;
@@ -89,6 +91,14 @@ typedef struct {
 	bool in_block_sequence;             /* True if we're building a block sequence */
 	bool in_block_mapping;              /* True if we're building a block mapping */
 	bool expect_mapping_value;          /* True if next item is a mapping value after : */
+	int last_event_line;                /* Last event line processed */
+	int last_scalar_line;               /* Last scalar event line */
+	int last_scalar_col;                /* Last scalar event column */
+	int last_scalar_key_col;            /* Last scalar key start column */
+	GTEXT_YAML_Node *last_scalar_node;  /* Last scalar node seen */
+	bool last_scalar_in_root;           /* True if last scalar stored in root */
+	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
+	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
 } parser_state;
 
 /* Stack states */
@@ -108,11 +118,16 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->stack.capacity = 32;
 	p->stack.nodes = (GTEXT_YAML_Node **)malloc(p->stack.capacity * sizeof(GTEXT_YAML_Node *));
 	p->stack.states = (int *)malloc(p->stack.capacity * sizeof(int));
+	p->stack.indents = (int *)malloc(p->stack.capacity * sizeof(int));
+	p->stack.is_block = (bool *)malloc(p->stack.capacity * sizeof(bool));
 	p->stack.temps = (saved_temp *)calloc(p->stack.capacity, sizeof(saved_temp));
 	
-	if (!p->stack.nodes || !p->stack.states || !p->stack.temps) {
+	if (!p->stack.nodes || !p->stack.states || !p->stack.indents ||
+		!p->stack.is_block || !p->stack.temps) {
 		free(p->stack.nodes);
 		free(p->stack.states);
+		free(p->stack.indents);
+		free(p->stack.is_block);
 		free(p->stack.temps);
 		return false;
 	}
@@ -123,6 +138,8 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	if (!p->temp.items) {
 		free(p->stack.nodes);
 		free(p->stack.states);
+		free(p->stack.indents);
+		free(p->stack.is_block);
 		free(p->stack.temps);
 		return false;
 	}
@@ -133,6 +150,8 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	if (!p->anchors.entries) {
 		free(p->stack.nodes);
 		free(p->stack.states);
+		free(p->stack.indents);
+		free(p->stack.is_block);
 		free(p->stack.temps);
 		free(p->temp.items);
 		return false;
@@ -144,6 +163,8 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	if (!p->aliases.nodes) {
 		free(p->stack.nodes);
 		free(p->stack.states);
+		free(p->stack.indents);
+		free(p->stack.is_block);
 		free(p->stack.temps);
 		free(p->temp.items);
 		free(p->anchors.entries);
@@ -154,6 +175,15 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->tag_handles.entries = NULL;
 	p->tag_handles.count = 0;
 	p->tag_handles.capacity = 0;
+
+	p->last_event_line = -1;
+	p->last_scalar_line = -1;
+	p->last_scalar_col = -1;
+	p->last_scalar_key_col = -1;
+	p->last_scalar_node = NULL;
+	p->last_scalar_in_root = false;
+	p->last_scalar_in_temp = false;
+	p->last_scalar_temp_depth = 0;
 	
 	return true;
 }
@@ -175,6 +205,8 @@ static void parser_free(parser_state *p) {
 	}
 	free(p->stack.nodes);
 	free(p->stack.states);
+	free(p->stack.indents);
+	free(p->stack.is_block);
 	free(p->stack.temps);
 	free(p->temp.items);
 	
@@ -394,7 +426,15 @@ static bool finalize_tag_handles(parser_state *p, GTEXT_YAML_Document *doc) {
  * @brief Push a node onto the stack (for tracking nesting).
  * Saves the current temp state and clears temp for the new level.
  */
-static bool stack_push(parser_state *p, GTEXT_YAML_Node *node, int state, const char *anchor, const char *tag) {
+static bool stack_push(
+	parser_state *p,
+	GTEXT_YAML_Node *node,
+	int state,
+	const char *anchor,
+	const char *tag,
+	int indent,
+	bool is_block
+) {
 	if (p->stack.depth >= p->stack.capacity) {
 		/* Grow stack */
 		size_t new_cap = p->stack.capacity * 2;
@@ -402,11 +442,15 @@ static bool stack_push(parser_state *p, GTEXT_YAML_Node *node, int state, const 
 			p->stack.nodes, new_cap * sizeof(GTEXT_YAML_Node *)
 		);
 		int *new_states = (int *)realloc(p->stack.states, new_cap * sizeof(int));
+		int *new_indents = (int *)realloc(p->stack.indents, new_cap * sizeof(int));
+		bool *new_is_block = (bool *)realloc(p->stack.is_block, new_cap * sizeof(bool));
 		saved_temp *new_temps = (saved_temp *)realloc(p->stack.temps, new_cap * sizeof(saved_temp));
 		
-		if (!new_nodes || !new_states || !new_temps) {
+		if (!new_nodes || !new_states || !new_indents || !new_is_block || !new_temps) {
 			free(new_nodes);
 			free(new_states);
+			free(new_indents);
+			free(new_is_block);
 			free(new_temps);
 			return false;
 		}
@@ -416,6 +460,8 @@ static bool stack_push(parser_state *p, GTEXT_YAML_Node *node, int state, const 
 		
 		p->stack.nodes = new_nodes;
 		p->stack.states = new_states;
+		p->stack.indents = new_indents;
+		p->stack.is_block = new_is_block;
 		p->stack.temps = new_temps;
 		p->stack.capacity = new_cap;
 	}
@@ -445,6 +491,8 @@ static bool stack_push(parser_state *p, GTEXT_YAML_Node *node, int state, const 
 	
 	p->stack.nodes[p->stack.depth] = node;
 	p->stack.states[p->stack.depth] = state;
+	p->stack.indents[p->stack.depth] = indent;
+	p->stack.is_block[p->stack.depth] = is_block;
 	p->stack.depth++;
 	return true;
 }
@@ -504,6 +552,188 @@ static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
 	return true;
 }
 
+static int line_key_col_from_offset(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t length = 0;
+	size_t line_start = 0;
+	size_t end = 0;
+	size_t i = 0;
+	int col = 1;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return -1;
+
+	buffer = p->ctx->input_buffer;
+	length = p->ctx->input_buffer_len;
+	if (offset > length) offset = length;
+
+	line_start = offset;
+	while (line_start > 0) {
+		char ch = buffer[line_start - 1];
+		if (ch == '\n' || ch == '\r') break;
+		line_start--;
+	}
+
+	end = offset;
+	for (i = line_start; i < end; i++) {
+		char ch = buffer[i];
+		if (ch == ' ' || ch == '\t') {
+			col++;
+			continue;
+		}
+		break;
+	}
+
+	if (i < end && buffer[i] == '-') {
+		size_t j = i + 1;
+		int col_after_dash = col + 1;
+		if (j < end && (buffer[j] == ' ' || buffer[j] == '\t')) {
+			while (j < end && (buffer[j] == ' ' || buffer[j] == '\t')) {
+				j++;
+				col_after_dash++;
+			}
+			return col_after_dash;
+		}
+	}
+
+	return col;
+}
+
+static bool stack_top_is_block(const parser_state *p) {
+	if (!p || p->stack.depth == 0) return false;
+	return p->stack.is_block[p->stack.depth - 1];
+}
+
+static int stack_top_indent(const parser_state *p) {
+	if (!p || p->stack.depth == 0) return -1;
+	return p->stack.indents[p->stack.depth - 1];
+}
+
+static void maybe_finish_block_mapping_value(parser_state *p) {
+	if (!p || p->stack.depth == 0) return;
+	if (!p->stack.is_block[p->stack.depth - 1]) return;
+	if (p->stack.states[p->stack.depth - 1] != STATE_MAPPING_VALUE) return;
+
+	p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+}
+
+static GTEXT_YAML_Node *detach_last_scalar(parser_state *p) {
+	GTEXT_YAML_Node *node = p->last_scalar_node;
+
+	if (!node) return NULL;
+
+	if (p->last_scalar_in_root) {
+		p->root = NULL;
+		p->last_scalar_node = NULL;
+		return node;
+	}
+
+	if (!p->last_scalar_in_temp) return NULL;
+	if (p->last_scalar_temp_depth != p->stack.depth) return NULL;
+	if (p->temp.count == 0) return NULL;
+	if (p->temp.items[p->temp.count - 1] != node) return NULL;
+
+	p->temp.count--;
+	p->last_scalar_node = NULL;
+	return node;
+}
+
+static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
+	GTEXT_YAML_Node *node = NULL;
+	char *anchor = NULL;
+	char *tag = NULL;
+	int state = 0;
+
+	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
+
+	state = p->stack.states[p->stack.depth - 1];
+	stack_get_and_clear_metadata(p, &anchor, &tag);
+
+	if (state == STATE_SEQUENCE) {
+		node = yaml_node_new_sequence(p->ctx, p->temp.count, tag, anchor);
+		if (!node) {
+			free(anchor);
+			free(tag);
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory creating sequence";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+		
+		node->as.sequence.count = p->temp.count;
+		for (size_t i = 0; i < p->temp.count; i++) {
+			node->as.sequence.children[i] = p->temp.items[i];
+		}
+	} else {
+		size_t pair_count = p->temp.count / 2;
+		node = yaml_node_new_mapping(p->ctx, pair_count, tag, anchor);
+		if (!node) {
+			free(anchor);
+			free(tag);
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory creating mapping";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+		
+		node->as.mapping.count = pair_count;
+		for (size_t i = 0; i < pair_count; i++) {
+			node->as.mapping.pairs[i].key = p->temp.items[i * 2];
+			node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
+			node->as.mapping.pairs[i].key_tag = NULL;
+			node->as.mapping.pairs[i].value_tag = NULL;
+		}
+	}
+
+	free(anchor);
+	free(tag);
+
+	if (node->type == GTEXT_YAML_SEQUENCE && node->as.sequence.anchor) {
+		GTEXT_YAML_Status anchor_status = register_anchor(p, node->as.sequence.anchor, node);
+		if (anchor_status != GTEXT_YAML_OK) {
+			return anchor_status;
+		}
+	}
+	if (node->type == GTEXT_YAML_MAPPING && node->as.mapping.anchor) {
+		GTEXT_YAML_Status anchor_status = register_anchor(p, node->as.mapping.anchor, node);
+		if (anchor_status != GTEXT_YAML_OK) {
+			return anchor_status;
+		}
+	}
+
+	stack_pop(p);
+
+	if (p->stack.depth == 0) {
+		p->root = node;
+	} else {
+		if (!temp_add(p, node)) {
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory nesting collection";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+		maybe_finish_block_mapping_value(p);
+	}
+
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status close_block_contexts(parser_state *p, int new_indent) {
+	if (!p) return GTEXT_YAML_E_INVALID;
+
+	while (p->stack.depth > 0) {
+		if (!stack_top_is_block(p)) break;
+		if (new_indent >= stack_top_indent(p)) break;
+		
+		GTEXT_YAML_Status status = finalize_top_collection(p);
+		if (status != GTEXT_YAML_OK) return status;
+	}
+
+	return GTEXT_YAML_OK;
+}
+
 /**
  * @brief Streaming parser callback - builds DOM from events.
  */
@@ -518,6 +748,12 @@ static GTEXT_YAML_Status parse_callback(
 	
 	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
 	GTEXT_YAML_Event_Type type = event->type;
+
+	if (event->line >= 0 && event->line != p->last_event_line) {
+		GTEXT_YAML_Status close_status = close_block_contexts(p, event->col);
+		if (close_status != GTEXT_YAML_OK) return close_status;
+		p->last_event_line = event->line;
+	}
 	
 	/* Skip events if first document already complete (multi-doc streams) */
 	if (p->first_document_complete) {
@@ -632,6 +868,8 @@ static GTEXT_YAML_Status parse_callback(
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
 				p->root = node;
+				p->last_scalar_in_root = true;
+				p->last_scalar_in_temp = false;
 			} else {
 				if (!temp_add(p, node)) {
 					p->failed = true;
@@ -641,15 +879,18 @@ static GTEXT_YAML_Status parse_callback(
 					}
 					return GTEXT_YAML_E_OOM;
 				}
-				
-				/* If we just added a mapping value, flip back to KEY state */
-				if (p->in_block_mapping && p->expect_mapping_value) {
-					p->expect_mapping_value = false;
-					if (p->stack.depth > 0) {
-						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
-					}
-				}
+
+				p->last_scalar_in_root = false;
+				p->last_scalar_in_temp = true;
+				p->last_scalar_temp_depth = p->stack.depth;
+
+				maybe_finish_block_mapping_value(p);
 			}
+
+			p->last_scalar_node = node;
+			p->last_scalar_line = event->line;
+			p->last_scalar_col = event->col;
+			p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
 			break;
 		}
 		
@@ -659,7 +900,7 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Push placeholder (we'll create the actual node on SEQUENCE_END) */
 			/* Store anchor and tag from event for later use */
-			if (!stack_push(p, NULL, STATE_SEQUENCE, evt->anchor, evt->tag)) {
+			if (!stack_push(p, NULL, STATE_SEQUENCE, evt->anchor, evt->tag, -1, false)) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -727,6 +968,7 @@ static GTEXT_YAML_Status parse_callback(
 					}
 					return GTEXT_YAML_E_OOM;
 				}
+				maybe_finish_block_mapping_value(p);
 			}
 			
 			break;
@@ -736,7 +978,7 @@ static GTEXT_YAML_Status parse_callback(
 			/* Start building a mapping */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
 			
-			if (!stack_push(p, NULL, STATE_MAPPING_KEY, evt->anchor, evt->tag)) {
+			if (!stack_push(p, NULL, STATE_MAPPING_KEY, evt->anchor, evt->tag, -1, false)) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -809,6 +1051,7 @@ static GTEXT_YAML_Status parse_callback(
 					}
 					return GTEXT_YAML_E_OOM;
 				}
+				maybe_finish_block_mapping_value(p);
 			}
 			
 			break;
@@ -821,54 +1064,8 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_DOCUMENT_END:
 			/* End of document */
 			if (p->document_started && !p->first_document_complete) {
-				/* Finalize any open block collections */
-				if (p->in_block_sequence && p->stack.depth > 0) {
-					/* Create block sequence node */
-					GTEXT_YAML_Node *node = yaml_node_new_sequence(p->ctx, p->temp.count, NULL, NULL);
-					if (!node) {
-						p->failed = true;
-						if (p->error) {
-							p->error->code = GTEXT_YAML_E_OOM;
-							p->error->message = "Out of memory creating block sequence";
-						}
-						return GTEXT_YAML_E_OOM;
-					}
-					
-					/* Copy collected items */
-					for (size_t i = 0; i < p->temp.count; i++) {
-						node->as.sequence.children[i] = p->temp.items[i];
-					}
-					node->as.sequence.count = p->temp.count;
-					
-					stack_pop(p);
-					p->root = node;
-					p->in_block_sequence = false;
-				} else if (p->in_block_mapping && p->stack.depth > 0) {
-					/* Create block mapping node */
-					size_t pair_count = p->temp.count / 2;
-					GTEXT_YAML_Node *node = yaml_node_new_mapping(p->ctx, pair_count, NULL, NULL);
-					if (!node) {
-						p->failed = true;
-						if (p->error) {
-							p->error->code = GTEXT_YAML_E_OOM;
-							p->error->message = "Out of memory creating block mapping";
-						}
-						return GTEXT_YAML_E_OOM;
-					}
-					
-					/* Copy key-value pairs */
-					for (size_t i = 0; i < pair_count; i++) {
-						node->as.mapping.pairs[i].key = p->temp.items[i * 2];
-						node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
-						node->as.mapping.pairs[i].key_tag = NULL;
-						node->as.mapping.pairs[i].value_tag = NULL;
-					}
-					node->as.mapping.count = pair_count;
-					
-					stack_pop(p);
-					p->root = node;
-					p->in_block_mapping = false;
-				}
+				GTEXT_YAML_Status close_status = close_block_contexts(p, -1);
+				if (close_status != GTEXT_YAML_OK) return close_status;
 				
 				/* First document is complete */
 				p->first_document_complete = true;
@@ -920,6 +1117,7 @@ static GTEXT_YAML_Status parse_callback(
 					}
 					return GTEXT_YAML_E_OOM;
 				}
+				maybe_finish_block_mapping_value(p);
 			}
 			break;
 		}
@@ -931,7 +1129,7 @@ static GTEXT_YAML_Status parse_callback(
 			switch (ch) {
 				case '[':
 					/* Start flow sequence (fallback if START event not emitted) */
-					if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL)) {
+					if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL, -1, false)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_OOM;
@@ -986,13 +1184,14 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_OOM;
 						}
+						maybe_finish_block_mapping_value(p);
 					}
 					break;
 				}
 				
 				case '{':
 					/* Start flow mapping (fallback if START event not emitted) */
-					if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL)) {
+					if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, -1, false)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_OOM;
@@ -1052,51 +1251,90 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_OOM;
 						}
+						maybe_finish_block_mapping_value(p);
 					}
 					break;
 				}
 				
 				case ':':
+				{
 					/* Mapping key-value separator */
-					if (p->stack.depth > 0 && p->stack.states[p->stack.depth - 1] == STATE_MAPPING_KEY) {
-						/* In flow mapping - flip state */
-						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
-					} else if (p->stack.depth == 0 && !p->in_block_sequence && !p->in_block_mapping) {
-						/* At root level - start block mapping */
-						p->in_block_mapping = true;
-						p->expect_mapping_value = true;
-						/* Push block mapping context */
-						if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL)) {
-							p->failed = true;
-							if (p->error) {
-								p->error->code = GTEXT_YAML_E_OOM;
-								p->error->message = "Out of memory tracking block mapping";
-							}
-							return GTEXT_YAML_E_OOM;
-						}
-						/* Set state to expect value */
-						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
-						
-						/* If root was already set to a scalar, move it to temp as the mapping key */
-						if (p->root != NULL) {
-							if (!temp_add(p, p->root)) {
-								p->failed = true;
-								if (p->error) {
-									p->error->code = GTEXT_YAML_E_OOM;
-									p->error->message = "Out of memory adding key to mapping";
-								}
-								return GTEXT_YAML_E_OOM;
-							}
-							p->root = NULL;  /* Clear root since we're building a collection */
-						}
-					} else if (p->in_block_mapping) {
-						/* Already in block mapping - this is another key-value separator */
-						p->expect_mapping_value = true;
-						if (p->stack.depth > 0) {
-							p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
-						}
+					bool in_flow_mapping = false;
+					bool in_block_mapping = false;
+					int key_indent = p->last_scalar_key_col >= 0
+						? p->last_scalar_key_col
+						: p->last_scalar_col;
+					GTEXT_YAML_Node *key_node = NULL;
+					size_t top = 0;
+
+					if (p->stack.depth > 0) {
+						top = p->stack.depth - 1;
+						in_flow_mapping = !p->stack.is_block[top] &&
+							(p->stack.states[top] == STATE_MAPPING_KEY ||
+							 p->stack.states[top] == STATE_MAPPING_VALUE);
+						in_block_mapping = p->stack.is_block[top] &&
+							(p->stack.states[top] == STATE_MAPPING_KEY ||
+							 p->stack.states[top] == STATE_MAPPING_VALUE);
 					}
+
+					if (in_flow_mapping) {
+						p->stack.states[top] = STATE_MAPPING_VALUE;
+						break;
+					}
+
+					if (key_indent < 0) {
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Mapping key missing before ':'";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
+					if (p->last_scalar_line != event->line) {
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Mapping key not on same line as ':'";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
+					if (in_block_mapping && p->stack.indents[top] == key_indent) {
+						p->stack.states[top] = STATE_MAPPING_VALUE;
+						p->expect_mapping_value = true;
+						break;
+					}
+
+					key_node = detach_last_scalar(p);
+					if (!key_node) {
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Mapping key not found before ':'";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
+					if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, key_indent, true)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory tracking block mapping";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+
+					if (!temp_add(p, key_node)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory adding key to mapping";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+
+					p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
+					p->expect_mapping_value = true;
 					break;
+				}
 					
 				case ',':
 					/* Item separator - handle mapping state flip */
@@ -1106,12 +1344,23 @@ static GTEXT_YAML_Status parse_callback(
 					break;
 					
 				case '-':
+				{
 					/* Block sequence indicator */
-					/* If we're at root level and not in a block collection yet, start one */
-					if (p->stack.depth == 0 && !p->in_block_sequence && !p->in_block_mapping) {
-						p->in_block_sequence = true;
-						/* Push block sequence context */
-						if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL)) {
+					bool start_new = true;
+					int indent = event->col;
+					size_t top = 0;
+
+					if (p->stack.depth > 0) {
+						top = p->stack.depth - 1;
+						if (p->stack.is_block[top] &&
+							p->stack.states[top] == STATE_SEQUENCE &&
+							p->stack.indents[top] == indent) {
+							start_new = false;
+						}
+					}
+
+					if (start_new) {
+						if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL, indent, true)) {
 							p->failed = true;
 							if (p->error) {
 								p->error->code = GTEXT_YAML_E_OOM;
@@ -1120,8 +1369,8 @@ static GTEXT_YAML_Status parse_callback(
 							return GTEXT_YAML_E_OOM;
 						}
 					}
-					/* Otherwise, the `-` is just an indicator within a collection */
 					break;
+				}
 					
 				default:
 					/* Unknown indicator - ignore */
@@ -1223,53 +1472,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	
 	/* Finalize any open block collections */
 	if (status == GTEXT_YAML_OK && !parser.failed) {
-		if (parser.in_block_sequence && parser.stack.depth > 0) {
-			/* Create block sequence node */
-			GTEXT_YAML_Node *node = yaml_node_new_sequence(parser.ctx, parser.temp.count, NULL, NULL);
-			if (!node) {
-				parser.failed = true;
-				if (error) {
-					error->code = GTEXT_YAML_E_OOM;
-					error->message = "Out of memory creating block sequence";
-				}
-				status = GTEXT_YAML_E_OOM;
-			} else {
-				/* Copy collected items */
-				for (size_t i = 0; i < parser.temp.count; i++) {
-					node->as.sequence.children[i] = parser.temp.items[i];
-				}
-				node->as.sequence.count = parser.temp.count;
-				
-				stack_pop(&parser);
-				parser.root = node;
-				parser.in_block_sequence = false;
-			}
-		} else if (parser.in_block_mapping && parser.stack.depth > 0) {
-			/* Create block mapping node */
-			size_t pair_count = parser.temp.count / 2;
-			GTEXT_YAML_Node *node = yaml_node_new_mapping(parser.ctx, pair_count, NULL, NULL);
-			if (!node) {
-				parser.failed = true;
-				if (error) {
-					error->code = GTEXT_YAML_E_OOM;
-					error->message = "Out of memory creating block mapping";
-				}
-				status = GTEXT_YAML_E_OOM;
-			} else {
-				/* Copy key-value pairs */
-				for (size_t i = 0; i < pair_count; i++) {
-					node->as.mapping.pairs[i].key = parser.temp.items[i * 2];
-					node->as.mapping.pairs[i].value = parser.temp.items[i * 2 + 1];
-					node->as.mapping.pairs[i].key_tag = NULL;
-					node->as.mapping.pairs[i].value_tag = NULL;
-				}
-				node->as.mapping.count = pair_count;
-				
-				stack_pop(&parser);
-				parser.root = node;
-				parser.in_block_mapping = false;
-			}
-		}
+		status = close_block_contexts(&parser, -1);
 	}
 	
 	/* Check if parsing succeeded */
@@ -1355,44 +1558,9 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 	
 	/* Finalize any open block collections */
 	p = state->current_parser;
-	if (p->in_block_sequence && p->stack.depth > 0) {
-		GTEXT_YAML_Node *node = yaml_node_new_sequence(p->ctx, p->temp.count, NULL, NULL);
-		if (!node) {
-			state->failed = true;
-			if (state->error) {
-				state->error->code = GTEXT_YAML_E_OOM;
-				state->error->message = "Out of memory creating block sequence";
-			}
-			return false;
-		}
-		for (size_t i = 0; i < p->temp.count; i++) {
-			node->as.sequence.children[i] = p->temp.items[i];
-		}
-		node->as.sequence.count = p->temp.count;
-		stack_pop(p);
-		p->root = node;
-		p->in_block_sequence = false;
-	} else if (p->in_block_mapping && p->stack.depth > 0) {
-		size_t pair_count = p->temp.count / 2;
-		GTEXT_YAML_Node *node = yaml_node_new_mapping(p->ctx, pair_count, NULL, NULL);
-		if (!node) {
-			state->failed = true;
-			if (state->error) {
-				state->error->code = GTEXT_YAML_E_OOM;
-				state->error->message = "Out of memory creating block mapping";
-			}
-			return false;
-		}
-		for (size_t i = 0; i < pair_count; i++) {
-			node->as.mapping.pairs[i].key = p->temp.items[i * 2];
-			node->as.mapping.pairs[i].value = p->temp.items[i * 2 + 1];
-			node->as.mapping.pairs[i].key_tag = NULL;
-			node->as.mapping.pairs[i].value_tag = NULL;
-		}
-		node->as.mapping.count = pair_count;
-		stack_pop(p);
-		p->root = node;
-		p->in_block_mapping = false;
+	if (close_block_contexts(p, -1) != GTEXT_YAML_OK) {
+		state->failed = true;
+		return false;
 	}
 	
 	/* Resolve aliases */
