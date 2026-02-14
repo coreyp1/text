@@ -248,6 +248,214 @@ GTEXT_API const char * gtext_yaml_node_anchor(const GTEXT_YAML_Node * node);
  */
 GTEXT_API const GTEXT_YAML_Node * gtext_yaml_alias_target(const GTEXT_YAML_Node * node);
 
+/* ============================================================================
+ * DOM Manipulation API (Phase 4.7)
+ * ============================================================================ */
+
+/**
+ * @brief Create a new empty YAML document.
+ *
+ * The returned document has no root node yet. Use gtext_yaml_document_set_root()
+ * to assign a root, or use node creation functions to build the tree.
+ *
+ * The document must be freed with gtext_yaml_free() when no longer needed.
+ *
+ * @param options Parse options to configure document limits (may be NULL for defaults)
+ * @param error Error output (may be NULL)
+ * @return New document on success, NULL on error
+ */
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_document_new(
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Error * error
+);
+
+/**
+ * @brief Set or replace the root node of a document.
+ *
+ * The node must have been created in the same document's context using
+ * gtext_yaml_node_new_* functions. Returns false if node was created in
+ * a different document or if doc is NULL.
+ *
+ * @param doc Document to modify
+ * @param root New root node (may be NULL to clear root)
+ * @return true on success, false on error
+ */
+GTEXT_API bool gtext_yaml_document_set_root(
+	GTEXT_YAML_Document * doc,
+	GTEXT_YAML_Node * root
+);
+
+/**
+ * @brief Create a new scalar node.
+ *
+ * The node is allocated from the document's arena and must not be freed
+ * directly. It will be freed when the document is freed.
+ *
+ * @param doc Document that will own the node
+ * @param value String value (will be copied)
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New scalar node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar(
+	GTEXT_YAML_Document * doc,
+	const char * value,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new empty sequence node.
+ *
+ * The node is allocated from the document's arena. Use gtext_yaml_sequence_append()
+ * to add child nodes.
+ *
+ * @param doc Document that will own the node
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New sequence node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_sequence(
+	GTEXT_YAML_Document * doc,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new empty mapping node.
+ *
+ * The node is allocated from the document's arena. Use gtext_yaml_mapping_set()
+ * to add key-value pairs.
+ *
+ * @param doc Document that will own the node
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New mapping node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_mapping(
+	GTEXT_YAML_Document * doc,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Append a child node to a sequence.
+ *
+ * The child node must have been created in the same document context.
+ * This operation creates a new sequence node with the appended child and
+ * returns it. The old sequence node remains valid but should not be used.
+ *
+ * Important: The returned node is the new sequence. Update any references
+ * to the old sequence (like document root) to point to the returned node.
+ *
+ * @param doc Document owning the sequence (needed for arena allocation)
+ * @param sequence Sequence node to modify
+ * @param child Node to append
+ * @return New sequence node with child appended, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_sequence_append(
+	GTEXT_YAML_Document * doc,
+	GTEXT_YAML_Node * sequence,
+	GTEXT_YAML_Node * child
+);
+
+/**
+ * @brief Insert a child node at a specific index in a sequence.
+ *
+ * Existing nodes at index and beyond are shifted right. This operation creates
+ * a new sequence node with the inserted child and returns it.
+ *
+ * Important: The returned node is the new sequence. Update any references
+ * to the old sequence to point to the returned node.
+ *
+ * @param doc Document owning the sequence (needed for arena allocation)
+ * @param sequence Sequence node to modify
+ * @param index Zero-based index where to insert (0 to length inclusive)
+ * @param child Node to insert
+ * @return New sequence node with child inserted, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_sequence_insert(
+	GTEXT_YAML_Document * doc,
+	GTEXT_YAML_Node * sequence,
+	size_t index,
+	GTEXT_YAML_Node * child
+);
+
+/**
+ * @brief Remove a child node at a specific index from a sequence.
+ *
+ * Nodes after index are shifted left. Returns false if sequence is not a
+ * sequence node or index is out of bounds.
+ *
+ * Note: The removed node is not freed (arena-allocated). It remains valid
+ * until the document is freed.
+ *
+ * @param sequence Sequence node to modify
+ * @param index Zero-based index of node to remove
+ * @return true on success, false on error
+ */
+GTEXT_API bool gtext_yaml_sequence_remove(
+	GTEXT_YAML_Node * sequence,
+	size_t index
+);
+
+/**
+ * @brief Set or add a key-value pair in a mapping.
+ *
+ * If the key already exists, its value is replaced (last-wins). If the key
+ * doesn't exist, a new pair is added. This operation creates a new mapping
+ * node and returns it.
+ *
+ * Important: The returned node is the new mapping. Update any references
+ * to the old mapping to point to the returned node.
+ *
+ * For string keys, use gtext_yaml_node_new_scalar() to create the key node.
+ *
+ * @param doc Document owning the mapping (needed for arena allocation)
+ * @param mapping Mapping node to modify
+ * @param key Key node
+ * @param value Value node
+ * @return New mapping node with key-value set, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_mapping_set(
+	GTEXT_YAML_Document * doc,
+	GTEXT_YAML_Node * mapping,
+	GTEXT_YAML_Node * key,
+	GTEXT_YAML_Node * value
+);
+
+/**
+ * @brief Remove a key-value pair from a mapping by string key.
+ *
+ * Performs a linear search for a scalar key matching the given string.
+ * Returns true if the pair was found and removed, false otherwise.
+ *
+ * Note: The removed nodes are not freed (arena-allocated). They remain valid
+ * until the document is freed.
+ *
+ * @param mapping Mapping node to modify
+ * @param key String key to remove
+ * @return true if pair was removed, false if not found or mapping is invalid
+ */
+GTEXT_API bool gtext_yaml_mapping_delete(
+	GTEXT_YAML_Node * mapping,
+	const char * key
+);
+
+/**
+ * @brief Check if a mapping contains a string key.
+ *
+ * Performs a linear search for a scalar key matching the given string.
+ *
+ * @param mapping Mapping node to search
+ * @param key String key to look for
+ * @return true if key exists, false otherwise
+ */
+GTEXT_API bool gtext_yaml_mapping_has_key(
+	const GTEXT_YAML_Node * mapping,
+	const char * key
+);
+
 #ifdef __cplusplus
 }
 #endif

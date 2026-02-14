@@ -360,3 +360,350 @@ GTEXT_API const GTEXT_YAML_Node *gtext_yaml_alias_target(const GTEXT_YAML_Node *
 	
 	return node;
 }
+
+/* ============================================================================
+ * DOM Manipulation API (Phase 4.7)
+ * ============================================================================ */
+
+/**
+ * @brief Create a new empty YAML document.
+ */
+GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+) {
+	(void)error;  /* Not used yet - future error reporting */
+	
+	/* Create context */
+	yaml_context *ctx = yaml_context_new();
+	if (!ctx) {
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Failed to allocate document context";
+		}
+		return NULL;
+	}
+	
+	/* Allocate document structure */
+	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)malloc(sizeof(GTEXT_YAML_Document));
+	if (!doc) {
+		yaml_context_free(ctx);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Failed to allocate document structure";
+		}
+		return NULL;
+	}
+	
+	/* Initialize document */
+	doc->ctx = ctx;
+	doc->root = NULL;
+	doc->options = options ? *options : gtext_yaml_parse_options_default();
+	doc->node_count = 0;
+	doc->document_index = 0;
+	doc->has_directives = false;
+	doc->yaml_version_major = 0;
+	doc->yaml_version_minor = 0;
+	
+	return doc;
+}
+
+/**
+ * @brief Set or replace the root node of a document.
+ */
+GTEXT_API bool gtext_yaml_document_set_root(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *root
+) {
+	if (!doc) return false;
+	
+	/* Allow NULL root to clear the document */
+	doc->root = root;
+	return true;
+}
+
+/**
+ * @brief Create a new scalar node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_scalar(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	
+	/* Use internal node factory */
+	size_t value_len = value ? strlen(value) : 0;
+	return yaml_node_new_scalar(doc->ctx, value, value_len, tag, anchor);
+}
+
+/**
+ * @brief Create a new empty sequence node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_sequence(
+	GTEXT_YAML_Document *doc,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	
+	/* Create with initial capacity of 0 */
+	return yaml_node_new_sequence(doc->ctx, 0, tag, anchor);
+}
+
+/**
+ * @brief Create a new empty mapping node.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_mapping(
+	GTEXT_YAML_Document *doc,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	
+	/* Create with initial capacity of 0 */
+	return yaml_node_new_mapping(doc->ctx, 0, tag, anchor);
+}
+
+/**
+ * @brief Helper function to get the document context from a node.
+ * 
+ * This is a workaround since nodes don't carry a back-pointer to their document.
+ * For now, we'll need to track this through the document parameter in the API.
+ * 
+ * Note: This function is not exposed publicly and should be used internally.
+ */
+static yaml_context *get_node_context(GTEXT_YAML_Node *node) {
+	/* Nodes don't currently have back-pointers to their context.
+	 * This is a limitation of the current design. For mutation operations,
+	 * we'll need to pass the document or handle resizing differently. */
+	(void)node;
+	return NULL;
+}
+
+/**
+ * @brief Helper to grow a sequence node by creating a new larger node.
+ */
+static GTEXT_YAML_Node *sequence_grow(
+	yaml_context *ctx,
+	GTEXT_YAML_Node *old_seq,
+	size_t new_capacity
+) {
+	if (!ctx || !old_seq || old_seq->type != GTEXT_YAML_SEQUENCE) return NULL;
+	
+	/* Create new sequence with larger capacity */
+	GTEXT_YAML_Node *new_seq = yaml_node_new_sequence(
+		ctx, new_capacity, old_seq->as.sequence.tag, old_seq->as.sequence.anchor
+	);
+	if (!new_seq) return NULL;
+	
+	/* Copy existing children */
+	new_seq->as.sequence.count = old_seq->as.sequence.count;
+	for (size_t i = 0; i < old_seq->as.sequence.count; i++) {
+		new_seq->as.sequence.children[i] = old_seq->as.sequence.children[i];
+	}
+	
+	return new_seq;
+}
+
+/**
+ * @brief Append a child node to a sequence.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_append(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *sequence,
+	GTEXT_YAML_Node *child
+) {
+	if (!doc || !doc->ctx || !sequence || sequence->type != GTEXT_YAML_SEQUENCE || !child) return NULL;
+	
+	/* Create new sequence with room for one more child */
+	size_t new_count = sequence->as.sequence.count + 1;
+	GTEXT_YAML_Node *new_seq = sequence_grow(doc->ctx, sequence, new_count);
+	if (!new_seq) return NULL;
+	
+	/* Add the new child */
+	new_seq->as.sequence.children[sequence->as.sequence.count] = child;
+	new_seq->as.sequence.count = new_count;
+	
+	return new_seq;
+}
+
+/**
+ * @brief Insert a child node at a specific index in a sequence.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_insert(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *sequence,
+	size_t index,
+	GTEXT_YAML_Node *child
+) {
+	if (!doc || !doc->ctx || !sequence || sequence->type != GTEXT_YAML_SEQUENCE || !child) return NULL;
+	if (index > sequence->as.sequence.count) return NULL;
+	
+	/* Create new sequence with room for one more child */
+	size_t new_count = sequence->as.sequence.count + 1;
+	GTEXT_YAML_Node *new_seq = yaml_node_new_sequence(
+		doc->ctx, new_count, sequence->as.sequence.tag, sequence->as.sequence.anchor
+	);
+	if (!new_seq) return NULL;
+	
+	/* Copy children before insertion point */
+	for (size_t i = 0; i < index; i++) {
+		new_seq->as.sequence.children[i] = sequence->as.sequence.children[i];
+	}
+	
+	/* Insert new child */
+	new_seq->as.sequence.children[index] = child;
+	
+	/* Copy children after insertion point */
+	for (size_t i = index; i < sequence->as.sequence.count; i++) {
+		new_seq->as.sequence.children[i + 1] = sequence->as.sequence.children[i];
+	}
+	
+	new_seq->as.sequence.count = new_count;
+	return new_seq;
+}
+
+/**
+ * @brief Remove a child node at a specific index from a sequence.
+ */
+GTEXT_API bool gtext_yaml_sequence_remove(
+	GTEXT_YAML_Node *sequence,
+	size_t index
+) {
+	if (!sequence || sequence->type != GTEXT_YAML_SEQUENCE) return false;
+	if (index >= sequence->as.sequence.count) return false;
+	
+	/* Shift remaining elements left */
+	for (size_t i = index; i < sequence->as.sequence.count - 1; i++) {
+		sequence->as.sequence.children[i] = sequence->as.sequence.children[i + 1];
+	}
+	sequence->as.sequence.count--;
+	
+	return true;
+}
+
+/**
+ * @brief Helper to grow a mapping node by creating a new larger node.
+ */
+static GTEXT_YAML_Node *mapping_grow(
+	yaml_context *ctx,
+	GTEXT_YAML_Node *old_map,
+	size_t new_capacity
+) {
+	if (!ctx || !old_map || old_map->type != GTEXT_YAML_MAPPING) return NULL;
+	
+	/* Create new mapping with larger capacity */
+	GTEXT_YAML_Node *new_map = yaml_node_new_mapping(
+		ctx, new_capacity, old_map->as.mapping.tag, old_map->as.mapping.anchor
+	);
+	if (!new_map) return NULL;
+	
+	/* Copy existing pairs */
+	new_map->as.mapping.count = old_map->as.mapping.count;
+	for (size_t i = 0; i < old_map->as.mapping.count; i++) {
+		new_map->as.mapping.pairs[i] = old_map->as.mapping.pairs[i];
+	}
+	
+	return new_map;
+}
+
+/**
+ * @brief Set or add a key-value pair in a mapping.
+ */
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_mapping_set(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *mapping,
+	GTEXT_YAML_Node *key,
+	GTEXT_YAML_Node *value
+) {
+	if (!doc || !doc->ctx || !mapping || mapping->type != GTEXT_YAML_MAPPING || !key || !value) return NULL;
+	
+	/* Check if key already exists (for string keys) */
+	size_t existing_idx = (size_t)-1;
+	if (key->type == GTEXT_YAML_STRING) {
+		for (size_t i = 0; i < mapping->as.mapping.count; i++) {
+			const GTEXT_YAML_Node *k = mapping->as.mapping.pairs[i].key;
+			if (k && k->type == GTEXT_YAML_STRING) {
+				if (strcmp(k->as.scalar.value, key->as.scalar.value) == 0) {
+					existing_idx = i;
+					break;
+				}
+			}
+		}
+	}
+	
+	if (existing_idx != (size_t)-1) {
+		/* Key exists - replace value in place */
+		mapping->as.mapping.pairs[existing_idx].value = value;
+		return mapping;
+	}
+	
+	/* Key doesn't exist - add new pair */
+	size_t new_count = mapping->as.mapping.count + 1;
+	GTEXT_YAML_Node *new_map = mapping_grow(doc->ctx, mapping, new_count);
+	if (!new_map) return NULL;
+	
+	/* Add the new pair */
+	new_map->as.mapping.pairs[mapping->as.mapping.count].key = key;
+	new_map->as.mapping.pairs[mapping->as.mapping.count].value = value;
+	new_map->as.mapping.pairs[mapping->as.mapping.count].key_tag = NULL;
+	new_map->as.mapping.pairs[mapping->as.mapping.count].value_tag = NULL;
+	new_map->as.mapping.count = new_count;
+	
+	return new_map;
+}
+
+/**
+ * @brief Remove a key-value pair from a mapping by string key.
+ */
+GTEXT_API bool gtext_yaml_mapping_delete(
+	GTEXT_YAML_Node *mapping,
+	const char *key
+) {
+	if (!mapping || mapping->type != GTEXT_YAML_MAPPING || !key) return false;
+	
+	/* Find the key */
+	size_t found_idx = (size_t)-1;
+	for (size_t i = 0; i < mapping->as.mapping.count; i++) {
+		const GTEXT_YAML_Node *k = mapping->as.mapping.pairs[i].key;
+		if (k && k->type == GTEXT_YAML_STRING) {
+			if (strcmp(k->as.scalar.value, key) == 0) {
+				found_idx = i;
+				break;
+			}
+		}
+	}
+	
+	if (found_idx == (size_t)-1) return false;  /* Not found */
+	
+	/* Shift remaining pairs left */
+	for (size_t i = found_idx; i < mapping->as.mapping.count - 1; i++) {
+		mapping->as.mapping.pairs[i] = mapping->as.mapping.pairs[i + 1];
+	}
+	mapping->as.mapping.count--;
+	
+	return true;
+}
+
+/**
+ * @brief Check if a mapping contains a string key.
+ */
+GTEXT_API bool gtext_yaml_mapping_has_key(
+	const GTEXT_YAML_Node *mapping,
+	const char *key
+) {
+	if (!mapping || mapping->type != GTEXT_YAML_MAPPING || !key) return false;
+	
+	/* Linear search through key-value pairs */
+	for (size_t i = 0; i < mapping->as.mapping.count; i++) {
+		const GTEXT_YAML_Node *k = mapping->as.mapping.pairs[i].key;
+		if (k && k->type == GTEXT_YAML_STRING) {
+			if (strcmp(k->as.scalar.value, key) == 0) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
