@@ -8,7 +8,7 @@ This document describes the **YAML parsing library in C** implemented in the `te
 
 ## 1. Overview
 
-The YAML module provides YAML 1.2.2 processing capabilities with support for streaming parsing, anchors/aliases, and comprehensive error handling. The implementation is currently focused on reading YAML documents; writing support is planned.
+The YAML module provides YAML 1.2.2 processing capabilities with support for streaming parsing, anchors/aliases, comprehensive error handling, and writer/serialization.
 
 ### Current Status (February 2026)
 
@@ -22,11 +22,11 @@ The YAML module provides YAML 1.2.2 processing capabilities with support for str
 - ✅ Multi-document streams (`---` and `...`)
 - ✅ Comprehensive limit enforcement
 - ✅ Memory-safe operation (zero leaks, valgrind-clean)
-- ✅ 781 comprehensive tests with real-world YAML examples
+- ✅ DOM parser with accessors, mutation, and cloning
+- ✅ Writer/serialization for DOM and streaming events
+- ✅ 951 comprehensive tests with real-world YAML examples
 
 **Planned:**
-- ⏳ DOM/tree parsing model
-- ⏳ Writer/serialization
 - ⏳ Directives (`%YAML`, `%TAG`)
 - ⏳ Binary scalar support (`!!binary`)
 - ⏳ Custom tag system
@@ -130,6 +130,27 @@ gtext_yaml_document_set_root(clone_doc, clone);
 
 gtext_yaml_free(doc);
 gtext_yaml_free(clone_doc);
+```
+
+### 2.3 Writing and Formatting (Implemented)
+
+The writer serializes a DOM to a sink and exposes formatting options such as
+indentation, scalar styles, flow vs. block collections, and line-width aware
+folding.
+
+```c
+GTEXT_YAML_Sink sink;
+gtext_yaml_sink_buffer(&sink);
+
+GTEXT_YAML_Write_Options opts = gtext_yaml_write_options_default();
+opts.pretty = true;
+opts.indent_spaces = 4;
+opts.scalar_style = GTEXT_YAML_SCALAR_STYLE_FOLDED;
+opts.line_width = 12;
+
+gtext_yaml_write_document(doc, &sink, &opts);
+printf("%s", gtext_yaml_sink_buffer_data(&sink));
+gtext_yaml_sink_buffer_free(&sink);
 ```
 
 ---

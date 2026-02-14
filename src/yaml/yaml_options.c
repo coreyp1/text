@@ -31,9 +31,12 @@ GTEXT_API GTEXT_YAML_Write_Options gtext_yaml_write_options_default(void)
   GTEXT_YAML_Write_Options opts = {0};
   opts.pretty = false;
   opts.indent_spaces = 2;
+  opts.line_width = 0;
   opts.newline = "\n";
   opts.trailing_newline = false;
   opts.canonical = false;
+  opts.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
+  opts.flow_style = GTEXT_YAML_FLOW_STYLE_AUTO;
   return opts;
 }
 

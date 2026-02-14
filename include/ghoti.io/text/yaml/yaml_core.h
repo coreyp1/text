@@ -100,6 +100,28 @@ typedef struct GTEXT_YAML_Document GTEXT_YAML_Document;
 typedef enum { GTEXT_YAML_DUPKEY_ERROR, GTEXT_YAML_DUPKEY_FIRST_WINS, GTEXT_YAML_DUPKEY_LAST_WINS } GTEXT_YAML_Dupkey_Mode;
 
 /**
+ * @enum GTEXT_YAML_Scalar_Style
+ * @brief Preferred scalar style for YAML emission.
+ */
+typedef enum {
+  GTEXT_YAML_SCALAR_STYLE_PLAIN,
+  GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED,
+  GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED,
+  GTEXT_YAML_SCALAR_STYLE_LITERAL,
+  GTEXT_YAML_SCALAR_STYLE_FOLDED
+} GTEXT_YAML_Scalar_Style;
+
+/**
+ * @enum GTEXT_YAML_Flow_Style
+ * @brief Preferred collection style for YAML emission.
+ */
+typedef enum {
+  GTEXT_YAML_FLOW_STYLE_AUTO,
+  GTEXT_YAML_FLOW_STYLE_BLOCK,
+  GTEXT_YAML_FLOW_STYLE_FLOW
+} GTEXT_YAML_Flow_Style;
+
+/**
  * @struct GTEXT_YAML_Parse_Options
  * @brief Options that control parsing behavior and limits.
  *
@@ -125,9 +147,12 @@ typedef struct {
 typedef struct {
   bool pretty;
   int indent_spaces;
+  int line_width;
   const char * newline;
   bool trailing_newline;
   bool canonical;
+  GTEXT_YAML_Scalar_Style scalar_style;
+  GTEXT_YAML_Flow_Style flow_style;
 } GTEXT_YAML_Write_Options;
 
 /**

@@ -1,8 +1,18 @@
-# JSON Module Examples
+# Text Module Examples
 
-This directory contains example programs demonstrating how to use the JSON module API.
+This directory contains example programs demonstrating how to use the text module APIs.
 
 ## Examples
+
+## YAML Examples
+
+### yaml_writer_formatting.c
+Writer formatting options for YAML. Demonstrates:
+- Writing a DOM to a sink
+- Scalar style selection and line-width folding
+- Custom indentation
+
+## JSON Examples
 
 ### json_basic.c
 Basic JSON parsing and writing example. Demonstrates:

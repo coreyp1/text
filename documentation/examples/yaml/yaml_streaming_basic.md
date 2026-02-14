@@ -202,4 +202,4 @@ The parser buffers internally as needed.
 
 ## Status Note
 
-**Current Status:** The streaming parser is implemented and functional (as of February 2026). DOM parser and writer APIs are planned for future releases.
+**Current Status:** The streaming parser is implemented and functional (as of February 2026). DOM parsing and writer APIs are also available.

@@ -30,12 +30,19 @@ This page provides practical examples demonstrating the YAML module's streaming 
   - Nested sections and key-value extraction
   - Real-world config file patterns
 
+### Writer Output
+
+- **[yaml_writer_formatting.c](@ref example_yaml_writer_formatting)** - Writer formatting options
+    - Pretty/block output with custom indentation
+    - Scalar style selection and line-width folding
+    - Buffer sink output
+
 ## Example Status
 
 **Current Status (February 2026):**
 - ✅ Streaming parser examples available
-- ⏳ DOM parser examples (planned - awaiting DOM implementation)
-- ⏳ Writer examples (planned - awaiting writer implementation)
+- ⏳ DOM parser examples (planned - awaiting DOM-specific examples)
+- ✅ Writer examples available
 
 The examples focus on the **streaming parser API**, which is currently implemented. DOM and writer examples will be added as those features are completed.
 
