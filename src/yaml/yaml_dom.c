@@ -384,8 +384,10 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 		return NULL;
 	}
 	
-	/* Allocate document structure */
-	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)malloc(sizeof(GTEXT_YAML_Document));
+	/* Allocate document structure from arena (not malloc!) */
+	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)yaml_context_alloc(
+		ctx, sizeof(GTEXT_YAML_Document), 8
+	);
 	if (!doc) {
 		yaml_context_free(ctx);
 		if (error) {
@@ -396,6 +398,7 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 	}
 	
 	/* Initialize document */
+	memset(doc, 0, sizeof(*doc));
 	doc->ctx = ctx;
 	doc->root = NULL;
 	doc->options = options ? *options : gtext_yaml_parse_options_default();
