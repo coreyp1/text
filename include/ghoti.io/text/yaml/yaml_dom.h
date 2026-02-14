@@ -108,7 +108,7 @@ GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node * n);
 /**
  * @brief Return a nul-terminated string view for scalar nodes.
  *
- * For non-string nodes this function returns NULL. The returned pointer
+ * For non-scalar nodes this function returns NULL. The returned pointer
  * is valid for the lifetime of the owning document; callers must not free it.
  */
 GTEXT_API const char * gtext_yaml_node_as_string(const GTEXT_YAML_Node * n);

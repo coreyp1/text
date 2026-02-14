@@ -58,6 +58,9 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	/* Initialize scalar fields */
 	node->type = GTEXT_YAML_STRING;
 	node->as.scalar.type = GTEXT_YAML_STRING;
+	node->as.scalar.bool_value = false;
+	node->as.scalar.int_value = 0;
+	node->as.scalar.float_value = 0.0;
 	
 	/* Copy value into arena */
 	node->as.scalar.value = arena_strdup(ctx, value, length);
@@ -224,8 +227,16 @@ GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node *n) {
  */
 const char *gtext_yaml_node_as_string(const GTEXT_YAML_Node *n) {
 	if (!n) return NULL;
-	if (n->type != GTEXT_YAML_STRING) return NULL;
-	return n->as.scalar.value;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			return n->as.scalar.value;
+		default:
+			return NULL;
+	}
 }
 
 /* ============================================================================
@@ -322,6 +333,10 @@ const char *gtext_yaml_node_tag(const GTEXT_YAML_Node *node) {
 	
 	switch (node->type) {
 		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
 			return node->as.scalar.tag;
 		case GTEXT_YAML_SEQUENCE:
 			return node->as.sequence.tag;
@@ -337,6 +352,10 @@ GTEXT_API const char *gtext_yaml_node_anchor(const GTEXT_YAML_Node *node) {
 	
 	switch (node->type) {
 		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
 			return node->as.scalar.anchor;
 		case GTEXT_YAML_SEQUENCE:
 			return node->as.sequence.anchor;
@@ -407,6 +426,8 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 	doc->has_directives = false;
 	doc->yaml_version_major = 0;
 	doc->yaml_version_minor = 0;
+	doc->tag_handles = NULL;
+	doc->tag_handle_count = 0;
 	
 	return doc;
 }
@@ -528,6 +549,10 @@ static GTEXT_YAML_Node *clone_node(
 
 	switch (node->type) {
 		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
 			clone = yaml_node_new_scalar(
 				ctx,
 				node->as.scalar.value,
@@ -536,6 +561,11 @@ static GTEXT_YAML_Node *clone_node(
 				node->as.scalar.anchor
 			);
 			if (!clone) return NULL;
+			clone->type = node->type;
+			clone->as.scalar.type = node->type;
+			clone->as.scalar.bool_value = node->as.scalar.bool_value;
+			clone->as.scalar.int_value = node->as.scalar.int_value;
+			clone->as.scalar.float_value = node->as.scalar.float_value;
 			if (!clone_map_add(map, node, clone)) return NULL;
 			return clone;
 		case GTEXT_YAML_SEQUENCE: {

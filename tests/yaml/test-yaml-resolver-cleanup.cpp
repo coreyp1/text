@@ -21,7 +21,7 @@ int gtext_yaml_resolver_register_anchor_with_refs(ResolverState *r, const char *
 TEST(YamlResolverCleanup, CreateAndDestroy) {
   // Test 9.2.4: Create and destroy resolver multiple times
   for (int i = 0; i < 10; ++i) {
-    GTEXT_YAML_Parse_Options opts;
+    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
     opts.max_alias_expansion = 1000;
     
     ResolverState *r = gtext_yaml_resolver_new(&opts);
@@ -40,7 +40,7 @@ TEST(YamlResolverCleanup, CreateAndDestroy) {
 
 TEST(YamlResolverCleanup, ComplexAnchorsWithRefs) {
   // Test 9.2.5: Complex anchor graph to stress-test cleanup
-  GTEXT_YAML_Parse_Options opts;
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
   opts.max_alias_expansion = 10000;
   
   ResolverState *r = gtext_yaml_resolver_new(&opts);
@@ -74,7 +74,7 @@ TEST(YamlResolverCleanup, NullResolver) {
 
 TEST(YamlResolverCleanup, EmptyResolver) {
   // Edge case: resolver with no anchors registered
-  GTEXT_YAML_Parse_Options opts;
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
   opts.max_alias_expansion = 100;
   
   ResolverState *r = gtext_yaml_resolver_new(&opts);
@@ -87,7 +87,7 @@ TEST(YamlResolverCleanup, EmptyResolver) {
 
 TEST(YamlResolverCleanup, ManyAnchors) {
   // Stress test: many anchors
-  GTEXT_YAML_Parse_Options opts;
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
   opts.max_alias_expansion = 100000;
   
   ResolverState *r = gtext_yaml_resolver_new(&opts);

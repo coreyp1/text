@@ -1,6 +1,6 @@
 # YAML Module - Current Limitations and Status
 
-**Last Updated:** February 13, 2026  
+**Last Updated:** February 14, 2026  
 **Current Version:** Alpha (In Active Development)
 
 This document provides an honest assessment of the YAML module's current implementation status, known limitations, and planned improvements.
@@ -19,17 +19,22 @@ The YAML module has a **functional streaming parser** with:
 - Multi-document stream support
 - All scalar styles (plain, quoted, literal, folded)
 - All escape sequences including Unicode
+- `%YAML` and `%TAG` directives with tag handle resolution
+- Schema-based implicit typing (Failsafe, JSON, Core)
 - Security limits (depth, bytes, alias expansion)
 - Memory safety (889+ tests pass valgrind with zero leaks)
 - Comprehensive test coverage (889 tests passing - 100% pass rate)
+- DOM parsing with accessors, mutation, and cloning
+- Writer/serializer for DOM and streaming events
 
 ### ⏳ What's Planned
 
 The following features are **designed but partially implemented**:
-- DOM (Document Object Model) parser - Phase 4 (partially complete)
-- Writer/serializer - Phase 6
 - Full YAML 1.2 spec compliance - Phase 7
 - Pull-model streaming parser - Phase 7 (optional)
+- Standard YAML type tags (Phase 5.5)
+- YAML 1.1 compatibility mode (Phase 5.6)
+- Merge keys (Phase 5.3)
 
 ### ⚠️ Known Issues
 
@@ -136,27 +141,16 @@ See [Known Bugs](#known-bugs) section below for specific issues.
 
 ### ❌ Not Yet Implemented
 
-#### Writer/Serializer (Phase 6)
-Status: Designed, not started
-
-- ❌ Sink abstraction (buffer, file, custom)
-- ❌ DOM to YAML serialization
-- ❌ Streaming writer (event → YAML)
-- ❌ Pretty printing options
-- ❌ Canonical output mode
-
-**Impact:** Module is read-only. Cannot generate YAML output.
-
 #### Tag System (Phase 5.1)
-Status: Not started
+Status: Partially implemented
 
-- ❌ Core schema implicit typing (`true`, `null`, `123`, `3.14`)
-- ❌ Tag directives (`%TAG`)
-- ❌ Custom tag registration
-- ❌ Type resolution
+- ✅ Core schema implicit typing (`true`, `null`, `123`, `3.14`)
+- ✅ Tag directives (`%YAML`, `%TAG`) and tag handle expansion
+- ❌ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`)
+- ❌ Custom tag resolution for application-defined types
 - ❌ Binary scalars (`!!binary`)
 
-**Impact:** All values are treated as strings. No automatic type conversion.
+**Impact:** Core schema typing works, but standard tags and custom tag handling are incomplete.
 
 #### Merge Keys (Phase 5.3)
 Status: Not started

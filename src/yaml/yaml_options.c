@@ -16,6 +16,7 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
 {
   GTEXT_YAML_Parse_Options opts = {0};
   opts.dupkeys = GTEXT_YAML_DUPKEY_ERROR;
+  opts.schema = GTEXT_YAML_SCHEMA_CORE;
   /* Defaults: 0 means use library default; here we supply concrete defaults */
   opts.max_depth = 256; /* default max nesting */
   opts.max_total_bytes = 64 * 1024 * 1024; /* 64 MiB */

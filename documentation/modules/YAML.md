@@ -18,18 +18,21 @@ The YAML module provides YAML 1.2.2 processing capabilities with support for str
 - ✅ Scalar styles (plain, single-quoted, double-quoted, literal `|`, folded `>`)
 - ✅ Flow and block collections (sequences `[]` and mappings `{}`)
 - ✅ Anchors (`&anchor`) and aliases (`*anchor`)
-- ✅ Merge keys (`<<`)
 - ✅ Multi-document streams (`---` and `...`)
 - ✅ Comprehensive limit enforcement
 - ✅ Memory-safe operation (zero leaks, valgrind-clean)
 - ✅ DOM parser with accessors, mutation, and cloning
 - ✅ Writer/serialization for DOM and streaming events
 - ✅ 951 comprehensive tests with real-world YAML examples
+- ✅ `%YAML` and `%TAG` directives with tag handle resolution
+- ✅ Schema-based implicit typing (Failsafe, JSON, Core)
 
 **Planned:**
-- ⏳ Directives (`%YAML`, `%TAG`)
+- ⏳ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`)
+- ⏳ YAML 1.1 compatibility mode
+- ⏳ Merge keys (`<<`)
 - ⏳ Binary scalar support (`!!binary`)
-- ⏳ Custom tag system
+- ⏳ Custom tag resolution for application-defined types
 
 ### Core Capabilities
 
@@ -40,11 +43,9 @@ The YAML module provides YAML 1.2.2 processing capabilities with support for str
 - **Configurable limits** for depth, bytes, and alias expansion
 - **Chunked input support** for network or file I/O scenarios
 - **Memory safety** with zero memory leaks (valgrind-verified)
-
 ---
 
 ## 2. Parsing Models
-
 ### 2.1 Streaming Parsing (Implemented)
 
 Streaming parsing processes YAML incrementally, emitting events as nodes are encountered. This mode is ideal when you need to:
@@ -87,8 +88,24 @@ status = gtext_yaml_stream_finish(stream);
 gtext_yaml_stream_free(stream);
 ```
 
-**Multi-Chunk Value Handling:**
+opts.dupkeys = GTEXT_YAML_DUPKEY_LAST_WINS;  // Allow duplicate keys, last wins
 
+
+### 3.3 Schema and Tag Resolution
+
+The resolver supports schema-based implicit typing and explicit tag handling.
+
+- **`schema`**: Selects the implicit typing rules.
+  - `GTEXT_YAML_SCHEMA_FAILSAFE`: All scalars remain strings.
+  - `GTEXT_YAML_SCHEMA_JSON`: JSON-compatible null/bool/int/float/string.
+  - `GTEXT_YAML_SCHEMA_CORE`: YAML core schema (includes `.nan`, `.inf`, etc.).
+- **`resolve_tags`**: When disabled, preserves explicit tags and keeps scalars as strings.
+
+```c
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+opts.schema = GTEXT_YAML_SCHEMA_JSON;
+opts.resolve_tags = true;
+```
 The parser correctly handles values (strings, numbers, collections) that span multiple chunks. When a value is incomplete at the end of a chunk, the parser preserves state and waits for more input.
 
 - **No chunk count limit**: Values can span 2, 3, 100, or more chunks

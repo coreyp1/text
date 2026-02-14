@@ -100,6 +100,16 @@ typedef struct GTEXT_YAML_Document GTEXT_YAML_Document;
 typedef enum { GTEXT_YAML_DUPKEY_ERROR, GTEXT_YAML_DUPKEY_FIRST_WINS, GTEXT_YAML_DUPKEY_LAST_WINS } GTEXT_YAML_Dupkey_Mode;
 
 /**
+ * @enum GTEXT_YAML_Schema
+ * @brief Implicit typing schema selection.
+ */
+typedef enum {
+  GTEXT_YAML_SCHEMA_FAILSAFE,
+  GTEXT_YAML_SCHEMA_JSON,
+  GTEXT_YAML_SCHEMA_CORE
+} GTEXT_YAML_Schema;
+
+/**
  * @enum GTEXT_YAML_Scalar_Style
  * @brief Preferred scalar style for YAML emission.
  */
@@ -130,6 +140,7 @@ typedef enum {
 typedef struct {
   /* Limits and behavior */
   GTEXT_YAML_Dupkey_Mode dupkeys;
+  GTEXT_YAML_Schema schema;
   size_t max_depth;
   size_t max_total_bytes;
   size_t max_alias_expansion;

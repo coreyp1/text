@@ -37,6 +37,7 @@ typedef enum {
 	GTEXT_YAML_EVENT_STREAM_END,
 	GTEXT_YAML_EVENT_DOCUMENT_START,
 	GTEXT_YAML_EVENT_DOCUMENT_END,
+	GTEXT_YAML_EVENT_DIRECTIVE,
 	GTEXT_YAML_EVENT_SEQUENCE_START,
 	GTEXT_YAML_EVENT_SEQUENCE_END,
 	GTEXT_YAML_EVENT_MAPPING_START,
@@ -66,6 +67,11 @@ typedef struct {
 			const char * ptr;
 			size_t len;
 		} scalar;
+		struct {
+			const char * name;
+			const char * value;
+			const char * value2;
+		} directive;
 		const char * alias_name;  /* For GTEXT_YAML_EVENT_ALIAS */
 		char indicator;
 	} data;

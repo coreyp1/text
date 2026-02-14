@@ -31,6 +31,11 @@ typedef struct {
 	GTEXT_YAML_Node *node;   /* Associated node */
 } anchor_entry;
 
+typedef struct {
+	char *handle;
+	char *prefix;
+} tag_handle_entry;
+
 /* Parser state for building DOM from events */
 typedef struct {
 	yaml_context *ctx;                  /* Context owns arena */
@@ -66,6 +71,13 @@ typedef struct {
 		size_t count;
 		size_t capacity;
 	} aliases;
+
+	/* Tag handle map for %TAG directives */
+	struct {
+		tag_handle_entry *entries;
+		size_t count;
+		size_t capacity;
+	} tag_handles;
 	
 	GTEXT_YAML_Node *root;              /* Root node once complete */
 	bool failed;                        /* True if error occurred */
@@ -137,6 +149,11 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 		free(p->anchors.entries);
 		return false;
 	}
+
+	/* Tag handles start empty */
+	p->tag_handles.entries = NULL;
+	p->tag_handles.count = 0;
+	p->tag_handles.capacity = 0;
 	
 	return true;
 }
@@ -169,33 +186,66 @@ static void parser_free(parser_state *p) {
 	
 	/* Free alias list */
 	free(p->aliases.nodes);
+
+	/* Free tag handles */
+	for (size_t i = 0; i < p->tag_handles.count; i++) {
+		free(p->tag_handles.entries[i].handle);
+		free(p->tag_handles.entries[i].prefix);
+	}
+	free(p->tag_handles.entries);
 }
+
+/* Forward declarations */
+static GTEXT_YAML_Node *lookup_anchor(parser_state *p, const char *name);
 
 /**
  * @brief Register an anchor name with its node.
  */
-static bool register_anchor(parser_state *p, const char *name, GTEXT_YAML_Node *node) {
-	if (!name || !node) return true;  /* No anchor to register */
-	
+static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEXT_YAML_Node *node) {
+	if (!name || !node) return GTEXT_YAML_OK;  /* No anchor to register */
+
+	if (lookup_anchor(p, name)) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message = "Duplicate anchor name";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
 	/* Check if we need to grow the anchor map */
 	if (p->anchors.count >= p->anchors.capacity) {
 		size_t new_cap = p->anchors.capacity * 2;
 		anchor_entry *new_entries = (anchor_entry *)realloc(
 			p->anchors.entries, new_cap * sizeof(anchor_entry)
 		);
-		if (!new_entries) return false;
+		if (!new_entries) {
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory registering anchor";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
 		memset(new_entries + p->anchors.capacity, 0, (new_cap - p->anchors.capacity) * sizeof(anchor_entry));
 		p->anchors.entries = new_entries;
 		p->anchors.capacity = new_cap;
 	}
-	
+
 	/* Add the anchor */
 	p->anchors.entries[p->anchors.count].name = strdup(name);
 	p->anchors.entries[p->anchors.count].node = node;
-	if (!p->anchors.entries[p->anchors.count].name) return false;
+	if (!p->anchors.entries[p->anchors.count].name) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_OOM;
+			p->error->message = "Out of memory registering anchor";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
 	p->anchors.count++;
-	
-	return true;
+
+	return GTEXT_YAML_OK;
 }
 
 /**
@@ -234,13 +284,72 @@ static GTEXT_YAML_Node *lookup_anchor(parser_state *p, const char *name) {
 	return NULL;
 }
 
+static const char *context_strdup(yaml_context *ctx, const char *value) {
+	if (!ctx || !value) return NULL;
+	size_t len = strlen(value);
+	char *copy = (char *)yaml_context_alloc(ctx, len + 1, 1);
+	if (!copy) return NULL;
+	memcpy(copy, value, len);
+	copy[len] = '\0';
+	return copy;
+}
+
+static bool tag_handle_add(parser_state *p, const char *handle, const char *prefix) {
+	if (!p || !handle || !prefix) return false;
+
+	for (size_t i = 0; i < p->tag_handles.count; i++) {
+		if (strcmp(p->tag_handles.entries[i].handle, handle) == 0) {
+			char *new_prefix = strdup(prefix);
+			if (!new_prefix) return false;
+			free(p->tag_handles.entries[i].prefix);
+			p->tag_handles.entries[i].prefix = new_prefix;
+			return true;
+		}
+	}
+
+	if (p->tag_handles.count >= p->tag_handles.capacity) {
+		size_t new_cap = p->tag_handles.capacity == 0 ? 8 : p->tag_handles.capacity * 2;
+		tag_handle_entry *new_entries = (tag_handle_entry *)realloc(
+			p->tag_handles.entries, new_cap * sizeof(tag_handle_entry)
+		);
+		if (!new_entries) return false;
+		p->tag_handles.entries = new_entries;
+		p->tag_handles.capacity = new_cap;
+	}
+
+	p->tag_handles.entries[p->tag_handles.count].handle = strdup(handle);
+	p->tag_handles.entries[p->tag_handles.count].prefix = strdup(prefix);
+	if (!p->tag_handles.entries[p->tag_handles.count].handle ||
+		!p->tag_handles.entries[p->tag_handles.count].prefix) {
+		free(p->tag_handles.entries[p->tag_handles.count].handle);
+		free(p->tag_handles.entries[p->tag_handles.count].prefix);
+		return false;
+	}
+	p->tag_handles.count++;
+	return true;
+}
+
 /**
  * @brief Resolve all alias nodes.
  */
 static GTEXT_YAML_Status resolve_aliases(parser_state *p) {
+	if (!p || !p->doc) return GTEXT_YAML_E_INVALID;
+	size_t max_aliases = p->doc->options.max_alias_expansion;
+	size_t alias_count = 0;
+
 	for (size_t i = 0; i < p->aliases.count; i++) {
 		GTEXT_YAML_Node *alias = p->aliases.nodes[i];
 		if (alias->type != GTEXT_YAML_ALIAS) continue;  /* Shouldn't happen */
+
+		if (max_aliases > 0 && alias_count + 1 > max_aliases) {
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_LIMIT;
+				p->error->message = "Alias expansion limit exceeded";
+			}
+			return GTEXT_YAML_E_LIMIT;
+		}
+		alias_count++;
 		
 		const char *anchor_name = alias->as.alias.anchor_name;
 		GTEXT_YAML_Node *target = lookup_anchor(p, anchor_name);
@@ -259,6 +368,26 @@ static GTEXT_YAML_Status resolve_aliases(parser_state *p) {
 	}
 	
 	return GTEXT_YAML_OK;
+}
+
+static bool finalize_tag_handles(parser_state *p, GTEXT_YAML_Document *doc) {
+	if (!p || !doc) return false;
+	if (p->tag_handles.count == 0) return true;
+
+	yaml_tag_handle *handles = (yaml_tag_handle *)yaml_context_alloc(
+		doc->ctx, sizeof(yaml_tag_handle) * p->tag_handles.count, 8
+	);
+	if (!handles) return false;
+
+	for (size_t i = 0; i < p->tag_handles.count; i++) {
+		handles[i].handle = context_strdup(doc->ctx, p->tag_handles.entries[i].handle);
+		handles[i].prefix = context_strdup(doc->ctx, p->tag_handles.entries[i].prefix);
+		if (!handles[i].handle || !handles[i].prefix) return false;
+	}
+
+	doc->tag_handles = handles;
+	doc->tag_handle_count = p->tag_handles.count;
+	return true;
 }
 
 /**
@@ -411,6 +540,67 @@ static GTEXT_YAML_Status parse_callback(
 				p->first_document_complete = true;
 			}
 			break;
+
+		case GTEXT_YAML_EVENT_DIRECTIVE: {
+			const char *name = event->data.directive.name;
+			const char *value = event->data.directive.value;
+			const char *value2 = event->data.directive.value2;
+
+			if (!name) {
+				break;
+			}
+
+			p->doc->has_directives = true;
+			if (strcmp(name, "YAML") == 0) {
+				if (!value) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "YAML directive missing version";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				char *end = NULL;
+				long major = strtol(value, &end, 10);
+				if (!end || *end != '.') {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "Invalid YAML directive version";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				long minor = strtol(end + 1, &end, 10);
+				if (!end || *end != '\0') {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "Invalid YAML directive version";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				p->doc->yaml_version_major = (int)major;
+				p->doc->yaml_version_minor = (int)minor;
+			} else if (strcmp(name, "TAG") == 0) {
+				if (!value || !value2) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "TAG directive missing handle or prefix";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				if (!tag_handle_add(p, value, value2)) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory storing tag handle";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+			break;
+		}
 			
 		case GTEXT_YAML_EVENT_SCALAR: {
 			/* Create scalar node */
@@ -433,13 +623,9 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Register anchor if present */
 			if (event->anchor) {
-				if (!register_anchor(p, event->anchor, node)) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory registering anchor";
-					}
-					return GTEXT_YAML_E_OOM;
+				GTEXT_YAML_Status anchor_status = register_anchor(p, event->anchor, node);
+				if (anchor_status != GTEXT_YAML_OK) {
+					return anchor_status;
 				}
 			}
 			
@@ -519,7 +705,10 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Register anchor if present */
 			if (node->as.sequence.anchor) {
-				register_anchor(p, node->as.sequence.anchor, node);
+				GTEXT_YAML_Status anchor_status = register_anchor(p, node->as.sequence.anchor, node);
+				if (anchor_status != GTEXT_YAML_OK) {
+					return anchor_status;
+				}
 			}
 			
 			/* Pop sequence from stack (restores parent temp) */
@@ -599,7 +788,10 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Register anchor if present */
 			if (node->as.mapping.anchor) {
-				register_anchor(p, node->as.mapping.anchor, node);
+				GTEXT_YAML_Status anchor_status = register_anchor(p, node->as.mapping.anchor, node);
+				if (anchor_status != GTEXT_YAML_OK) {
+					return anchor_status;
+				}
 			}
 			
 			/* Pop mapping from stack (restores parent temp) */
@@ -1103,6 +1295,24 @@ GTEXT_YAML_Document *yaml_parse_document(
 	/* Set document root */
 	doc->root = parser.root;
 	doc->node_count = 1;  /* TODO: track actual count */
+
+	if (!finalize_tag_handles(&parser, doc)) {
+		parser_free(&parser);
+		yaml_context_free(ctx);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory finalizing tag handles";
+		}
+		return NULL;
+	}
+
+	/* Resolve tags and implicit scalar types */
+	status = yaml_resolve_document(doc, error);
+	if (status != GTEXT_YAML_OK) {
+		parser_free(&parser);
+		yaml_context_free(ctx);
+		return NULL;
+	}
 	
 	parser_free(&parser);
 	return doc;
@@ -1195,6 +1405,22 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 	/* Set document root */
 	state->current_doc->root = p->root;
 	state->current_doc->node_count = 1;
+
+	if (!finalize_tag_handles(p, state->current_doc)) {
+		state->failed = true;
+		if (state->error) {
+			state->error->code = GTEXT_YAML_E_OOM;
+			state->error->message = "Out of memory finalizing tag handles";
+		}
+		return false;
+	}
+
+	/* Resolve tags and implicit scalar types */
+	status = yaml_resolve_document(state->current_doc, state->error);
+	if (status != GTEXT_YAML_OK) {
+		state->failed = true;
+		return false;
+	}
 	
 	/* Add to documents array */
 	if (state->count >= state->capacity) {

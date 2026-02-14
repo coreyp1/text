@@ -294,6 +294,10 @@ static const char *node_tag(const GTEXT_YAML_Node *node) {
   if (!node) return NULL;
   switch (node->type) {
     case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
       return node->as.scalar.tag;
     case GTEXT_YAML_SEQUENCE:
       return node->as.sequence.tag;
@@ -308,6 +312,10 @@ static const char *node_anchor(const GTEXT_YAML_Node *node) {
   if (!node) return NULL;
   switch (node->type) {
     case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
       return node->as.scalar.anchor;
     case GTEXT_YAML_SEQUENCE:
       return node->as.sequence.anchor;
@@ -322,6 +330,14 @@ static const char *default_tag_for_type(GTEXT_YAML_Node_Type type) {
   switch (type) {
     case GTEXT_YAML_STRING:
       return "!!str";
+    case GTEXT_YAML_NULL:
+      return "!!null";
+    case GTEXT_YAML_BOOL:
+      return "!!bool";
+    case GTEXT_YAML_INT:
+      return "!!int";
+    case GTEXT_YAML_FLOAT:
+      return "!!float";
     case GTEXT_YAML_SEQUENCE:
       return "!!seq";
     case GTEXT_YAML_MAPPING:
@@ -819,6 +835,10 @@ static GTEXT_YAML_Status write_node(
 
   switch (node->type) {
     case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
       return write_scalar_node(state, node, indent, flow, tag_override);
     case GTEXT_YAML_SEQUENCE:
       return write_sequence_node(state, node, indent, flow, tag_override, leading_newline);
@@ -1641,6 +1661,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
       writer->in_document = false;
       return GTEXT_YAML_OK;
     }
+    case GTEXT_YAML_EVENT_DIRECTIVE:
+      return GTEXT_YAML_OK;
     case GTEXT_YAML_EVENT_SEQUENCE_START:
       return writer_emit_container_start(writer, event, YAML_WRITER_STACK_SEQUENCE);
     case GTEXT_YAML_EVENT_SEQUENCE_END:

@@ -9,6 +9,7 @@
 #define TEXT_SRC_YAML_YAML_INTERNAL_H
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
@@ -48,6 +49,7 @@ GTEXT_INTERNAL_API int gtext_yaml_dynbuf_append(GTEXT_YAML_DynBuf *b, const char
 typedef enum {
 	GTEXT_YAML_TOKEN_INDICATOR,
 	GTEXT_YAML_TOKEN_SCALAR,
+	GTEXT_YAML_TOKEN_DIRECTIVE,
 	GTEXT_YAML_TOKEN_DOCUMENT_START,  /* "---" */
 	GTEXT_YAML_TOKEN_DOCUMENT_END,    /* "..." */
 	GTEXT_YAML_TOKEN_EOF,
@@ -157,6 +159,9 @@ typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_STRING initially */
 	const char *value;          /* Null-terminated string (arena-allocated) */
 	size_t length;              /* Length excluding null terminator */
+	bool bool_value;            /* Parsed boolean value */
+	int64_t int_value;          /* Parsed integer value */
+	double float_value;         /* Parsed floating-point value */
 	const char *tag;            /* Optional tag (e.g., "!!str"), NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
 } yaml_node_scalar;
@@ -177,6 +182,11 @@ typedef struct {
 	GTEXT_YAML_Node *key;       /* Key node (can be any type per YAML spec) */
 	GTEXT_YAML_Node *value;     /* Value node */
 } yaml_mapping_pair;
+
+typedef struct {
+	const char *handle;
+	const char *prefix;
+} yaml_tag_handle;
 
 typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_MAPPING */
@@ -217,6 +227,8 @@ struct GTEXT_YAML_Document {
 	bool has_directives;        /* True if %YAML or %TAG directives present */
 	int yaml_version_major;     /* YAML version from %YAML directive (0 if none) */
 	int yaml_version_minor;
+	yaml_tag_handle *tag_handles; /* Array of %TAG handle mappings */
+	size_t tag_handle_count;
 };
 
 /* ============================================================================
@@ -239,6 +251,14 @@ GTEXT_INTERNAL_API GTEXT_YAML_Document *yaml_parse_document(
 	const char *input,
 	size_t length,
 	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+);
+
+/**
+ * @brief Resolve tags and implicit scalar types for a document.
+ */
+GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
+	GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Error *error
 );
 

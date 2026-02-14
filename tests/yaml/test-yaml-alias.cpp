@@ -16,9 +16,10 @@ TEST(YamlAlias, MaxAliasBudget) {
     ASSERT_NE(s, nullptr);
     const char *input = "*a *b *c";
     GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
-    if (st != GTEXT_YAML_OK) {
-        EXPECT_EQ(st, GTEXT_YAML_E_LIMIT);
+    if (st == GTEXT_YAML_OK) {
+        st = gtext_yaml_stream_finish(s);
     }
+    EXPECT_EQ(st, GTEXT_YAML_E_LIMIT);
     gtext_yaml_stream_free(s);
 }
 

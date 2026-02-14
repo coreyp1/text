@@ -35,8 +35,8 @@ struct GTEXT_YAML_Scanner {
   yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
   int context_depth;      /* current depth in context stack */
   
-  /* Track if last token was anchor/alias indicator */
-  int last_was_anchor_or_alias;
+  /* Track last indicator character for tag/anchor/alias parsing */
+  int last_indicator;
 };
 
 static int is_indicator_char(int c)
@@ -125,7 +125,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->col = 1;
   s->finished = 0;
   s->context_depth = 0; /* Start in block context */
-  s->last_was_anchor_or_alias = 0;
+  s->last_indicator = 0;
   return s;
 }
 
@@ -163,7 +163,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       tok->offset = s->offset;
       tok->line = s->line;
       tok->col = s->col;
-      s->last_was_anchor_or_alias = 0;
+      s->last_indicator = 0;
       return GTEXT_YAML_OK;
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -177,6 +177,82 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   int line = s->line, col = s->col;
 
   /* Buffer state (debug prints removed) */
+
+  /* Directive lines start with '%' at column 1. */
+  if (c == '%' && col == 1) {
+    size_t look = 1;
+    size_t end = 0;
+    while (s->cursor + look < s->input.len) {
+      int nc = (unsigned char)s->input.data[s->cursor + look];
+      if (nc == '\n' || nc == '\r') break;
+      look++;
+    }
+
+    if (s->cursor + look >= s->input.len && !s->finished) {
+      return GTEXT_YAML_E_INCOMPLETE;
+    }
+
+    end = look;
+
+    /* Copy directive line (excluding leading '%') and trim comments/whitespace. */
+    size_t raw_len = end > 1 ? end - 1 : 0;
+    const char *raw = s->input.data + s->cursor + 1;
+    size_t trim_end = raw_len;
+
+    for (size_t i = 0; i < raw_len; i++) {
+      if (raw[i] == '#') {
+        if (i == 0 || isspace((unsigned char)raw[i - 1])) {
+          trim_end = i;
+          break;
+        }
+      }
+    }
+
+    while (trim_end > 0 && isspace((unsigned char)raw[trim_end - 1])) {
+      trim_end--;
+    }
+
+    size_t start = 0;
+    while (start < trim_end && isspace((unsigned char)raw[start])) {
+      start++;
+    }
+
+    size_t out_len = trim_end > start ? trim_end - start : 0;
+    size_t alloc_len = out_len > 0 ? out_len : 1;
+    char *out = (char *)malloc(alloc_len);
+    if (!out) {
+      if (err) {
+        err->code = GTEXT_YAML_E_OOM;
+        err->message = "out of memory";
+      }
+      return GTEXT_YAML_E_OOM;
+    }
+    if (out_len > 0) {
+      memcpy(out, raw + start, out_len);
+    } else {
+      out[0] = '\0';
+    }
+
+    /* Consume the directive line and line break. */
+    for (size_t i = 0; i < end; i++) {
+      scanner_consume(s);
+    }
+    if (scanner_peek(s) == '\r') {
+      scanner_consume(s);
+    }
+    if (scanner_peek(s) == '\n') {
+      scanner_consume(s);
+    }
+
+    tok->type = GTEXT_YAML_TOKEN_DIRECTIVE;
+    tok->u.scalar.ptr = out;
+    tok->u.scalar.len = out_len;
+    tok->offset = off;
+    tok->line = line;
+    tok->col = col;
+    s->last_indicator = 0;
+    return GTEXT_YAML_OK;
+  }
 
   /* Special-case block scalars '|' and '>' to parse them into a scalar token. */
   if (c == '|' || c == '>') {
@@ -207,7 +283,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       int p = scanner_peek(s);
       if (p == -1) {
         if (!s->finished) return GTEXT_YAML_E_INCOMPLETE;
-        break;
+      s->last_indicator = 0;
       }
       scanner_consume(s);
       if (p == '\n') break;
@@ -412,7 +488,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
           tok->offset = off;
           tok->line = line;
           tok->col = col;
-          s->last_was_anchor_or_alias = 0;
+          s->last_indicator = 0;
           return GTEXT_YAML_OK;
         }
         /* Otherwise, it's not a document marker (e.g., "---abc"), fall through to indicator handling */
@@ -441,8 +517,12 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->line = line;
     tok->col = col;
     
-    /* Track if this is an anchor or alias indicator */
-    s->last_was_anchor_or_alias = (c == '&' || c == '*');
+    /* Track if this is an anchor, alias, or tag indicator */
+    if (c == '&' || c == '*' || c == '!') {
+      s->last_indicator = c;
+    } else {
+      s->last_indicator = 0;
+    }
     
     return GTEXT_YAML_OK;
   }
@@ -612,7 +692,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->offset = off;
     tok->line = line;
     tok->col = col;
-    s->last_was_anchor_or_alias = 0;
+    s->last_indicator = 0;
     return GTEXT_YAML_OK;
   }
 
@@ -626,7 +706,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   
   /* If this scalar follows an anchor/alias indicator, it must be space-delimited
      (anchor/alias names cannot contain spaces per YAML spec) */
-  int require_space_delimiter = s->last_was_anchor_or_alias;
+  int require_space_delimiter = (s->last_indicator == '&' || s->last_indicator == '*' || s->last_indicator == '!');
   
   size_t look = 0;
   while (1) {
@@ -712,7 +792,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       /* In flow context, plain scalars are space-delimited (original behavior)
          Also applies to anchor/alias names which must be space-delimited */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
-      if (is_indicator_char(c)) break;
+      if (is_indicator_char(c)) {
+        if (!(s->last_indicator == '!' && c == '!')) break;
+      }
     }
     
     char ch = (char)c;
@@ -737,7 +819,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->offset = s->offset;
     tok->line = s->line;
     tok->col = s->col;
-    s->last_was_anchor_or_alias = 0;
+    s->last_indicator = 0;
     return GTEXT_YAML_OK;
   }
 
@@ -790,7 +872,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   tok->col = col;
   
   /* Reset anchor/alias flag after emitting any scalar */
-  s->last_was_anchor_or_alias = 0;
+  s->last_indicator = 0;
   
   return GTEXT_YAML_OK;
 }

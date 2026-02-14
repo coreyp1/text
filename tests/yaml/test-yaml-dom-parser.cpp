@@ -108,9 +108,9 @@ TEST(YamlDomParser, NumericScalar) {
 	
 	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
 	ASSERT_NE(root, nullptr);
-	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_STRING);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_INT);
 	
-	// Phase 4.2: all scalars are strings (type resolution in Phase 5)
+	// Scalar text remains available after resolution
 	const char *value = gtext_yaml_node_as_string(root);
 	ASSERT_NE(value, nullptr);
 	EXPECT_STREQ(value, "42");
