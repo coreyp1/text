@@ -24,6 +24,7 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.validate_utf8 = true;
   opts.resolve_tags = true;
   opts.retain_comments = false;
+  opts.yaml_1_1 = false;
   return opts;
 }
 

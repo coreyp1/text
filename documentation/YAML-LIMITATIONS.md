@@ -26,15 +26,14 @@ The YAML module has a **functional streaming parser** with:
 - Comprehensive test coverage (889 tests passing - 100% pass rate)
 - DOM parsing with accessors, mutation, and cloning
 - Writer/serializer for DOM and streaming events
+- YAML 1.1 compatibility mode (directive or parse option)
 
 ### ⏳ What's Planned
 
 The following features are **designed but partially implemented**:
 - Full YAML 1.2 spec compliance - Phase 7
 - Pull-model streaming parser - Phase 7 (optional)
-- Standard YAML type tags (Phase 5.5)
-- YAML 1.1 compatibility mode (Phase 5.6)
-- Merge keys (Phase 5.3)
+- Binary scalar support (Phase 7)
 
 ### ⚠️ Known Issues
 
@@ -152,6 +151,19 @@ Status: Partially implemented
 
 **Impact:** Core schema typing works, but standard tags and custom tag handling are incomplete.
 
+#### Standard Type Tags (Phase 5.5)
+Status: Implemented with limitations
+
+**Current behavior:**
+- `!!timestamp` accepts a strict ISO-8601 subset (date or date-time with optional fractional seconds and timezone).
+- `!!set` validates mapping values are null; no dedicated set node type.
+- `!!omap` and `!!pairs` validate sequence entries are single-pair mappings; `!!omap` enforces unique keys.
+
+**Limitations (implementation-specific):**
+- Timestamps are validated but not parsed into a normalized time structure.
+- No timezone normalization or conversion to epoch; value remains a string.
+- Timestamp parsing only accepts ISO-8601 variants supported by YAML 1.2/1.1.
+
 #### Merge Keys (Phase 5.3)
 Status: Not started
 
@@ -237,7 +249,20 @@ None currently identified. Critical memory safety issues and parsing bugs have b
 - **Current:** Partial YAML 1.2 support
   - Core structure parsing works
   - Many 1.2 features not yet implemented
-  - No explicit YAML 1.1 compatibility mode
+   - YAML 1.1 compatibility mode available (directive or parse option)
+
+### YAML 1.1 Compatibility Notes
+
+When YAML 1.1 compatibility is enabled (via `%YAML 1.1` or `opts.yaml_1_1`),
+the resolver expands implicit scalar typing with:
+
+- **Booleans:** `yes/no`, `on/off`, `y/n` (case-insensitive)
+- **Octal integers:** leading `0` notation (e.g., `0755`)
+- **Sexagesimal numbers:** `190:20:30` or `1:20:30.5`
+
+The compatibility mode only affects **implicit scalar resolution**. Explicit
+tags continue to override implicit typing, and the writer remains YAML 1.2 by
+default.
 
 ### Platform Support
 

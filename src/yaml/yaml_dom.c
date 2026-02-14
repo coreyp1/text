@@ -61,6 +61,18 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	node->as.scalar.bool_value = false;
 	node->as.scalar.int_value = 0;
 	node->as.scalar.float_value = 0.0;
+	node->as.scalar.has_timestamp = false;
+	node->as.scalar.timestamp_has_time = false;
+	node->as.scalar.timestamp_tz_specified = false;
+	node->as.scalar.timestamp_tz_utc = false;
+	node->as.scalar.timestamp_year = 0;
+	node->as.scalar.timestamp_month = 0;
+	node->as.scalar.timestamp_day = 0;
+	node->as.scalar.timestamp_hour = 0;
+	node->as.scalar.timestamp_minute = 0;
+	node->as.scalar.timestamp_second = 0;
+	node->as.scalar.timestamp_nsec = 0;
+	node->as.scalar.timestamp_tz_offset = 0;
 	
 	/* Copy value into arena */
 	node->as.scalar.value = arena_strdup(ctx, value, length);
@@ -237,6 +249,27 @@ const char *gtext_yaml_node_as_string(const GTEXT_YAML_Node *n) {
 		default:
 			return NULL;
 	}
+}
+
+GTEXT_API bool gtext_yaml_node_as_bool(const GTEXT_YAML_Node *n, bool *out) {
+	if (!n || !out) return false;
+	if (n->type != GTEXT_YAML_BOOL) return false;
+	*out = n->as.scalar.bool_value;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_as_int(const GTEXT_YAML_Node *n, int64_t *out) {
+	if (!n || !out) return false;
+	if (n->type != GTEXT_YAML_INT) return false;
+	*out = n->as.scalar.int_value;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_as_float(const GTEXT_YAML_Node *n, double *out) {
+	if (!n || !out) return false;
+	if (n->type != GTEXT_YAML_FLOAT) return false;
+	*out = n->as.scalar.float_value;
+	return true;
 }
 
 /* ============================================================================
@@ -566,6 +599,18 @@ static GTEXT_YAML_Node *clone_node(
 			clone->as.scalar.bool_value = node->as.scalar.bool_value;
 			clone->as.scalar.int_value = node->as.scalar.int_value;
 			clone->as.scalar.float_value = node->as.scalar.float_value;
+			clone->as.scalar.has_timestamp = node->as.scalar.has_timestamp;
+			clone->as.scalar.timestamp_has_time = node->as.scalar.timestamp_has_time;
+			clone->as.scalar.timestamp_tz_specified = node->as.scalar.timestamp_tz_specified;
+			clone->as.scalar.timestamp_tz_utc = node->as.scalar.timestamp_tz_utc;
+			clone->as.scalar.timestamp_year = node->as.scalar.timestamp_year;
+			clone->as.scalar.timestamp_month = node->as.scalar.timestamp_month;
+			clone->as.scalar.timestamp_day = node->as.scalar.timestamp_day;
+			clone->as.scalar.timestamp_hour = node->as.scalar.timestamp_hour;
+			clone->as.scalar.timestamp_minute = node->as.scalar.timestamp_minute;
+			clone->as.scalar.timestamp_second = node->as.scalar.timestamp_second;
+			clone->as.scalar.timestamp_nsec = node->as.scalar.timestamp_nsec;
+			clone->as.scalar.timestamp_tz_offset = node->as.scalar.timestamp_tz_offset;
 			if (!clone_map_add(map, node, clone)) return NULL;
 			return clone;
 		case GTEXT_YAML_SEQUENCE: {

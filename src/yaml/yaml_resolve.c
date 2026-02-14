@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,6 +45,248 @@ static const char *tag_suffix(const char *tag) {
 	return NULL;
 }
 
+static const GTEXT_YAML_Node *deref_alias(const GTEXT_YAML_Node *node);
+
+static const char *implicit_tag_suffix(GTEXT_YAML_Node_Type type) {
+	switch (type) {
+		case GTEXT_YAML_STRING:
+			return "str";
+		case GTEXT_YAML_BOOL:
+			return "bool";
+		case GTEXT_YAML_INT:
+			return "int";
+		case GTEXT_YAML_FLOAT:
+			return "float";
+		case GTEXT_YAML_NULL:
+			return "null";
+		default:
+			return NULL;
+	}
+}
+
+static const char *scalar_tag_id(const GTEXT_YAML_Node *node) {
+	if (!node) return NULL;
+	const char *tag = node->as.scalar.tag;
+	if (tag) {
+		const char *suffix = tag_suffix(tag);
+		return suffix ? suffix : tag;
+	}
+	return implicit_tag_suffix(node->type);
+}
+
+static bool node_is_null(const GTEXT_YAML_Node *node) {
+	const GTEXT_YAML_Node *resolved = deref_alias(node);
+	if (!resolved) return false;
+	if (resolved->type == GTEXT_YAML_NULL) return true;
+	return false;
+}
+
+static bool parse_fixed_digits(const char *s, size_t len, size_t count, int *out) {
+	if (!s || len < count || !out) return false;
+	int value = 0;
+	for (size_t i = 0; i < count; i++) {
+		if (s[i] < '0' || s[i] > '9') return false;
+		value = value * 10 + (s[i] - '0');
+	}
+	*out = value;
+	return true;
+}
+
+static int days_in_month(int year, int month) {
+	static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	int is_leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+	if (month == 2) return days[1] + (is_leap ? 1 : 0);
+	return days[month - 1];
+}
+
+static bool parse_timestamp(
+	const char *value,
+	size_t len,
+	yaml_node_scalar *out
+) {
+	if (!value || len < 10 || !out) return false;
+	int year = 0;
+	int month = 0;
+	int day = 0;
+	if (!parse_fixed_digits(value, len, 4, &year)) return false;
+	if (value[4] != '-') return false;
+	if (!parse_fixed_digits(value + 5, len - 5, 2, &month)) return false;
+	if (value[7] != '-') return false;
+	if (!parse_fixed_digits(value + 8, len - 8, 2, &day)) return false;
+	if (month < 1 || month > 12) return false;
+	if (day < 1 || day > days_in_month(year, month)) return false;
+
+	bool has_time = false;
+	bool tz_specified = false;
+	bool tz_utc = false;
+	int tz_offset = 0;
+	int hour = 0;
+	int minute = 0;
+	int second = 0;
+	int nsec = 0;
+
+	if (len > 10) {
+		size_t idx = 10;
+		char sep = value[idx];
+		if (sep != 'T' && sep != 't' && sep != ' ') return false;
+		idx++;
+		has_time = true;
+
+		if (!parse_fixed_digits(value + idx, len - idx, 2, &hour)) return false;
+		idx += 2;
+		if (idx >= len || value[idx] != ':') return false;
+		idx++;
+		if (!parse_fixed_digits(value + idx, len - idx, 2, &minute)) return false;
+		idx += 2;
+		if (idx < len && value[idx] == ':') {
+			idx++;
+			if (!parse_fixed_digits(value + idx, len - idx, 2, &second)) return false;
+			idx += 2;
+		}
+		if (hour > 23 || minute > 59 || second > 60) return false;
+
+		if (idx < len && value[idx] == '.') {
+			idx++;
+			if (idx >= len) return false;
+			int digits = 0;
+			int frac = 0;
+			while (idx < len && value[idx] >= '0' && value[idx] <= '9') {
+				if (digits >= 9) return false;
+				frac = frac * 10 + (value[idx] - '0');
+				digits++;
+				idx++;
+			}
+			while (digits < 9) {
+				frac *= 10;
+				digits++;
+			}
+			nsec = frac;
+		}
+
+		if (idx < len) {
+			if (value[idx] == 'Z' || value[idx] == 'z') {
+				tz_specified = true;
+				tz_utc = true;
+				tz_offset = 0;
+				idx++;
+			} else if (value[idx] == '+' || value[idx] == '-') {
+				int sign = value[idx] == '-' ? -1 : 1;
+				idx++;
+				int tz_hour = 0;
+				int tz_minute = 0;
+				if (!parse_fixed_digits(value + idx, len - idx, 2, &tz_hour)) return false;
+				idx += 2;
+				if (idx < len && value[idx] == ':') {
+					idx++;
+				}
+				if (idx + 2 <= len && idx < len && value[idx] >= '0' && value[idx] <= '9') {
+					if (!parse_fixed_digits(value + idx, len - idx, 2, &tz_minute)) return false;
+					idx += 2;
+				}
+				if (tz_hour > 23 || tz_minute > 59) return false;
+				tz_specified = true;
+				tz_offset = sign * (tz_hour * 60 + tz_minute);
+			}
+			if (idx != len) return false;
+		}
+	}
+
+	out->has_timestamp = true;
+	out->timestamp_has_time = has_time;
+	out->timestamp_tz_specified = tz_specified;
+	out->timestamp_tz_utc = tz_utc;
+	out->timestamp_year = year;
+	out->timestamp_month = month;
+	out->timestamp_day = day;
+	out->timestamp_hour = hour;
+	out->timestamp_minute = minute;
+	out->timestamp_second = second;
+	out->timestamp_nsec = nsec;
+	out->timestamp_tz_offset = tz_offset;
+	return true;
+}
+
+static const char *format_timestamp(
+	GTEXT_YAML_Document *doc,
+	const yaml_node_scalar *scalar
+) {
+	if (!doc || !scalar || !scalar->has_timestamp) return NULL;
+	char buf[64];
+	int offset_abs = scalar->timestamp_tz_offset < 0
+		? -scalar->timestamp_tz_offset
+		: scalar->timestamp_tz_offset;
+	int offset_hour = offset_abs / 60;
+	int offset_min = offset_abs % 60;
+
+	int len = 0;
+	if (!scalar->timestamp_has_time) {
+		len = snprintf(
+			buf,
+			sizeof(buf),
+			"%04d-%02d-%02d",
+			scalar->timestamp_year,
+			scalar->timestamp_month,
+			scalar->timestamp_day
+		);
+	} else {
+		len = snprintf(
+			buf,
+			sizeof(buf),
+			"%04d-%02d-%02dT%02d:%02d:%02d",
+			scalar->timestamp_year,
+			scalar->timestamp_month,
+			scalar->timestamp_day,
+			scalar->timestamp_hour,
+			scalar->timestamp_minute,
+			scalar->timestamp_second
+		);
+		if (scalar->timestamp_nsec > 0) {
+			int frac = scalar->timestamp_nsec;
+			char frac_buf[10];
+			int digits = 9;
+			for (int i = 8; i >= 0; i--) {
+				frac_buf[i] = (char)('0' + (frac % 10));
+				frac /= 10;
+			}
+			while (digits > 0 && frac_buf[digits - 1] == '0') {
+				digits--;
+			}
+			if (digits > 0 && len + 1 + digits < (int)sizeof(buf)) {
+				buf[len++] = '.';
+				memcpy(buf + len, frac_buf, (size_t)digits);
+				len += digits;
+				buf[len] = '\0';
+			}
+		}
+		if (scalar->timestamp_tz_specified) {
+			if (scalar->timestamp_tz_utc) {
+				if (len + 1 < (int)sizeof(buf)) {
+					buf[len++] = 'Z';
+					buf[len] = '\0';
+				}
+			} else {
+				char sign = scalar->timestamp_tz_offset < 0 ? '-' : '+';
+				if (len + 6 < (int)sizeof(buf)) {
+					len += snprintf(
+						buf + len,
+						sizeof(buf) - (size_t)len,
+						"%c%02d:%02d",
+						sign,
+						offset_hour,
+						offset_min
+					);
+				}
+			}
+		}
+	}
+	if (len <= 0) return NULL;
+	char *out = (char *)yaml_context_alloc(doc->ctx, (size_t)len + 1, 1);
+	if (!out) return NULL;
+	memcpy(out, buf, (size_t)len);
+	out[len] = '\0';
+	return out;
+}
+
 static char *strip_underscores(const char *s, size_t len, bool allow) {
 	if (!allow) {
 		char *copy = (char *)malloc(len + 1);
@@ -65,7 +308,13 @@ static char *strip_underscores(const char *s, size_t len, bool allow) {
 	return buf;
 }
 
-static bool parse_bool_value(const char *s, size_t len, bool json_only, bool *out) {
+static bool parse_bool_value(
+	const char *s,
+	size_t len,
+	bool json_only,
+	bool yaml_1_1,
+	bool *out
+) {
 	if (json_only) {
 		if (str_eq_len(s, len, "true")) { *out = true; return true; }
 		if (str_eq_len(s, len, "false")) { *out = false; return true; }
@@ -73,6 +322,14 @@ static bool parse_bool_value(const char *s, size_t len, bool json_only, bool *ou
 	}
 	if (str_eq_ci_len(s, len, "true")) { *out = true; return true; }
 	if (str_eq_ci_len(s, len, "false")) { *out = false; return true; }
+	if (yaml_1_1) {
+		if (str_eq_ci_len(s, len, "yes")) { *out = true; return true; }
+		if (str_eq_ci_len(s, len, "no")) { *out = false; return true; }
+		if (str_eq_ci_len(s, len, "on")) { *out = true; return true; }
+		if (str_eq_ci_len(s, len, "off")) { *out = false; return true; }
+		if (str_eq_ci_len(s, len, "y")) { *out = true; return true; }
+		if (str_eq_ci_len(s, len, "n")) { *out = false; return true; }
+	}
 	return false;
 }
 
@@ -84,11 +341,116 @@ static bool parse_null_value(const char *s, size_t len, bool json_only) {
 	return str_eq_ci_len(s, len, "null");
 }
 
+static bool yaml_use_1_1(const GTEXT_YAML_Document *doc, const GTEXT_YAML_Parse_Options *opts) {
+	if (opts && opts->yaml_1_1) return true;
+	if (doc && doc->yaml_version_major == 1 && doc->yaml_version_minor == 1) return true;
+	return false;
+}
+
+static bool has_disallowed_leading_zero(const char *s, size_t len, bool allow_underscore) {
+	if (!s || len == 0) return false;
+	char *clean = strip_underscores(s, len, allow_underscore);
+	if (!clean) return false;
+	const char *p = clean;
+	if (*p == '+' || *p == '-') p++;
+	bool result = false;
+	if (p[0] == '0' && p[1] != '\0') {
+		if (p[1] == 'x' || p[1] == 'X' || p[1] == 'o' || p[1] == 'O' || p[1] == 'b' || p[1] == 'B') {
+			result = false;
+		} else if (p[1] >= '0' && p[1] <= '9') {
+			result = true;
+		}
+	}
+	free(clean);
+	return result;
+}
+
+static bool parse_sexagesimal_value(
+	const char *s,
+	size_t len,
+	bool allow_underscore,
+	double *out,
+	bool *out_is_int
+) {
+	if (!s || len == 0 || !out) return false;
+	char *clean = strip_underscores(s, len, allow_underscore);
+	if (!clean) return false;
+	const char *p = clean;
+	bool neg = false;
+	if (*p == '+' || *p == '-') {
+		neg = (*p == '-');
+		p++;
+	}
+	if (*p == '\0' || strchr(p, ':') == NULL) {
+		free(clean);
+		return false;
+	}
+
+	double total = 0.0;
+	bool has_fraction = false;
+	while (*p != '\0') {
+		const char *colon = strchr(p, ':');
+		bool last = colon == NULL;
+		size_t seg_len = last ? strlen(p) : (size_t)(colon - p);
+		if (seg_len == 0) {
+			free(clean);
+			return false;
+		}
+
+		double segment = 0.0;
+		if (!last) {
+			for (size_t i = 0; i < seg_len; i++) {
+				if (p[i] < '0' || p[i] > '9') {
+					free(clean);
+					return false;
+				}
+				segment = segment * 10.0 + (double)(p[i] - '0');
+			}
+		} else {
+			bool seen_dot = false;
+			double frac_scale = 1.0;
+			for (size_t i = 0; i < seg_len; i++) {
+				char c = p[i];
+				if (c == '.') {
+					if (seen_dot) {
+						free(clean);
+						return false;
+					}
+					seen_dot = true;
+					continue;
+				}
+				if (c < '0' || c > '9') {
+					free(clean);
+					return false;
+				}
+				if (!seen_dot) {
+					segment = segment * 10.0 + (double)(c - '0');
+				} else {
+					frac_scale *= 10.0;
+					segment += (double)(c - '0') / frac_scale;
+					has_fraction = true;
+				}
+			}
+		}
+
+		total = total * 60.0 + segment;
+		if (last) break;
+		p = colon + 1;
+	}
+
+	if (neg) total = -total;
+	*out = total;
+	if (out_is_int) *out_is_int = !has_fraction;
+	free(clean);
+	return true;
+}
+
 static bool parse_int_value(
 	const char *s,
 	size_t len,
 	bool allow_underscore,
 	bool allow_base_prefix,
+	bool allow_yaml_1_1_octal,
 	int64_t *out
 ) {
 	if (!s || len == 0 || !out) return false;
@@ -124,6 +486,29 @@ static bool parse_int_value(
 				break;
 			default:
 				break;
+		}
+	}
+
+	if (allow_yaml_1_1_octal && p[0] == '0' && p[1] != '\0') {
+		bool octal = true;
+		for (size_t i = 1; p[i] != '\0'; i++) {
+			if (p[i] < '0' || p[i] > '7') {
+				octal = false;
+				break;
+			}
+		}
+		if (octal) {
+			errno = 0;
+			char *end = NULL;
+			long long parsed = strtoll(p, &end, 8);
+			if (errno == ERANGE || end == p || (end && *end != '\0')) {
+				free(clean);
+				return false;
+			}
+			if (neg) parsed = -parsed;
+			*out = (int64_t)parsed;
+			free(clean);
+			return true;
 		}
 	}
 
@@ -198,6 +583,12 @@ static const GTEXT_YAML_Node *deref_alias(const GTEXT_YAML_Node *node) {
 }
 
 static bool scalar_equal(const GTEXT_YAML_Node *a, const GTEXT_YAML_Node *b) {
+	const char *tag_a = scalar_tag_id(a);
+	const char *tag_b = scalar_tag_id(b);
+	if (tag_a || tag_b) {
+		if (!tag_a || !tag_b) return false;
+		if (strcmp(tag_a, tag_b) != 0) return false;
+	}
 	if (a->type != b->type) return false;
 	if (a->type == GTEXT_YAML_NULL) return true;
 	if (a->type == GTEXT_YAML_BOOL) return a->as.scalar.bool_value == b->as.scalar.bool_value;
@@ -683,7 +1074,8 @@ static GTEXT_YAML_Status resolve_scalar(
 		}
 		if (strcmp(suffix, "bool") == 0) {
 			bool out = false;
-			if (!parse_bool_value(value, len, false, &out)) {
+			bool yaml_1_1 = yaml_use_1_1(doc, opts);
+			if (!parse_bool_value(value, len, false, yaml_1_1, &out)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid boolean scalar for explicit tag";
@@ -697,7 +1089,26 @@ static GTEXT_YAML_Status resolve_scalar(
 		}
 		if (strcmp(suffix, "int") == 0) {
 			int64_t out = 0;
-			if (!parse_int_value(value, len, true, true, &out)) {
+			bool yaml_1_1 = yaml_use_1_1(doc, opts);
+			if (yaml_1_1) {
+				double sexa = 0.0;
+				bool is_int = false;
+				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int)) {
+					if (!is_int) {
+						if (error) {
+							error->code = GTEXT_YAML_E_INVALID;
+							error->message = "Invalid integer scalar for explicit tag";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+					out = (int64_t)sexa;
+					node->type = GTEXT_YAML_INT;
+					node->as.scalar.type = GTEXT_YAML_INT;
+					node->as.scalar.int_value = out;
+					return GTEXT_YAML_OK;
+				}
+			}
+			if (!parse_int_value(value, len, true, true, yaml_1_1, &out)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid integer scalar for explicit tag";
@@ -711,6 +1122,18 @@ static GTEXT_YAML_Status resolve_scalar(
 		}
 		if (strcmp(suffix, "float") == 0) {
 			double out = 0.0;
+			bool yaml_1_1 = yaml_use_1_1(doc, opts);
+			if (yaml_1_1) {
+				double sexa = 0.0;
+				bool is_int = false;
+				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int)) {
+					out = sexa;
+					node->type = GTEXT_YAML_FLOAT;
+					node->as.scalar.type = GTEXT_YAML_FLOAT;
+					node->as.scalar.float_value = out;
+					return GTEXT_YAML_OK;
+				}
+			}
 			if (!parse_float_value(value, len, true, &out)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
@@ -728,6 +1151,28 @@ static GTEXT_YAML_Status resolve_scalar(
 			node->as.scalar.type = GTEXT_YAML_NULL;
 			return GTEXT_YAML_OK;
 		}
+		if (strcmp(suffix, "timestamp") == 0) {
+			yaml_node_scalar snapshot = node->as.scalar;
+			if (!parse_timestamp(value, len, &snapshot)) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid timestamp scalar";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
+			const char *formatted = format_timestamp(doc, &snapshot);
+			if (!formatted) {
+				if (error) {
+					error->code = GTEXT_YAML_E_OOM;
+					error->message = "Out of memory normalizing timestamp";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+			node->as.scalar = snapshot;
+			node->as.scalar.value = formatted;
+			node->as.scalar.length = strlen(formatted);
+			return GTEXT_YAML_OK;
+		}
 
 		return GTEXT_YAML_OK;
 	}
@@ -743,6 +1188,7 @@ static GTEXT_YAML_Status resolve_scalar(
 	bool json_only = opts->schema == GTEXT_YAML_SCHEMA_JSON;
 	bool allow_underscore = opts->schema == GTEXT_YAML_SCHEMA_CORE;
 	bool allow_base_prefix = opts->schema == GTEXT_YAML_SCHEMA_CORE;
+	bool yaml_1_1 = yaml_use_1_1(doc, opts) && opts->schema == GTEXT_YAML_SCHEMA_CORE;
 
 	if (parse_null_value(value, len, json_only)) {
 		node->type = GTEXT_YAML_NULL;
@@ -751,15 +1197,35 @@ static GTEXT_YAML_Status resolve_scalar(
 	}
 
 	bool bool_out = false;
-	if (parse_bool_value(value, len, json_only, &bool_out)) {
+	if (parse_bool_value(value, len, json_only, yaml_1_1, &bool_out)) {
 		node->type = GTEXT_YAML_BOOL;
 		node->as.scalar.type = GTEXT_YAML_BOOL;
 		node->as.scalar.bool_value = bool_out;
 		return GTEXT_YAML_OK;
 	}
 
+	if (yaml_1_1) {
+		double sexa = 0.0;
+		bool is_int = false;
+		if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &is_int)) {
+			if (is_int) {
+				node->type = GTEXT_YAML_INT;
+				node->as.scalar.type = GTEXT_YAML_INT;
+				node->as.scalar.int_value = (int64_t)sexa;
+			} else {
+				node->type = GTEXT_YAML_FLOAT;
+				node->as.scalar.type = GTEXT_YAML_FLOAT;
+				node->as.scalar.float_value = sexa;
+			}
+			return GTEXT_YAML_OK;
+		}
+	}
+
 	int64_t int_out = 0;
-	if (parse_int_value(value, len, allow_underscore, allow_base_prefix, &int_out)) {
+	if (!yaml_1_1 && has_disallowed_leading_zero(value, len, allow_underscore)) {
+		return GTEXT_YAML_OK;
+	}
+	if (parse_int_value(value, len, allow_underscore, allow_base_prefix, yaml_1_1, &int_out)) {
 		node->type = GTEXT_YAML_INT;
 		node->as.scalar.type = GTEXT_YAML_INT;
 		node->as.scalar.int_value = int_out;
@@ -813,6 +1279,44 @@ static GTEXT_YAML_Status resolve_node(
 				);
 				if (st != GTEXT_YAML_OK) return st;
 				node->as.sequence.children[i] = child;
+			}
+			{
+				const char *seq_suffix = tag_suffix(node->as.sequence.tag);
+				if (seq_suffix && strcmp(seq_suffix, "omap") == 0) {
+					for (size_t i = 0; i < node->as.sequence.count; i++) {
+						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
+						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
+							if (error) {
+								error->code = GTEXT_YAML_E_INVALID;
+								error->message = "omap entries must be single-pair mappings";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+						const GTEXT_YAML_Node *key = item->as.mapping.pairs[0].key;
+						for (size_t j = 0; j < i; j++) {
+							const GTEXT_YAML_Node *prev = deref_alias(node->as.sequence.children[j]);
+							if (!prev || prev->type != GTEXT_YAML_MAPPING) continue;
+							if (nodes_equal(key, prev->as.mapping.pairs[0].key, 0, opts ? opts->max_depth : 0)) {
+								if (error) {
+									error->code = GTEXT_YAML_E_DUPKEY;
+									error->message = "omap keys must be unique";
+								}
+								return GTEXT_YAML_E_DUPKEY;
+							}
+						}
+					}
+				} else if (seq_suffix && strcmp(seq_suffix, "pairs") == 0) {
+					for (size_t i = 0; i < node->as.sequence.count; i++) {
+						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
+						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
+							if (error) {
+								error->code = GTEXT_YAML_E_INVALID;
+								error->message = "pairs entries must be single-pair mappings";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+					}
+				}
 			}
 			return GTEXT_YAML_OK;
 		case GTEXT_YAML_MAPPING:
@@ -880,6 +1384,20 @@ static GTEXT_YAML_Status resolve_node(
 					(*replacement_count)++;
 					*node_ptr = merged_node;
 					node = merged_node;
+				}
+			}
+			{
+				const char *map_suffix = tag_suffix(node->as.mapping.tag);
+				if (map_suffix && strcmp(map_suffix, "set") == 0) {
+					for (size_t i = 0; i < node->as.mapping.count; i++) {
+						if (!node_is_null(node->as.mapping.pairs[i].value)) {
+							if (error) {
+								error->code = GTEXT_YAML_E_INVALID;
+								error->message = "set values must be null";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+					}
 				}
 			}
 			return apply_dupkey_policy(doc, node, opts, error);

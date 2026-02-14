@@ -149,6 +149,7 @@ typedef struct {
   bool validate_utf8;
   bool resolve_tags;
   bool retain_comments;
+  bool yaml_1_1;
 } GTEXT_YAML_Parse_Options;
 
 /**

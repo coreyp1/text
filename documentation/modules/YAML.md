@@ -26,9 +26,9 @@ The YAML module provides YAML 1.2.2 processing capabilities with support for str
 - ✅ 951 comprehensive tests with real-world YAML examples
 - ✅ `%YAML` and `%TAG` directives with tag handle resolution
 - ✅ Schema-based implicit typing (Failsafe, JSON, Core)
+- ✅ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`) with validation
 
 **Planned:**
-- ⏳ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`)
 - ⏳ YAML 1.1 compatibility mode
 - ⏳ Merge keys (`<<`)
 - ⏳ Binary scalar support (`!!binary`)
@@ -100,6 +100,7 @@ The resolver supports schema-based implicit typing and explicit tag handling.
   - `GTEXT_YAML_SCHEMA_JSON`: JSON-compatible null/bool/int/float/string.
   - `GTEXT_YAML_SCHEMA_CORE`: YAML core schema (includes `.nan`, `.inf`, etc.).
 - **`resolve_tags`**: When disabled, preserves explicit tags and keeps scalars as strings.
+- **`yaml_1_1`**: When enabled, apply YAML 1.1 implicit typing (yes/no/on/off, 0755 octal, sexagesimal). This is also enabled automatically when a `%YAML 1.1` directive is present.
 
 ```c
 GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();

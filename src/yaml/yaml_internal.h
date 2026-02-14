@@ -162,6 +162,18 @@ typedef struct {
 	bool bool_value;            /* Parsed boolean value */
 	int64_t int_value;          /* Parsed integer value */
 	double float_value;         /* Parsed floating-point value */
+	bool has_timestamp;         /* True if timestamp was parsed */
+	bool timestamp_has_time;    /* True if time component is present */
+	bool timestamp_tz_specified;/* True if timezone was specified */
+	bool timestamp_tz_utc;      /* True if timezone was 'Z' */
+	int timestamp_year;
+	int timestamp_month;
+	int timestamp_day;
+	int timestamp_hour;
+	int timestamp_minute;
+	int timestamp_second;
+	int timestamp_nsec;         /* Fractional seconds in nanoseconds */
+	int timestamp_tz_offset;    /* Offset in minutes from UTC */
 	const char *tag;            /* Optional tag (e.g., "!!str"), NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
 } yaml_node_scalar;

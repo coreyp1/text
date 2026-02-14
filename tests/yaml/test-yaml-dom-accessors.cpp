@@ -9,6 +9,74 @@
 #include <gtest/gtest.h>
 #include <ghoti.io/text/yaml.h>
 #include <string.h>
+#include <stdint.h>
+
+/* ============================================================================
+ * Scalar Accessor Tests
+ * ============================================================================ */
+
+TEST(YamlDomAccessors, ScalarBoolAccessor) {
+	const char *yaml = "true";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	bool value = false;
+	EXPECT_TRUE(gtext_yaml_node_as_bool(root, &value));
+	EXPECT_TRUE(value);
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, ScalarIntAccessor) {
+	const char *yaml = "42";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	int64_t value = 0;
+	EXPECT_TRUE(gtext_yaml_node_as_int(root, &value));
+	EXPECT_EQ(value, 42);
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, ScalarFloatAccessor) {
+	const char *yaml = "3.25";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	double value = 0.0;
+	EXPECT_TRUE(gtext_yaml_node_as_float(root, &value));
+	EXPECT_DOUBLE_EQ(value, 3.25);
+
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomAccessors, ScalarAccessorWrongType) {
+	const char *yaml = "hello";
+	GTEXT_YAML_Error error = {};
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+
+	bool bool_value = false;
+	int64_t int_value = 0;
+	double float_value = 0.0;
+	EXPECT_FALSE(gtext_yaml_node_as_bool(root, &bool_value));
+	EXPECT_FALSE(gtext_yaml_node_as_int(root, &int_value));
+	EXPECT_FALSE(gtext_yaml_node_as_float(root, &float_value));
+
+	gtext_yaml_free(doc);
+}
 
 /* ============================================================================
  * Sequence Accessor Tests

@@ -11,6 +11,8 @@
 #ifndef GHOTI_IO_TEXT_YAML_DOM_H
 #define GHOTI_IO_TEXT_YAML_DOM_H
 
+#include <stdint.h>
+
 #include <ghoti.io/text/yaml/yaml_core.h>
 
 #ifdef __cplusplus
@@ -112,6 +114,39 @@ GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node * n);
  * is valid for the lifetime of the owning document; callers must not free it.
  */
 GTEXT_API const char * gtext_yaml_node_as_string(const GTEXT_YAML_Node * n);
+
+/**
+ * @brief Return scalar value as a boolean.
+ *
+ * Returns false if the node is NULL, not a boolean, or @p out is NULL.
+ *
+ * @param n Scalar node to query
+ * @param out Output boolean value
+ * @return true on success, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_as_bool(const GTEXT_YAML_Node * n, bool * out);
+
+/**
+ * @brief Return scalar value as an integer.
+ *
+ * Returns false if the node is NULL, not an integer, or @p out is NULL.
+ *
+ * @param n Scalar node to query
+ * @param out Output integer value
+ * @return true on success, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_as_int(const GTEXT_YAML_Node * n, int64_t * out);
+
+/**
+ * @brief Return scalar value as a floating-point number.
+ *
+ * Returns false if the node is NULL, not a float, or @p out is NULL.
+ *
+ * @param n Scalar node to query
+ * @param out Output float value
+ * @return true on success, false otherwise
+ */
+GTEXT_API bool gtext_yaml_node_as_float(const GTEXT_YAML_Node * n, double * out);
 
 /* ============================================================================
  * Sequence Accessors (Phase 4.3)
