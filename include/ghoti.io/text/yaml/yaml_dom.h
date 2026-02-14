@@ -19,6 +19,9 @@
 extern "C" {
 #endif
 
+/* Forward declaration of JSON value type */
+typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
+
 /**
  * @brief Parse a YAML string into a DOM document.
  *
@@ -869,6 +872,38 @@ GTEXT_API bool gtext_yaml_mapping_has_key(
 GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_clone(
 	GTEXT_YAML_Document * doc,
 	const GTEXT_YAML_Node * node
+);
+
+/**
+ * @brief Convert a YAML DOM to a JSON DOM.
+ *
+ * Converts a YAML document to a JSON value for documents that only use
+ * JSON-compatible features. Rejects YAML-specific features:
+ * - Anchors and aliases (anchor/alias references)
+ * - Non-standard tags (set, omap, pairs, custom tags)
+ * - Complex keys (only string keys allowed in JSON objects)
+ * - Merge keys (<<)
+ *
+ * The JSON value and all its descendants are owned by the caller and
+ * must be freed with gtext_json_free().
+ *
+ * Supported conversions:
+ * - YAML null → JSON null
+ * - YAML bool → JSON boolean
+ * - YAML int/float → JSON number
+ * - YAML string → JSON string
+ * - YAML sequence → JSON array
+ * - YAML mapping with string keys → JSON object
+ *
+ * @param yaml_doc YAML document to convert
+ * @param out_json Pointer to store converted JSON value
+ * @param out_err Error output (may be NULL)
+ * @return GTEXT_YAML_OK on success, error code if document contains incompatible features
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json(
+	const GTEXT_YAML_Document * yaml_doc,
+	GTEXT_JSON_Value ** out_json,
+	GTEXT_YAML_Error * out_err
 );
 
 #ifdef __cplusplus

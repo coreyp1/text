@@ -131,7 +131,7 @@ SOURCES := $(shell find src -type f -name '*.c')
 LIBOBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 
 
-TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags gtest`
+TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --cflags gtest gtest_main`
 
 
 TEXTLIBRARY := -L $(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)
