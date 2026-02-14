@@ -614,22 +614,6 @@ static GTEXT_YAML_Node *clone_node(
 }
 
 /**
- * @brief Helper function to get the document context from a node.
- * 
- * This is a workaround since nodes don't carry a back-pointer to their document.
- * For now, we'll need to track this through the document parameter in the API.
- * 
- * Note: This function is not exposed publicly and should be used internally.
- */
-static yaml_context *get_node_context(GTEXT_YAML_Node *node) {
-	/* Nodes don't currently have back-pointers to their context.
-	 * This is a limitation of the current design. For mutation operations,
-	 * we'll need to pass the document or handle resizing differently. */
-	(void)node;
-	return NULL;
-}
-
-/**
  * @brief Helper to grow a sequence node by creating a new larger node.
  */
 static GTEXT_YAML_Node *sequence_grow(

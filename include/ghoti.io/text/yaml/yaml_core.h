@@ -157,6 +157,36 @@ GTEXT_API void gtext_yaml_error_free(GTEXT_YAML_Error * err);
  */
 GTEXT_API void gtext_yaml_free(GTEXT_YAML_Document * doc);
 
+/**
+ * @brief Parse a YAML file into a document.
+ */
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_file(
+  const char * path,
+  const GTEXT_YAML_Parse_Options * options,
+  GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Parse a YAML file into an array of documents.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_file_all(
+  const char * path,
+  const GTEXT_YAML_Parse_Options * options,
+  GTEXT_YAML_Document *** out_docs,
+  size_t * out_count,
+  GTEXT_YAML_Error * out_err
+);
+
+/**
+ * @brief Write a YAML document to a file.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_write_file(
+  const char * path,
+  const GTEXT_YAML_Document * doc,
+  const GTEXT_YAML_Write_Options * options,
+  GTEXT_YAML_Error * out_err
+);
+
 #ifdef __cplusplus
 }
 #endif

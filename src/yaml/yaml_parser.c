@@ -376,13 +376,6 @@ static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
 }
 
 /**
- * @brief Clear temporary storage.
- */
-static void temp_clear(parser_state *p) {
-	p->temp.count = 0;
-}
-
-/**
  * @brief Streaming parser callback - builds DOM from events.
  */
 static GTEXT_YAML_Status parse_callback(
