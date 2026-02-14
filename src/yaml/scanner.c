@@ -13,6 +13,16 @@
 #include "yaml_internal.h"
 #include <stdio.h>
 
+/* Context types for plain scalar parsing */
+typedef enum {
+  YAML_CONTEXT_BLOCK,        /* Block context - plain scalars can contain spaces */
+  YAML_CONTEXT_FLOW_SEQUENCE, /* Inside [] - plain scalars are space-delimited */
+  YAML_CONTEXT_FLOW_MAPPING   /* Inside {} - plain scalars are space-delimited */
+} yaml_context_type;
+
+/* Simple context stack (max depth 32 should be more than enough) */
+#define MAX_CONTEXT_DEPTH 32
+
 struct GTEXT_YAML_Scanner {
   GTEXT_YAML_DynBuf input; /* buffered input */
   size_t cursor;          /* next byte index to consume */
@@ -20,6 +30,10 @@ struct GTEXT_YAML_Scanner {
   int line;
   int col;
   int finished;           /* whether finish() was called */
+  
+  /* Context stack for tracking block vs flow context */
+  yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
+  int context_depth;      /* current depth in context stack */
 };
 
 static int is_indicator_char(int c)
@@ -72,6 +86,28 @@ static int hexval(int c)
 }
 
 
+/* Context stack helpers */
+static yaml_context_type scanner_current_context(GTEXT_YAML_Scanner *s)
+{
+  if (s->context_depth == 0) return YAML_CONTEXT_BLOCK;
+  return s->context_stack[s->context_depth - 1];
+}
+
+static void scanner_push_context(GTEXT_YAML_Scanner *s, yaml_context_type ctx)
+{
+  if (s->context_depth < MAX_CONTEXT_DEPTH) {
+    s->context_stack[s->context_depth++] = ctx;
+  }
+}
+
+static void scanner_pop_context(GTEXT_YAML_Scanner *s)
+{
+  if (s->context_depth > 0) {
+    s->context_depth--;
+  }
+}
+
+
 GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
 {
   GTEXT_YAML_Scanner *s = (GTEXT_YAML_Scanner *)malloc(sizeof(*s));
@@ -85,6 +121,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->line = 1;
   s->col = 1;
   s->finished = 0;
+  s->context_depth = 0; /* Start in block context */
   return s;
 }
 
@@ -382,6 +419,15 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
   if (is_indicator_char(c)) {
+    /* Update context stack for flow collection boundaries */
+    if (c == '[') {
+      scanner_push_context(s, YAML_CONTEXT_FLOW_SEQUENCE);
+    } else if (c == '{') {
+      scanner_push_context(s, YAML_CONTEXT_FLOW_MAPPING);
+    } else if (c == ']' || c == '}') {
+      scanner_pop_context(s);
+    }
+    
     scanner_consume(s);
     tok->type = GTEXT_YAML_TOKEN_INDICATOR;
     tok->u.c = (char)c;
@@ -565,6 +611,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   GTEXT_YAML_DynBuf scalar;
   if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
 
+  yaml_context_type ctx = scanner_current_context(s);
+  
   size_t look = 0;
   while (1) {
     if (s->cursor + look >= s->input.len) {
@@ -573,8 +621,84 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       c = (unsigned char)s->input.data[s->cursor + look];
     }
     if (c == -1) break;
-    if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
-    if (is_indicator_char(c)) break;
+    
+    /* Context-aware whitespace handling */
+    if (ctx == YAML_CONTEXT_BLOCK) {
+      /* In block context, plain scalars can contain spaces and tabs,
+         but end at newlines or when followed by structural indicators */
+      if (c == '\r' || c == '\n') break;
+      
+      /* Handle spaces: look ahead to determine if this is a separator or part of value */
+      if (c == ' ' || c == '\t') {
+        /* Skip whitespace to see what's after */
+        size_t ws_len = 1;
+        while (s->cursor + look + ws_len < s->input.len) {
+          int peek_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
+          if (peek_c != ' ' && peek_c != '\t') break;
+          ws_len++;
+        }
+        
+        /* Check what follows the whitespace */
+        int next_c = -1;
+        if (s->cursor + look + ws_len < s->input.len) {
+          next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
+        }
+        
+        /* Always break if followed by structural elements or EOF */
+        if (next_c == -1 || next_c == '\r' || next_c == '\n') break;
+        if (next_c == ':' || next_c == '-' || next_c == '?') break;
+        if (next_c == '#' || next_c == '&' || next_c == '*') break;
+        if (next_c == '[' || next_c == ']' || next_c == '{' || next_c == '}' || next_c == ',') break;
+        
+        /* Only include space if we've already collected significant content
+           AND what follows looks like continuation of the same value */
+        if (scalar.len > 0) {
+          char ch = (char)c;
+          if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) {
+            gtext_yaml_dynbuf_free(&scalar);
+            if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; }
+            return GTEXT_YAML_E_OOM;
+          }
+          look++;
+          continue;
+        } else {
+          /* Leading space - break */
+          break;
+        }
+      }
+      
+      /* Check for key-value separator */
+      if (c == ':') {
+        int next_c = -1;
+        if (s->cursor + look + 1 < s->input.len) {
+          next_c = (unsigned char)s->input.data[s->cursor + look + 1];
+        }
+        if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c ==  '\n') {
+          break;
+        }
+      }
+      
+      /* Check for list/key indicators */
+      if (c == '-' || c == '?') {
+        int next_c = -1;
+        if (s->cursor + look + 1 < s->input.len) {
+          next_c = (unsigned char)s->input.data[s->cursor + look + 1];
+        }
+        if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c == '\n') {
+          break;
+        }
+      }
+      
+      /* Other structural indicators */
+      if (c == '#' || c == '&' || c == '*' || c == '!') break;
+      if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') break;
+      if (c == '|' || c == '>' || c == '%') break;
+    } else {
+      /* In flow context, plain scalars are space-delimited (original behavior) */
+      if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
+      if (is_indicator_char(c)) break;
+    }
+    
     char ch = (char)c;
     if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) {
       gtext_yaml_dynbuf_free(&scalar);
