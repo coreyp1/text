@@ -21,6 +21,7 @@ typedef struct GTEXT_YAML_CharReader {
   size_t pos; /* byte offset */
   int line;
   int col;
+  int suppress_lf; /* 1 if previous char was CR and LF should not advance line */
 } GTEXT_YAML_CharReader;
 
 GTEXT_INTERNAL_API GTEXT_YAML_CharReader *gtext_yaml_char_reader_new(
@@ -38,6 +39,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_CharReader *gtext_yaml_char_reader_new(
   r->pos = 0;
   r->line = 1;
   r->col = 1;
+  r->suppress_lf = 0;
   return r;
 }
 
@@ -74,12 +76,23 @@ GTEXT_INTERNAL_API int gtext_yaml_char_reader_consume(GTEXT_YAML_CharReader *r)
   }
 
   unsigned char c = (unsigned char)r->data[r->pos++];
-  if (c == '\n') {
+  if (c == '\r') {
     r->line++;
     r->col = 1;
-  } else {
-    r->col++;
+    r->suppress_lf = 1;
+    return '\n';
   }
+  if (c == '\n') {
+    if (r->suppress_lf) {
+      r->suppress_lf = 0;
+      return '\n';
+    }
+    r->line++;
+    r->col = 1;
+    return '\n';
+  }
+  r->suppress_lf = 0;
+  r->col++;
 
   return c;
 }

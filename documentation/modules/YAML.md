@@ -315,6 +315,9 @@ script: |
 
 Literal scalars preserve newlines and indentation. Each line break is preserved as-is.
 
+**Line break normalization:** Input line endings are normalized to `\n` during parsing.
+Use `GTEXT_YAML_Write_Options.newline` to control output line endings (LF/CRLF/CR).
+
 ### 5.5 Folded Scalars (`>`)
 
 ```yaml

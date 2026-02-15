@@ -31,6 +31,7 @@ struct GTEXT_YAML_Scanner {
   int col;
   int finished;           /* whether finish() was called */
   int indent_ws;          /* 1 if still in indentation whitespace on this line */
+  int suppress_lf;        /* 1 if previous char was CR and LF should not advance line */
   
   /* Context stack for tracking block vs flow context */
   yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
@@ -63,15 +64,27 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
   if (s->cursor >= s->input.len) return -1;
   unsigned char c = (unsigned char)s->input.data[s->cursor++];
   s->offset++;
-  if (c == '\n') {
+  if (c == '\r') {
     s->line++;
     s->col = 1;
     s->indent_ws = 1;
-  } else {
-    s->col++;
-    if (s->indent_ws && c != ' ') {
-      s->indent_ws = 0;
+    s->suppress_lf = 1;
+    return '\n';
+  }
+  if (c == '\n') {
+    if (s->suppress_lf) {
+      s->suppress_lf = 0;
+      return '\n';
     }
+    s->line++;
+    s->col = 1;
+    s->indent_ws = 1;
+    return '\n';
+  }
+  s->suppress_lf = 0;
+  s->col++;
+  if (s->indent_ws && c != ' ') {
+    s->indent_ws = 0;
   }
   /* When we've consumed enough that we can free the earlier prefix, do so. */
   if (s->cursor > 1024 && s->cursor * 2 > s->input.len) {
@@ -144,6 +157,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->line = 1;
   s->col = 1;
   s->indent_ws = 1;
+  s->suppress_lf = 0;
   s->finished = 0;
   s->context_depth = 0; /* Start in block context */
   s->last_indicator = 0;
@@ -307,10 +321,13 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       int p = scanner_peek(s);
       if (p == -1) {
         if (!s->finished) return GTEXT_YAML_E_INCOMPLETE;
-      s->last_indicator = 0;
+        s->last_indicator = 0;
       }
       scanner_consume(s);
-      if (p == '\n') break;
+      if (p == '\n' || p == '\r') break;
+    }
+    if (scanner_peek(s) == '\n') {
+      scanner_consume(s);
     }
 
   /* Collect following indented lines as scalar. If explicit_indent > 0, use that
@@ -358,6 +375,15 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       int saw_nl = 0;
       while (pos2 < s->input.len) {
         int cc = (unsigned char)s->input.data[pos2++];
+        if (cc == '\r') {
+          char nl = '\n';
+          if (!gtext_yaml_dynbuf_append(&scalar, &nl, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+          if (pos2 < s->input.len && s->input.data[pos2] == '\n') {
+            pos2++;
+          }
+          saw_nl = 1;
+          break;
+        }
         char chch = (char)cc;
         if (!gtext_yaml_dynbuf_append(&scalar, &chch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
         if (cc == '\n') { saw_nl = 1; break; }
@@ -598,6 +624,16 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
           /* otherwise a lone quote marks end of scalar */
           break;
         }
+        if (nc == '\r') {
+          char ch = '\n';
+          if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+          if (s->cursor + look + 1 < s->input.len && s->input.data[s->cursor + look + 1] == '\n') {
+            look += 2;
+          } else {
+            look++;
+          }
+          continue;
+        }
         /* normal character inside single-quoted scalar */
         char ch = (char)nc;
         if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
@@ -607,6 +643,16 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
       /* double-quoted handling */
       if (quote == '"') {
+        if (nc == '\r') {
+          char ch = '\n';
+          if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+          if (s->cursor + look + 1 < s->input.len && s->input.data[s->cursor + look + 1] == '\n') {
+            look += 2;
+          } else {
+            look++;
+          }
+          continue;
+        }
         if (nc == '"') {
           /* end of double-quoted scalar */
           break;
