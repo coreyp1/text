@@ -213,6 +213,15 @@ GTEXT_YAML_Document *gtext_yaml_parse(
 	return yaml_parse_document(input, length, options, error);
 }
 
+GTEXT_YAML_Document *gtext_yaml_parse_safe(
+	const char *input,
+	size_t length,
+	GTEXT_YAML_Error *error
+) {
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_safe();
+	return yaml_parse_document(input, length, &opts, error);
+}
+
 /**
  * @brief Get the root node of a document.
  */

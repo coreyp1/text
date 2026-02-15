@@ -220,6 +220,33 @@ GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
 opts.dupkey_mode = GTEXT_YAML_DUPKEY_LAST_WINS;  // Allow duplicate keys, last wins
 ```
 
+### 3.3 Safe Mode
+
+Safe mode configures parsing for untrusted input by disabling potentially
+dangerous or surprising features and restricting mapping keys to strings.
+
+Safe mode enforces:
+- Aliases disabled
+- Merge keys disabled
+- Non-standard tags disabled (only standard YAML tags allowed)
+- Complex keys disabled (mapping keys must be scalars)
+- String-only keys (mapping keys must be strings)
+
+Use the convenience constructor or wrapper:
+
+```c
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_safe();
+GTEXT_YAML_Document *doc = gtext_yaml_parse_safe(yaml, strlen(yaml), &err);
+```
+
+For manual control, the relevant toggles are:
+- `allow_aliases`
+- `allow_merge_keys`
+- `allow_complex_keys`
+- `require_string_keys`
+- `allow_nonstandard_tags`
+- `enable_custom_tags`
+
 ---
 
 ## 4. Error Handling

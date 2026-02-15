@@ -26,12 +26,32 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.retain_comments = false;
   opts.yaml_1_1 = false;
   opts.enable_custom_tags = false;
+  opts.allow_nonstandard_tags = true;
+  opts.allow_aliases = true;
+  opts.allow_merge_keys = true;
+  opts.allow_complex_keys = true;
+  opts.require_string_keys = false;
   opts.custom_tags = NULL;
   opts.custom_tag_count = 0;
   opts.warning_callback = NULL;
   opts.warning_user_data = NULL;
   opts.warnings_as_errors = false;
   opts.warning_mask = 0;
+  return opts;
+}
+
+GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_safe(void)
+{
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+  opts.max_depth = 64;
+  opts.max_total_bytes = 16 * 1024 * 1024;
+  opts.max_alias_expansion = 1000;
+  opts.enable_custom_tags = false;
+  opts.allow_nonstandard_tags = false;
+  opts.allow_aliases = false;
+  opts.allow_merge_keys = false;
+  opts.allow_complex_keys = false;
+  opts.require_string_keys = true;
   return opts;
 }
 

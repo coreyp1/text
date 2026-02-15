@@ -46,6 +46,15 @@ GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse(
 );
 
 /**
+ * @brief Parse a YAML string into a DOM document using safe-mode defaults.
+ */
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_safe(
+	const char * input,
+	size_t length,
+	GTEXT_YAML_Error * error
+);
+
+/**
  * @brief Parse all documents in a YAML stream.
  *
  * Parses the input string and builds in-memory tree representations for
@@ -80,6 +89,16 @@ GTEXT_API GTEXT_YAML_Document ** gtext_yaml_parse_all(
 	size_t length,
 	size_t * document_count,
 	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Error * error
+);
+
+/**
+ * @brief Parse all documents in a YAML stream using safe-mode defaults.
+ */
+GTEXT_API GTEXT_YAML_Document ** gtext_yaml_parse_all_safe(
+	const char * input,
+	size_t length,
+	size_t * document_count,
 	GTEXT_YAML_Error * error
 );
 

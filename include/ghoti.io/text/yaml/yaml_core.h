@@ -244,6 +244,11 @@ typedef struct {
   bool retain_comments;
   bool yaml_1_1;
   bool enable_custom_tags;
+  bool allow_nonstandard_tags;
+  bool allow_aliases;
+  bool allow_merge_keys;
+  bool allow_complex_keys;
+  bool require_string_keys;
   const GTEXT_YAML_Custom_Tag * custom_tags;
   size_t custom_tag_count;
 
@@ -281,6 +286,11 @@ typedef struct {
  * passing to APIs that accept @ref GTEXT_YAML_Parse_Options *.
  */
 GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void);
+
+/**
+ * @brief Return parse options configured for safe-mode parsing.
+ */
+GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_safe(void);
 
 /**
  * @brief Return write options initialized to sensible defaults.

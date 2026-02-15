@@ -1163,7 +1163,21 @@ static GTEXT_YAML_Status parse_callback(
 			
 		case GTEXT_YAML_EVENT_ALIAS: {
 			/* Create alias node */
+			const GTEXT_YAML_Parse_Options *opts = p->doc ? &p->doc->options : NULL;
 			const char *anchor_name = event->data.alias_name;
+			GTEXT_YAML_Node *node = NULL;
+			bool explicit_handled = false;
+			GTEXT_YAML_Status explicit_status = GTEXT_YAML_OK;
+
+			if (opts && !opts->allow_aliases) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_INVALID;
+					p->error->message = "Aliases are disabled by parse options";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
+
 			if (!anchor_name) {
 				p->failed = true;
 				if (p->error) {
@@ -1173,7 +1187,7 @@ static GTEXT_YAML_Status parse_callback(
 				return GTEXT_YAML_E_INVALID;
 			}
 			
-			GTEXT_YAML_Node *node = yaml_node_new_alias(p->ctx, anchor_name);
+			node = yaml_node_new_alias(p->ctx, anchor_name);
 			if (!node) {
 				p->failed = true;
 				if (p->error) {
@@ -1197,8 +1211,7 @@ static GTEXT_YAML_Status parse_callback(
 			if (p->stack.depth == 0) {
 				p->root = node;
 			} else {
-				bool explicit_handled = false;
-				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+				explicit_status = capture_explicit_key(p, node, &explicit_handled);
 				if (explicit_status != GTEXT_YAML_OK) {
 					return explicit_status;
 				}
@@ -2016,4 +2029,14 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 	
 	*document_count = state.count;
 	return state.documents;
+}
+
+GTEXT_YAML_Document **gtext_yaml_parse_all_safe(
+	const char *input,
+	size_t length,
+	size_t *document_count,
+	GTEXT_YAML_Error *error
+) {
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_safe();
+	return gtext_yaml_parse_all(input, length, document_count, &opts, error);
 }

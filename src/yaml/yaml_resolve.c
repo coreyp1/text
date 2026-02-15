@@ -45,6 +45,52 @@ static const char *tag_suffix(const char *tag) {
 	return NULL;
 }
 
+static bool is_standard_tag(const char *tag) {
+	static const char *allowed[] = {
+		"str",
+		"bool",
+		"int",
+		"float",
+		"null",
+		"seq",
+		"map",
+		"set",
+		"omap",
+		"pairs",
+		"binary",
+		"timestamp",
+		"merge"
+	};
+	const char *suffix = NULL;
+
+	if (!tag) return true;
+	if (strcmp(tag, "!") == 0 || strcmp(tag, "!!") == 0) return true;
+
+	suffix = tag_suffix(tag);
+	if (!suffix) return false;
+	if (suffix[0] == '\0') return true;
+
+	for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+		if (strcmp(suffix, allowed[i]) == 0) return true;
+	}
+
+	return false;
+}
+
+static GTEXT_YAML_Status enforce_tag_policy(
+	const char *tag,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	if (!opts || opts->allow_nonstandard_tags) return GTEXT_YAML_OK;
+	if (is_standard_tag(tag)) return GTEXT_YAML_OK;
+	if (error) {
+		error->code = GTEXT_YAML_E_INVALID;
+		error->message = "Non-standard tag not allowed by parse options";
+	}
+	return GTEXT_YAML_E_INVALID;
+}
+
 static const GTEXT_YAML_Node *deref_alias(const GTEXT_YAML_Node *node);
 
 static const char *implicit_tag_suffix(GTEXT_YAML_Node_Type type) {
@@ -739,6 +785,52 @@ static const GTEXT_YAML_Node *deref_alias(const GTEXT_YAML_Node *node) {
 	return node;
 }
 
+static bool is_scalar_key_type(GTEXT_YAML_Node_Type type) {
+	switch (type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static GTEXT_YAML_Status validate_mapping_key(
+	const GTEXT_YAML_Node *key,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	const GTEXT_YAML_Node *resolved = NULL;
+
+	if (!opts || (!opts->allow_complex_keys && !opts->require_string_keys)) {
+		return GTEXT_YAML_OK;
+	}
+
+	resolved = deref_alias(key);
+	if (!resolved) return GTEXT_YAML_OK;
+
+	if (!opts->allow_complex_keys && !is_scalar_key_type(resolved->type)) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Mapping keys must be scalars";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	if (opts->require_string_keys && resolved->type != GTEXT_YAML_STRING) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Mapping keys must be strings";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	return GTEXT_YAML_OK;
+}
+
 static bool scalar_equal(const GTEXT_YAML_Node *a, const GTEXT_YAML_Node *b) {
 	const char *tag_a = scalar_tag_id(a);
 	const char *tag_b = scalar_tag_id(b);
@@ -969,6 +1061,13 @@ static GTEXT_YAML_Status apply_merge_keys(
 	}
 
 	if (!has_merge) return GTEXT_YAML_OK;
+	if (opts && !opts->allow_merge_keys) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Merge keys are disabled by parse options";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
 
 	doc->has_merge_keys = true;
 
@@ -1359,18 +1458,26 @@ static GTEXT_YAML_Status resolve_scalar(
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Error *error
 ) {
+	const char *value = NULL;
+	size_t len = 0;
+	const char *tag = NULL;
+	const char *resolved_tag = NULL;
+	GTEXT_YAML_Status tag_status = GTEXT_YAML_OK;
+
 	if (!node || node->type == GTEXT_YAML_ALIAS) return GTEXT_YAML_OK;
-	if (!opts || !opts->resolve_tags) return GTEXT_YAML_OK;
 
-	const char *value = node->as.scalar.value;
-	size_t len = node->as.scalar.length;
-	const char *tag = node->as.scalar.tag;
-
-	const char *resolved_tag = resolve_tag_handle(doc, tag);
-	if (resolved_tag != tag) {
+	value = node->as.scalar.value;
+	len = node->as.scalar.length;
+	tag = node->as.scalar.tag;
+	resolved_tag = tag ? resolve_tag_handle(doc, tag) : NULL;
+	if (resolved_tag && resolved_tag != tag) {
 		node->as.scalar.tag = resolved_tag;
 		tag = resolved_tag;
 	}
+
+	tag_status = enforce_tag_policy(tag, opts, error);
+	if (tag_status != GTEXT_YAML_OK) return tag_status;
+	if (!opts || !opts->resolve_tags) return GTEXT_YAML_OK;
 
 	const char *suffix = tag_suffix(tag);
 	if (suffix) {
@@ -1626,6 +1733,11 @@ static GTEXT_YAML_Status resolve_node(
 			if (node->as.sequence.tag) {
 				node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
 			}
+			{
+				const char *tag = node->as.sequence.tag;
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(tag, opts, error);
+				if (tag_status != GTEXT_YAML_OK) return tag_status;
+			}
 			for (size_t i = 0; i < node->as.sequence.count; i++) {
 				GTEXT_YAML_Node *child = node->as.sequence.children[i];
 				GTEXT_YAML_Status st = resolve_node(
@@ -1708,6 +1820,11 @@ static GTEXT_YAML_Status resolve_node(
 			if (node->as.mapping.tag) {
 				node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
 			}
+			{
+				const char *tag = node->as.mapping.tag;
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(tag, opts, error);
+				if (tag_status != GTEXT_YAML_OK) return tag_status;
+			}
 			for (size_t i = 0; i < node->as.mapping.count; i++) {
 				GTEXT_YAML_Node *key = node->as.mapping.pairs[i].key;
 				GTEXT_YAML_Status st = resolve_node(
@@ -1721,6 +1838,8 @@ static GTEXT_YAML_Status resolve_node(
 				);
 				if (st != GTEXT_YAML_OK) return st;
 				node->as.mapping.pairs[i].key = key;
+				st = validate_mapping_key(key, opts, error);
+				if (st != GTEXT_YAML_OK) return st;
 
 				GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
 				st = resolve_node(
