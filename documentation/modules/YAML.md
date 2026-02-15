@@ -232,6 +232,12 @@ Safe mode enforces:
 - Complex keys disabled (mapping keys must be scalars)
 - String-only keys (mapping keys must be strings)
 
+Safe mode helps prevent common YAML attack patterns:
+- Exponential alias expansion ("billion laughs") and alias cycles
+- Merge key abuse that injects unexpected keys or overrides config
+- Non-standard tag constructors that can trigger unsafe behaviors
+- Complex key tricks that hide duplicate or conflicting keys
+
 Use the convenience constructor or wrapper:
 
 ```c
@@ -317,6 +323,34 @@ GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), &opts, NULL);
 ```
 
 ---
+
+### 4.4 Partial Parsing and Recovery
+
+For IDE and validation scenarios, you can parse with recovery and collect
+multiple errors while still receiving a best-effort DOM:
+
+```c
+GTEXT_YAML_Document *doc = NULL;
+GTEXT_YAML_Error *errors = NULL;
+size_t error_count = 0;
+
+GTEXT_YAML_Status status = gtext_yaml_parse_partial(
+  input,
+  len,
+  NULL,
+  &doc,
+  &errors,
+  &error_count,
+  NULL
+);
+```
+
+Recovery behavior and limitations:
+- Errors are collected in order; the caller owns the array and must free it.
+- Recovery resumes at the next top-level node (column 1) or document boundary.
+- If recovery produces multiple top-level nodes, the root is a sequence.
+- Error markers are emitted as scalar nodes containing an error message.
+
 
 ## 5. Scalar Styles
 

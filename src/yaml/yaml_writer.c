@@ -1459,6 +1459,71 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
   return GTEXT_YAML_OK;
 }
 
+GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
+    GTEXT_YAML_Document * const * docs,
+    size_t count,
+    GTEXT_YAML_Sink * sink,
+    const GTEXT_YAML_Write_Options * opts) {
+  GTEXT_YAML_Write_Options defaults = gtext_yaml_write_options_default();
+  yaml_writer_state state;
+  GTEXT_YAML_Status status = GTEXT_YAML_OK;
+  bool wrote_doc = false;
+
+  if (!docs || count == 0) {
+    return GTEXT_YAML_E_INVALID;
+  }
+  if (!sink || !sink->write) {
+    return GTEXT_YAML_E_INVALID;
+  }
+  if (!opts) {
+    opts = &defaults;
+  }
+
+  state.sink = sink;
+  state.opts = opts;
+  writer_encoding_init(&state.encoding, opts);
+
+  for (size_t i = 0; i < count; i++) {
+    const GTEXT_YAML_Document *doc = docs[i];
+    const GTEXT_YAML_Node *root = NULL;
+
+    if (!doc) {
+      return GTEXT_YAML_E_INVALID;
+    }
+
+    if (wrote_doc) {
+      status = write_str(&state, writer_newline(opts));
+      if (status != GTEXT_YAML_OK) return status;
+    }
+
+    status = write_str(&state, "---");
+    if (status != GTEXT_YAML_OK) return status;
+    status = write_str(&state, writer_newline(opts));
+    if (status != GTEXT_YAML_OK) return status;
+
+    root = doc->root;
+    if (root) {
+      status = write_comment_lines(&state, node_leading_comment(root), 0);
+      if (status != GTEXT_YAML_OK) return status;
+      status = write_node(&state, root, 0, !opts->pretty, NULL, false);
+      if (status != GTEXT_YAML_OK) return status;
+    }
+
+    if (opts->trailing_newline) {
+      status = write_str(&state, writer_newline(opts));
+      if (status != GTEXT_YAML_OK) return status;
+    }
+
+    wrote_doc = true;
+  }
+
+  if (state.encoding.pending_utf8_len != 0) {
+    return GTEXT_YAML_E_INVALID;
+  }
+
+  return GTEXT_YAML_OK;
+}
+
 // ============================================================================
 // Streaming Writer (event -> YAML)
 // ============================================================================

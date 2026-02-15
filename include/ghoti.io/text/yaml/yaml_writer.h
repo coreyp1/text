@@ -120,6 +120,18 @@ GTEXT_API void gtext_yaml_sink_fixed_buffer_free(GTEXT_YAML_Sink * sink);
 GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(const GTEXT_YAML_Document * doc, GTEXT_YAML_Sink * sink, const GTEXT_YAML_Write_Options * opts);
 
 /**
+ * @brief Serialize multiple documents to @p sink using @p opts.
+ *
+ * This emits explicit document start markers for each document.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
+	GTEXT_YAML_Document * const * docs,
+	size_t count,
+	GTEXT_YAML_Sink * sink,
+	const GTEXT_YAML_Write_Options * opts
+);
+
+/**
  * @brief Forward declaration of streaming YAML writer structure.
  */
 typedef struct GTEXT_YAML_Writer GTEXT_YAML_Writer;

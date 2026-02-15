@@ -122,6 +122,24 @@ GTEXT_API GTEXT_YAML_Document ** gtext_yaml_parse_all_safe(
 );
 
 /**
+ * @brief Parse YAML and return a partial DOM with error recovery.
+ *
+ * On success, returns GTEXT_YAML_OK and sets @p out_doc. Recoverable
+ * errors are collected in @p out_errors. The caller owns the error array
+ * and must free it with free(). Each error entry can be cleaned with
+ * gtext_yaml_error_free() if it contains a context snippet.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
+	const void * data,
+	size_t len,
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Document ** out_doc,
+	GTEXT_YAML_Error ** out_errors,
+	size_t * out_error_count,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
  * @brief Get the root node of a YAML document.
  *
  * Returns NULL if the document is NULL or empty.

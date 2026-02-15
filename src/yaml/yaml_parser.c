@@ -2517,6 +2517,467 @@ GTEXT_YAML_Document *yaml_parse_document(
 	return doc;
 }
 
+/* ==========================================================================
+ * Partial Parser (gtext_yaml_parse_partial)
+ * ==========================================================================
+ */
+
+typedef struct {
+	yaml_context *ctx;
+	GTEXT_YAML_Document *doc;
+	parser_state parser;
+	bool parser_ready;
+	bool recovering;
+	bool in_document;
+	GTEXT_YAML_Error last_error;
+	GTEXT_YAML_Error *errors;
+	size_t error_count;
+	size_t error_capacity;
+	GTEXT_YAML_Node **top_nodes;
+	size_t top_count;
+	size_t top_capacity;
+} partial_state;
+
+static bool partial_errors_reserve(partial_state *state, size_t needed) {
+	if (!state) return false;
+	if (state->error_capacity >= needed) return true;
+
+	size_t new_capacity = state->error_capacity == 0 ? 4 : state->error_capacity * 2;
+	while (new_capacity < needed) {
+		if (new_capacity > SIZE_MAX / 2) return false;
+		new_capacity *= 2;
+	}
+
+	GTEXT_YAML_Error *errors = (GTEXT_YAML_Error *)realloc(
+		state->errors, new_capacity * sizeof(*errors)
+	);
+	if (!errors) return false;
+	state->errors = errors;
+	state->error_capacity = new_capacity;
+	return true;
+}
+
+static bool partial_errors_push(partial_state *state, const GTEXT_YAML_Error *err) {
+	if (!state || !err) return false;
+	if (!partial_errors_reserve(state, state->error_count + 1)) return false;
+
+	GTEXT_YAML_Error *dst = &state->errors[state->error_count];
+	memset(dst, 0, sizeof(*dst));
+	*dst = *err;
+
+	if (err->context_snippet && err->context_snippet_len > 0) {
+		size_t len = err->context_snippet_len;
+		char *copy = (char *)malloc(len + 1);
+		if (!copy) return false;
+		memcpy(copy, err->context_snippet, len);
+		copy[len] = '\0';
+		dst->context_snippet = copy;
+		dst->context_snippet_len = len;
+	} else {
+		dst->context_snippet = NULL;
+		dst->context_snippet_len = 0;
+		dst->caret_offset = 0;
+	}
+
+	state->error_count++;
+	return true;
+}
+
+static bool partial_top_reserve(partial_state *state, size_t needed) {
+	if (!state) return false;
+	if (state->top_capacity >= needed) return true;
+
+	size_t new_capacity = state->top_capacity == 0 ? 4 : state->top_capacity * 2;
+	while (new_capacity < needed) {
+		if (new_capacity > SIZE_MAX / 2) return false;
+		new_capacity *= 2;
+	}
+
+	GTEXT_YAML_Node **nodes = (GTEXT_YAML_Node **)realloc(
+		state->top_nodes, new_capacity * sizeof(*nodes)
+	);
+	if (!nodes) return false;
+	state->top_nodes = nodes;
+	state->top_capacity = new_capacity;
+	return true;
+}
+
+static bool partial_top_push(partial_state *state, GTEXT_YAML_Node *node) {
+	if (!state || !node) return false;
+	if (!partial_top_reserve(state, state->top_count + 1)) return false;
+	state->top_nodes[state->top_count++] = node;
+	return true;
+}
+
+static void partial_capture_root(partial_state *state) {
+	parser_state *p = NULL;
+	if (!state || !state->parser_ready) return;
+	p = &state->parser;
+	if (!p->root) return;
+	if (!partial_top_push(state, p->root)) return;
+	p->root = NULL;
+	p->last_scalar_node = NULL;
+	p->last_scalar_in_root = false;
+	p->last_scalar_in_temp = false;
+	p->last_scalar_temp_depth = 0;
+	if (p->pending_leading_comment) {
+		free(p->pending_leading_comment);
+		p->pending_leading_comment = NULL;
+	}
+}
+
+static void partial_error_fallback(
+	GTEXT_YAML_Error *err,
+	const GTEXT_YAML_Event *event,
+	GTEXT_YAML_Status status
+) {
+	if (!err) return;
+	err->code = status != GTEXT_YAML_OK ? status : GTEXT_YAML_E_INVALID;
+	err->message = "Parse error";
+	err->offset = event ? event->offset : 0;
+	err->line = event ? event->line : 0;
+	err->col = event ? event->col : 0;
+	err->context_snippet = NULL;
+	err->context_snippet_len = 0;
+	err->caret_offset = 0;
+	err->expected_token = NULL;
+	err->actual_token = NULL;
+}
+
+static void partial_add_error_marker(partial_state *state, const GTEXT_YAML_Error *err) {
+	if (!state || !state->ctx || !err) return;
+	const char *message = err->message ? err->message : "parse error";
+	char buf[256];
+	snprintf(buf, sizeof(buf), "error: %s", message);
+	GTEXT_YAML_Node *node = yaml_node_new_scalar(state->ctx, buf, strlen(buf), NULL, NULL);
+	if (!node) return;
+	node_set_source_location(node, err->offset, err->line, err->col);
+
+	char comment[128];
+	snprintf(comment, sizeof(comment), "parse_error line %d col %d", err->line, err->col);
+	const char *stored = parser_arena_strdup(state->ctx, comment, strlen(comment));
+	if (stored) {
+		node->as.scalar.leading_comment = stored;
+	}
+	partial_top_push(state, node);
+}
+
+static bool partial_event_starts_node(const GTEXT_YAML_Event *event) {
+	if (!event) return false;
+	switch (event->type) {
+		case GTEXT_YAML_EVENT_SCALAR:
+		case GTEXT_YAML_EVENT_SEQUENCE_START:
+		case GTEXT_YAML_EVENT_MAPPING_START:
+		case GTEXT_YAML_EVENT_ALIAS:
+			return true;
+		case GTEXT_YAML_EVENT_INDICATOR:
+			switch (event->data.indicator) {
+				case '-':
+				case '?':
+				case ':':
+				case '[':
+				case '{':
+					return true;
+				default:
+					return false;
+			}
+		default:
+			return false;
+	}
+}
+
+static bool partial_reset_parser(partial_state *state) {
+	if (!state || !state->parser_ready) return false;
+	parser_free(&state->parser);
+	if (!parser_init(&state->parser, state->ctx, &state->last_error)) return false;
+	state->parser.doc = state->doc;
+	state->parser.document_started = state->in_document;
+	state->parser.first_document_complete = false;
+	return true;
+}
+
+static GTEXT_YAML_Status partial_callback(
+	GTEXT_YAML_Stream *s,
+	const void *event_payload,
+	void *user_data
+) {
+	(void)s;
+	partial_state *state = (partial_state *)user_data;
+	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
+
+	if (!state || !event) return GTEXT_YAML_E_INVALID;
+
+	switch (event->type) {
+		case GTEXT_YAML_EVENT_STREAM_START:
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_EVENT_DOCUMENT_START:
+			state->in_document = true;
+			if (state->recovering) {
+				partial_reset_parser(state);
+				state->recovering = false;
+			}
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_EVENT_DOCUMENT_END:
+			if (state->parser_ready) {
+				GTEXT_YAML_Status close_status = close_block_contexts(&state->parser, -1);
+				if (close_status != GTEXT_YAML_OK) {
+					if (close_status == GTEXT_YAML_E_OOM || close_status == GTEXT_YAML_E_LIMIT) {
+						return close_status;
+					}
+					GTEXT_YAML_Error captured = state->last_error;
+					if (captured.code == GTEXT_YAML_OK) {
+						partial_error_fallback(&captured, event, close_status);
+					}
+					if (!partial_errors_push(state, &captured)) {
+						return GTEXT_YAML_E_OOM;
+					}
+					partial_add_error_marker(state, &captured);
+				}
+			}
+			partial_capture_root(state);
+			state->in_document = false;
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_EVENT_STREAM_END:
+			if (state->parser_ready) {
+				GTEXT_YAML_Status close_status = close_block_contexts(&state->parser, -1);
+				if (close_status != GTEXT_YAML_OK) {
+					if (close_status == GTEXT_YAML_E_OOM || close_status == GTEXT_YAML_E_LIMIT) {
+						return close_status;
+					}
+					GTEXT_YAML_Error captured = state->last_error;
+					if (captured.code == GTEXT_YAML_OK) {
+						partial_error_fallback(&captured, event, close_status);
+					}
+					if (!partial_errors_push(state, &captured)) {
+						return GTEXT_YAML_E_OOM;
+					}
+					partial_add_error_marker(state, &captured);
+				}
+			}
+			partial_capture_root(state);
+			return GTEXT_YAML_OK;
+		default:
+			break;
+	}
+
+	if (!state->in_document) {
+		state->in_document = true;
+		state->parser.document_started = true;
+	}
+
+	if (state->recovering) {
+		if (event->col == 1 && partial_event_starts_node(event)) {
+			partial_reset_parser(state);
+			state->recovering = false;
+		} else {
+			return GTEXT_YAML_OK;
+		}
+	}
+
+	GTEXT_YAML_Status status = parse_callback(s, event_payload, &state->parser);
+	if (status != GTEXT_YAML_OK) {
+		if (status == GTEXT_YAML_E_OOM || status == GTEXT_YAML_E_LIMIT) {
+			return status;
+		}
+		GTEXT_YAML_Error captured = state->last_error;
+		if (captured.code == GTEXT_YAML_OK) {
+			partial_error_fallback(&captured, event, status);
+		}
+		if (!partial_errors_push(state, &captured)) {
+			return GTEXT_YAML_E_OOM;
+		}
+		partial_capture_root(state);
+		partial_add_error_marker(state, &captured);
+		state->recovering = true;
+		return GTEXT_YAML_OK;
+	}
+
+	return GTEXT_YAML_OK;
+}
+
+GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
+	const void *data,
+	size_t len,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Document **out_doc,
+	GTEXT_YAML_Error **out_errors,
+	size_t *out_error_count,
+	GTEXT_YAML_Error *out_err
+) {
+	const char *input = (const char *)data;
+	if (!input || !out_doc || !out_errors || !out_error_count) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_INVALID;
+			out_err->message = "Invalid arguments";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	*out_doc = NULL;
+	*out_errors = NULL;
+	*out_error_count = 0;
+
+	GTEXT_YAML_Parse_Options effective_opts =
+		gtext_yaml_parse_options_effective(options);
+	const GTEXT_YAML_Parse_Options *opts = &effective_opts;
+
+	partial_state state;
+	memset(&state, 0, sizeof(state));
+
+	state.ctx = yaml_context_new();
+	if (!state.ctx) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_OOM;
+			out_err->message = "Out of memory creating context";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	yaml_context_set_input_buffer(state.ctx, input, len);
+
+	state.doc = (GTEXT_YAML_Document *)yaml_context_alloc(
+		state.ctx, sizeof(GTEXT_YAML_Document), 8
+	);
+	if (!state.doc) {
+		yaml_context_free(state.ctx);
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_OOM;
+			out_err->message = "Out of memory creating document";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	memset(state.doc, 0, sizeof(*state.doc));
+	state.doc->ctx = state.ctx;
+	state.doc->options = *opts;
+	state.doc->document_index = 0;
+
+	if (!parser_init(&state.parser, state.ctx, &state.last_error)) {
+		yaml_context_free(state.ctx);
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_OOM;
+			out_err->message = "Out of memory initializing parser";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	state.parser_ready = true;
+	state.parser.doc = state.doc;
+
+	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(opts, partial_callback, &state);
+	if (!stream) {
+		parser_free(&state.parser);
+		yaml_context_free(state.ctx);
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_OOM;
+			out_err->message = "Out of memory creating stream parser";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	gtext_yaml_stream_set_sync_mode(stream, true);
+
+	GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, input, len);
+	if (status == GTEXT_YAML_OK) {
+		status = gtext_yaml_stream_finish(stream);
+	}
+	gtext_yaml_stream_free(stream);
+
+	partial_capture_root(&state);
+
+	if (status != GTEXT_YAML_OK) {
+		parser_free(&state.parser);
+		if (out_err) {
+			*out_err = state.last_error;
+			if (out_err->code == GTEXT_YAML_OK) {
+				out_err->code = status;
+				out_err->message = "Parse error";
+			}
+		}
+		for (size_t i = 0; i < state.error_count; i++) {
+			gtext_yaml_error_free(&state.errors[i]);
+		}
+		free(state.errors);
+		free(state.top_nodes);
+		yaml_context_free(state.ctx);
+		return status;
+	}
+
+	GTEXT_YAML_Node *root = NULL;
+	if (state.top_count == 1) {
+		root = state.top_nodes[0];
+	} else if (state.top_count > 1) {
+		root = yaml_node_new_sequence(state.ctx, state.top_count, NULL, NULL);
+		if (!root) {
+			parser_free(&state.parser);
+			for (size_t i = 0; i < state.error_count; i++) {
+				gtext_yaml_error_free(&state.errors[i]);
+			}
+			free(state.errors);
+			free(state.top_nodes);
+			yaml_context_free(state.ctx);
+			if (out_err) {
+				out_err->code = GTEXT_YAML_E_OOM;
+				out_err->message = "Out of memory creating recovery root";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+		for (size_t i = 0; i < state.top_count; i++) {
+			root->as.sequence.children[i] = state.top_nodes[i];
+		}
+		root->as.sequence.count = state.top_count;
+	}
+
+	state.doc->root = root;
+	state.doc->node_count = state.ctx->node_count;
+
+	if (root) {
+		GTEXT_YAML_Error resolve_error = {0};
+		GTEXT_YAML_Status resolve_status = yaml_resolve_document(state.doc, &resolve_error);
+		if (resolve_status != GTEXT_YAML_OK) {
+			if (resolve_status == GTEXT_YAML_E_OOM || resolve_status == GTEXT_YAML_E_LIMIT) {
+				parser_free(&state.parser);
+				for (size_t i = 0; i < state.error_count; i++) {
+					gtext_yaml_error_free(&state.errors[i]);
+				}
+				free(state.errors);
+				free(state.top_nodes);
+				yaml_context_free(state.ctx);
+				if (out_err) {
+					*out_err = resolve_error;
+					if (out_err->code == GTEXT_YAML_OK) {
+						out_err->code = resolve_status;
+						out_err->message = "Out of memory resolving document";
+					}
+				}
+				return resolve_status;
+			}
+			if (resolve_error.code == GTEXT_YAML_OK) {
+				partial_error_fallback(&resolve_error, NULL, resolve_status);
+			}
+			if (!partial_errors_push(&state, &resolve_error)) {
+				parser_free(&state.parser);
+				for (size_t i = 0; i < state.error_count; i++) {
+					gtext_yaml_error_free(&state.errors[i]);
+				}
+				free(state.errors);
+				free(state.top_nodes);
+				yaml_context_free(state.ctx);
+				if (out_err) {
+					out_err->code = GTEXT_YAML_E_OOM;
+					out_err->message = "Out of memory storing resolve error";
+				}
+				return GTEXT_YAML_E_OOM;
+			}
+		}
+	}
+
+	parser_free(&state.parser);
+	free(state.top_nodes);
+
+	*out_doc = state.doc;
+	*out_errors = state.errors;
+	*out_error_count = state.error_count;
+
+	return GTEXT_YAML_OK;
+}
+
 /* ============================================================================
  * Multi-Document Parser (gtext_yaml_parse_all)
  * ============================================================================ */
