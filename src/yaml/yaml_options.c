@@ -31,6 +31,7 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.allow_merge_keys = true;
   opts.allow_complex_keys = true;
   opts.require_string_keys = false;
+  opts.enable_json_fast_path = true;
   opts.custom_tags = NULL;
   opts.custom_tag_count = 0;
   opts.warning_callback = NULL;
@@ -52,6 +53,7 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_safe(void)
   opts.allow_merge_keys = false;
   opts.allow_complex_keys = false;
   opts.require_string_keys = true;
+  opts.enable_json_fast_path = true;
   return opts;
 }
 

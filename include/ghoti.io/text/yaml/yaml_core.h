@@ -249,6 +249,7 @@ typedef struct {
   bool allow_merge_keys;
   bool allow_complex_keys;
   bool require_string_keys;
+  bool enable_json_fast_path;
   const GTEXT_YAML_Custom_Tag * custom_tags;
   size_t custom_tag_count;
 

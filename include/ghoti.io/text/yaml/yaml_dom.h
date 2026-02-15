@@ -46,6 +46,25 @@ GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse(
 );
 
 /**
+ * @brief Parse JSON input into a YAML DOM document.
+ *
+ * This function accepts JSON input and returns an equivalent YAML DOM.
+ * JSON parsing is strict and does not allow YAML-specific extensions.
+ *
+ * @param input Input JSON string (must not be NULL)
+ * @param length Length of input string in bytes
+ * @param options Parse options (NULL for defaults)
+ * @param error Error output (may be NULL)
+ * @return Document on success, NULL on error
+ */
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_json(
+	const char * input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Error * error
+);
+
+/**
  * @brief Parse a YAML string into a DOM document using safe-mode defaults.
  */
 GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_safe(

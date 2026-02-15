@@ -519,7 +519,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     return s->pending_error;
   }
   
-  /* Skip whitespace */
+  /* Skip whitespace and comments */
   int c;
   do {
     c = scanner_peek(s);
@@ -537,6 +537,15 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
       scanner_consume(s);
+      continue;
+    }
+    if (c == '#') {
+      while (1) {
+        c = scanner_peek(s);
+        if (c == -1) break;
+        if (c == '\n' || c == '\r') break;
+        scanner_consume(s);
+      }
       continue;
     }
     break;

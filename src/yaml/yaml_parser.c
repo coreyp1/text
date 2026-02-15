@@ -12,6 +12,7 @@
 
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_stream.h>
+#include <ghoti.io/text/json/json_dom.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -237,6 +238,379 @@ static void parser_free(parser_state *p) {
 
 /* Forward declarations */
 static GTEXT_YAML_Node *lookup_anchor(parser_state *p, const char *name);
+
+static bool json_fastpath_candidate(const char *input, size_t length) {
+	size_t i = 0;
+	size_t depth = 0;
+	bool in_string = false;
+	bool escape = false;
+	struct {
+		int type;
+		bool expect_key;
+	} stack[64];
+	const int ctx_object = 1;
+	const int ctx_array = 2;
+
+	if (!input || length == 0) return false;
+
+	if (length >= 4) {
+		unsigned char b0 = (unsigned char)input[0];
+		unsigned char b1 = (unsigned char)input[1];
+		unsigned char b2 = (unsigned char)input[2];
+		unsigned char b3 = (unsigned char)input[3];
+		if ((b0 == 0x00 && b1 == 0x00 && b2 == 0xFE && b3 == 0xFF) ||
+			(b0 == 0xFF && b1 == 0xFE && b2 == 0x00 && b3 == 0x00)) {
+			return false;
+		}
+	}
+
+	if (length >= 2) {
+		unsigned char b0 = (unsigned char)input[0];
+		unsigned char b1 = (unsigned char)input[1];
+		if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+			return false;
+		}
+	}
+
+	if (length >= 3 &&
+		(unsigned char)input[0] == 0xEF &&
+		(unsigned char)input[1] == 0xBB &&
+		(unsigned char)input[2] == 0xBF) {
+		i = 3;
+	}
+
+	while (i < length) {
+		char ch = input[i];
+		if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
+			break;
+		}
+		i++;
+	}
+
+	if (i >= length) return false;
+	if (input[i] != '{' && input[i] != '[') return false;
+
+	for (size_t j = i; j < length; j++) {
+		char ch = input[j];
+		if (in_string) {
+			if (escape) {
+				escape = false;
+				continue;
+			}
+			if (ch == '\\') {
+				escape = true;
+				continue;
+			}
+			if (ch == '"') {
+				in_string = false;
+			}
+			continue;
+		}
+
+		if (ch == '"') {
+			in_string = true;
+			if (depth > 0 && stack[depth - 1].type == ctx_object &&
+				stack[depth - 1].expect_key) {
+				stack[depth - 1].expect_key = false;
+			}
+			continue;
+		}
+
+		if (ch == '#') return false;
+		if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+
+		if (ch == '{') {
+			if (depth >= sizeof(stack) / sizeof(stack[0])) return false;
+			stack[depth].type = ctx_object;
+			stack[depth].expect_key = true;
+			depth++;
+			continue;
+		}
+
+		if (ch == '[') {
+			if (depth >= sizeof(stack) / sizeof(stack[0])) return false;
+			stack[depth].type = ctx_array;
+			stack[depth].expect_key = false;
+			depth++;
+			continue;
+		}
+
+		if (ch == '}') {
+			if (depth == 0 || stack[depth - 1].type != ctx_object) return false;
+			depth--;
+			continue;
+		}
+
+		if (ch == ']') {
+			if (depth == 0 || stack[depth - 1].type != ctx_array) return false;
+			depth--;
+			continue;
+		}
+
+		if (ch == ',') {
+			if (depth > 0 && stack[depth - 1].type == ctx_object) {
+				stack[depth - 1].expect_key = true;
+			}
+			continue;
+		}
+
+		if (ch == ':') {
+			if (depth > 0 && stack[depth - 1].type == ctx_object) {
+				stack[depth - 1].expect_key = false;
+			}
+			continue;
+		}
+
+		if (depth > 0 && stack[depth - 1].type == ctx_object &&
+			stack[depth - 1].expect_key) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static GTEXT_JSON_Dupkey_Mode json_dupkey_mode(GTEXT_YAML_Dupkey_Mode mode) {
+	switch (mode) {
+		case GTEXT_YAML_DUPKEY_FIRST_WINS:
+			return GTEXT_JSON_DUPKEY_FIRST_WINS;
+		case GTEXT_YAML_DUPKEY_LAST_WINS:
+			return GTEXT_JSON_DUPKEY_LAST_WINS;
+		case GTEXT_YAML_DUPKEY_ERROR:
+		default:
+			return GTEXT_JSON_DUPKEY_ERROR;
+	}
+}
+
+static GTEXT_JSON_Parse_Options json_parse_options_from_yaml(
+	const GTEXT_YAML_Parse_Options *opts
+) {
+	GTEXT_JSON_Parse_Options json_opts = gtext_json_parse_options_default();
+
+	if (!opts) return json_opts;
+
+	json_opts.dupkeys = json_dupkey_mode(opts->dupkeys);
+	json_opts.validate_utf8 = opts->validate_utf8;
+	if (opts->max_depth > 0) json_opts.max_depth = opts->max_depth;
+	if (opts->max_total_bytes > 0) json_opts.max_total_bytes = opts->max_total_bytes;
+
+	return json_opts;
+}
+
+static void map_json_error(const GTEXT_JSON_Error *json_err, GTEXT_YAML_Error *yaml_err) {
+	if (!json_err || !yaml_err) return;
+
+	switch (json_err->code) {
+		case GTEXT_JSON_E_OOM:
+			yaml_err->code = GTEXT_YAML_E_OOM;
+			break;
+		case GTEXT_JSON_E_LIMIT:
+			yaml_err->code = GTEXT_YAML_E_LIMIT;
+			break;
+		case GTEXT_JSON_E_DEPTH:
+			yaml_err->code = GTEXT_YAML_E_DEPTH;
+			break;
+		case GTEXT_JSON_E_INCOMPLETE:
+			yaml_err->code = GTEXT_YAML_E_INCOMPLETE;
+			break;
+		case GTEXT_JSON_E_BAD_TOKEN:
+			yaml_err->code = GTEXT_YAML_E_BAD_TOKEN;
+			break;
+		case GTEXT_JSON_E_BAD_ESCAPE:
+			yaml_err->code = GTEXT_YAML_E_BAD_ESCAPE;
+			break;
+		default:
+			yaml_err->code = GTEXT_YAML_E_INVALID;
+			break;
+	}
+
+	yaml_err->message = json_err->message;
+	yaml_err->offset = json_err->offset;
+	yaml_err->line = json_err->line;
+	yaml_err->col = json_err->col;
+	yaml_err->context_snippet = NULL;
+	yaml_err->context_snippet_len = 0;
+	yaml_err->caret_offset = 0;
+	yaml_err->expected_token = NULL;
+	yaml_err->actual_token = NULL;
+}
+
+static GTEXT_YAML_Node *json_to_yaml_node(
+	yaml_context *ctx,
+	const GTEXT_JSON_Value *json,
+	GTEXT_YAML_Error *error
+) {
+	GTEXT_JSON_Type type = GTEXT_JSON_NULL;
+	GTEXT_YAML_Node *node = NULL;
+
+	if (!json) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Missing JSON value";
+		}
+		return NULL;
+	}
+
+	type = gtext_json_typeof(json);
+
+	switch (type) {
+		case GTEXT_JSON_NULL:
+			return yaml_node_new_scalar(ctx, "null", 4, NULL, NULL);
+		case GTEXT_JSON_BOOL: {
+			bool value = false;
+			if (gtext_json_get_bool(json, &value) != GTEXT_JSON_OK) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid JSON boolean value";
+				}
+				return NULL;
+			}
+			return yaml_node_new_scalar(ctx, value ? "true" : "false", value ? 4 : 5, NULL, NULL);
+		}
+		case GTEXT_JSON_NUMBER: {
+			const char *lexeme = NULL;
+			size_t lexeme_len = 0;
+			if (gtext_json_get_number_lexeme(json, &lexeme, &lexeme_len) != GTEXT_JSON_OK || !lexeme) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid JSON number value";
+				}
+				return NULL;
+			}
+			return yaml_node_new_scalar(ctx, lexeme, lexeme_len, NULL, NULL);
+		}
+		case GTEXT_JSON_STRING: {
+			const char *value = NULL;
+			size_t value_len = 0;
+			if (gtext_json_get_string(json, &value, &value_len) != GTEXT_JSON_OK || !value) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid JSON string value";
+				}
+				return NULL;
+			}
+			return yaml_node_new_scalar(ctx, value, value_len, NULL, NULL);
+		}
+		case GTEXT_JSON_ARRAY: {
+			size_t count = gtext_json_array_size(json);
+			node = yaml_node_new_sequence(ctx, count, NULL, NULL);
+			if (!node) return NULL;
+			node->as.sequence.count = count;
+			for (size_t i = 0; i < count; i++) {
+				const GTEXT_JSON_Value *child = gtext_json_array_get(json, i);
+				node->as.sequence.children[i] = json_to_yaml_node(ctx, child, error);
+				if (!node->as.sequence.children[i]) return NULL;
+			}
+			return node;
+		}
+		case GTEXT_JSON_OBJECT: {
+			size_t count = gtext_json_object_size(json);
+			node = yaml_node_new_mapping(ctx, count, NULL, NULL);
+			if (!node) return NULL;
+			node->as.mapping.count = count;
+			for (size_t i = 0; i < count; i++) {
+				size_t key_len = 0;
+				const char *key = gtext_json_object_key(json, i, &key_len);
+				const GTEXT_JSON_Value *value = gtext_json_object_value(json, i);
+				if (!key || !value) {
+					if (error) {
+						error->code = GTEXT_YAML_E_INVALID;
+						error->message = "Invalid JSON object member";
+					}
+					return NULL;
+				}
+				node->as.mapping.pairs[i].key = yaml_node_new_scalar(ctx, key, key_len, NULL, NULL);
+				if (!node->as.mapping.pairs[i].key) return NULL;
+				node->as.mapping.pairs[i].value = json_to_yaml_node(ctx, value, error);
+				if (!node->as.mapping.pairs[i].value) return NULL;
+				node->as.mapping.pairs[i].key_tag = NULL;
+				node->as.mapping.pairs[i].value_tag = NULL;
+			}
+			return node;
+		}
+		default:
+			break;
+	}
+
+	if (error) {
+		error->code = GTEXT_YAML_E_INVALID;
+		error->message = "Unsupported JSON value type";
+	}
+	return NULL;
+}
+
+static GTEXT_YAML_Document *yaml_parse_json_document_internal(
+	const char *input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error,
+	bool report_errors
+) {
+	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
+	const GTEXT_YAML_Parse_Options *opts = options ? options : &default_opts;
+	GTEXT_JSON_Parse_Options json_opts = json_parse_options_from_yaml(opts);
+	GTEXT_JSON_Error json_err = {0};
+	GTEXT_JSON_Value *json_root = gtext_json_parse(input, length, &json_opts, &json_err);
+	GTEXT_YAML_Document *doc = NULL;
+	yaml_context *ctx = NULL;
+	GTEXT_YAML_Node *root = NULL;
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+
+	if (!json_root) {
+		if (report_errors && error) {
+			map_json_error(&json_err, error);
+		}
+		gtext_json_error_free(&json_err);
+		return NULL;
+	}
+	gtext_json_error_free(&json_err);
+
+	ctx = yaml_context_new();
+	if (!ctx) {
+		gtext_json_free(json_root);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating context";
+		}
+		return NULL;
+	}
+
+	yaml_context_set_input_buffer(ctx, input, length);
+
+	doc = (GTEXT_YAML_Document *)yaml_context_alloc(ctx, sizeof(GTEXT_YAML_Document), 8);
+	if (!doc) {
+		yaml_context_free(ctx);
+		gtext_json_free(json_root);
+		if (error) {
+			error->code = GTEXT_YAML_E_OOM;
+			error->message = "Out of memory creating document";
+		}
+		return NULL;
+	}
+
+	memset(doc, 0, sizeof(*doc));
+	doc->ctx = ctx;
+	doc->options = *opts;
+	doc->document_index = 0;
+
+	root = json_to_yaml_node(ctx, json_root, error);
+	gtext_json_free(json_root);
+	if (!root) {
+		yaml_context_free(ctx);
+		return NULL;
+	}
+
+	doc->root = root;
+	doc->node_count = 1;
+
+	status = yaml_resolve_document(doc, error);
+	if (status != GTEXT_YAML_OK) {
+		yaml_context_free(ctx);
+		return NULL;
+	}
+
+	return doc;
+}
 
 /**
  * @brief Register an anchor name with its node.
@@ -1590,6 +1964,19 @@ GTEXT_YAML_Document *yaml_parse_document(
 	/* Use default options if none provided */
 	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
 	if (!options) options = &default_opts;
+
+	if (json_fastpath_candidate(input, length)) {
+		GTEXT_YAML_Document *json_doc = yaml_parse_json_document_internal(
+			input,
+			length,
+			options,
+			error,
+			false
+		);
+		if (json_doc) {
+			return json_doc;
+		}
+	}
 	
 	/* Create context */
 	yaml_context *ctx = yaml_context_new();
@@ -2029,6 +2416,23 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 	
 	*document_count = state.count;
 	return state.documents;
+}
+
+GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_json(
+	const char *input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+) {
+	if (!input) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Input string is NULL";
+		}
+		return NULL;
+	}
+
+	return yaml_parse_json_document_internal(input, length, options, error, true);
 }
 
 GTEXT_YAML_Document **gtext_yaml_parse_all_safe(

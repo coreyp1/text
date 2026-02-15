@@ -278,6 +278,13 @@ GTEXT_INTERNAL_API GTEXT_YAML_Document *yaml_parse_document(
 	GTEXT_YAML_Error *error
 );
 
+GTEXT_INTERNAL_API GTEXT_YAML_Document *yaml_parse_json_document(
+	const char *input,
+	size_t length,
+	const GTEXT_YAML_Parse_Options *options,
+	GTEXT_YAML_Error *error
+);
+
 /**
  * @brief Resolve tags and implicit scalar types for a document.
  */

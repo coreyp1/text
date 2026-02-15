@@ -247,6 +247,18 @@ For manual control, the relevant toggles are:
 - `allow_nonstandard_tags`
 - `enable_custom_tags`
 
+### 3.4 JSON Fast Path
+
+JSON is a valid subset of YAML. When the input begins with `{` or `[` and
+appears JSON-compatible, the parser attempts a JSON fast path for improved
+performance. If JSON parsing fails, it falls back to full YAML parsing.
+
+You can force JSON-only parsing with:
+
+```c
+GTEXT_YAML_Document *doc = gtext_yaml_parse_json(json, strlen(json), NULL, &err);
+```
+
 ---
 
 ## 4. Error Handling
