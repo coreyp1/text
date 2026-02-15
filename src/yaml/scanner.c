@@ -7,6 +7,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -32,6 +33,14 @@ struct GTEXT_YAML_Scanner {
   int finished;           /* whether finish() was called */
   int indent_ws;          /* 1 if still in indentation whitespace on this line */
   int suppress_lf;        /* 1 if previous char was CR and LF should not advance line */
+
+  int encoding_determined;
+  GTEXT_YAML_Encoding encoding;
+  GTEXT_YAML_DynBuf raw_prefix;
+  unsigned char decode_pending[4];
+  size_t decode_pending_len;
+  GTEXT_YAML_Status pending_error;
+  const char *pending_error_message;
   
   /* Context stack for tracking block vs flow context */
   yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
@@ -121,6 +130,269 @@ static int hexval(int c)
   return -1;
 }
 
+static void scanner_set_error(
+    GTEXT_YAML_Scanner *s,
+    GTEXT_YAML_Status code,
+    const char *message)
+{
+  if (!s || s->pending_error != GTEXT_YAML_OK) {
+    return;
+  }
+  s->pending_error = code;
+  s->pending_error_message = message;
+}
+
+static int scanner_append_utf8_codepoint(
+    GTEXT_YAML_Scanner *s,
+    uint32_t codepoint)
+{
+  char out[4];
+  size_t out_len = 0;
+
+  if (codepoint <= 0x7F) {
+    out[0] = (char)codepoint;
+    out_len = 1;
+  } else if (codepoint <= 0x7FF) {
+    out[0] = (char)(0xC0 | (codepoint >> 6));
+    out[1] = (char)(0x80 | (codepoint & 0x3F));
+    out_len = 2;
+  } else if (codepoint <= 0xFFFF) {
+    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
+      return 0;
+    }
+    out[0] = (char)(0xE0 | (codepoint >> 12));
+    out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (codepoint & 0x3F));
+    out_len = 3;
+  } else if (codepoint <= 0x10FFFF) {
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out_len = 4;
+  } else {
+    return 0;
+  }
+
+  return gtext_yaml_dynbuf_append(&s->input, out, out_len);
+}
+
+static int scanner_decode_utf16(
+    GTEXT_YAML_Scanner *s,
+    const unsigned char *data,
+    size_t len,
+    int big_endian,
+    int final)
+{
+  unsigned char buf[4];
+  size_t buf_len = s->decode_pending_len;
+  if (buf_len > 0) {
+    memcpy(buf, s->decode_pending, buf_len);
+  }
+
+  for (size_t i = 0; i < len; i++) {
+    if (buf_len < sizeof(buf)) {
+      buf[buf_len++] = data[i];
+    }
+
+    for (;;) {
+      if (buf_len < 2) {
+        break;
+      }
+      uint16_t unit = big_endian
+          ? (uint16_t)((buf[0] << 8) | buf[1])
+          : (uint16_t)((buf[1] << 8) | buf[0]);
+      if (unit >= 0xD800 && unit <= 0xDBFF) {
+        if (buf_len < 4) {
+          break;
+        }
+        uint16_t low = big_endian
+            ? (uint16_t)((buf[2] << 8) | buf[3])
+            : (uint16_t)((buf[3] << 8) | buf[2]);
+        if (low < 0xDC00 || low > 0xDFFF) {
+          scanner_set_error(s, GTEXT_YAML_E_INVALID, "invalid UTF-16 surrogate pair");
+          return 0;
+        }
+        uint32_t codepoint = 0x10000;
+        codepoint += ((uint32_t)(unit - 0xD800) << 10);
+        codepoint += (uint32_t)(low - 0xDC00);
+        if (!scanner_append_utf8_codepoint(s, codepoint)) {
+          scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory decoding UTF-16");
+          return 0;
+        }
+        memmove(buf, buf + 4, buf_len - 4);
+        buf_len -= 4;
+      } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+        scanner_set_error(s, GTEXT_YAML_E_INVALID, "invalid UTF-16 surrogate pair");
+        return 0;
+      } else {
+        if (!scanner_append_utf8_codepoint(s, unit)) {
+          scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory decoding UTF-16");
+          return 0;
+        }
+        memmove(buf, buf + 2, buf_len - 2);
+        buf_len -= 2;
+      }
+    }
+  }
+
+  if (final && buf_len != 0) {
+    scanner_set_error(s, GTEXT_YAML_E_INVALID, "truncated UTF-16 sequence");
+    return 0;
+  }
+
+  s->decode_pending_len = buf_len;
+  if (buf_len > 0) {
+    memcpy(s->decode_pending, buf, buf_len);
+  }
+  return 1;
+}
+
+static int scanner_decode_utf32(
+    GTEXT_YAML_Scanner *s,
+    const unsigned char *data,
+    size_t len,
+    int big_endian,
+    int final)
+{
+  unsigned char buf[4];
+  size_t buf_len = s->decode_pending_len;
+  if (buf_len > 0) {
+    memcpy(buf, s->decode_pending, buf_len);
+  }
+
+  for (size_t i = 0; i < len; i++) {
+    if (buf_len < sizeof(buf)) {
+      buf[buf_len++] = data[i];
+    }
+    if (buf_len < 4) {
+      continue;
+    }
+
+    uint32_t codepoint = big_endian
+        ? ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+            ((uint32_t)buf[2] << 8) | (uint32_t)buf[3]
+        : ((uint32_t)buf[3] << 24) | ((uint32_t)buf[2] << 16) |
+            ((uint32_t)buf[1] << 8) | (uint32_t)buf[0];
+
+    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+      scanner_set_error(s, GTEXT_YAML_E_INVALID, "invalid UTF-32 codepoint");
+      return 0;
+    }
+
+    if (!scanner_append_utf8_codepoint(s, codepoint)) {
+      scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory decoding UTF-32");
+      return 0;
+    }
+
+    buf_len = 0;
+  }
+
+  if (final && buf_len != 0) {
+    scanner_set_error(s, GTEXT_YAML_E_INVALID, "truncated UTF-32 sequence");
+    return 0;
+  }
+
+  s->decode_pending_len = buf_len;
+  if (buf_len > 0) {
+    memcpy(s->decode_pending, buf, buf_len);
+  }
+  return 1;
+}
+
+static int scanner_decode_bytes(
+    GTEXT_YAML_Scanner *s,
+    const unsigned char *data,
+    size_t len,
+    int final)
+{
+  if (s->encoding == GTEXT_YAML_ENCODING_UTF8) {
+    if (!gtext_yaml_dynbuf_append(&s->input, (const char *)data, len)) {
+      scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory buffering input");
+      return 0;
+    }
+    return 1;
+  }
+
+  if (s->encoding == GTEXT_YAML_ENCODING_UTF16LE) {
+    return scanner_decode_utf16(s, data, len, 0, final);
+  }
+  if (s->encoding == GTEXT_YAML_ENCODING_UTF16BE) {
+    return scanner_decode_utf16(s, data, len, 1, final);
+  }
+  if (s->encoding == GTEXT_YAML_ENCODING_UTF32LE) {
+    return scanner_decode_utf32(s, data, len, 0, final);
+  }
+  if (s->encoding == GTEXT_YAML_ENCODING_UTF32BE) {
+    return scanner_decode_utf32(s, data, len, 1, final);
+  }
+
+  scanner_set_error(s, GTEXT_YAML_E_INVALID, "unsupported input encoding");
+  return 0;
+}
+
+static int scanner_determine_encoding(GTEXT_YAML_Scanner *s, int final)
+{
+  if (!s || s->encoding_determined) {
+    return 1;
+  }
+
+  if (s->raw_prefix.len >= 4) {
+    const unsigned char *b = (const unsigned char *)s->raw_prefix.data;
+    if (b[0] == 0x00 && b[1] == 0x00 && b[2] == 0xFE && b[3] == 0xFF) {
+      s->encoding = GTEXT_YAML_ENCODING_UTF32BE;
+      memmove(s->raw_prefix.data, s->raw_prefix.data + 4, s->raw_prefix.len - 4);
+      s->raw_prefix.len -= 4;
+      s->encoding_determined = 1;
+      return 1;
+    }
+    if (b[0] == 0xFF && b[1] == 0xFE && b[2] == 0x00 && b[3] == 0x00) {
+      s->encoding = GTEXT_YAML_ENCODING_UTF32LE;
+      memmove(s->raw_prefix.data, s->raw_prefix.data + 4, s->raw_prefix.len - 4);
+      s->raw_prefix.len -= 4;
+      s->encoding_determined = 1;
+      return 1;
+    }
+  }
+
+  if (s->raw_prefix.len >= 3) {
+    const unsigned char *b = (const unsigned char *)s->raw_prefix.data;
+    if (b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {
+      s->encoding = GTEXT_YAML_ENCODING_UTF8;
+      memmove(s->raw_prefix.data, s->raw_prefix.data + 3, s->raw_prefix.len - 3);
+      s->raw_prefix.len -= 3;
+      s->encoding_determined = 1;
+      return 1;
+    }
+  }
+
+  if (s->raw_prefix.len >= 2) {
+    const unsigned char *b = (const unsigned char *)s->raw_prefix.data;
+    if (b[0] == 0xFE && b[1] == 0xFF) {
+      s->encoding = GTEXT_YAML_ENCODING_UTF16BE;
+      memmove(s->raw_prefix.data, s->raw_prefix.data + 2, s->raw_prefix.len - 2);
+      s->raw_prefix.len -= 2;
+      s->encoding_determined = 1;
+      return 1;
+    }
+    if (b[0] == 0xFF && b[1] == 0xFE) {
+      s->encoding = GTEXT_YAML_ENCODING_UTF16LE;
+      memmove(s->raw_prefix.data, s->raw_prefix.data + 2, s->raw_prefix.len - 2);
+      s->raw_prefix.len -= 2;
+      s->encoding_determined = 1;
+      return 1;
+    }
+  }
+
+  if (final || s->raw_prefix.len >= 4) {
+    s->encoding = GTEXT_YAML_ENCODING_UTF8;
+    s->encoding_determined = 1;
+    return 1;
+  }
+
+  return 0;
+}
+
 
 /* Context stack helpers */
 static yaml_context_type scanner_current_context(GTEXT_YAML_Scanner *s)
@@ -152,6 +424,11 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
     free(s);
     return NULL;
   }
+  if (!gtext_yaml_dynbuf_init(&s->raw_prefix)) {
+    gtext_yaml_dynbuf_free(&s->input);
+    free(s);
+    return NULL;
+  }
   s->cursor = 0;
   s->offset = 0;
   s->line = 1;
@@ -159,6 +436,11 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->indent_ws = 1;
   s->suppress_lf = 0;
   s->finished = 0;
+  s->encoding_determined = 0;
+  s->encoding = GTEXT_YAML_ENCODING_UTF8;
+  s->decode_pending_len = 0;
+  s->pending_error = GTEXT_YAML_OK;
+  s->pending_error_message = NULL;
   s->context_depth = 0; /* Start in block context */
   s->last_indicator = 0;
   return s;
@@ -168,6 +450,7 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s)
 {
   if (!s) return;
   gtext_yaml_dynbuf_free(&s->input);
+  gtext_yaml_dynbuf_free(&s->raw_prefix);
   free(s);
 }
 
@@ -175,18 +458,66 @@ GTEXT_INTERNAL_API int gtext_yaml_scanner_feed(GTEXT_YAML_Scanner *s, const char
 {
   if (!s) return 0;
   if (len == 0) return 1;
-  return gtext_yaml_dynbuf_append(&s->input, data, len);
+  if (!s->encoding_determined) {
+    if (!gtext_yaml_dynbuf_append(&s->raw_prefix, data, len)) {
+      scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory buffering input");
+      return 0;
+    }
+    if (!scanner_determine_encoding(s, s->finished)) {
+      return 1;
+    }
+    if (!scanner_decode_bytes(s, (const unsigned char *)s->raw_prefix.data,
+        s->raw_prefix.len, s->finished)) {
+      return 1;
+    }
+    s->raw_prefix.len = 0;
+    return 1;
+  }
+
+  return scanner_decode_bytes(s, (const unsigned char *)data, len, s->finished);
 }
 
 GTEXT_INTERNAL_API void gtext_yaml_scanner_finish(GTEXT_YAML_Scanner *s)
 {
   if (!s) return;
   s->finished = 1;
+  if (!s->encoding_determined) {
+    if (!scanner_determine_encoding(s, 1)) {
+      return;
+    }
+    if (!scanner_decode_bytes(s, (const unsigned char *)s->raw_prefix.data,
+        s->raw_prefix.len, 1)) {
+      return;
+    }
+    s->raw_prefix.len = 0;
+  } else if (s->decode_pending_len > 0) {
+    scanner_set_error(s, GTEXT_YAML_E_INVALID, "truncated encoded input");
+  }
 }
 
 GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner *s, GTEXT_YAML_Token *tok, GTEXT_YAML_Error *err)
 {
   if (!s || !tok) return GTEXT_YAML_E_INVALID;
+
+  if (!s->encoding_determined && s->finished) {
+    scanner_determine_encoding(s, 1);
+    if (s->encoding_determined && s->raw_prefix.len > 0) {
+      scanner_decode_bytes(s, (const unsigned char *)s->raw_prefix.data,
+          s->raw_prefix.len, 1);
+      s->raw_prefix.len = 0;
+    }
+  }
+
+  if (s->pending_error != GTEXT_YAML_OK) {
+    if (err) {
+      err->code = s->pending_error;
+      err->message = s->pending_error_message;
+      err->offset = s->offset;
+      err->line = s->line;
+      err->col = s->col;
+    }
+    return s->pending_error;
+  }
   
   /* Skip whitespace */
   int c;

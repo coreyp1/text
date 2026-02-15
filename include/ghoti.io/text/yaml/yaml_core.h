@@ -136,6 +136,18 @@ typedef enum {
 } GTEXT_YAML_Flow_Style;
 
 /**
+ * @enum GTEXT_YAML_Encoding
+ * @brief Output encoding selection for YAML emission.
+ */
+typedef enum {
+  GTEXT_YAML_ENCODING_UTF8,
+  GTEXT_YAML_ENCODING_UTF16LE,
+  GTEXT_YAML_ENCODING_UTF16BE,
+  GTEXT_YAML_ENCODING_UTF32LE,
+  GTEXT_YAML_ENCODING_UTF32BE
+} GTEXT_YAML_Encoding;
+
+/**
  * @brief Custom tag constructor callback.
  */
 typedef GTEXT_YAML_Status (*GTEXT_YAML_Custom_Tag_Constructor)(
@@ -216,6 +228,8 @@ typedef struct {
   bool canonical;
   GTEXT_YAML_Scalar_Style scalar_style;
   GTEXT_YAML_Flow_Style flow_style;
+  GTEXT_YAML_Encoding encoding;
+  bool emit_bom;
   bool enable_custom_tags;
   const GTEXT_YAML_Custom_Tag * custom_tags;
   size_t custom_tag_count;

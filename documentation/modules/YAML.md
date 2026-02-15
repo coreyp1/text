@@ -487,11 +487,24 @@ status = gtext_yaml_stream_finish(stream);
 
 ---
 
-## 9. UTF-8 Support
+## 9. Encoding Support
 
-The parser fully supports UTF-8 encoded input:
+The parser accepts UTF-8, UTF-16, and UTF-32 input when a BOM is present.
+Input is normalized to UTF-8 internally.
 
-### 9.1 UTF-8 Validation
+### 9.1 BOM Detection and Transcoding
+
+Supported BOMs:
+
+- UTF-8: EF BB BF
+- UTF-16LE: FF FE
+- UTF-16BE: FE FF
+- UTF-32LE: FF FE 00 00
+- UTF-32BE: 00 00 FE FF
+
+If no BOM is present, input is treated as UTF-8.
+
+### 9.2 UTF-8 Validation
 
 All input is validated as valid UTF-8. Invalid sequences cause `GTEXT_YAML_E_INVALID`:
 
@@ -502,7 +515,7 @@ GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, invalid_utf8, strlen(i
 // status == GTEXT_YAML_E_INVALID
 ```
 
-### 9.2 Unicode Escapes
+### 9.3 Unicode Escapes
 
 Double-quoted strings support Unicode escapes:
 

@@ -229,18 +229,308 @@ GTEXT_API void gtext_yaml_sink_fixed_buffer_free(GTEXT_YAML_Sink * sink) {
 }
 
 typedef struct {
+  GTEXT_YAML_Encoding encoding;
+  bool emit_bom;
+  bool bom_written;
+  unsigned char pending_utf8[4];
+  size_t pending_utf8_len;
+} yaml_encoding_state;
+
+typedef struct {
   GTEXT_YAML_Sink * sink;
   const GTEXT_YAML_Write_Options * opts;
+  yaml_encoding_state encoding;
 } yaml_writer_state;
+
+static GTEXT_YAML_Encoding writer_encoding(const GTEXT_YAML_Write_Options *opts) {
+  return opts ? opts->encoding : GTEXT_YAML_ENCODING_UTF8;
+}
+
+static bool writer_emit_bom(const GTEXT_YAML_Write_Options *opts) {
+  return opts ? opts->emit_bom : false;
+}
+
+static void writer_encoding_init(
+    yaml_encoding_state *state,
+    const GTEXT_YAML_Write_Options *opts) {
+  if (!state) {
+    return;
+  }
+  state->encoding = writer_encoding(opts);
+  state->emit_bom = writer_emit_bom(opts);
+  state->bom_written = false;
+  state->pending_utf8_len = 0;
+}
+
+static int writer_should_emit_bom(const yaml_encoding_state *state) {
+  if (!state) {
+    return 0;
+  }
+  if (state->emit_bom) {
+    return 1;
+  }
+  return state->encoding != GTEXT_YAML_ENCODING_UTF8;
+}
+
+static int writer_emit_bom_bytes(
+    GTEXT_YAML_Sink *sink,
+    yaml_encoding_state *state) {
+  if (!sink || !sink->write || !state) {
+    return 1;
+  }
+  if (state->bom_written) {
+    return 0;
+  }
+  if (!writer_should_emit_bom(state)) {
+    state->bom_written = true;
+    return 0;
+  }
+
+  const unsigned char *bom = NULL;
+  size_t bom_len = 0;
+  switch (state->encoding) {
+    case GTEXT_YAML_ENCODING_UTF8: {
+      static const unsigned char utf8_bom[] = {0xEF, 0xBB, 0xBF};
+      bom = utf8_bom;
+      bom_len = sizeof(utf8_bom);
+      break;
+    }
+    case GTEXT_YAML_ENCODING_UTF16LE: {
+      static const unsigned char utf16le_bom[] = {0xFF, 0xFE};
+      bom = utf16le_bom;
+      bom_len = sizeof(utf16le_bom);
+      break;
+    }
+    case GTEXT_YAML_ENCODING_UTF16BE: {
+      static const unsigned char utf16be_bom[] = {0xFE, 0xFF};
+      bom = utf16be_bom;
+      bom_len = sizeof(utf16be_bom);
+      break;
+    }
+    case GTEXT_YAML_ENCODING_UTF32LE: {
+      static const unsigned char utf32le_bom[] = {0xFF, 0xFE, 0x00, 0x00};
+      bom = utf32le_bom;
+      bom_len = sizeof(utf32le_bom);
+      break;
+    }
+    case GTEXT_YAML_ENCODING_UTF32BE: {
+      static const unsigned char utf32be_bom[] = {0x00, 0x00, 0xFE, 0xFF};
+      bom = utf32be_bom;
+      bom_len = sizeof(utf32be_bom);
+      break;
+    }
+    default:
+      return 1;
+  }
+
+  if (sink->write(sink->user, (const char *)bom, bom_len) != 0) {
+    return 1;
+  }
+  state->bom_written = true;
+  return 0;
+}
+
+static int writer_encode_codepoint(
+    GTEXT_YAML_Sink *sink,
+    yaml_encoding_state *state,
+    uint32_t codepoint) {
+  unsigned char out[4];
+  size_t out_len = 0;
+
+  if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+    return 1;
+  }
+
+  switch (state->encoding) {
+    case GTEXT_YAML_ENCODING_UTF16LE:
+    case GTEXT_YAML_ENCODING_UTF16BE: {
+      if (codepoint <= 0xFFFF) {
+        uint16_t unit = (uint16_t)codepoint;
+        if (state->encoding == GTEXT_YAML_ENCODING_UTF16BE) {
+          out[0] = (unsigned char)((unit >> 8) & 0xFF);
+          out[1] = (unsigned char)(unit & 0xFF);
+        } else {
+          out[0] = (unsigned char)(unit & 0xFF);
+          out[1] = (unsigned char)((unit >> 8) & 0xFF);
+        }
+        out_len = 2;
+        if (sink->write(sink->user, (const char *)out, out_len) != 0) {
+          return 1;
+        }
+        return 0;
+      }
+
+      uint32_t value = codepoint - 0x10000;
+      uint16_t high = (uint16_t)(0xD800 | ((value >> 10) & 0x3FF));
+      uint16_t low = (uint16_t)(0xDC00 | (value & 0x3FF));
+      if (state->encoding == GTEXT_YAML_ENCODING_UTF16BE) {
+        out[0] = (unsigned char)((high >> 8) & 0xFF);
+        out[1] = (unsigned char)(high & 0xFF);
+        out[2] = (unsigned char)((low >> 8) & 0xFF);
+        out[3] = (unsigned char)(low & 0xFF);
+      } else {
+        out[0] = (unsigned char)(high & 0xFF);
+        out[1] = (unsigned char)((high >> 8) & 0xFF);
+        out[2] = (unsigned char)(low & 0xFF);
+        out[3] = (unsigned char)((low >> 8) & 0xFF);
+      }
+      out_len = 4;
+      return sink->write(sink->user, (const char *)out, out_len) == 0 ? 0 : 1;
+    }
+    case GTEXT_YAML_ENCODING_UTF32LE:
+    case GTEXT_YAML_ENCODING_UTF32BE: {
+      uint32_t unit = codepoint;
+      if (state->encoding == GTEXT_YAML_ENCODING_UTF32BE) {
+        out[0] = (unsigned char)((unit >> 24) & 0xFF);
+        out[1] = (unsigned char)((unit >> 16) & 0xFF);
+        out[2] = (unsigned char)((unit >> 8) & 0xFF);
+        out[3] = (unsigned char)(unit & 0xFF);
+      } else {
+        out[0] = (unsigned char)(unit & 0xFF);
+        out[1] = (unsigned char)((unit >> 8) & 0xFF);
+        out[2] = (unsigned char)((unit >> 16) & 0xFF);
+        out[3] = (unsigned char)((unit >> 24) & 0xFF);
+      }
+      out_len = 4;
+      return sink->write(sink->user, (const char *)out, out_len) == 0 ? 0 : 1;
+    }
+    default:
+      return 1;
+  }
+}
+
+static int utf8_decode_one(
+    const unsigned char *buf,
+    size_t len,
+    uint32_t *out_codepoint,
+    size_t *out_len) {
+  if (len == 0) {
+    return 0;
+  }
+
+  unsigned char c = buf[0];
+  if (c < 0x80) {
+    *out_codepoint = c;
+    *out_len = 1;
+    return 1;
+  }
+
+  if ((c & 0xE0) == 0xC0) {
+    if (len < 2) return 0;
+    if ((buf[1] & 0xC0) != 0x80) return -1;
+    uint32_t code = ((uint32_t)(c & 0x1F) << 6) | (uint32_t)(buf[1] & 0x3F);
+    if (code < 0x80) return -1;
+    *out_codepoint = code;
+    *out_len = 2;
+    return 1;
+  }
+
+  if ((c & 0xF0) == 0xE0) {
+    if (len < 3) return 0;
+    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80) return -1;
+    uint32_t code = ((uint32_t)(c & 0x0F) << 12) |
+        ((uint32_t)(buf[1] & 0x3F) << 6) |
+        (uint32_t)(buf[2] & 0x3F);
+    if (code < 0x800) return -1;
+    if (code >= 0xD800 && code <= 0xDFFF) return -1;
+    *out_codepoint = code;
+    *out_len = 3;
+    return 1;
+  }
+
+  if ((c & 0xF8) == 0xF0) {
+    if (len < 4) return 0;
+    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80 ||
+        (buf[3] & 0xC0) != 0x80) return -1;
+    uint32_t code = ((uint32_t)(c & 0x07) << 18) |
+        ((uint32_t)(buf[1] & 0x3F) << 12) |
+        ((uint32_t)(buf[2] & 0x3F) << 6) |
+        (uint32_t)(buf[3] & 0x3F);
+    if (code < 0x10000 || code > 0x10FFFF) return -1;
+    *out_codepoint = code;
+    *out_len = 4;
+    return 1;
+  }
+
+  return -1;
+}
+
+static GTEXT_YAML_Status write_encoded_bytes(
+    GTEXT_YAML_Sink *sink,
+    yaml_encoding_state *state,
+    const char *bytes,
+    size_t len) {
+  if (!sink || !sink->write || !bytes || !state) {
+    return GTEXT_YAML_E_INVALID;
+  }
+
+  if (writer_emit_bom_bytes(sink, state) != 0) {
+    return GTEXT_YAML_E_WRITE;
+  }
+
+  if (state->encoding == GTEXT_YAML_ENCODING_UTF8) {
+    return sink->write(sink->user, bytes, len) == 0
+        ? GTEXT_YAML_OK
+        : GTEXT_YAML_E_WRITE;
+  }
+
+  size_t i = 0;
+  if (state->pending_utf8_len > 0) {
+    while (state->pending_utf8_len < sizeof(state->pending_utf8) && i < len) {
+      state->pending_utf8[state->pending_utf8_len++] =
+          (unsigned char)bytes[i++];
+    }
+    uint32_t codepoint = 0;
+    size_t used = 0;
+    int rc = utf8_decode_one(state->pending_utf8, state->pending_utf8_len,
+        &codepoint, &used);
+    if (rc < 0) {
+      return GTEXT_YAML_E_INVALID;
+    }
+    if (rc == 1) {
+      if (writer_encode_codepoint(sink, state, codepoint) != 0) {
+        return GTEXT_YAML_E_WRITE;
+      }
+      size_t remaining = state->pending_utf8_len - used;
+      if (remaining > 0) {
+        memmove(state->pending_utf8, state->pending_utf8 + used, remaining);
+      }
+      state->pending_utf8_len = remaining;
+    }
+  }
+
+  while (i < len) {
+    uint32_t codepoint = 0;
+    size_t used = 0;
+    int rc = utf8_decode_one((const unsigned char *)bytes + i, len - i,
+        &codepoint, &used);
+    if (rc < 0) {
+      return GTEXT_YAML_E_INVALID;
+    }
+    if (rc == 0) {
+      size_t remaining = len - i;
+      if (remaining > sizeof(state->pending_utf8)) {
+        return GTEXT_YAML_E_INVALID;
+      }
+      memcpy(state->pending_utf8, bytes + i, remaining);
+      state->pending_utf8_len = remaining;
+      break;
+    }
+    if (writer_encode_codepoint(sink, state, codepoint) != 0) {
+      return GTEXT_YAML_E_WRITE;
+    }
+    i += used;
+  }
+
+  return GTEXT_YAML_OK;
+}
 
 static GTEXT_YAML_Status write_bytes(
     yaml_writer_state * state, const char * bytes, size_t len) {
   if (!state || !state->sink || !state->sink->write) {
     return GTEXT_YAML_E_INVALID;
   }
-  return state->sink->write(state->sink->user, bytes, len) == 0
-      ? GTEXT_YAML_OK
-      : GTEXT_YAML_E_WRITE;
+  return write_encoded_bytes(state->sink, &state->encoding, bytes, len);
 }
 
 static GTEXT_YAML_Status write_str(
@@ -1005,6 +1295,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
 
   state.sink = sink;
   state.opts = opts;
+  writer_encoding_init(&state.encoding, opts);
   root = doc->root;
 
   if (!root) {
@@ -1018,9 +1309,15 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
 
   if (opts->trailing_newline) {
     status = write_str(&state, writer_newline(opts));
+    if (status != GTEXT_YAML_OK) {
+      return status;
+    }
+  }
+  if (state.encoding.pending_utf8_len != 0) {
+    return GTEXT_YAML_E_INVALID;
   }
 
-  return status;
+  return GTEXT_YAML_OK;
 }
 
 // ============================================================================
@@ -1045,6 +1342,7 @@ typedef struct {
 struct GTEXT_YAML_Writer {
   GTEXT_YAML_Sink sink;
   GTEXT_YAML_Write_Options opts;
+  yaml_encoding_state encoding;
   yaml_writer_stack_entry *stack;
   size_t stack_size;
   size_t stack_capacity;
@@ -1127,11 +1425,13 @@ static int writer_write_bytes(GTEXT_YAML_Writer *writer,
   if (!writer || !writer->sink.write || !bytes) {
     return 1;
   }
-  int result = writer->sink.write(writer->sink.user, bytes, len);
-  if (result != 0) {
+  GTEXT_YAML_Status status = write_encoded_bytes(
+      &writer->sink, &writer->encoding, bytes, len);
+  if (status != GTEXT_YAML_OK) {
     writer->error = true;
+    return 1;
   }
-  return result;
+  return 0;
 }
 
 static int writer_write_char(GTEXT_YAML_Writer *writer, char c) {
@@ -1737,6 +2037,7 @@ GTEXT_API GTEXT_YAML_Writer * gtext_yaml_writer_new(
   } else {
     writer->opts = gtext_yaml_write_options_default();
   }
+  writer_encoding_init(&writer->encoding, &writer->opts);
   writer->stack_capacity = YAML_WRITER_DEFAULT_STACK_CAPACITY;
   writer->stack = (yaml_writer_stack_entry *)calloc(
       writer->stack_capacity, sizeof(yaml_writer_stack_entry));
@@ -1829,6 +2130,9 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_finish(GTEXT_YAML_Writer *writer) 
   }
   if (writer->in_document) {
     return GTEXT_YAML_E_STATE;
+  }
+  if (writer->encoding.pending_utf8_len != 0) {
+    return GTEXT_YAML_E_INVALID;
   }
   return writer->error ? GTEXT_YAML_E_WRITE : GTEXT_YAML_OK;
 }

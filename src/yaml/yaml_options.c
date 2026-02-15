@@ -42,6 +42,8 @@ GTEXT_API GTEXT_YAML_Write_Options gtext_yaml_write_options_default(void)
   opts.canonical = false;
   opts.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   opts.flow_style = GTEXT_YAML_FLOW_STYLE_AUTO;
+  opts.encoding = GTEXT_YAML_ENCODING_UTF8;
+  opts.emit_bom = false;
   opts.enable_custom_tags = false;
   opts.custom_tags = NULL;
   opts.custom_tag_count = 0;
