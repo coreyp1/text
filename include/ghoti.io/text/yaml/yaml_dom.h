@@ -270,6 +270,14 @@ GTEXT_API const char * gtext_yaml_node_inline_comment(
 );
 
 /**
+ * @brief Get the source location for a node.
+ */
+GTEXT_API bool gtext_yaml_node_source_location(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Source_Location *out
+);
+
+/**
  * @brief Set the leading comment for a node.
  */
 GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_leading_comment(

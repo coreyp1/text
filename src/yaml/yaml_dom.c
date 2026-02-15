@@ -60,6 +60,9 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	node->as.scalar.type = GTEXT_YAML_STRING;
 	node->as.scalar.leading_comment = NULL;
 	node->as.scalar.inline_comment = NULL;
+	node->as.scalar.source_offset = 0;
+	node->as.scalar.source_line = 0;
+	node->as.scalar.source_col = 0;
 	node->as.scalar.bool_value = false;
 	node->as.scalar.int_value = 0;
 	node->as.scalar.float_value = 0.0;
@@ -120,6 +123,9 @@ GTEXT_YAML_Node *yaml_node_new_sequence(
 	node->as.sequence.type = GTEXT_YAML_SEQUENCE;
 	node->as.sequence.leading_comment = NULL;
 	node->as.sequence.inline_comment = NULL;
+	node->as.sequence.source_offset = 0;
+	node->as.sequence.source_line = 0;
+	node->as.sequence.source_col = 0;
 	node->as.sequence.count = 0;  /* Caller will populate */
 	node->as.sequence.tag = tag ? arena_strdup(ctx, tag, strlen(tag)) : NULL;
 	node->as.sequence.anchor = anchor ? arena_strdup(ctx, anchor, strlen(anchor)) : NULL;
@@ -159,6 +165,9 @@ GTEXT_YAML_Node *yaml_node_new_mapping(
 	node->as.mapping.type = GTEXT_YAML_MAPPING;
 	node->as.mapping.leading_comment = NULL;
 	node->as.mapping.inline_comment = NULL;
+	node->as.mapping.source_offset = 0;
+	node->as.mapping.source_line = 0;
+	node->as.mapping.source_col = 0;
 	node->as.mapping.count = 0;  /* Caller will populate */
 	node->as.mapping.tag = tag ? arena_strdup(ctx, tag, strlen(tag)) : NULL;
 	node->as.mapping.anchor = anchor ? arena_strdup(ctx, anchor, strlen(anchor)) : NULL;
@@ -196,6 +205,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
 	node->as.alias.type = GTEXT_YAML_ALIAS;
 	node->as.alias.leading_comment = NULL;
 	node->as.alias.inline_comment = NULL;
+	node->as.alias.source_offset = 0;
+	node->as.alias.source_line = 0;
+	node->as.alias.source_col = 0;
 	node->as.alias.anchor_name = arena_strdup(ctx, anchor_name, strlen(anchor_name));
 	node->as.alias.target = NULL;  /* Will be resolved later */
 	
@@ -382,12 +394,59 @@ static const char *node_inline_comment(const GTEXT_YAML_Node *n) {
 	}
 }
 
+static bool node_source_location(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Source_Location *out
+) {
+	if (!n || !out) return false;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			out->offset = n->as.scalar.source_offset;
+			out->line = n->as.scalar.source_line;
+			out->col = n->as.scalar.source_col;
+			return true;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			out->offset = n->as.sequence.source_offset;
+			out->line = n->as.sequence.source_line;
+			out->col = n->as.sequence.source_col;
+			return true;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			out->offset = n->as.mapping.source_offset;
+			out->line = n->as.mapping.source_line;
+			out->col = n->as.mapping.source_col;
+			return true;
+		case GTEXT_YAML_ALIAS:
+			out->offset = n->as.alias.source_offset;
+			out->line = n->as.alias.source_line;
+			out->col = n->as.alias.source_col;
+			return true;
+		default:
+			break;
+	}
+
+	return false;
+}
+
 GTEXT_API const char *gtext_yaml_node_leading_comment(const GTEXT_YAML_Node *n) {
 	return node_leading_comment(n);
 }
 
 GTEXT_API const char *gtext_yaml_node_inline_comment(const GTEXT_YAML_Node *n) {
 	return node_inline_comment(n);
+}
+
+GTEXT_API bool gtext_yaml_node_source_location(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Source_Location *out
+) {
+	return node_source_location(n, out);
 }
 
 static GTEXT_YAML_Status node_set_comment(

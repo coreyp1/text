@@ -80,6 +80,16 @@ typedef struct {
 } GTEXT_YAML_Error;
 
 /**
+ * @struct GTEXT_YAML_Source_Location
+ * @brief Source location metadata for a node.
+ */
+typedef struct {
+  size_t offset;
+  int line;
+  int col;
+} GTEXT_YAML_Source_Location;
+
+/**
  * @enum GTEXT_YAML_Node_Type
  * @brief Node types present in the YAML DOM.
  */

@@ -24,6 +24,9 @@ typedef struct {
 	size_t capacity;
 	char *anchor;  /* Anchor for this collection level (malloc'd, NULL if none) */
 	char *tag;     /* Tag for this collection level (malloc'd, NULL if none) */
+	size_t source_offset; /* Byte offset for collection start */
+	int source_line;      /* 1-based line for collection start */
+	int source_col;       /* 1-based column for collection start */
 } saved_temp;
 
 /* Anchor map entry */
@@ -905,7 +908,10 @@ static bool stack_push(
 	const char *anchor,
 	const char *tag,
 	int indent,
-	bool is_block
+	bool is_block,
+	size_t source_offset,
+	int source_line,
+	int source_col
 ) {
 	if (p->stack.depth >= p->stack.capacity) {
 		/* Grow stack */
@@ -944,6 +950,9 @@ static bool stack_push(
 	p->stack.temps[p->stack.depth].capacity = p->temp.capacity;
 	p->stack.temps[p->stack.depth].anchor = anchor ? strdup(anchor) : NULL;
 	p->stack.temps[p->stack.depth].tag = tag ? strdup(tag) : NULL;
+	p->stack.temps[p->stack.depth].source_offset = source_offset;
+	p->stack.temps[p->stack.depth].source_line = source_line;
+	p->stack.temps[p->stack.depth].source_col = source_col;
 	
 	/* Allocate new temp storage for this level */
 	p->temp.capacity = 16;
@@ -991,16 +1000,115 @@ static void stack_pop(parser_state *p) {
 /**
  * @brief Pop and get the saved anchor/tag, then clear them.
  */
-static void stack_get_and_clear_metadata(parser_state *p, char **anchor, char **tag) {
+static void stack_get_and_clear_metadata(
+	parser_state *p,
+	char **anchor,
+	char **tag,
+	size_t *source_offset,
+	int *source_line,
+	int *source_col
+) {
 	if (p->stack.depth > 0 && p->stack.depth <= p->stack.capacity) {
 		size_t idx = p->stack.depth - 1;
 		*anchor = p->stack.temps[idx].anchor;
 		*tag = p->stack.temps[idx].tag;
+		if (source_offset) *source_offset = p->stack.temps[idx].source_offset;
+		if (source_line) *source_line = p->stack.temps[idx].source_line;
+		if (source_col) *source_col = p->stack.temps[idx].source_col;
 		p->stack.temps[idx].anchor = NULL;
 		p->stack.temps[idx].tag = NULL;
+		p->stack.temps[idx].source_offset = 0;
+		p->stack.temps[idx].source_line = 0;
+		p->stack.temps[idx].source_col = 0;
 	} else {
 		*anchor = NULL;
 		*tag = NULL;
+		if (source_offset) *source_offset = 0;
+		if (source_line) *source_line = 0;
+		if (source_col) *source_col = 0;
+	}
+}
+
+static void node_set_source_location(
+	GTEXT_YAML_Node *node,
+	size_t offset,
+	int line,
+	int col
+) {
+	if (!node) return;
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			node->as.scalar.source_offset = offset;
+			node->as.scalar.source_line = line;
+			node->as.scalar.source_col = col;
+			return;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			node->as.sequence.source_offset = offset;
+			node->as.sequence.source_line = line;
+			node->as.sequence.source_col = col;
+			return;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			node->as.mapping.source_offset = offset;
+			node->as.mapping.source_line = line;
+			node->as.mapping.source_col = col;
+			return;
+		case GTEXT_YAML_ALIAS:
+			node->as.alias.source_offset = offset;
+			node->as.alias.source_line = line;
+			node->as.alias.source_col = col;
+			return;
+		default:
+			return;
+	}
+}
+
+static void node_get_source_location(
+	const GTEXT_YAML_Node *node,
+	size_t *offset,
+	int *line,
+	int *col
+) {
+	if (offset) *offset = 0;
+	if (line) *line = 0;
+	if (col) *col = 0;
+	if (!node) return;
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			if (offset) *offset = node->as.scalar.source_offset;
+			if (line) *line = node->as.scalar.source_line;
+			if (col) *col = node->as.scalar.source_col;
+			return;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			if (offset) *offset = node->as.sequence.source_offset;
+			if (line) *line = node->as.sequence.source_line;
+			if (col) *col = node->as.sequence.source_col;
+			return;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			if (offset) *offset = node->as.mapping.source_offset;
+			if (line) *line = node->as.mapping.source_line;
+			if (col) *col = node->as.mapping.source_col;
+			return;
+		case GTEXT_YAML_ALIAS:
+			if (offset) *offset = node->as.alias.source_offset;
+			if (line) *line = node->as.alias.source_line;
+			if (col) *col = node->as.alias.source_col;
+			return;
+		default:
+			return;
 	}
 }
 
@@ -1157,12 +1265,22 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	GTEXT_YAML_Node *node = NULL;
 	char *anchor = NULL;
 	char *tag = NULL;
+	size_t source_offset = 0;
+	int source_line = 0;
+	int source_col = 0;
 	int state = 0;
 
 	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
 
 	state = p->stack.states[p->stack.depth - 1];
-	stack_get_and_clear_metadata(p, &anchor, &tag);
+	stack_get_and_clear_metadata(
+		p,
+		&anchor,
+		&tag,
+		&source_offset,
+		&source_line,
+		&source_col
+	);
 
 	if (state == STATE_SEQUENCE) {
 		node = yaml_node_new_sequence(p->ctx, p->temp.count, tag, anchor);
@@ -1204,6 +1322,8 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 
 	free(anchor);
 	free(tag);
+
+	node_set_source_location(node, source_offset, source_line, source_col);
 
 	if (node->type == GTEXT_YAML_SEQUENCE && node->as.sequence.anchor) {
 		GTEXT_YAML_Status anchor_status = register_anchor(p, node->as.sequence.anchor, node);
@@ -1420,6 +1540,8 @@ static GTEXT_YAML_Status parse_callback(
 				return GTEXT_YAML_E_OOM;
 			}
 
+			node_set_source_location(node, event->offset, event->line, event->col);
+
 			parser_attach_leading_comment(p, node);
 			
 			/* Register anchor if present */
@@ -1482,7 +1604,18 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Push placeholder (we'll create the actual node on SEQUENCE_END) */
 			/* Store anchor and tag from event for later use */
-			if (!stack_push(p, NULL, STATE_SEQUENCE, evt->anchor, evt->tag, -1, false)) {
+			if (!stack_push(
+				p,
+				NULL,
+				STATE_SEQUENCE,
+				evt->anchor,
+				evt->tag,
+				-1,
+				false,
+				evt->offset,
+				evt->line,
+				evt->col
+			)) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -1497,7 +1630,17 @@ static GTEXT_YAML_Status parse_callback(
 			/* Get anchor and tag from saved stack state */
 			char *anchor = NULL;
 			char *tag = NULL;
-			stack_get_and_clear_metadata(p, &anchor, &tag);
+			size_t source_offset = 0;
+			int source_line = 0;
+			int source_col = 0;
+			stack_get_and_clear_metadata(
+				p,
+				&anchor,
+				&tag,
+				&source_offset,
+				&source_line,
+				&source_col
+			);
 			
 			/* Create sequence node with collected children */
 			GTEXT_YAML_Node *node = yaml_node_new_sequence(
@@ -1527,6 +1670,7 @@ static GTEXT_YAML_Status parse_callback(
 				node->as.sequence.children[i] = p->temp.items[i];
 			}
 			node->as.sequence.count = p->temp.count;
+			node_set_source_location(node, source_offset, source_line, source_col);
 			
 			/* Register anchor if present */
 			if (node->as.sequence.anchor) {
@@ -1572,7 +1716,18 @@ static GTEXT_YAML_Status parse_callback(
 			/* Start building a mapping */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
 			
-			if (!stack_push(p, NULL, STATE_MAPPING_KEY, evt->anchor, evt->tag, -1, false)) {
+			if (!stack_push(
+				p,
+				NULL,
+				STATE_MAPPING_KEY,
+				evt->anchor,
+				evt->tag,
+				-1,
+				false,
+				evt->offset,
+				evt->line,
+				evt->col
+			)) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -1587,7 +1742,17 @@ static GTEXT_YAML_Status parse_callback(
 			/* Get anchor and tag from saved stack state */
 			char *anchor = NULL;
 			char *tag = NULL;
-			stack_get_and_clear_metadata(p, &anchor, &tag);
+			size_t source_offset = 0;
+			int source_line = 0;
+			int source_col = 0;
+			stack_get_and_clear_metadata(
+				p,
+				&anchor,
+				&tag,
+				&source_offset,
+				&source_line,
+				&source_col
+			);
 			
 			/* Create mapping node with collected key-value pairs */
 			/* temp.items should have [key0, val0, key1, val1, ...] */
@@ -1623,6 +1788,7 @@ static GTEXT_YAML_Status parse_callback(
 				node->as.mapping.pairs[i].value_tag = NULL;
 			}
 			node->as.mapping.count = pair_count;
+			node_set_source_location(node, source_offset, source_line, source_col);
 			
 			/* Register anchor if present */
 			if (node->as.mapping.anchor) {
@@ -1715,6 +1881,8 @@ static GTEXT_YAML_Status parse_callback(
 				return GTEXT_YAML_E_OOM;
 			}
 
+			node_set_source_location(node, event->offset, event->line, event->col);
+
 			parser_attach_leading_comment(p, node);
 			
 			/* Track alias for later resolution */
@@ -1760,7 +1928,18 @@ static GTEXT_YAML_Status parse_callback(
 			switch (ch) {
 				case '[':
 					/* Start flow sequence (fallback if START event not emitted) */
-					if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL, -1, false)) {
+					if (!stack_push(
+						p,
+						NULL,
+						STATE_SEQUENCE,
+						NULL,
+						NULL,
+						-1,
+						false,
+						event->offset,
+						event->line,
+						event->col
+					)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_OOM;
@@ -1780,10 +1959,28 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_INVALID;
 					}
+					char *anchor = NULL;
+					char *tag = NULL;
+					size_t source_offset = 0;
+					int source_line = 0;
+					int source_col = 0;
+					stack_get_and_clear_metadata(
+						p,
+						&anchor,
+						&tag,
+						&source_offset,
+						&source_line,
+						&source_col
+					);
 					
 					GTEXT_YAML_Node *node = yaml_node_new_sequence(
-						p->ctx, p->temp.count, NULL, NULL
+						p->ctx,
+						p->temp.count,
+						tag,
+						anchor
 					);
+					free(anchor);
+					free(tag);
 					if (!node) {
 						p->failed = true;
 						if (p->error) {
@@ -1797,6 +1994,7 @@ static GTEXT_YAML_Status parse_callback(
 					
 					/* Set the count */
 					node->as.sequence.count = p->temp.count;
+					node_set_source_location(node, source_offset, source_line, source_col);
 					
 					/* Copy collected items */
 					for (size_t i = 0; i < p->temp.count; i++) {
@@ -1827,7 +2025,18 @@ static GTEXT_YAML_Status parse_callback(
 				
 				case '{':
 					/* Start flow mapping (fallback if START event not emitted) */
-					if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, -1, false)) {
+					if (!stack_push(
+						p,
+						NULL,
+						STATE_MAPPING_KEY,
+						NULL,
+						NULL,
+						-1,
+						false,
+						event->offset,
+						event->line,
+						event->col
+					)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_OOM;
@@ -1849,12 +2058,27 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_INVALID;
 					}
+					char *anchor = NULL;
+					char *tag = NULL;
+					size_t source_offset = 0;
+					int source_line = 0;
+					int source_col = 0;
+					stack_get_and_clear_metadata(
+						p,
+						&anchor,
+						&tag,
+						&source_offset,
+						&source_line,
+						&source_col
+					);
 					
 					/* temp.count should be even (key-value pairs) */
 					size_t pair_count = p->temp.count / 2;
 					GTEXT_YAML_Node *node = yaml_node_new_mapping(
-						p->ctx, pair_count, NULL, NULL
+						p->ctx, pair_count, tag, anchor
 					);
+					free(anchor);
+					free(tag);
 					if (!node) {
 						p->failed = true;
 						if (p->error) {
@@ -1868,6 +2092,7 @@ static GTEXT_YAML_Status parse_callback(
 					
 					/* Set the count */
 					node->as.mapping.count = pair_count;
+					node_set_source_location(node, source_offset, source_line, source_col);
 					
 					/* Copy key-value pairs */
 					for (size_t i = 0; i < pair_count; i++) {
@@ -1906,6 +2131,9 @@ static GTEXT_YAML_Status parse_callback(
 						? p->last_scalar_key_col
 						: p->last_scalar_col;
 					GTEXT_YAML_Node *key_node = NULL;
+					size_t source_offset = 0;
+					int source_line = 0;
+					int source_col = 0;
 					size_t top = 0;
 
 					if (p->explicit_key_pending && p->stack.depth <= p->explicit_key_depth) {
@@ -1982,8 +2210,20 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_INVALID;
 					}
+					node_get_source_location(key_node, &source_offset, &source_line, &source_col);
 
-					if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, key_indent, true)) {
+					if (!stack_push(
+						p,
+						NULL,
+						STATE_MAPPING_KEY,
+						NULL,
+						NULL,
+						key_indent,
+						true,
+						source_offset,
+						source_line,
+						source_col
+					)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_OOM;
@@ -2040,7 +2280,18 @@ static GTEXT_YAML_Status parse_callback(
 					}
 
 					if (!at_block_mapping) {
-						if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, indent, true)) {
+						if (!stack_push(
+							p,
+							NULL,
+							STATE_MAPPING_KEY,
+							NULL,
+							NULL,
+							indent,
+							true,
+							event->offset,
+							event->line,
+							event->col
+						)) {
 							p->failed = true;
 							if (p->error) {
 								p->error->code = GTEXT_YAML_E_OOM;
@@ -2080,7 +2331,18 @@ static GTEXT_YAML_Status parse_callback(
 					}
 
 					if (start_new) {
-						if (!stack_push(p, NULL, STATE_SEQUENCE, NULL, NULL, indent, true)) {
+						if (!stack_push(
+							p,
+							NULL,
+							STATE_SEQUENCE,
+							NULL,
+							NULL,
+							indent,
+							true,
+							event->offset,
+							event->line,
+							event->col
+						)) {
 							p->failed = true;
 							if (p->error) {
 								p->error->code = GTEXT_YAML_E_OOM;

@@ -174,6 +174,9 @@ typedef struct {
 	size_t length;              /* Length excluding null terminator */
 	const char *leading_comment; /* Optional leading comment */
 	const char *inline_comment;  /* Optional inline comment */
+	size_t source_offset;       /* Byte offset for node start */
+	int source_line;            /* 1-based line number */
+	int source_col;             /* 1-based column number */
 	bool bool_value;            /* Parsed boolean value */
 	int64_t int_value;          /* Parsed integer value */
 	double float_value;         /* Parsed floating-point value */
@@ -203,6 +206,9 @@ typedef struct {
 	const char *anchor;         /* Optional anchor name, NULL if none */
 	const char *leading_comment; /* Optional leading comment */
 	const char *inline_comment;  /* Optional inline comment */
+	size_t source_offset;       /* Byte offset for node start */
+	int source_line;            /* 1-based line number */
+	int source_col;             /* 1-based column number */
 	size_t count;               /* Number of children */
 	GTEXT_YAML_Node *children[1]; /* Flexible array member */
 } yaml_node_sequence;
@@ -226,6 +232,9 @@ typedef struct {
 	const char *anchor;         /* Optional anchor name, NULL if none */
 	const char *leading_comment; /* Optional leading comment */
 	const char *inline_comment;  /* Optional inline comment */
+	size_t source_offset;       /* Byte offset for node start */
+	int source_line;            /* 1-based line number */
+	int source_col;             /* 1-based column number */
 	size_t count;               /* Number of key-value pairs */
 	yaml_mapping_pair pairs[1]; /* Flexible array member */
 } yaml_node_mapping;
@@ -237,6 +246,9 @@ typedef struct {
 	GTEXT_YAML_Node *target;    /* Resolved target node (NULL until resolved) */
 	const char *leading_comment; /* Optional leading comment */
 	const char *inline_comment;  /* Optional inline comment */
+	size_t source_offset;       /* Byte offset for node start */
+	int source_line;            /* 1-based line number */
+	int source_col;             /* 1-based column number */
 } yaml_node_alias;
 
 /* Union node type (public type is opaque pointer to this) */
