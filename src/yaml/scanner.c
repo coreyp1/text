@@ -30,6 +30,7 @@ struct GTEXT_YAML_Scanner {
   int line;
   int col;
   int finished;           /* whether finish() was called */
+  int indent_ws;          /* 1 if still in indentation whitespace on this line */
   
   /* Context stack for tracking block vs flow context */
   yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
@@ -65,8 +66,12 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
   if (c == '\n') {
     s->line++;
     s->col = 1;
+    s->indent_ws = 1;
   } else {
     s->col++;
+    if (s->indent_ws && c != ' ') {
+      s->indent_ws = 0;
+    }
   }
   /* When we've consumed enough that we can free the earlier prefix, do so. */
   if (s->cursor > 1024 && s->cursor * 2 > s->input.len) {
@@ -77,6 +82,21 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
     s->cursor = 0;
   }
   return c;
+}
+
+static GTEXT_YAML_Status scanner_tab_indent_error(
+    const GTEXT_YAML_Scanner *s,
+    GTEXT_YAML_Error *err,
+    size_t rel_offset)
+{
+  if (err) {
+    err->code = GTEXT_YAML_E_INVALID;
+    err->message = "tab character used for indentation";
+    err->offset = s->offset + rel_offset;
+    err->line = s->line;
+    err->col = s->col + (int)rel_offset;
+  }
+  return GTEXT_YAML_E_INVALID;
 }
 
 /* convert ASCII hex character to value, or -1 if invalid */
@@ -123,6 +143,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->offset = 0;
   s->line = 1;
   s->col = 1;
+  s->indent_ws = 1;
   s->finished = 0;
   s->context_depth = 0; /* Start in block context */
   s->last_indicator = 0;
@@ -165,6 +186,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       tok->col = s->col;
       s->last_indicator = 0;
       return GTEXT_YAML_OK;
+    }
+    if (c == '\t' && s->indent_ws) {
+      return scanner_tab_indent_error(s, err, 0);
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
       scanner_consume(s);
@@ -304,6 +328,19 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         break;
       }
       size_t pos = s->cursor;
+      size_t indent_pos = pos;
+      while (indent_pos < s->input.len) {
+        char ch = s->input.data[indent_pos];
+        if (ch == ' ') {
+          indent_pos++;
+          continue;
+        }
+        if (ch == '\t') {
+          gtext_yaml_dynbuf_free(&scalar);
+          return scanner_tab_indent_error(s, err, indent_pos - s->cursor);
+        }
+        break;
+      }
       int first = (unsigned char)s->input.data[pos];
       if (explicit_indent > 0) {
         size_t colcount = 0;
@@ -342,7 +379,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
        - compute minimum indentation from non-blank lines and remove it
        - apply folding if style == '>' (convert line breaks to spaces except between paragraph breaks)
        - apply chomping: already consumed chomping indicator but we recorded none; handle default clip: remove single trailing newline
-       For minimal behavior we treat tabs as single indent char.
+       Tabs in indentation are rejected; tabs in content are preserved.
     */
     size_t in_len = scalar.len;
     char *in_buf = scalar.data; /* owned by dynbuf */

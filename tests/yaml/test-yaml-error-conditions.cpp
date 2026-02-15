@@ -180,6 +180,63 @@ TEST(YamlErrorConditions, TabInPlainScalar) {
 }
 
 //
+// Test: Tab character in indentation should be rejected
+//
+TEST(YamlErrorConditions, TabInIndentationRejected) {
+    const char *input = "\tkey: value\n";
+
+    GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, noop_cb, NULL);
+    ASSERT_NE(s, nullptr);
+
+    GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+    if (st == GTEXT_YAML_OK) {
+        st = gtext_yaml_stream_finish(s);
+    }
+
+    EXPECT_NE(st, GTEXT_YAML_OK);
+
+    gtext_yaml_stream_free(s);
+}
+
+//
+// Test: Tabs inside quoted scalar content are allowed
+//
+TEST(YamlErrorConditions, TabInQuotedScalarAllowed) {
+    const char *input = "key: \"a\tb\"";
+
+    GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, noop_cb, NULL);
+    ASSERT_NE(s, nullptr);
+
+    GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+    if (st == GTEXT_YAML_OK) {
+        st = gtext_yaml_stream_finish(s);
+    }
+
+    EXPECT_EQ(st, GTEXT_YAML_OK);
+
+    gtext_yaml_stream_free(s);
+}
+
+//
+// Test: Tab character in block scalar indentation should be rejected
+//
+TEST(YamlErrorConditions, TabInBlockScalarIndentationRejected) {
+    const char *input = "key: |\n\tline\n";
+
+    GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, noop_cb, NULL);
+    ASSERT_NE(s, nullptr);
+
+    GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+    if (st == GTEXT_YAML_OK) {
+        st = gtext_yaml_stream_finish(s);
+    }
+
+    EXPECT_NE(st, GTEXT_YAML_OK);
+
+    gtext_yaml_stream_free(s);
+}
+
+//
 // Test: Invalid anchor name (starts with number)
 //
 TEST(YamlErrorConditions, InvalidAnchorName) {
@@ -363,7 +420,7 @@ TEST(YamlErrorConditions, EmptyDocument) {
 // Test: Only whitespace document
 //
 TEST(YamlErrorConditions, WhitespaceOnlyDocument) {
-    const char *input = "   \n  \t  \n   ";
+    const char *input = "   \n     \n   ";
     
     GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, noop_cb, NULL);
     ASSERT_NE(s, nullptr);
