@@ -58,6 +58,8 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	/* Initialize scalar fields */
 	node->type = GTEXT_YAML_STRING;
 	node->as.scalar.type = GTEXT_YAML_STRING;
+	node->as.scalar.leading_comment = NULL;
+	node->as.scalar.inline_comment = NULL;
 	node->as.scalar.bool_value = false;
 	node->as.scalar.int_value = 0;
 	node->as.scalar.float_value = 0.0;
@@ -116,6 +118,8 @@ GTEXT_YAML_Node *yaml_node_new_sequence(
 	/* Initialize sequence fields */
 	node->type = GTEXT_YAML_SEQUENCE;
 	node->as.sequence.type = GTEXT_YAML_SEQUENCE;
+	node->as.sequence.leading_comment = NULL;
+	node->as.sequence.inline_comment = NULL;
 	node->as.sequence.count = 0;  /* Caller will populate */
 	node->as.sequence.tag = tag ? arena_strdup(ctx, tag, strlen(tag)) : NULL;
 	node->as.sequence.anchor = anchor ? arena_strdup(ctx, anchor, strlen(anchor)) : NULL;
@@ -153,6 +157,8 @@ GTEXT_YAML_Node *yaml_node_new_mapping(
 	/* Initialize mapping fields */
 	node->type = GTEXT_YAML_MAPPING;
 	node->as.mapping.type = GTEXT_YAML_MAPPING;
+	node->as.mapping.leading_comment = NULL;
+	node->as.mapping.inline_comment = NULL;
 	node->as.mapping.count = 0;  /* Caller will populate */
 	node->as.mapping.tag = tag ? arena_strdup(ctx, tag, strlen(tag)) : NULL;
 	node->as.mapping.anchor = anchor ? arena_strdup(ctx, anchor, strlen(anchor)) : NULL;
@@ -188,6 +194,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
 	/* Initialize alias fields */
 	node->type = GTEXT_YAML_ALIAS;
 	node->as.alias.type = GTEXT_YAML_ALIAS;
+	node->as.alias.leading_comment = NULL;
+	node->as.alias.inline_comment = NULL;
 	node->as.alias.anchor_name = arena_strdup(ctx, anchor_name, strlen(anchor_name));
 	node->as.alias.target = NULL;  /* Will be resolved later */
 	
@@ -326,6 +334,130 @@ GTEXT_API bool gtext_yaml_node_as_binary(
 	*out_data = n->as.scalar.binary_data;
 	*out_len = n->as.scalar.binary_len;
 	return true;
+}
+
+static const char *node_leading_comment(const GTEXT_YAML_Node *n) {
+	if (!n) return NULL;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			return n->as.scalar.leading_comment;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			return n->as.sequence.leading_comment;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			return n->as.mapping.leading_comment;
+		case GTEXT_YAML_ALIAS:
+			return n->as.alias.leading_comment;
+		default:
+			return NULL;
+	}
+}
+
+static const char *node_inline_comment(const GTEXT_YAML_Node *n) {
+	if (!n) return NULL;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			return n->as.scalar.inline_comment;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			return n->as.sequence.inline_comment;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			return n->as.mapping.inline_comment;
+		case GTEXT_YAML_ALIAS:
+			return n->as.alias.inline_comment;
+		default:
+			return NULL;
+	}
+}
+
+GTEXT_API const char *gtext_yaml_node_leading_comment(const GTEXT_YAML_Node *n) {
+	return node_leading_comment(n);
+}
+
+GTEXT_API const char *gtext_yaml_node_inline_comment(const GTEXT_YAML_Node *n) {
+	return node_inline_comment(n);
+}
+
+static GTEXT_YAML_Status node_set_comment(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *n,
+	const char *comment,
+	bool inline_comment
+) {
+	if (!doc || !doc->ctx || !n) return GTEXT_YAML_E_INVALID;
+	const char *stored = NULL;
+	if (comment && comment[0] != '\0') {
+		stored = arena_strdup(doc->ctx, comment, strlen(comment));
+		if (!stored) return GTEXT_YAML_E_OOM;
+	}
+
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			if (inline_comment) {
+				n->as.scalar.inline_comment = stored;
+			} else {
+				n->as.scalar.leading_comment = stored;
+			}
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			if (inline_comment) {
+				n->as.sequence.inline_comment = stored;
+			} else {
+				n->as.sequence.leading_comment = stored;
+			}
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			if (inline_comment) {
+				n->as.mapping.inline_comment = stored;
+			} else {
+				n->as.mapping.leading_comment = stored;
+			}
+			return GTEXT_YAML_OK;
+		case GTEXT_YAML_ALIAS:
+			if (inline_comment) {
+				n->as.alias.inline_comment = stored;
+			} else {
+				n->as.alias.leading_comment = stored;
+			}
+			return GTEXT_YAML_OK;
+		default:
+			return GTEXT_YAML_E_INVALID;
+	}
+}
+
+GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_leading_comment(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *n,
+	const char *comment
+) {
+	return node_set_comment(doc, n, comment, false);
+}
+
+GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_inline_comment(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *n,
+	const char *comment
+) {
+	return node_set_comment(doc, n, comment, true);
 }
 
 GTEXT_API bool gtext_yaml_node_set_bool(GTEXT_YAML_Node *n, bool value) {

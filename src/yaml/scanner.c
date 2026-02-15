@@ -540,13 +540,57 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       continue;
     }
     if (c == '#') {
-      while (1) {
-        c = scanner_peek(s);
-        if (c == -1) break;
-        if (c == '\n' || c == '\r') break;
+      size_t look = 0;
+      while (s->cursor + look < s->input.len) {
+        int nc = (unsigned char)s->input.data[s->cursor + look];
+        if (nc == '\n' || nc == '\r') break;
+        look++;
+      }
+
+      if (s->cursor + look >= s->input.len && !s->finished) {
+        return GTEXT_YAML_E_INCOMPLETE;
+      }
+
+      size_t off = s->offset;
+      int line = s->line;
+      int col = s->col;
+      bool inline_comment = s->indent_ws == 0;
+
+      const char *raw = s->input.data + s->cursor + 1;
+      size_t raw_len = look > 0 ? look - 1 : 0;
+
+      size_t start = 0;
+      while (start < raw_len && (raw[start] == ' ' || raw[start] == '\t')) {
+        start++;
+      }
+      size_t out_len = raw_len > start ? raw_len - start : 0;
+      size_t alloc_len = out_len + 1;
+      char *out = (char *)malloc(alloc_len);
+      if (!out) {
+        if (err) {
+          err->code = GTEXT_YAML_E_OOM;
+          err->message = "out of memory";
+        }
+        return GTEXT_YAML_E_OOM;
+      }
+      if (out_len > 0) {
+        memcpy(out, raw + start, out_len);
+      }
+      out[out_len] = '\0';
+
+      for (size_t i = 0; i < look; i++) {
         scanner_consume(s);
       }
-      continue;
+
+      tok->type = GTEXT_YAML_TOKEN_COMMENT;
+      tok->u.comment.ptr = out;
+      tok->u.comment.len = out_len;
+      tok->u.comment.inline_comment = inline_comment;
+      tok->offset = off;
+      tok->line = line;
+      tok->col = col;
+      s->last_indicator = 0;
+      return GTEXT_YAML_OK;
     }
     break;
   } while (1);

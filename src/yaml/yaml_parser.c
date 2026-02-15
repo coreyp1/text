@@ -104,6 +104,9 @@ typedef struct {
 	bool explicit_key_active;           /* True if explicit key stored and awaiting ':' */
 	int explicit_key_indent;            /* Indent column for explicit key */
 	size_t explicit_key_depth;          /* Stack depth for explicit key mapping */
+	char *pending_leading_comment;      /* Pending leading comment (malloc'd) */
+	GTEXT_YAML_Node *last_emitted_node; /* Last node created for inline comments */
+	int last_emitted_line;              /* Line for last_emitted_node */
 } parser_state;
 
 /* Stack states */
@@ -186,6 +189,9 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_col = -1;
 	p->last_scalar_key_col = -1;
 	p->last_scalar_node = NULL;
+	p->pending_leading_comment = NULL;
+	p->last_emitted_node = NULL;
+	p->last_emitted_line = -1;
 	p->last_scalar_in_root = false;
 	p->last_scalar_in_temp = false;
 	p->last_scalar_temp_depth = 0;
@@ -228,6 +234,8 @@ static void parser_free(parser_state *p) {
 	/* Free alias list */
 	free(p->aliases.nodes);
 
+	free(p->pending_leading_comment);
+
 	/* Free tag handles */
 	for (size_t i = 0; i < p->tag_handles.count; i++) {
 		free(p->tag_handles.entries[i].handle);
@@ -238,6 +246,87 @@ static void parser_free(parser_state *p) {
 
 /* Forward declarations */
 static GTEXT_YAML_Node *lookup_anchor(parser_state *p, const char *name);
+
+static const char *parser_arena_strdup(
+	yaml_context *ctx,
+	const char *str,
+	size_t len
+) {
+	if (!ctx || !str) return NULL;
+	char *copy = (char *)yaml_context_alloc(ctx, len + 1, 1);
+	if (!copy) return NULL;
+	memcpy(copy, str, len);
+	copy[len] = '\0';
+	return copy;
+}
+
+static void parser_attach_leading_comment(parser_state *p, GTEXT_YAML_Node *node) {
+	if (!p || !node || !p->pending_leading_comment || !p->ctx) return;
+	const char *stored = parser_arena_strdup(
+		p->ctx,
+		p->pending_leading_comment,
+		strlen(p->pending_leading_comment)
+	);
+	if (!stored) return;
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			node->as.scalar.leading_comment = stored;
+			break;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			node->as.sequence.leading_comment = stored;
+			break;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			node->as.mapping.leading_comment = stored;
+			break;
+		case GTEXT_YAML_ALIAS:
+			node->as.alias.leading_comment = stored;
+			break;
+		default:
+			break;
+	}
+	free(p->pending_leading_comment);
+	p->pending_leading_comment = NULL;
+}
+
+static void parser_attach_inline_comment(
+	parser_state *p,
+	GTEXT_YAML_Node *node,
+	const char *comment
+) {
+	if (!p || !node || !comment || !p->ctx) return;
+	const char *stored = parser_arena_strdup(p->ctx, comment, strlen(comment));
+	if (!stored) return;
+	switch (node->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			node->as.scalar.inline_comment = stored;
+			break;
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			node->as.sequence.inline_comment = stored;
+			break;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			node->as.mapping.inline_comment = stored;
+			break;
+		case GTEXT_YAML_ALIAS:
+			node->as.alias.inline_comment = stored;
+			break;
+		default:
+			break;
+	}
+}
 
 static bool json_fastpath_candidate(const char *input, size_t length) {
 	size_t i = 0;
@@ -1273,6 +1362,44 @@ static GTEXT_YAML_Status parse_callback(
 			}
 			break;
 		}
+		case GTEXT_YAML_EVENT_COMMENT: {
+			const char *comment = event->data.comment.ptr;
+			bool inline_comment = event->data.comment.inline_comment;
+			if (!comment) {
+				break;
+			}
+			if (inline_comment && p->last_emitted_node &&
+				p->last_emitted_line == event->line) {
+				parser_attach_inline_comment(p, p->last_emitted_node, comment);
+			} else {
+				size_t existing = p->pending_leading_comment
+					? strlen(p->pending_leading_comment)
+					: 0;
+				size_t add_len = strlen(comment);
+				size_t extra = existing > 0 ? 1 : 0;
+				char *buf = (char *)malloc(existing + add_len + extra + 1);
+				if (!buf) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory storing comment";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+				if (existing > 0) {
+					memcpy(buf, p->pending_leading_comment, existing);
+					buf[existing] = '\n';
+					memcpy(buf + existing + 1, comment, add_len);
+					buf[existing + 1 + add_len] = '\0';
+					free(p->pending_leading_comment);
+				} else {
+					memcpy(buf, comment, add_len);
+					buf[add_len] = '\0';
+				}
+				p->pending_leading_comment = buf;
+			}
+			break;
+		}
 			
 		case GTEXT_YAML_EVENT_SCALAR: {
 			/* Create scalar node */
@@ -1292,6 +1419,8 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				return GTEXT_YAML_E_OOM;
 			}
+
+			parser_attach_leading_comment(p, node);
 			
 			/* Register anchor if present */
 			if (event->anchor) {
@@ -1311,6 +1440,8 @@ static GTEXT_YAML_Status parse_callback(
 				p->last_scalar_line = event->line;
 				p->last_scalar_col = event->col;
 				p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
+				p->last_emitted_node = node;
+				p->last_emitted_line = event->line;
 				break;
 			}
 			
@@ -1340,6 +1471,8 @@ static GTEXT_YAML_Status parse_callback(
 			p->last_scalar_line = event->line;
 			p->last_scalar_col = event->col;
 			p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
+			p->last_emitted_node = node;
+			p->last_emitted_line = event->line;
 			break;
 		}
 		
@@ -1386,6 +1519,8 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				return GTEXT_YAML_E_OOM;
 			}
+
+			parser_attach_leading_comment(p, node);
 			
 			/* Copy children into node */
 			for (size_t i = 0; i < p->temp.count; i++) {
@@ -1426,6 +1561,9 @@ static GTEXT_YAML_Status parse_callback(
 					maybe_finish_block_mapping_value(p);
 				}
 			}
+
+			p->last_emitted_node = node;
+			p->last_emitted_line = event->line;
 			
 			break;
 		}
@@ -1474,6 +1612,8 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				return GTEXT_YAML_E_OOM;
 			}
+
+			parser_attach_leading_comment(p, node);
 			
 			/* Copy pairs into node */
 			for (size_t i = 0; i < pair_count; i++) {
@@ -1516,6 +1656,9 @@ static GTEXT_YAML_Status parse_callback(
 					maybe_finish_block_mapping_value(p);
 				}
 			}
+
+			p->last_emitted_node = node;
+			p->last_emitted_line = event->line;
 			
 			break;
 		}
@@ -1571,6 +1714,8 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				return GTEXT_YAML_E_OOM;
 			}
+
+			parser_attach_leading_comment(p, node);
 			
 			/* Track alias for later resolution */
 			if (!track_alias(p, node)) {
@@ -1602,6 +1747,9 @@ static GTEXT_YAML_Status parse_callback(
 					maybe_finish_block_mapping_value(p);
 				}
 			}
+
+			p->last_emitted_node = node;
+			p->last_emitted_line = event->line;
 			break;
 		}
 			
@@ -1644,6 +1792,8 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+
+					parser_attach_leading_comment(p, node);
 					
 					/* Set the count */
 					node->as.sequence.count = p->temp.count;
@@ -1669,6 +1819,9 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						maybe_finish_block_mapping_value(p);
 					}
+
+					p->last_emitted_node = node;
+					p->last_emitted_line = event->line;
 					break;
 				}
 				
@@ -1710,6 +1863,8 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+
+					parser_attach_leading_comment(p, node);
 					
 					/* Set the count */
 					node->as.mapping.count = pair_count;
@@ -1736,6 +1891,9 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						maybe_finish_block_mapping_value(p);
 					}
+
+					p->last_emitted_node = node;
+					p->last_emitted_line = event->line;
 					break;
 				}
 				

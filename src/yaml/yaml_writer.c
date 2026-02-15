@@ -831,6 +831,96 @@ static GTEXT_YAML_Status write_block_scalar(
   return GTEXT_YAML_OK;
 }
 
+static const char *node_leading_comment(const GTEXT_YAML_Node *node) {
+  if (!node) return NULL;
+  switch (node->type) {
+    case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
+      return node->as.scalar.leading_comment;
+    case GTEXT_YAML_SEQUENCE:
+    case GTEXT_YAML_OMAP:
+    case GTEXT_YAML_PAIRS:
+      return node->as.sequence.leading_comment;
+    case GTEXT_YAML_MAPPING:
+    case GTEXT_YAML_SET:
+      return node->as.mapping.leading_comment;
+    case GTEXT_YAML_ALIAS:
+      return node->as.alias.leading_comment;
+    default:
+      return NULL;
+  }
+}
+
+static const char *node_inline_comment(const GTEXT_YAML_Node *node) {
+  if (!node) return NULL;
+  switch (node->type) {
+    case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
+      return node->as.scalar.inline_comment;
+    case GTEXT_YAML_SEQUENCE:
+    case GTEXT_YAML_OMAP:
+    case GTEXT_YAML_PAIRS:
+      return node->as.sequence.inline_comment;
+    case GTEXT_YAML_MAPPING:
+    case GTEXT_YAML_SET:
+      return node->as.mapping.inline_comment;
+    case GTEXT_YAML_ALIAS:
+      return node->as.alias.inline_comment;
+    default:
+      return NULL;
+  }
+}
+
+static GTEXT_YAML_Status write_comment_lines(
+    yaml_writer_state *state,
+    const char *comment,
+    size_t indent) {
+  if (!comment || !state) return GTEXT_YAML_OK;
+
+  const char *line = comment;
+  const char *cursor = comment;
+
+  for (;;) {
+    if (*cursor == '\n' || *cursor == '\0') {
+      size_t len = (size_t)(cursor - line);
+      GTEXT_YAML_Status status = write_indent(state, indent);
+      if (status != GTEXT_YAML_OK) return status;
+      status = write_str(state, "#");
+      if (status != GTEXT_YAML_OK) return status;
+      if (len > 0) {
+        status = write_str(state, " ");
+        if (status != GTEXT_YAML_OK) return status;
+        status = write_bytes(state, line, len);
+        if (status != GTEXT_YAML_OK) return status;
+      }
+      status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+      if (*cursor == '\0') break;
+      cursor++;
+      line = cursor;
+      continue;
+    }
+    cursor++;
+  }
+
+  return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status write_inline_comment(
+    yaml_writer_state *state,
+    const char *comment) {
+  if (!comment || !state) return GTEXT_YAML_OK;
+  GTEXT_YAML_Status status = write_str(state, " # ");
+  if (status != GTEXT_YAML_OK) return status;
+  return write_str(state, comment);
+}
+
 static GTEXT_YAML_Status write_node(
     yaml_writer_state * state,
     const GTEXT_YAML_Node * node,
@@ -973,20 +1063,30 @@ static GTEXT_YAML_Status write_scalar_node(
 
   switch (style) {
     case GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED:
-      return write_single_quoted_scalar(state, value);
+      status = write_single_quoted_scalar(state, value);
+      break;
     case GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED:
-      return write_escaped_scalar(state, value);
+      status = write_escaped_scalar(state, value);
+      break;
     case GTEXT_YAML_SCALAR_STYLE_LITERAL:
       return write_block_scalar(state, value, indent, false);
     case GTEXT_YAML_SCALAR_STYLE_FOLDED:
       return write_block_scalar(state, value, indent, true);
     case GTEXT_YAML_SCALAR_STYLE_PLAIN:
     default:
+      status = GTEXT_YAML_OK;
       break;
   }
 
+  if (status != GTEXT_YAML_OK) return status;
+
   if (!value) value = "";
-  return write_str(state, value);
+  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+    status = write_str(state, value);
+    if (status != GTEXT_YAML_OK) return status;
+  }
+
+  return write_inline_comment(state, node_inline_comment(node));
 }
 
 static GTEXT_YAML_Status write_sequence_node(
@@ -1050,7 +1150,9 @@ static GTEXT_YAML_Status write_sequence_node(
       );
       if (status != GTEXT_YAML_OK) return status;
     }
-    return write_str(state, "]");
+    status = write_str(state, "]");
+    if (status != GTEXT_YAML_OK) return status;
+    return write_inline_comment(state, node_inline_comment(node));
   }
 
   if (node->as.sequence.count == 0) {
@@ -1058,8 +1160,14 @@ static GTEXT_YAML_Status write_sequence_node(
   }
 
   for (size_t i = 0; i < node->as.sequence.count; i++) {
+    const GTEXT_YAML_Node *child = node->as.sequence.children[i];
+    const char *child_comment = node_leading_comment(child);
     if (i > 0 || leading_newline) {
       status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+    }
+    if (child_comment) {
+      status = write_comment_lines(state, child_comment, indent);
       if (status != GTEXT_YAML_OK) return status;
     }
     if (status != GTEXT_YAML_OK) return status;
@@ -1068,7 +1176,6 @@ static GTEXT_YAML_Status write_sequence_node(
     status = write_str(state, "-");
     if (status != GTEXT_YAML_OK) return status;
 
-    const GTEXT_YAML_Node *child = node->as.sequence.children[i];
     if (child && (node_is_sequence_type(child) || node_is_mapping_type(child))) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
@@ -1172,7 +1279,9 @@ static GTEXT_YAML_Status write_mapping_node(
       );
       if (status != GTEXT_YAML_OK) return status;
     }
-    return write_str(state, "}");
+    status = write_str(state, "}");
+    if (status != GTEXT_YAML_OK) return status;
+    return write_inline_comment(state, node_inline_comment(node));
   }
 
   if (node->as.mapping.count == 0) {
@@ -1180,8 +1289,14 @@ static GTEXT_YAML_Status write_mapping_node(
   }
 
   for (size_t i = 0; i < node->as.mapping.count; i++) {
+    const GTEXT_YAML_Node *key_node = node->as.mapping.pairs[i].key;
+    const char *key_comment = node_leading_comment(key_node);
     if (i > 0 || leading_newline) {
       status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+    }
+    if (key_comment) {
+      status = write_comment_lines(state, key_comment, indent);
       if (status != GTEXT_YAML_OK) return status;
     }
     if (status != GTEXT_YAML_OK) return status;
@@ -1189,7 +1304,7 @@ static GTEXT_YAML_Status write_mapping_node(
     if (status != GTEXT_YAML_OK) return status;
     status = write_node(
         state,
-        node->as.mapping.pairs[i].key,
+        key_node,
         indent,
         true,
         node->as.mapping.pairs[i].key_tag,
@@ -1241,7 +1356,9 @@ static GTEXT_YAML_Status write_alias_node(
 
   GTEXT_YAML_Status status = write_str(state, "*");
   if (status != GTEXT_YAML_OK) return status;
-  return write_str(state, name);
+  status = write_str(state, name);
+  if (status != GTEXT_YAML_OK) return status;
+  return write_inline_comment(state, node_inline_comment(node));
 }
 
 static GTEXT_YAML_Status write_node(
@@ -1300,6 +1417,11 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
 
   if (!root) {
     return GTEXT_YAML_OK;
+  }
+
+  status = write_comment_lines(&state, node_leading_comment(root), 0);
+  if (status != GTEXT_YAML_OK) {
+    return status;
   }
 
   status = write_node(&state, root, 0, !opts->pretty, NULL, false);
@@ -1805,6 +1927,29 @@ static GTEXT_YAML_Status writer_emit_alias(
   return GTEXT_YAML_OK;
 }
 
+static GTEXT_YAML_Status writer_emit_comment(
+    GTEXT_YAML_Writer *writer,
+    const GTEXT_YAML_Event *event) {
+  if (!writer || !event) return GTEXT_YAML_E_INVALID;
+  const char *comment = event->data.comment.ptr;
+  if (!comment) return GTEXT_YAML_OK;
+
+  yaml_writer_stack_entry *top = writer_stack_top(writer);
+  size_t indent = top ? top->indent : 0;
+
+  if (writer_write_indent(writer, indent) != 0) return GTEXT_YAML_E_WRITE;
+  if (writer_write_string(writer, "#") != 0) return GTEXT_YAML_E_WRITE;
+  if (comment[0] != '\0') {
+    if (writer_write_string(writer, " ") != 0) return GTEXT_YAML_E_WRITE;
+    if (writer_write_string(writer, comment) != 0) return GTEXT_YAML_E_WRITE;
+  }
+  if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
+    return GTEXT_YAML_E_WRITE;
+  }
+
+  return GTEXT_YAML_OK;
+}
+
 static GTEXT_YAML_Status writer_emit_container_start(
     GTEXT_YAML_Writer *writer,
     const GTEXT_YAML_Event *event,
@@ -2102,6 +2247,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
     }
     case GTEXT_YAML_EVENT_DIRECTIVE:
       return GTEXT_YAML_OK;
+    case GTEXT_YAML_EVENT_COMMENT:
+      return writer_emit_comment(writer, event);
     case GTEXT_YAML_EVENT_SEQUENCE_START:
       return writer_emit_container_start(writer, event, YAML_WRITER_STACK_SEQUENCE);
     case GTEXT_YAML_EVENT_SEQUENCE_END:

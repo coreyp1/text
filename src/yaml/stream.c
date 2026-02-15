@@ -300,9 +300,28 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
       continue;
     }
 
-    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE) {
+    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE && tok.type != GTEXT_YAML_TOKEN_COMMENT) {
       GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
       if (doc_rc != GTEXT_YAML_OK) return doc_rc;
+    }
+
+    if (tok.type == GTEXT_YAML_TOKEN_COMMENT) {
+      if (s->opts.retain_comments) {
+        ev.type = GTEXT_YAML_EVENT_COMMENT;
+        ev.data.comment.ptr = tok.u.comment.ptr;
+        ev.data.comment.len = tok.u.comment.len;
+        ev.data.comment.inline_comment = tok.u.comment.inline_comment;
+        if (s->cb) {
+          GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+          free((void *)tok.u.comment.ptr);
+          if (rc != GTEXT_YAML_OK) return rc;
+        } else {
+          free((void *)tok.u.comment.ptr);
+        }
+      } else {
+        free((void *)tok.u.comment.ptr);
+      }
+      continue;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DIRECTIVE) {
@@ -564,9 +583,28 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       continue;
     }
 
-    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE) {
+    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE && tok.type != GTEXT_YAML_TOKEN_COMMENT) {
       GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
       if (doc_rc != GTEXT_YAML_OK) return doc_rc;
+    }
+
+    if (tok.type == GTEXT_YAML_TOKEN_COMMENT) {
+      if (s->opts.retain_comments) {
+        ev.type = GTEXT_YAML_EVENT_COMMENT;
+        ev.data.comment.ptr = tok.u.comment.ptr;
+        ev.data.comment.len = tok.u.comment.len;
+        ev.data.comment.inline_comment = tok.u.comment.inline_comment;
+        if (s->cb) {
+          GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+          free((void *)tok.u.comment.ptr);
+          if (rc != GTEXT_YAML_OK) return rc;
+        } else {
+          free((void *)tok.u.comment.ptr);
+        }
+      } else {
+        free((void *)tok.u.comment.ptr);
+      }
+      continue;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {

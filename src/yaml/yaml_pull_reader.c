@@ -61,6 +61,9 @@ static void event_free(GTEXT_YAML_Event *event) {
 			free((void *)event->data.directive.value);
 			free((void *)event->data.directive.value2);
 			break;
+		case GTEXT_YAML_EVENT_COMMENT:
+			free((void *)event->data.comment.ptr);
+			break;
 		case GTEXT_YAML_EVENT_ALIAS:
 			free((void *)event->data.alias_name);
 			break;
@@ -169,6 +172,15 @@ static GTEXT_YAML_Status queue_event_copy(
 			if ((event->data.directive.name && !copy.data.directive.name) ||
 				(event->data.directive.value && !copy.data.directive.value) ||
 				(event->data.directive.value2 && !copy.data.directive.value2)) {
+				event_free(&copy);
+				return GTEXT_YAML_E_OOM;
+			}
+			break;
+		case GTEXT_YAML_EVENT_COMMENT:
+			copy.data.comment.ptr = dup_len(event->data.comment.ptr, event->data.comment.len);
+			copy.data.comment.len = event->data.comment.len;
+			copy.data.comment.inline_comment = event->data.comment.inline_comment;
+			if (!copy.data.comment.ptr && event->data.comment.len > 0) {
 				event_free(&copy);
 				return GTEXT_YAML_E_OOM;
 			}

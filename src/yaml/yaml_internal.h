@@ -60,6 +60,7 @@ GTEXT_INTERNAL_API int gtext_yaml_dynbuf_append(GTEXT_YAML_DynBuf *b, const char
 typedef enum {
 	GTEXT_YAML_TOKEN_INDICATOR,
 	GTEXT_YAML_TOKEN_SCALAR,
+	GTEXT_YAML_TOKEN_COMMENT,
 	GTEXT_YAML_TOKEN_DIRECTIVE,
 	GTEXT_YAML_TOKEN_DOCUMENT_START,  /* "---" */
 	GTEXT_YAML_TOKEN_DOCUMENT_END,    /* "..." */
@@ -75,6 +76,7 @@ typedef struct {
 	union {
 		char c;
 		struct { const char *ptr; size_t len; } scalar;
+		struct { const char *ptr; size_t len; bool inline_comment; } comment;
 	} u;
 	size_t offset; /* byte offset where token begins */
 	int line, col;  /* position */
@@ -170,6 +172,8 @@ typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_STRING initially */
 	const char *value;          /* Null-terminated string (arena-allocated) */
 	size_t length;              /* Length excluding null terminator */
+	const char *leading_comment; /* Optional leading comment */
+	const char *inline_comment;  /* Optional inline comment */
 	bool bool_value;            /* Parsed boolean value */
 	int64_t int_value;          /* Parsed integer value */
 	double float_value;         /* Parsed floating-point value */
@@ -197,6 +201,8 @@ typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_SEQUENCE */
 	const char *tag;            /* Optional tag, NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
+	const char *leading_comment; /* Optional leading comment */
+	const char *inline_comment;  /* Optional inline comment */
 	size_t count;               /* Number of children */
 	GTEXT_YAML_Node *children[1]; /* Flexible array member */
 } yaml_node_sequence;
@@ -218,6 +224,8 @@ typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_MAPPING */
 	const char *tag;            /* Optional tag, NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
+	const char *leading_comment; /* Optional leading comment */
+	const char *inline_comment;  /* Optional inline comment */
 	size_t count;               /* Number of key-value pairs */
 	yaml_mapping_pair pairs[1]; /* Flexible array member */
 } yaml_node_mapping;
@@ -227,6 +235,8 @@ typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_ALIAS */
 	const char *anchor_name;    /* Name of the referenced anchor (arena-allocated) */
 	GTEXT_YAML_Node *target;    /* Resolved target node (NULL until resolved) */
+	const char *leading_comment; /* Optional leading comment */
+	const char *inline_comment;  /* Optional inline comment */
 } yaml_node_alias;
 
 /* Union node type (public type is opaque pointer to this) */

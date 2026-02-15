@@ -47,6 +47,7 @@ static const char* event_type_name(GTEXT_YAML_Event_Type type) {
 		case GTEXT_YAML_EVENT_MAPPING_END: return "MAPPING_END";
 		case GTEXT_YAML_EVENT_SCALAR: return "SCALAR";
 		case GTEXT_YAML_EVENT_ALIAS: return "ALIAS";
+		case GTEXT_YAML_EVENT_COMMENT: return "COMMENT";
 		case GTEXT_YAML_EVENT_INDICATOR: return "INDICATOR";
 		default: return "UNKNOWN";
 	}

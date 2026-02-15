@@ -256,6 +256,38 @@ GTEXT_API bool gtext_yaml_node_as_binary(
 );
 
 /**
+ * @brief Get the leading comment attached to a node.
+ */
+GTEXT_API const char * gtext_yaml_node_leading_comment(
+	const GTEXT_YAML_Node *n
+);
+
+/**
+ * @brief Get the inline comment attached to a node.
+ */
+GTEXT_API const char * gtext_yaml_node_inline_comment(
+	const GTEXT_YAML_Node *n
+);
+
+/**
+ * @brief Set the leading comment for a node.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_leading_comment(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *n,
+	const char *comment
+);
+
+/**
+ * @brief Set the inline comment for a node.
+ */
+GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_inline_comment(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *n,
+	const char *comment
+);
+
+/**
  * @brief Set a scalar node to a boolean value.
  *
  * Returns false if the node is NULL or not a scalar.
