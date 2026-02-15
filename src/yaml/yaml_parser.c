@@ -1541,6 +1541,7 @@ static GTEXT_YAML_Status parse_callback(
 			}
 
 			node_set_source_location(node, event->offset, event->line, event->col);
+			node->as.scalar.scalar_style = event->scalar_style;
 
 			parser_attach_leading_comment(p, node);
 			

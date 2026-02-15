@@ -633,6 +633,21 @@ static bool node_is_mapping_type(const GTEXT_YAML_Node *node) {
       node->type == GTEXT_YAML_SET;
 }
 
+static bool node_scalar_block_style(const GTEXT_YAML_Node *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case GTEXT_YAML_STRING:
+    case GTEXT_YAML_BOOL:
+    case GTEXT_YAML_INT:
+    case GTEXT_YAML_FLOAT:
+    case GTEXT_YAML_NULL:
+      return node->as.scalar.scalar_style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
+        node->as.scalar.scalar_style == GTEXT_YAML_SCALAR_STYLE_FOLDED;
+    default:
+      return false;
+  }
+}
+
 static const char *default_tag_for_type(GTEXT_YAML_Node_Type type) {
   switch (type) {
     case GTEXT_YAML_STRING:
@@ -1035,6 +1050,8 @@ static GTEXT_YAML_Status write_scalar_node(
 
   if (canonical) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+    style = node->as.scalar.scalar_style;
   }
 
   if (!canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN &&
@@ -1194,7 +1211,7 @@ static GTEXT_YAML_Status write_sequence_node(
           state,
           child,
           indent + (size_t)writer_indent_spaces(state->opts),
-          true,
+        !node_scalar_block_style(child),
           NULL,
           false
         );
@@ -1333,7 +1350,7 @@ static GTEXT_YAML_Status write_mapping_node(
           state,
           value,
           indent + (size_t)writer_indent_spaces(state->opts),
-          true,
+        !node_scalar_block_style(value),
           node->as.mapping.pairs[i].value_tag,
           false
         );
@@ -1864,7 +1881,11 @@ static GTEXT_YAML_Status writer_emit_scalar(
 
   if (writer->opts.canonical) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && writer_scalar_needs_quotes(value, len)) {
+  }
+  if (!writer->opts.canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+    style = event->scalar_style;
+  }
+  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && writer_scalar_needs_quotes(value, len)) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && !in_flow && writer->opts.pretty) {
     int width = writer_line_width(&writer->opts);

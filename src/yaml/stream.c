@@ -504,6 +504,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
       ev.type = GTEXT_YAML_EVENT_SCALAR;
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
+      ev.scalar_style = tok.scalar_style;
       /* Attach pending anchor if any */
       ev.anchor = s->pending_anchor;
       ev.tag = s->pending_tag;
@@ -750,6 +751,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       ev.type = GTEXT_YAML_EVENT_SCALAR;
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
+      ev.scalar_style = tok.scalar_style;
       ev.anchor = s->pending_anchor;  /* Attach pending anchor */
       ev.tag = s->pending_tag;
       if (s->cb) {

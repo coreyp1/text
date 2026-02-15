@@ -899,6 +899,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   gtext_yaml_dynbuf_free(&scalar);
 
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
+    tok->scalar_style = (style == '>')
+      ? GTEXT_YAML_SCALAR_STYLE_FOLDED
+      : GTEXT_YAML_SCALAR_STYLE_LITERAL;
   tok->u.scalar.ptr = out;
   tok->u.scalar.len = out_len;
     tok->offset = off;
@@ -1154,6 +1157,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     gtext_yaml_dynbuf_free(&scalar);
 
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
+    tok->scalar_style = (quote == '\'')
+      ? GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED
+      : GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     tok->u.scalar.ptr = out;
     tok->u.scalar.len = slen;
     tok->offset = off;
@@ -1331,6 +1337,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   /* after consume (quiet) */
 
   tok->type = GTEXT_YAML_TOKEN_SCALAR;
+  tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   tok->u.scalar.ptr = out;
   tok->u.scalar.len = slen;
   /* scalar emitted */

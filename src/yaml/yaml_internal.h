@@ -78,6 +78,7 @@ typedef struct {
 		struct { const char *ptr; size_t len; } scalar;
 		struct { const char *ptr; size_t len; bool inline_comment; } comment;
 	} u;
+	GTEXT_YAML_Scalar_Style scalar_style; /* For scalar tokens */
 	size_t offset; /* byte offset where token begins */
 	int line, col;  /* position */
 } GTEXT_YAML_Token;
@@ -177,6 +178,7 @@ typedef struct {
 	size_t source_offset;       /* Byte offset for node start */
 	int source_line;            /* 1-based line number */
 	int source_col;             /* 1-based column number */
+	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style */
 	bool bool_value;            /* Parsed boolean value */
 	int64_t int_value;          /* Parsed integer value */
 	double float_value;         /* Parsed floating-point value */

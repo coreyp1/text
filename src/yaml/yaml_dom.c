@@ -63,6 +63,7 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	node->as.scalar.source_offset = 0;
 	node->as.scalar.source_line = 0;
 	node->as.scalar.source_col = 0;
+	node->as.scalar.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
 	node->as.scalar.bool_value = false;
 	node->as.scalar.int_value = 0;
 	node->as.scalar.float_value = 0.0;
@@ -447,6 +448,49 @@ GTEXT_API bool gtext_yaml_node_source_location(
 	GTEXT_YAML_Source_Location *out
 ) {
 	return node_source_location(n, out);
+}
+
+static bool node_scalar_style(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Scalar_Style *out
+) {
+	if (!n || !out) return false;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			*out = n->as.scalar.scalar_style;
+			return true;
+		default:
+			return false;
+	}
+}
+
+GTEXT_API bool gtext_yaml_node_scalar_style(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Scalar_Style *out
+) {
+	return node_scalar_style(n, out);
+}
+
+GTEXT_API bool gtext_yaml_node_set_scalar_style(
+	GTEXT_YAML_Node *n,
+	GTEXT_YAML_Scalar_Style style
+) {
+	if (!n) return false;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			n->as.scalar.scalar_style = style;
+			return true;
+		default:
+			return false;
+	}
 }
 
 static GTEXT_YAML_Status node_set_comment(

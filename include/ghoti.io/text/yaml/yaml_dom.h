@@ -296,6 +296,22 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_node_set_inline_comment(
 );
 
 /**
+ * @brief Get the scalar style stored on a scalar node.
+ */
+GTEXT_API bool gtext_yaml_node_scalar_style(
+	const GTEXT_YAML_Node *n,
+	GTEXT_YAML_Scalar_Style *out
+);
+
+/**
+ * @brief Set the scalar style stored on a scalar node.
+ */
+GTEXT_API bool gtext_yaml_node_set_scalar_style(
+	GTEXT_YAML_Node *n,
+	GTEXT_YAML_Scalar_Style style
+);
+
+/**
  * @brief Set a scalar node to a boolean value.
  *
  * Returns false if the node is NULL or not a scalar.

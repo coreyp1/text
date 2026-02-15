@@ -84,6 +84,7 @@ typedef struct {
 	} data;
 	const char * anchor;  /* Anchor name for this node (NULL if none) */
 	const char * tag;     /* Explicit tag for this node (NULL if none) */
+	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style (SCALAR events) */
 	size_t offset;
 	int line;
 	int col;

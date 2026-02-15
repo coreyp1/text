@@ -142,6 +142,7 @@ static GTEXT_YAML_Status queue_event_copy(
 	copy.offset = event->offset;
 	copy.line = event->line;
 	copy.col = event->col;
+	copy.scalar_style = event->scalar_style;
 
 	if (event->anchor) {
 		copy.anchor = dup_str(event->anchor);
