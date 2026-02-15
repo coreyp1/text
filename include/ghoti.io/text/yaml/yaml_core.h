@@ -136,6 +136,39 @@ typedef enum {
 } GTEXT_YAML_Flow_Style;
 
 /**
+ * @enum GTEXT_YAML_Warning_Code
+ * @brief Warning codes for non-fatal issues.
+ */
+typedef enum {
+  GTEXT_YAML_WARNING_YAML11_BOOL,
+  GTEXT_YAML_WARNING_YAML11_OCTAL,
+  GTEXT_YAML_WARNING_YAML11_SEXAGESIMAL,
+  GTEXT_YAML_WARNING_DUPLICATE_KEY
+} GTEXT_YAML_Warning_Code;
+
+/**
+ * @struct GTEXT_YAML_Warning
+ * @brief Warning payload for non-fatal parse issues.
+ */
+typedef struct {
+  GTEXT_YAML_Warning_Code code;
+  const char * message;
+  size_t offset;
+  int line;
+  int col;
+} GTEXT_YAML_Warning;
+
+/**
+ * @brief Warning callback invoked for non-fatal issues.
+ */
+typedef void (*GTEXT_YAML_Warning_Callback)(
+  const GTEXT_YAML_Warning * warning,
+  void * user
+);
+
+#define GTEXT_YAML_WARNING_MASK(code) (1u << (code))
+
+/**
  * @enum GTEXT_YAML_Encoding
  * @brief Output encoding selection for YAML emission.
  */
@@ -213,6 +246,12 @@ typedef struct {
   bool enable_custom_tags;
   const GTEXT_YAML_Custom_Tag * custom_tags;
   size_t custom_tag_count;
+
+  /* Warnings */
+  GTEXT_YAML_Warning_Callback warning_callback;
+  void * warning_user_data;
+  bool warnings_as_errors;
+  unsigned int warning_mask;
 } GTEXT_YAML_Parse_Options;
 
 /**

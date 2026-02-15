@@ -28,6 +28,10 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.enable_custom_tags = false;
   opts.custom_tags = NULL;
   opts.custom_tag_count = 0;
+  opts.warning_callback = NULL;
+  opts.warning_user_data = NULL;
+  opts.warnings_as_errors = false;
+  opts.warning_mask = 0;
   return opts;
 }
 

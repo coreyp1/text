@@ -1145,6 +1145,92 @@ static void mapping_remove_pair(GTEXT_YAML_Node *node, size_t index) {
 	}
 }
 
+static GTEXT_YAML_Status emit_warning(
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Warning_Code code,
+	const char *message,
+	GTEXT_YAML_Error *error
+) {
+	if (!opts) return GTEXT_YAML_OK;
+	if (opts->warning_mask & GTEXT_YAML_WARNING_MASK(code)) return GTEXT_YAML_OK;
+
+	GTEXT_YAML_Warning warning;
+	warning.code = code;
+	warning.message = message;
+	warning.offset = 0;
+	warning.line = 0;
+	warning.col = 0;
+
+	if (opts->warning_callback) {
+		opts->warning_callback(&warning, opts->warning_user_data);
+	}
+
+	if (opts->warnings_as_errors) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = message;
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status warn_yaml_1_1_scalars(
+	const char *value,
+	size_t len,
+	bool json_only,
+	bool allow_underscore,
+	bool allow_base_prefix,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	if (!opts) return GTEXT_YAML_OK;
+	if (opts->yaml_1_1) return GTEXT_YAML_OK;
+	if (json_only) return GTEXT_YAML_OK;
+
+	bool dummy = false;
+	bool yaml_1_1 = true;
+	if (parse_bool_value(value, len, json_only, yaml_1_1, &dummy)) {
+		if (!parse_bool_value(value, len, json_only, false, &dummy)) {
+			GTEXT_YAML_Status st = emit_warning(
+				opts,
+				GTEXT_YAML_WARNING_YAML11_BOOL,
+				"YAML 1.1 boolean value in YAML 1.2 mode",
+				error
+			);
+			if (st != GTEXT_YAML_OK) return st;
+		}
+	}
+
+	double sexa = 0.0;
+	bool sexa_is_int = false;
+	if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &sexa_is_int)) {
+		GTEXT_YAML_Status st = emit_warning(
+			opts,
+			GTEXT_YAML_WARNING_YAML11_SEXAGESIMAL,
+			"YAML 1.1 sexagesimal value in YAML 1.2 mode",
+			error
+		);
+		if (st != GTEXT_YAML_OK) return st;
+	}
+
+	if (has_disallowed_leading_zero(value, len, allow_underscore)) {
+		int64_t out = 0;
+		if (parse_int_value(value, len, allow_underscore, allow_base_prefix, true, &out)) {
+			GTEXT_YAML_Status st = emit_warning(
+				opts,
+				GTEXT_YAML_WARNING_YAML11_OCTAL,
+				"YAML 1.1 octal value in YAML 1.2 mode",
+				error
+			);
+			if (st != GTEXT_YAML_OK) return st;
+		}
+	}
+
+	return GTEXT_YAML_OK;
+}
+
 static GTEXT_YAML_Status apply_dupkey_policy(
 	const GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Node *node,
@@ -1168,10 +1254,28 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 					}
 					return GTEXT_YAML_E_DUPKEY;
 				case GTEXT_YAML_DUPKEY_FIRST_WINS:
+					{
+						GTEXT_YAML_Status warn = emit_warning(
+							opts,
+							GTEXT_YAML_WARNING_DUPLICATE_KEY,
+							"Duplicate mapping key (first wins)",
+							error
+						);
+						if (warn != GTEXT_YAML_OK) return warn;
+					}
 					mapping_remove_pair(node, j);
 					j--;
 					break;
 				case GTEXT_YAML_DUPKEY_LAST_WINS:
+					{
+						GTEXT_YAML_Status warn = emit_warning(
+							opts,
+							GTEXT_YAML_WARNING_DUPLICATE_KEY,
+							"Duplicate mapping key (last wins)",
+							error
+						);
+						if (warn != GTEXT_YAML_OK) return warn;
+					}
 					mapping_remove_pair(node, i);
 					if (i > 0) i--;
 					j = i;
@@ -1432,6 +1536,17 @@ static GTEXT_YAML_Status resolve_scalar(
 	bool allow_underscore = opts->schema == GTEXT_YAML_SCHEMA_CORE;
 	bool allow_base_prefix = opts->schema == GTEXT_YAML_SCHEMA_CORE;
 	bool yaml_1_1 = yaml_use_1_1(doc, opts) && opts->schema == GTEXT_YAML_SCHEMA_CORE;
+
+	GTEXT_YAML_Status warn = warn_yaml_1_1_scalars(
+		value,
+		len,
+		json_only,
+		allow_underscore,
+		allow_base_prefix,
+		opts,
+		error
+	);
+	if (warn != GTEXT_YAML_OK) return warn;
 
 	if (parse_null_value(value, len, json_only)) {
 		node->type = GTEXT_YAML_NULL;

@@ -258,6 +258,25 @@ if (status != GTEXT_YAML_OK) {
 }
 ```
 
+### 4.3 Warnings
+
+Non-fatal issues are reported through an optional warning callback. Warnings
+do not stop parsing unless `warnings_as_errors` is enabled.
+
+```c
+static void on_warning(const GTEXT_YAML_Warning *warning, void *user) {
+  (void)user;
+  printf("warning: %s\n", warning->message);
+}
+
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+opts.warning_callback = on_warning;
+opts.warning_user_data = NULL;
+opts.warnings_as_errors = false;
+
+GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), &opts, NULL);
+```
+
 ---
 
 ## 5. Scalar Styles
