@@ -783,7 +783,13 @@ static GTEXT_JSON_Status json_lexer_parse_string(
     token_length = tb->buffer_used; // Includes both quotes
   }
   else {
-    size_t start_pos = resuming ? tb->start_offset : start;
+    size_t start_pos = start;
+    if (resuming) {
+      if (!tb) {
+        return GTEXT_JSON_E_BAD_TOKEN;
+      }
+      start_pos = tb->start_offset;
+    }
     // Check for overflow: string_end + 1
     if (json_check_add_overflow(string_end, 1)) {
       if (tb) {
@@ -920,7 +926,6 @@ static GTEXT_JSON_Status json_lexer_parse_number(
         // We're resuming an incomplete -Infinity - continue reading
         // We already have tb->buffer_used characters in the buffer
         // We need to read the remaining (9 - tb->buffer_used) characters
-        const char * infinity_str = "-Infinity";
         size_t chars_needed = 9 - tb->buffer_used;
 
         while (chars_needed > 0 && end < lexer->input_len) {
@@ -928,17 +933,14 @@ static GTEXT_JSON_Status json_lexer_parse_number(
             break;
           }
           char next_c = lexer->input[end];
-          size_t expected_pos =
-              tb->buffer_used; // Position in "-Infinity" string
+          size_t expected_pos = tb->buffer_used; // Position in "-Infinity" string
           if (expected_pos < 9 && next_c == infinity_str[expected_pos]) {
             end++;
             // Append to buffer if available
-            if (tb) {
-              GTEXT_JSON_Status status =
-                  json_token_buffer_append(tb, &next_c, 1);
-              if (status != GTEXT_JSON_OK) {
-                return status;
-              }
+            GTEXT_JSON_Status status =
+                json_token_buffer_append(tb, &next_c, 1);
+            if (status != GTEXT_JSON_OK) {
+              return status;
             }
             chars_needed--;
           }
@@ -1114,14 +1116,6 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     // We're at EOF - check if the number might continue
     // Defensive check: ensure end - 1 is valid (end > start guarantees end >=
     // 1)
-    if (end == 0) {
-      // Shouldn't happen due to end > start check, but be defensive
-      if (tb) {
-        json_token_buffer_clear(tb);
-      }
-      return GTEXT_JSON_E_BAD_NUMBER;
-    }
-
     // Special case: if we only have "-" (just a minus sign), it's incomplete
     size_t total_len = resuming && tb ? tb->buffer_used : (end - start);
     if (total_len == 1) {
@@ -1391,11 +1385,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     // We completed the number from the buffer, but didn't consume any new input
     // The character at position 0 is the non-number character that ended the
     // number We should NOT advance past it - leave it for the next token
-    lexer->current_offset = end; // Keep at start, so next token is read
   }
-  else {
-    lexer->current_offset = end;
-  }
+  lexer->current_offset = end;
   lexer->pos.offset = lexer->current_offset;
   json_position_update_column(&lexer->pos, token->length);
 

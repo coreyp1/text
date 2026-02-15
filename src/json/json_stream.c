@@ -331,11 +331,11 @@ static GTEXT_JSON_Status json_stream_process_tokens(
   while (1) {
     memset(&token, 0, sizeof(token));
 
-    GTEXT_JSON_Status status = json_lexer_next(&st->lexer, &token);
-    if (status != GTEXT_JSON_OK) {
+    GTEXT_JSON_Status token_status = json_lexer_next(&st->lexer, &token);
+    if (token_status != GTEXT_JSON_OK) {
       // Check for incomplete input (string or number spanning chunks, or
       // partial keyword)
-      if (status == GTEXT_JSON_E_INCOMPLETE) {
+      if (token_status == GTEXT_JSON_E_INCOMPLETE) {
         // Incomplete token - need more input
         // For strings/numbers: token buffer has the partial token data, input
         // can be marked as processed For keywords: no token buffer, partial
@@ -467,8 +467,8 @@ static GTEXT_JSON_Status json_stream_handle_token(
     // Just processed a value, expect comma or closing bracket/brace
     if (token->type == JSON_TOKEN_COMMA) {
       // Continue to next value
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (!top) {
+      json_stream_stack_entry * current_top = json_stream_top(st);
+      if (!current_top) {
         // Comma at root level - invalid
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
@@ -479,7 +479,7 @@ static GTEXT_JSON_Status json_stream_handle_token(
       }
 
       // Update state based on container type
-      if (top->is_array) {
+      if (current_top->is_array) {
         st->state = JSON_STREAM_STATE_EXPECT_VALUE;
       }
       else {
@@ -489,8 +489,8 @@ static GTEXT_JSON_Status json_stream_handle_token(
     }
     else if (token->type == JSON_TOKEN_RBRACKET) {
       // End of array
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (!top || !top->is_array) {
+      json_stream_stack_entry * array_top = json_stream_top(st);
+      if (!array_top || !array_top->is_array) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
             .line = token->pos.line,
@@ -501,7 +501,7 @@ static GTEXT_JSON_Status json_stream_handle_token(
 
       // Check for trailing comma (if container has elements and we're expecting
       // a value)
-      if (top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE &&
+        if (array_top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE &&
           !st->opts.allow_trailing_commas) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
@@ -526,9 +526,9 @@ static GTEXT_JSON_Status json_stream_handle_token(
       else {
         // Mark that parent container has elements (nested array counts as
         // element)
-        json_stream_stack_entry * top = json_stream_top(st);
-        if (top) {
-          top->has_elements = 1;
+        json_stream_stack_entry * parent_top = json_stream_top(st);
+        if (parent_top) {
+          parent_top->has_elements = 1;
         }
         st->state = JSON_STREAM_STATE_VALUE;
       }
@@ -536,8 +536,8 @@ static GTEXT_JSON_Status json_stream_handle_token(
     }
     else if (token->type == JSON_TOKEN_RBRACE) {
       // End of object
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (!top || top->is_array) {
+      json_stream_stack_entry * object_top = json_stream_top(st);
+      if (!object_top || object_top->is_array) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
             .line = token->pos.line,
@@ -548,7 +548,7 @@ static GTEXT_JSON_Status json_stream_handle_token(
 
       // Check for trailing comma (if container has elements and we're expecting
       // a key)
-      if (top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY &&
+        if (object_top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY &&
           !st->opts.allow_trailing_commas) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
@@ -573,9 +573,9 @@ static GTEXT_JSON_Status json_stream_handle_token(
       else {
         // Mark that parent container has elements (nested object counts as
         // element)
-        json_stream_stack_entry * top = json_stream_top(st);
-        if (top) {
-          top->has_elements = 1;
+        json_stream_stack_entry * parent_top = json_stream_top(st);
+        if (parent_top) {
+          parent_top->has_elements = 1;
         }
         st->state = JSON_STREAM_STATE_VALUE;
       }
@@ -600,8 +600,8 @@ static GTEXT_JSON_Status json_stream_handle_token(
     // But also check for empty containers (closing bracket/brace)
     if (token->type == JSON_TOKEN_RBRACKET) {
       // End of array (empty array)
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (!top || !top->is_array) {
+      json_stream_stack_entry * array_top = json_stream_top(st);
+      if (!array_top || !array_top->is_array) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
             .line = token->pos.line,
@@ -633,8 +633,8 @@ static GTEXT_JSON_Status json_stream_handle_token(
     }
     else if (token->type == JSON_TOKEN_RBRACE) {
       // End of object (empty object)
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (!top || top->is_array) {
+      json_stream_stack_entry * object_top = json_stream_top(st);
+      if (!object_top || object_top->is_array) {
         json_position pos = {
             .offset = st->buffer_start_offset + token->pos.offset,
             .line = token->pos.line,

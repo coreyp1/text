@@ -349,15 +349,15 @@ GTEXT_CSV_Status csv_stream_unquoted_handle_special_char(
     }
     if (nl != CSV_NEWLINE_NONE) {
       // Field complete, end of record
-      GTEXT_CSV_Status status =
+      GTEXT_CSV_Status buffer_status =
           csv_stream_buffer_unquoted_field_if_needed(stream);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      if (buffer_status != GTEXT_CSV_OK) {
+        return buffer_status;
       }
       // Position already updated by csv_stream_handle_newline
-      status = csv_stream_emit_field(stream, true);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      buffer_status = csv_stream_emit_field(stream, true);
+      if (buffer_status != GTEXT_CSV_OK) {
+        return buffer_status;
       }
       csv_stream_clear_field_state(stream);
       stream->field_count = 0;
@@ -380,10 +380,10 @@ GTEXT_CSV_Status csv_stream_unquoted_handle_special_char(
 
     // Process the newline character as part of the field
     if (stream->field.is_buffered) {
-      GTEXT_CSV_Status status =
+      GTEXT_CSV_Status append_status =
           csv_stream_append_to_field_buffer(stream, &special_char, 1);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      if (append_status != GTEXT_CSV_OK) {
+        return append_status;
       }
       stream->field.length = stream->field.buffer_used;
     }
@@ -527,10 +527,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
       c == stream->opts.dialect.delimiter) {
     // End of quoted field - emit field
     // Ensure field is buffered if needed
-    GTEXT_CSV_Status status = csv_stream_ensure_field_buffered(
+    GTEXT_CSV_Status buffer_status = csv_stream_ensure_field_buffered(
         stream, process_input, process_len, *offset);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    if (buffer_status != GTEXT_CSV_OK) {
+      return buffer_status;
     }
 
     return csv_stream_complete_field_at_delimiter(stream, offset);
@@ -540,10 +540,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
   // record
   if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
     csv_newline_type nl;
-    GTEXT_CSV_Status status = csv_stream_handle_newline(
+    GTEXT_CSV_Status newline_status = csv_stream_handle_newline(
         stream, process_input, process_len, offset, byte_pos, &nl);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    if (newline_status != GTEXT_CSV_OK) {
+      return newline_status;
     }
     if (nl == CSV_NEWLINE_NONE) {
       // Not a complete newline sequence, continue processing
@@ -552,16 +552,16 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
     else {
       // End of quoted field, end of record
       // Ensure field is buffered if needed
-      GTEXT_CSV_Status status = csv_stream_ensure_field_buffered(
+      GTEXT_CSV_Status ensure_status = csv_stream_ensure_field_buffered(
           stream, process_input, process_len, *offset);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      if (ensure_status != GTEXT_CSV_OK) {
+        return ensure_status;
       }
 
       // Position already updated by csv_stream_handle_newline
-      status = csv_stream_emit_field(stream, true);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      ensure_status = csv_stream_emit_field(stream, true);
+      if (ensure_status != GTEXT_CSV_OK) {
+        return ensure_status;
       }
       csv_stream_clear_field_state(stream);
       stream->field_count = 0;
@@ -579,9 +579,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
 
   if (stream->opts.dialect.escape == GTEXT_CSV_ESCAPE_BACKSLASH && c == '\\') {
     stream->state = CSV_STREAM_STATE_ESCAPE_IN_QUOTED;
-    GTEXT_CSV_Status status = csv_stream_advance_position(stream, offset, 1);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    GTEXT_CSV_Status advance_status =
+        csv_stream_advance_position(stream, offset, 1);
+    if (advance_status != GTEXT_CSV_OK) {
+      return advance_status;
     }
     return GTEXT_CSV_OK;
   }
@@ -590,9 +591,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
     // Don't append the quote yet - we need to check if it's doubled or closing
     // Transition to QUOTE_IN_QUOTED to check next character
     stream->state = CSV_STREAM_STATE_QUOTE_IN_QUOTED;
-    GTEXT_CSV_Status status = csv_stream_advance_position(stream, offset, 1);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    GTEXT_CSV_Status advance_status =
+        csv_stream_advance_position(stream, offset, 1);
+    if (advance_status != GTEXT_CSV_OK) {
+      return advance_status;
     }
 
     // If we're at the end of the chunk, buffer the field data (up to but not
@@ -603,10 +605,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
       // The quote is at position offset-1 after we advanced offset
       // We need to buffer everything up to (but not including) the quote
       size_t quote_pos = *offset - 1;
-      GTEXT_CSV_Status status = csv_stream_ensure_field_buffered(
+      GTEXT_CSV_Status buffer_status = csv_stream_ensure_field_buffered(
           stream, process_input, process_len, quote_pos);
-      if (status != GTEXT_CSV_OK) {
-        return status;
+      if (buffer_status != GTEXT_CSV_OK) {
+        return buffer_status;
       }
       // Mark that we transitioned to QUOTE_IN_QUOTED at chunk boundary
       stream->quote_in_quoted_at_chunk_boundary = true;
@@ -629,9 +631,10 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
   // accumulate it
   if (stream->field.is_buffered) {
     // Append to field buffer
-    GTEXT_CSV_Status status = csv_stream_append_to_field_buffer(stream, &c, 1);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    GTEXT_CSV_Status append_status =
+        csv_stream_append_to_field_buffer(stream, &c, 1);
+    if (append_status != GTEXT_CSV_OK) {
+      return append_status;
     }
     stream->field.data = stream->field.buffer;
     stream->field.length = stream->field.buffer_used;
@@ -649,17 +652,18 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
     }
     stream->field.length++;
   }
-  GTEXT_CSV_Status status = csv_stream_advance_position(stream, offset, 1);
-  if (status != GTEXT_CSV_OK) {
-    return status;
+  GTEXT_CSV_Status advance_status =
+      csv_stream_advance_position(stream, offset, 1);
+  if (advance_status != GTEXT_CSV_OK) {
+    return advance_status;
   }
 
   // If we're at the end of the chunk, buffer the field data
   if (*offset >= process_len) {
-    GTEXT_CSV_Status status = csv_stream_ensure_field_buffered(
+    GTEXT_CSV_Status ensure_status = csv_stream_ensure_field_buffered(
         stream, process_input, process_len, *offset);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    if (ensure_status != GTEXT_CSV_OK) {
+      return ensure_status;
     }
     return GTEXT_CSV_OK; // Wait for next chunk
   }
@@ -872,10 +876,10 @@ GTEXT_CSV_Status csv_stream_process_escape_in_quoted(GTEXT_CSV_Stream * stream,
 
   // If at end of chunk, buffer field data
   if (*offset >= process_len) {
-    GTEXT_CSV_Status status = csv_stream_ensure_field_buffered(
+    GTEXT_CSV_Status ensure_status = csv_stream_ensure_field_buffered(
         stream, process_input, process_len, *offset);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    if (ensure_status != GTEXT_CSV_OK) {
+      return ensure_status;
     }
     return GTEXT_CSV_OK; // Wait for next chunk
   }

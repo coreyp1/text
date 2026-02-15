@@ -205,9 +205,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_sink_fixed_buffer(
   buf->truncated = false;
 
   // Initialize buffer with null terminator
-  if (size > 0) {
-    buffer[0] = '\0';
-  }
+  buffer[0] = '\0';
 
   sink->write = fixed_buffer_write_fn;
   sink->user = buf;
@@ -824,7 +822,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
   size_t start_row = 0;
 
   // Write header row if present
-  if (table_internal->has_header && table_internal->row_count > 0) {
+  if (table_internal->has_header) {
     // Bounds check: ensure row 0 is within allocated capacity
     if (table_internal->row_capacity == 0) {
       return GTEXT_CSV_E_INVALID;

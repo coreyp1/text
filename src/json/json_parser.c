@@ -236,16 +236,14 @@ static GTEXT_JSON_Status json_parse_array_element(json_parser * parser,
     // Conditions: in-situ mode enabled, context has input buffer, lexeme exists
     int use_in_situ = 0;
     size_t number_offset = 0;
-    size_t number_len = 0;
     if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
         ctx->input_buffer_len > 0 && num->lexeme && num->lexeme_len > 0) {
       // Verify the number position is within bounds
       // Check for integer overflow and bounds using shared helpers
       number_offset = token->pos.offset;
-      number_len = token->length;
       if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
-          !json_check_add_overflow(number_offset, number_len) &&
-          number_offset + number_len <= ctx->input_buffer_len) {
+          !json_check_add_overflow(number_offset, token->length) &&
+          number_offset + token->length <= ctx->input_buffer_len) {
         use_in_situ = 1;
       }
     }
@@ -360,16 +358,14 @@ static GTEXT_JSON_Status json_parse_array_element(json_parser * parser,
     // Conditions: in-situ mode enabled, context has input buffer
     int use_in_situ = 0;
     size_t number_offset = 0;
-    size_t number_len = 0;
     if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
         ctx->input_buffer_len > 0) {
       // Verify the number position is within bounds
       // Check for integer overflow and bounds using shared helpers
       number_offset = token->pos.offset;
-      number_len = token->length;
       if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
-          !json_check_add_overflow(number_offset, number_len) &&
-          number_offset + number_len <= ctx->input_buffer_len) {
+          !json_check_add_overflow(number_offset, token->length) &&
+          number_offset + token->length <= ctx->input_buffer_len) {
         use_in_situ = 1;
       }
     }
@@ -845,9 +841,9 @@ static GTEXT_JSON_Status json_parse_object(
         parser->opts ? parser->opts->dupkeys : GTEXT_JSON_DUPKEY_ERROR;
     size_t existing_idx =
         json_object_find_key(object, key_copy ? key_copy : "", key_len);
-    int handled_duplicate = 0; // Flag to track if we handled a duplicate
 
     if (existing_idx != SIZE_MAX) {
+      int handled_duplicate = 0; // Flag to track if we handled a duplicate
       // Duplicate key found - handle according to policy
       int should_break = 0; // Flag to break from while loop
 
@@ -1268,16 +1264,14 @@ static GTEXT_JSON_Status json_parse_value(
       // exists
       int use_in_situ = 0;
       size_t number_offset = 0;
-      size_t number_len = 0;
       if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
           ctx->input_buffer_len > 0 && num->lexeme && num->lexeme_len > 0) {
         // Verify the number position is within bounds
         // Check for integer overflow and bounds using shared helpers
         number_offset = token.pos.offset;
-        number_len = token.length;
         if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
-            !json_check_add_overflow(number_offset, number_len) &&
-            number_offset + number_len <= ctx->input_buffer_len) {
+            !json_check_add_overflow(number_offset, token.length) &&
+            number_offset + token.length <= ctx->input_buffer_len) {
           use_in_situ = 1;
         }
       }
@@ -1413,16 +1407,14 @@ static GTEXT_JSON_Status json_parse_value(
       // Conditions: in-situ mode enabled, context has input buffer
       int use_in_situ = 0;
       size_t number_offset = 0;
-      size_t number_len = 0;
       if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
           ctx->input_buffer_len > 0) {
         // Verify the number position is within bounds
         // Check for integer overflow and bounds using shared helpers
         number_offset = token.pos.offset;
-        number_len = token.length;
         if (json_check_bounds_offset(number_offset, ctx->input_buffer_len) &&
-            !json_check_add_overflow(number_offset, number_len) &&
-            number_offset + number_len <= ctx->input_buffer_len) {
+            !json_check_add_overflow(number_offset, token.length) &&
+            number_offset + token.length <= ctx->input_buffer_len) {
           use_in_situ = 1;
         }
       }

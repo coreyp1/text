@@ -1348,10 +1348,9 @@ static GTEXT_YAML_Status parse_callback(
 					/* Block sequence indicator */
 					bool start_new = true;
 					int indent = event->col;
-					size_t top = 0;
 
 					if (p->stack.depth > 0) {
-						top = p->stack.depth - 1;
+						size_t top = p->stack.depth - 1;
 						if (p->stack.is_block[top] &&
 							p->stack.states[top] == STATE_SEQUENCE &&
 							p->stack.indents[top] == indent) {

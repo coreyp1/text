@@ -167,9 +167,6 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
     // Verify bounds: ensure token_start + token_len doesn't exceed len
     // This ensures ptr + token_start is within valid range
     // Note: token_start < len from loop condition, but check defensively
-    if (token_start >= len) {
-      return NULL; // Invalid start position
-    }
     // Check for underflow in subtraction (defensive)
     if (token_len > len || token_start > len - token_len) {
       return NULL; // Invalid bounds

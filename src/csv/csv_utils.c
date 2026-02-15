@@ -152,10 +152,6 @@ csv_utf8_result csv_validate_utf8(const char * input, size_t input_len,
   size_t remaining = input_len - offset;
 
   while (remaining > 0) {
-    if (offset >= input_len) {
-      break;
-    }
-
     // Bounds check: ensure offset is valid before accessing input
     if (offset >= input_len) {
       return CSV_UTF8_INVALID; // Invalid offset
@@ -289,11 +285,6 @@ GTEXT_INTERNAL_API GTEXT_CSV_Status csv_strip_bom(const char ** input,
   if ((unsigned char)(*input)[0] == 0xEF &&
       (unsigned char)(*input)[1] == 0xBB &&
       (unsigned char)(*input)[2] == 0xBF) {
-    // Check for underflow before subtracting (defensive check)
-    if (*input_len < 3) {
-      return GTEXT_CSV_OK; // Should not happen due to earlier check, but be
-                           // safe
-    }
     if (pos) {
       // Check all overflow conditions upfront before performing any operations
       if (pos->offset > SIZE_MAX - 3) {

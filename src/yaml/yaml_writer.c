@@ -179,9 +179,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_sink_fixed_buffer(
   buf->used = 0;
   buf->truncated = false;
 
-  if (size > 0) {
-    buf->data[0] = '\0';
-  }
+  buf->data[0] = '\0';
 
   sink->write = fixed_buffer_write_fn;
   sink->user = buf;

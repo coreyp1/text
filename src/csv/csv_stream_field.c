@@ -475,13 +475,7 @@ GTEXT_CSV_Status csv_stream_unescape_field_with_unescape(
   // This is critical when unescaping in-place in field buffer
   // Update AFTER setting output pointers but the callback is synchronous so
   // this is safe
-  if (input_is_field_buffer) {
-    stream->field.buffer_used = out_idx;
-  }
-  else if (*output_data == stream->field.buffer) {
-    // Output is in field buffer (we copied input to field buffer)
-    stream->field.buffer_used = out_idx;
-  }
+  stream->field.buffer_used = out_idx;
 
   return GTEXT_CSV_OK;
 }

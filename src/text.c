@@ -9,6 +9,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -30,8 +31,11 @@ GTEXT_API const char * gtext_version_string(void) {
   static int initialized = 0;
 
   if (!initialized) {
-    snprintf(version_string, sizeof(version_string), "%u.%u.%u",
-        GTEXT_VERSION_MAJOR, GTEXT_VERSION_MINOR, GTEXT_VERSION_PATCH);
+    snprintf(version_string, sizeof(version_string),
+      "%" PRIu32 ".%" PRIu32 ".%" PRIu32,
+      (uint32_t)GTEXT_VERSION_MAJOR,
+      (uint32_t)GTEXT_VERSION_MINOR,
+      (uint32_t)GTEXT_VERSION_PATCH);
     initialized = 1;
   }
 

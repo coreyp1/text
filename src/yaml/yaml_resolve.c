@@ -179,7 +179,7 @@ static bool parse_timestamp(
 				if (idx < len && value[idx] == ':') {
 					idx++;
 				}
-				if (idx + 2 <= len && idx < len && value[idx] >= '0' && value[idx] <= '9') {
+				if (idx + 2 <= len && value[idx] >= '0' && value[idx] <= '9') {
 					if (!parse_fixed_digits(value + idx, len - idx, 2, &tz_minute)) return false;
 					idx += 2;
 				}
@@ -384,8 +384,8 @@ static bool base64_decode(
 	}
 
 	size_t padding = 0;
-	if (count >= 1 && filtered[count - 1] == '=') padding++;
-	if (count >= 2 && filtered[count - 2] == '=') padding++;
+	if (filtered[count - 1] == '=') padding++;
+	if (filtered[count - 2] == '=') padding++;
 	if (padding > 2) {
 		free(filtered);
 		return false;
@@ -841,7 +841,7 @@ static bool is_merge_key(const GTEXT_YAML_Node *key) {
 
 static bool merge_pairs_grow(
 	yaml_merge_pair **pairs,
-	size_t *count,
+	const size_t *count,
 	size_t *capacity
 ) {
 	if (*count < *capacity) return true;
@@ -1146,7 +1146,7 @@ static void mapping_remove_pair(GTEXT_YAML_Node *node, size_t index) {
 }
 
 static GTEXT_YAML_Status apply_dupkey_policy(
-	GTEXT_YAML_Document *doc,
+	const GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Node *node,
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Error *error

@@ -39,7 +39,7 @@ static int json_validate_number_syntax(
   int has_digit = 0;
 
   // Optional minus sign
-  if (i < len && input[i] == '-') {
+  if (input[i] == '-') {
     i++;
   }
 

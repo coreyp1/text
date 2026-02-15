@@ -220,9 +220,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_sink_fixed_buffer(
   buf->truncated = 0;
 
   // Initialize buffer with null terminator
-  if (size > 0) {
-    buffer[0] = '\0';
-  }
+  buffer[0] = '\0';
 
   sink->write = fixed_buffer_write_fn;
   sink->user = buf;
@@ -575,21 +573,16 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Prefer lexeme if available and canonical_numbers is off
   if (v->as.number.lexeme && v->as.number.lexeme_len > 0 &&
       !opts->canonical_numbers) {
-    // Check for integer overflow in lexeme_len (defensive, though unlikely)
-    if (v->as.number.lexeme_len > SIZE_MAX) {
-      return 1; // Invalid length
-    }
     return write_bytes(sink, v->as.number.lexeme, v->as.number.lexeme_len);
   }
 
   // Format from available representation
   char num_buf[64];
-  int len = 0;
 
   // Try int64 first (if available and fits)
   if (v->as.number.has_i64) {
     int64_t i64 = v->as.number.i64;
-    len = format_number_locale_independent(
+    int len = format_number_locale_independent(
         num_buf, sizeof(num_buf), "%lld", (long long)i64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
@@ -599,7 +592,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Try uint64 next
   if (v->as.number.has_u64) {
     uint64_t u64 = v->as.number.u64;
-    len = format_number_locale_independent(
+    int len = format_number_locale_independent(
         num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
@@ -611,7 +604,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
     double d = v->as.number.dbl;
     GTEXT_JSON_Float_Format float_fmt = opts->float_format;
     int float_prec = opts->float_precision > 0 ? opts->float_precision : 6;
-    len = format_double(num_buf, sizeof(num_buf), d, float_fmt, float_prec);
+    int len = format_double(num_buf, sizeof(num_buf), d, float_fmt, float_prec);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }

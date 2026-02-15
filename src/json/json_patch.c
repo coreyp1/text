@@ -327,7 +327,7 @@ static int json_pointer_is_prefix(
   }
 
   // Check that the next character in path is '/' (proper prefix)
-  if (from_len < path_len && path[from_len] == '/') {
+  if (path[from_len] == '/') {
     return 1;
   }
 
@@ -345,7 +345,7 @@ static GTEXT_JSON_Status json_patch_find_parent_and_token(
   }
 
   // Empty path means root itself
-  if (path_len == 0 || (path_len == 1 && path[0] == '/')) {
+  if (path_len == 1 && path[0] == '/') {
     *out_parent = NULL; // No parent (root is the target)
     *out_token = NULL;
     *out_token_len = 0;
@@ -359,11 +359,6 @@ static GTEXT_JSON_Status json_patch_find_parent_and_token(
   for (size_t i = path_len; i > 0; i--) {
     // Check for unescaped '/'
     if (path[i - 1] == '/') {
-      // Check if it's escaped (preceded by '~1')
-      if (i >= 2 && path[i - 2] == '~' && path[i - 1] == '1') {
-        // This is an escaped '/', continue
-        continue;
-      }
       last_slash = &path[i - 1];
       last_slash_pos = i - 1;
       break;

@@ -338,7 +338,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         if (nst != GTEXT_YAML_OK) return nst;
 
         char buf[256];
-        size_t len = 0;
+        size_t tag_len = 0;
 
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
@@ -346,21 +346,21 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
-          len = name_tok.u.scalar.len;
-          if (len > sizeof(buf) - 3) len = sizeof(buf) - 3;
+          tag_len = name_tok.u.scalar.len;
+          if (tag_len > sizeof(buf) - 3) tag_len = sizeof(buf) - 3;
           buf[0] = '!';
           buf[1] = '!';
-          memcpy(buf + 2, name_tok.u.scalar.ptr, len);
-          len += 2;
-          buf[len] = '\0';
+          memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
+          tag_len += 2;
+          buf[tag_len] = '\0';
           free((void *)name_tok.u.scalar.ptr);
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
-          len = tag_tok.u.scalar.len;
-          if (len > sizeof(buf) - 2) len = sizeof(buf) - 2;
+          tag_len = tag_tok.u.scalar.len;
+          if (tag_len > sizeof(buf) - 2) tag_len = sizeof(buf) - 2;
           buf[0] = '!';
-          memcpy(buf + 1, tag_tok.u.scalar.ptr, len);
-          len += 1;
-          buf[len] = '\0';
+          memcpy(buf + 1, tag_tok.u.scalar.ptr, tag_len);
+          tag_len += 1;
+          buf[tag_len] = '\0';
           free((void *)tag_tok.u.scalar.ptr);
         } else {
           return GTEXT_YAML_E_BAD_TOKEN;
@@ -570,7 +570,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         if (nst != GTEXT_YAML_OK) return nst;
 
         char buf[256];
-        size_t len = 0;
+        size_t tag_len = 0;
 
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
@@ -578,21 +578,21 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
-          len = name_tok.u.scalar.len;
-          if (len > sizeof(buf) - 3) len = sizeof(buf) - 3;
+          tag_len = name_tok.u.scalar.len;
+          if (tag_len > sizeof(buf) - 3) tag_len = sizeof(buf) - 3;
           buf[0] = '!';
           buf[1] = '!';
-          memcpy(buf + 2, name_tok.u.scalar.ptr, len);
-          len += 2;
-          buf[len] = '\0';
+          memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
+          tag_len += 2;
+          buf[tag_len] = '\0';
           free((void *)name_tok.u.scalar.ptr);
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
-          len = tag_tok.u.scalar.len;
-          if (len > sizeof(buf) - 2) len = sizeof(buf) - 2;
+          tag_len = tag_tok.u.scalar.len;
+          if (tag_len > sizeof(buf) - 2) tag_len = sizeof(buf) - 2;
           buf[0] = '!';
-          memcpy(buf + 1, tag_tok.u.scalar.ptr, len);
-          len += 1;
-          buf[len] = '\0';
+          memcpy(buf + 1, tag_tok.u.scalar.ptr, tag_len);
+          tag_len += 1;
+          buf[tag_len] = '\0';
           free((void *)tag_tok.u.scalar.ptr);
         } else {
           return GTEXT_YAML_E_BAD_TOKEN;

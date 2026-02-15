@@ -371,12 +371,10 @@ static GTEXT_CSV_Status csv_ensure_index_to_entry_capacity(
   }
 
   // Calculate required capacity (index + 1, since indices are 0-based)
-  size_t required_capacity = required_index + 1;
-
-  // Check for overflow
-  if (required_capacity <= required_index) {
+  if (required_index == SIZE_MAX) {
     return GTEXT_CSV_E_OOM;
   }
+  size_t required_capacity = required_index + 1;
 
   // If current capacity is sufficient, nothing to do
   if (table->index_to_entry_capacity >= required_capacity) {
@@ -2137,11 +2135,9 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
         old_entry = old_entry->next;
       }
     }
-  }
 
-  // Copy header map data
-  if (total_header_entries > 0) {
-    size_t entry_idx = 0;
+    // Copy header map data
+    entry_idx = 0;
     for (size_t i = 0; i < table->header_map_size; i++) {
       csv_header_entry * old_entry = table->header_map[i];
       csv_header_entry ** new_chain = &new_header_map[i];
@@ -3048,7 +3044,7 @@ static GTEXT_CSV_Status csv_determine_header_value(
     }
     header_value = header_name;
     header_value_len = header_name_len;
-    if (header_value_len == 0 && header_value) {
+    if (header_value_len == 0) {
       header_value_len = csv_calculate_field_length(header_value, NULL, 0);
     }
     header_map_name = header_name;
@@ -3326,13 +3322,11 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
     }
     else {
       // Normal case: one more field
-      new_field_count = old_field_count + 1;
-
-      // Check for overflow
-      if (new_field_count < old_field_count) {
+      if (old_field_count == SIZE_MAX) {
         csv_column_op_cleanup_temp_arrays(&temp_arrays);
         return GTEXT_CSV_E_OOM;
       }
+      new_field_count = old_field_count + 1;
     }
 
     old_field_counts[array_idx] = old_field_count;
@@ -3550,13 +3544,11 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
     }
     else {
       // Normal case: one more field
-      new_header_field_count = old_header_field_count + 1;
-
-      // Check for overflow
-      if (new_header_field_count < old_header_field_count) {
+      if (old_header_field_count == SIZE_MAX) {
         csv_column_op_cleanup_temp_arrays(&temp_arrays);
         return GTEXT_CSV_E_OOM;
       }
+      new_header_field_count = old_header_field_count + 1;
     }
 
     // Allocate new field array for header row
