@@ -99,6 +99,10 @@ typedef struct {
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
+	bool explicit_key_pending;          /* True if '?' indicator seen and key is pending */
+	bool explicit_key_active;           /* True if explicit key stored and awaiting ':' */
+	int explicit_key_indent;            /* Indent column for explicit key */
+	size_t explicit_key_depth;          /* Stack depth for explicit key mapping */
 } parser_state;
 
 /* Stack states */
@@ -184,6 +188,10 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_in_root = false;
 	p->last_scalar_in_temp = false;
 	p->last_scalar_temp_depth = 0;
+	p->explicit_key_pending = false;
+	p->explicit_key_active = false;
+	p->explicit_key_indent = -1;
+	p->explicit_key_depth = 0;
 	
 	return true;
 }
@@ -637,6 +645,50 @@ static GTEXT_YAML_Node *detach_last_scalar(parser_state *p) {
 	return node;
 }
 
+static GTEXT_YAML_Status capture_explicit_key(
+	parser_state *p,
+	GTEXT_YAML_Node *node,
+	bool *handled
+) {
+	if (!handled) return GTEXT_YAML_E_INVALID;
+	*handled = false;
+
+	if (!p || !node) return GTEXT_YAML_E_INVALID;
+	if (!p->explicit_key_pending) return GTEXT_YAML_OK;
+	if (p->stack.depth != p->explicit_key_depth) return GTEXT_YAML_OK;
+	if (p->stack.depth == 0) {
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message = "Explicit key missing mapping context";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	size_t top = p->stack.depth - 1;
+	if (p->stack.states[top] != STATE_MAPPING_KEY &&
+		p->stack.states[top] != STATE_MAPPING_VALUE) {
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message = "Explicit key used outside mapping";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	if (!temp_add(p, node)) {
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_OOM;
+			p->error->message = "Out of memory adding explicit key";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+
+	p->explicit_key_pending = false;
+	p->explicit_key_active = true;
+	p->stack.states[top] = STATE_MAPPING_KEY;
+	*handled = true;
+	return GTEXT_YAML_OK;
+}
+
 static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	GTEXT_YAML_Node *node = NULL;
 	char *anchor = NULL;
@@ -703,6 +755,15 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	}
 
 	stack_pop(p);
+
+	bool explicit_handled = false;
+	GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+	if (explicit_status != GTEXT_YAML_OK) {
+		return explicit_status;
+	}
+	if (explicit_handled) {
+		return GTEXT_YAML_OK;
+	}
 
 	if (p->stack.depth == 0) {
 		p->root = node;
@@ -864,6 +925,19 @@ static GTEXT_YAML_Status parse_callback(
 					return anchor_status;
 				}
 			}
+
+			bool explicit_handled = false;
+			GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+			if (explicit_status != GTEXT_YAML_OK) {
+				return explicit_status;
+			}
+			if (explicit_handled) {
+				p->last_scalar_node = node;
+				p->last_scalar_line = event->line;
+				p->last_scalar_col = event->col;
+				p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
+				break;
+			}
 			
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
@@ -959,16 +1033,23 @@ static GTEXT_YAML_Status parse_callback(
 			if (p->stack.depth == 0) {
 				p->root = node;
 			} else {
-				/* Add to parent's temp */
-				if (!temp_add(p, node)) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory nesting sequence";
-					}
-					return GTEXT_YAML_E_OOM;
+				bool explicit_handled = false;
+				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+				if (explicit_status != GTEXT_YAML_OK) {
+					return explicit_status;
 				}
-				maybe_finish_block_mapping_value(p);
+				if (!explicit_handled) {
+					/* Add to parent's temp */
+					if (!temp_add(p, node)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory nesting sequence";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					maybe_finish_block_mapping_value(p);
+				}
 			}
 			
 			break;
@@ -1043,15 +1124,22 @@ static GTEXT_YAML_Status parse_callback(
 			if (p->stack.depth == 0) {
 				p->root = node;
 			} else {
-				if (!temp_add(p, node)) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory nesting mapping";
-					}
-					return GTEXT_YAML_E_OOM;
+				bool explicit_handled = false;
+				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+				if (explicit_status != GTEXT_YAML_OK) {
+					return explicit_status;
 				}
-				maybe_finish_block_mapping_value(p);
+				if (!explicit_handled) {
+					if (!temp_add(p, node)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory nesting mapping";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					maybe_finish_block_mapping_value(p);
+				}
 			}
 			
 			break;
@@ -1109,15 +1197,22 @@ static GTEXT_YAML_Status parse_callback(
 			if (p->stack.depth == 0) {
 				p->root = node;
 			} else {
-				if (!temp_add(p, node)) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory adding alias node";
-					}
-					return GTEXT_YAML_E_OOM;
+				bool explicit_handled = false;
+				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
+				if (explicit_status != GTEXT_YAML_OK) {
+					return explicit_status;
 				}
-				maybe_finish_block_mapping_value(p);
+				if (!explicit_handled) {
+					if (!temp_add(p, node)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory adding alias node";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					maybe_finish_block_mapping_value(p);
+				}
 			}
 			break;
 		}
@@ -1267,6 +1362,14 @@ static GTEXT_YAML_Status parse_callback(
 					GTEXT_YAML_Node *key_node = NULL;
 					size_t top = 0;
 
+					if (p->explicit_key_pending && p->stack.depth <= p->explicit_key_depth) {
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Explicit key missing before ':'";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					if (p->stack.depth > 0) {
 						top = p->stack.depth - 1;
 						in_flow_mapping = !p->stack.is_block[top] &&
@@ -1275,6 +1378,27 @@ static GTEXT_YAML_Status parse_callback(
 						in_block_mapping = p->stack.is_block[top] &&
 							(p->stack.states[top] == STATE_MAPPING_KEY ||
 							 p->stack.states[top] == STATE_MAPPING_VALUE);
+					}
+
+					if (p->explicit_key_active && p->stack.depth == p->explicit_key_depth) {
+						if (p->stack.depth == 0) {
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message = "Explicit key missing mapping context";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+						if (in_block_mapping && p->stack.indents[top] != event->col) {
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message = "Explicit key ':' indentation mismatch";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+						p->stack.states[top] = STATE_MAPPING_VALUE;
+						p->expect_mapping_value = true;
+						p->explicit_key_active = false;
+						break;
 					}
 
 					if (in_flow_mapping) {
@@ -1333,6 +1457,57 @@ static GTEXT_YAML_Status parse_callback(
 
 					p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
 					p->expect_mapping_value = true;
+					break;
+				}
+
+				case '?':
+				{
+					bool in_mapping = false;
+					bool in_flow_mapping = false;
+					bool at_block_mapping = false;
+					int indent = event->col;
+					size_t top = 0;
+
+					if (p->explicit_key_pending || p->explicit_key_active) {
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message = "Explicit key already pending";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
+					if (p->stack.depth > 0) {
+						top = p->stack.depth - 1;
+						in_mapping = (p->stack.states[top] == STATE_MAPPING_KEY ||
+							p->stack.states[top] == STATE_MAPPING_VALUE);
+						in_flow_mapping = in_mapping && !p->stack.is_block[top];
+						at_block_mapping = in_mapping && p->stack.is_block[top] &&
+							p->stack.indents[top] == indent;
+					}
+
+					if (in_flow_mapping) {
+						p->explicit_key_pending = true;
+						p->explicit_key_active = false;
+						p->explicit_key_indent = indent;
+						p->explicit_key_depth = p->stack.depth;
+						break;
+					}
+
+					if (!at_block_mapping) {
+						if (!stack_push(p, NULL, STATE_MAPPING_KEY, NULL, NULL, indent, true)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory tracking explicit key";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+					}
+
+					p->explicit_key_pending = true;
+					p->explicit_key_active = false;
+					p->explicit_key_indent = indent;
+					p->explicit_key_depth = p->stack.depth;
 					break;
 				}
 					
