@@ -358,6 +358,101 @@ TEST(YamlDomParser, BlockNestedMappingInSequence) {
 	gtext_yaml_free(doc);
 }
 
+TEST(YamlDomParser, BlockNestedSequenceInSequence) {
+	const char *yaml = "- - a\n  - b\n- - c\n  - d";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(root), 2);
+	
+	const GTEXT_YAML_Node *first = gtext_yaml_sequence_get(root, 0);
+	ASSERT_NE(first, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(first), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(first), 2);
+	
+	const GTEXT_YAML_Node *first_item = gtext_yaml_sequence_get(first, 0);
+	ASSERT_NE(first_item, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(first_item), "a");
+	
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomParser, BlockNestedMappingAndSequence) {
+	const char *yaml =
+		"root:\n"
+		"  child:\n"
+		"    key: value\n"
+		"  list:\n"
+		"    - one\n"
+		"    - two\n";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_MAPPING);
+	
+	const GTEXT_YAML_Node *root_map = gtext_yaml_mapping_get(root, "root");
+	ASSERT_NE(root_map, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root_map), GTEXT_YAML_MAPPING);
+	
+	const GTEXT_YAML_Node *child = gtext_yaml_mapping_get(root_map, "child");
+	ASSERT_NE(child, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(child), GTEXT_YAML_MAPPING);
+	
+	const GTEXT_YAML_Node *key = gtext_yaml_mapping_get(child, "key");
+	ASSERT_NE(key, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(key), "value");
+	
+	const GTEXT_YAML_Node *list = gtext_yaml_mapping_get(root_map, "list");
+	ASSERT_NE(list, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(list), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(list), 2);
+	
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlDomParser, BlockSequenceMappingWithNestedSequence) {
+	const char *yaml =
+		"- name: Bob\n"
+		"  tags:\n"
+		"    - dev\n"
+		"    - ops\n"
+		"- name: Alice\n"
+		"  tags:\n"
+		"    - qa\n";
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &error);
+	ASSERT_NE(doc, nullptr);
+	
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(root), 2);
+	
+	const GTEXT_YAML_Node *first = gtext_yaml_sequence_get(root, 0);
+	ASSERT_NE(first, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(first), GTEXT_YAML_MAPPING);
+	
+	const GTEXT_YAML_Node *tags = gtext_yaml_mapping_get(first, "tags");
+	ASSERT_NE(tags, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(tags), GTEXT_YAML_SEQUENCE);
+	EXPECT_EQ(gtext_yaml_sequence_length(tags), 2);
+	
+	gtext_yaml_free(doc);
+}
+
 // ============================================================================
 // Nested Structure Tests
 // ============================================================================
