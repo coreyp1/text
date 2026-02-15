@@ -19,6 +19,21 @@ static GTEXT_YAML_Status noop_cb(GTEXT_YAML_Stream *s, const void *evp, void *us
     return GTEXT_YAML_OK;
 }
 
+typedef struct {
+    int starts;
+    int ends;
+} doc_counter;
+
+static GTEXT_YAML_Status count_docs_cb(GTEXT_YAML_Stream *s, const void *evp, void *user) {
+    (void)s;
+    const GTEXT_YAML_Event *ev = (const GTEXT_YAML_Event *)evp;
+    doc_counter *counter = (doc_counter *)user;
+    if (!counter || !ev) return GTEXT_YAML_OK;
+    if (ev->type == GTEXT_YAML_EVENT_DOCUMENT_START) counter->starts++;
+    if (ev->type == GTEXT_YAML_EVENT_DOCUMENT_END) counter->ends++;
+    return GTEXT_YAML_OK;
+}
+
 //
 // Test: Single document with explicit ---
 //
@@ -53,6 +68,27 @@ TEST(YamlDocuments, SingleDocumentImplicit) {
     EXPECT_EQ(st, GTEXT_YAML_OK);
     
     gtext_yaml_stream_free(s);
+}
+
+TEST(YamlDocuments, ImplicitDocumentEmitsBoundaries) {
+    const char *input = "key: value\n";
+
+    doc_counter counter;
+    memset(&counter, 0, sizeof(counter));
+
+    GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, count_docs_cb, &counter);
+    ASSERT_NE(s, nullptr);
+
+    GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, input, strlen(input));
+    ASSERT_EQ(st, GTEXT_YAML_OK);
+
+    st = gtext_yaml_stream_finish(s);
+    EXPECT_EQ(st, GTEXT_YAML_OK);
+
+    gtext_yaml_stream_free(s);
+
+    EXPECT_EQ(counter.starts, 1);
+    EXPECT_EQ(counter.ends, 1);
 }
 
 //

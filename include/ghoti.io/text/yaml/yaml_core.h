@@ -114,6 +114,15 @@ typedef enum {
 } GTEXT_YAML_Schema;
 
 /**
+ * @enum GTEXT_YAML_Mode
+ * @brief Parse mode presets that override option defaults.
+ */
+typedef enum {
+  GTEXT_YAML_MODE_DEFAULT,
+  GTEXT_YAML_MODE_CONFIG
+} GTEXT_YAML_Mode;
+
+/**
  * @enum GTEXT_YAML_Scalar_Style
  * @brief Preferred scalar style for YAML emission.
  */
@@ -232,6 +241,7 @@ typedef struct {
  */
 typedef struct {
   /* Limits and behavior */
+  GTEXT_YAML_Mode mode;
   GTEXT_YAML_Dupkey_Mode dupkeys;
   GTEXT_YAML_Schema schema;
   size_t max_depth;

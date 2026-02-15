@@ -180,12 +180,14 @@ TEST(YamlStreamDebug, BareScalar) {
 	
 	gtext_yaml_stream_free(stream);
 	
-	//Check for DOCUMENT_END
+	bool has_doc_start = false;
 	bool has_doc_end = false;
 	for (const auto &ev : captured_events) {
+		if (ev.type == GTEXT_YAML_EVENT_DOCUMENT_START) has_doc_start = true;
 		if (ev.type == GTEXT_YAML_EVENT_DOCUMENT_END) has_doc_end = true;
 	}
-	EXPECT_FALSE(has_doc_end);
+	EXPECT_TRUE(has_doc_start);
+	EXPECT_TRUE(has_doc_end);
 }
 
 int main(int argc, char **argv) {

@@ -546,8 +546,9 @@ static GTEXT_YAML_Document *yaml_parse_json_document_internal(
 	GTEXT_YAML_Error *error,
 	bool report_errors
 ) {
-	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
-	const GTEXT_YAML_Parse_Options *opts = options ? options : &default_opts;
+	GTEXT_YAML_Parse_Options effective_opts =
+		gtext_yaml_parse_options_effective(options);
+	const GTEXT_YAML_Parse_Options *opts = &effective_opts;
 	GTEXT_JSON_Parse_Options json_opts = json_parse_options_from_yaml(opts);
 	GTEXT_JSON_Error json_err = {0};
 	GTEXT_JSON_Value *json_root = gtext_json_parse(input, length, &json_opts, &json_err);
@@ -1961,15 +1962,15 @@ GTEXT_YAML_Document *yaml_parse_document(
 		return NULL;
 	}
 	
-	/* Use default options if none provided */
-	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
-	if (!options) options = &default_opts;
+	GTEXT_YAML_Parse_Options effective_opts =
+		gtext_yaml_parse_options_effective(options);
+	const GTEXT_YAML_Parse_Options *opts = &effective_opts;
 
-	if (json_fastpath_candidate(input, length)) {
+	if (opts->enable_json_fast_path && json_fastpath_candidate(input, length)) {
 		GTEXT_YAML_Document *json_doc = yaml_parse_json_document_internal(
 			input,
 			length,
-			options,
+			opts,
 			error,
 			false
 		);
@@ -2006,7 +2007,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	
 	memset(doc, 0, sizeof(*doc));
 	doc->ctx = ctx;
-	doc->options = *options;
+	doc->options = *opts;
 	doc->document_index = 0;  /* Always parsing first document */
 	
 	/* Initialize parser state */
@@ -2022,7 +2023,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	parser.doc = doc;
 	
 	/* Create streaming parser */
-	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(options, parse_callback, &parser);
+	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(opts, parse_callback, &parser);
 	if (!stream) {
 		parser_free(&parser);
 		yaml_context_free(ctx);
@@ -2351,19 +2352,19 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 		return NULL;
 	}
 	
-	/* Use default options if none provided */
-	GTEXT_YAML_Parse_Options default_opts = gtext_yaml_parse_options_default();
-	if (!options) options = &default_opts;
+	GTEXT_YAML_Parse_Options effective_opts =
+		gtext_yaml_parse_options_effective(options);
+	const GTEXT_YAML_Parse_Options *opts = &effective_opts;
 	
 	/* Initialize multidoc state */
 	multidoc_state state = {0};
-	state.options = options;
+	state.options = opts;
 	state.error = error;
 	state.input = input;
 	state.input_length = length;
 	
 	/* Create streaming parser */
-	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(options, multidoc_callback, &state);
+	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(opts, multidoc_callback, &state);
 	if (!stream) {
 		if (error) {
 			error->code = GTEXT_YAML_E_OOM;

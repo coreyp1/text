@@ -15,6 +15,7 @@
 GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
 {
   GTEXT_YAML_Parse_Options opts = {0};
+  opts.mode = GTEXT_YAML_MODE_DEFAULT;
   opts.dupkeys = GTEXT_YAML_DUPKEY_ERROR;
   opts.schema = GTEXT_YAML_SCHEMA_CORE;
   /* Defaults: 0 means use library default; here we supply concrete defaults */
@@ -39,6 +40,23 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   opts.warnings_as_errors = false;
   opts.warning_mask = 0;
   return opts;
+}
+
+GTEXT_INTERNAL_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_effective(
+  const GTEXT_YAML_Parse_Options *opts
+) {
+  GTEXT_YAML_Parse_Options effective = opts
+    ? *opts
+    : gtext_yaml_parse_options_default();
+
+  if (effective.mode == GTEXT_YAML_MODE_CONFIG) {
+    effective.schema = GTEXT_YAML_SCHEMA_FAILSAFE;
+    effective.allow_complex_keys = false;
+    effective.require_string_keys = true;
+    effective.enable_json_fast_path = false;
+  }
+
+  return effective;
 }
 
 GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_safe(void)

@@ -79,6 +79,8 @@ struct GTEXT_YAML_Stream {
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
   bool pending_alias; /* True if alias indicator seen and name is pending */
   bool sync_mode; /* If true, call scanner_finish after each feed */
+  bool document_started; /* True if we've emitted DOCUMENT_START */
+  bool document_closed; /* True if current document is closed */
 };
 
 static GTEXT_YAML_Status stream_apply_alias_limit(GTEXT_YAML_Stream *s) {
@@ -133,6 +135,65 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
   return GTEXT_YAML_OK;
 }
 
+static GTEXT_YAML_Status stream_emit_document_start(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok
+) {
+  if (!s) return GTEXT_YAML_E_INVALID;
+
+  GTEXT_YAML_Event ev;
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
+  if (tok) {
+    ev.offset = tok->offset;
+    ev.line = tok->line;
+    ev.col = tok->col;
+  }
+
+  if (s->cb) {
+    GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+    if (rc != GTEXT_YAML_OK) return rc;
+  }
+
+  s->document_started = true;
+  s->document_closed = false;
+  return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status stream_emit_document_end(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok
+) {
+  if (!s) return GTEXT_YAML_E_INVALID;
+
+  GTEXT_YAML_Event ev;
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
+  if (tok) {
+    ev.offset = tok->offset;
+    ev.line = tok->line;
+    ev.col = tok->col;
+  }
+
+  if (s->cb) {
+    GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+    if (rc != GTEXT_YAML_OK) return rc;
+  }
+
+  s->document_closed = true;
+  return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status stream_ensure_document_started(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok
+) {
+  if (!s->document_started || s->document_closed) {
+    return stream_emit_document_start(s, tok);
+  }
+  return GTEXT_YAML_OK;
+}
+
 GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   const GTEXT_YAML_Parse_Options * opts,
   GTEXT_YAML_Event_Callback cb,
@@ -143,7 +204,7 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   memset(s, 0, sizeof(*s));
   s->cb = cb;
   s->user = user;
-  if (opts) s->opts = *opts;
+  s->opts = gtext_yaml_parse_options_effective(opts);
   s->total_bytes_consumed = 0;
   s->current_depth = 0;
   s->alias_expansion_count = 0;
@@ -206,6 +267,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
       s->pending_alias = false;
+      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
+      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
       GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &tok);
       if (alias_rc != GTEXT_YAML_OK) return alias_rc;
       continue;
@@ -218,21 +281,28 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     ev.col = tok.col;
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
-      ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+      if (s->document_started && !s->document_closed) {
+        GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
       }
+      GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
+      if (rc != GTEXT_YAML_OK) return rc;
       continue;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
-      ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+      if (!s->document_started || s->document_closed) {
+        GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
       }
+      GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
+      if (rc != GTEXT_YAML_OK) return rc;
       continue;
+    }
+
+    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE) {
+      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
+      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DIRECTIVE) {
@@ -379,6 +449,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           return GTEXT_YAML_OK;
         }
         if (nst != GTEXT_YAML_OK) return nst;
+        GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &next_tok);
+        if (doc_rc != GTEXT_YAML_OK) return doc_rc;
         return stream_emit_alias(s, &next_tok);
       }
       /* Emit remaining indicators (commas, colons, etc.) */
@@ -459,6 +531,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
       s->pending_alias = false;
+      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
+      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
       GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &tok);
       if (alias_rc != GTEXT_YAML_OK) return alias_rc;
       continue;
@@ -471,21 +545,28 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     ev.col = tok.col;
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
-      ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+      if (s->document_started && !s->document_closed) {
+        GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
       }
+      GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
+      if (rc != GTEXT_YAML_OK) return rc;
       continue;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
-      ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
+      if (!s->document_started || s->document_closed) {
+        GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
       }
+      GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
+      if (rc != GTEXT_YAML_OK) return rc;
       continue;
+    }
+
+    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE) {
+      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
+      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
@@ -613,6 +694,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           return GTEXT_YAML_OK;
         }
         if (nst != GTEXT_YAML_OK) return nst;
+        GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &next_tok);
+        if (doc_rc != GTEXT_YAML_OK) return doc_rc;
         GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &next_tok);
         if (alias_rc != GTEXT_YAML_OK) return alias_rc;
         continue;
@@ -650,6 +733,11 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       free((void *)tok.u.scalar.ptr);
       continue;
     }
+  }
+
+  if (s->document_started && !s->document_closed) {
+    GTEXT_YAML_Status rc = stream_emit_document_end(s, NULL);
+    if (rc != GTEXT_YAML_OK) return rc;
   }
 
   return GTEXT_YAML_OK;

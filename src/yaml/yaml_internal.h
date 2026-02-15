@@ -16,6 +16,10 @@
 /* Forward declarations */
 typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
 
+GTEXT_INTERNAL_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_effective(
+	const GTEXT_YAML_Parse_Options *opts
+);
+
 /* Internal structures for the scanner, reader, and parser. */
 
 typedef struct GTEXT_YAML_CharReader GTEXT_YAML_CharReader;
