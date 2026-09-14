@@ -798,7 +798,9 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     char *out = NULL;
     size_t out_len = 0;
     if (in_len == 0) {
-      out = (char *)malloc(0);
+      /* malloc(0) may legally return NULL; request 1 byte so the NULL check
+         below only ever signals a genuine allocation failure. */
+      out = (char *)malloc(1);
       if (!out) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
       out_len = 0;
     } else {
