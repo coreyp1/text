@@ -13,7 +13,7 @@ The `text` library provides:
 
 ## Dependencies
 
-- `cutil` - Core utility library (required)
+- None beyond libc (Google Test is required only to build the test suite)
 
 ## Building
 
