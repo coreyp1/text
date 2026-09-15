@@ -91,15 +91,15 @@ endif
 
 
 CXX := g++
-CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g
+CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
 CC := cc
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GTEXT_BUILD enables DLL export on Windows (checked by GTEXT_API macro)
 # GTEXT_TEST_BUILD enables export of internal functions for testing (checked by GTEXT_INTERNAL_API macro)
-LIB_CFLAGS := $(CFLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD
+LIB_CFLAGS := $(CFLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD $(EXTRA_CFLAGS)
 # -DGHOTIIO_CUTIL_ENABLE_MEMORY_DEBUG
-LDFLAGS := -L /usr/lib -lstdc++ -lm
+LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
 BUILD_DIR := ./build/$(BUILD)
 OBJ_DIR := $(BUILD_DIR)/objects
 GEN_DIR := $(BUILD_DIR)/generated
@@ -308,7 +308,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help
+.PHONY: clean cloc docs docs-pdf examples help coverage
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -734,6 +734,20 @@ docs-pdf: docs ## Generate the documentation as a pdf, at ./docs/(SUITE)-(PROJEC
 
 cloc: ## Count the lines of code used in the project
 	cloc src include tests Makefile
+
+coverage: ## Build instrumented, run the tests, and report line coverage
+# Cleans first because the object files would otherwise be reused without the
+# instrumentation, then cleans and rebuilds at the end: leaving the
+# instrumented objects behind would have a later `make` silently link them,
+# and leaving the tree cleaned would break any sibling project that links
+# this one. The cost is one extra build; coverage is not run often.
+	@$(MAKE) --no-print-directory clean > /dev/null
+	@$(MAKE) --no-print-directory test \
+		EXTRA_CFLAGS="--coverage -O0" \
+		EXTRA_LDFLAGS="--coverage" > /dev/null
+	@tools/coverage.sh $(OBJ_DIR)
+	@$(MAKE) --no-print-directory clean > /dev/null
+	@$(MAKE) --no-print-directory all > /dev/null
 
 help: ## Display this help
 	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' Makefile | sort | sed 's/\([^:]*\):.*## \(.*\)/\1:\2/' | awk -F: '{printf "%-15s %s\n", $$1, $$2}' | sed "s/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g"
