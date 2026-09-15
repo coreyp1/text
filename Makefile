@@ -308,7 +308,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage
+.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -734,6 +734,71 @@ docs-pdf: docs ## Generate the documentation as a pdf, at ./docs/(SUITE)-(PROJEC
 
 cloc: ## Count the lines of code used in the project
 	cloc src include tests Makefile
+
+####################################################################
+# Fuzzing (libFuzzer)
+####################################################################
+# The library sources are recompiled with clang's coverage instrumentation
+# and linked into the harness, rather than the harness linking the ordinary
+# shared library. That matters: libFuzzer steers its mutations by the
+# coverage it observes, and against an uninstrumented library it sees only
+# the harness file and degrades into random input generation.
+#
+# AddressSanitizer and UndefinedBehaviorSanitizer are on, since a parser
+# reading one byte past a buffer is exactly the bug being looked for and it
+# will not usually crash on its own.
+FUZZ_CC ?= clang
+FUZZ_CXX ?= clang++
+FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
+FUZZ_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
+FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
+FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
+FUZZ_DIR := $(BUILD_DIR)/fuzz
+FUZZ_OBJ_DIR := $(FUZZ_DIR)/objects
+FUZZ_APP_DIR := $(FUZZ_DIR)/apps
+FUZZ_OBJECTS := $(patsubst src/%.c,$(FUZZ_OBJ_DIR)/%.o,$(SOURCES))
+FUZZ_CORPUS := tests/fuzz/corpus
+# Long enough to be worth running, short enough for a coffee. Override for a
+# real campaign: make fuzz FUZZ_TIME=3600
+FUZZ_TIME ?= 60
+
+$(FUZZ_OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(@D)
+	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@
+
+# $1 = harness basename (fuzz_json), $2 = target suffix (json)
+define fuzz-rule
+fuzz-$2: ## Build the $2 fuzz harness (requires clang)
+fuzz-$2: $$(FUZZ_APP_DIR)/$1
+
+$$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.cpp $$(FUZZ_OBJECTS)
+	@if [ -z "$$(FUZZ_CC_OK)" ]; then \
+		echo "fuzzing requires $$(FUZZ_CXX); install clang or set FUZZ_CC/FUZZ_CXX"; \
+		exit 1; \
+	fi
+	@mkdir -p $$(@D) $$(FUZZ_CORPUS)
+	@printf "\n### Building $1 ###\n"
+	$$(FUZZ_CXX) $$(FUZZ_BIN_FLAGS) -std=c++20 -w $$(INCLUDE) \
+		-o $$@ $$< $$(FUZZ_OBJECTS)
+
+fuzz-run-$2: ## Run the $2 fuzzer for $$(FUZZ_TIME) seconds
+fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
+	@mkdir -p $$(FUZZ_CORPUS)/$2
+	@printf "\n### Fuzzing $2 for $$(FUZZ_TIME)s ###\n"
+	@$$(FUZZ_APP_DIR)/$1 $$(FUZZ_CORPUS)/$2 \
+		-max_total_time=$$(FUZZ_TIME) -print_final_stats=1
+endef
+
+$(eval $(call fuzz-rule,fuzz_json,json))
+$(eval $(call fuzz-rule,fuzz_yaml,yaml))
+$(eval $(call fuzz-rule,fuzz_csv,csv))
+
+fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
+fuzz: fuzz-run-json fuzz-run-yaml fuzz-run-csv
+
+fuzz-clean: ## Remove the fuzz build (keeps the corpus)
+fuzz-clean:
+	-@rm -rf $(FUZZ_DIR)
 
 coverage: ## Build instrumented, run the tests, and report line coverage
 # Cleans first because the object files would otherwise be reused without the

@@ -1,0 +1,7 @@
+# libFuzzer writes its own corpus here as it discovers inputs. Those are
+# machine-generated, numerous, and regenerable, so only the hand-built seeds
+# (*.seed, derived from tests/data) are tracked.
+*
+!.gitignore
+!*/
+!*/*.seed

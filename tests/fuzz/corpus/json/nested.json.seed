@@ -1,0 +1,24 @@
+c{
+  "level1": {
+    "level2": {
+      "level3": {
+        "level4": {
+          "level5": {
+            "value": "deep"
+          }
+        }
+      }
+    }
+  },
+  "array": [
+    [
+      [
+        [
+          [
+            "deep array"
+          ]
+        ]
+      ]
+    ]
+  ]
+}

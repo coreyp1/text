@@ -1,0 +1,5 @@
+c{
+  /* This is a
+     multi-line comment */
+  "key": "value"
+}

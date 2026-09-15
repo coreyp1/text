@@ -705,7 +705,13 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       int p = scanner_peek(s);
       if (p == -1) {
         if (!s->finished) return GTEXT_YAML_E_INCOMPLETE;
+        /* End of input inside the block scalar header. There is no newline
+           left to find and nothing left to consume, so stop: falling through
+           to scanner_consume() left the cursor where it was and peeked -1
+           again on the next pass, which spun forever. Two bytes - ">[" -
+           were enough to reach it. */
         s->last_indicator = 0;
+        break;
       }
       scanner_consume(s);
       if (p == '\n' || p == '\r') break;
@@ -1151,11 +1157,18 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       return GTEXT_YAML_E_INVALID;
     }
 
-    /* allocate output buffer */
+    /* Allocate the output buffer.
+       An empty quoted scalar - `a: ""`, which is ordinary YAML rather than
+       anything malformed - leaves scalar.data NULL and scalar.len 0. Two
+       things went wrong there: malloc(0) may return NULL, which this would
+       have reported as an allocation failure, and memcpy() declares both
+       pointers non-null even for a zero length, so passing the NULL was
+       undefined behaviour. Ask for at least one byte, and skip the copy when
+       there is nothing to copy. */
     size_t slen = scalar.len;
-    char *out = (char *)malloc(slen);
+    char *out = (char *)malloc(slen ? slen : 1);
     if (!out) { gtext_yaml_dynbuf_free(&scalar); if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; } return GTEXT_YAML_E_OOM; }
-    memcpy(out, scalar.data, slen);
+    if (slen) { memcpy(out, scalar.data, slen); }
     gtext_yaml_dynbuf_free(&scalar);
 
     tok->type = GTEXT_YAML_TOKEN_SCALAR;

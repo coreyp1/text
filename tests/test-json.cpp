@@ -16,6 +16,44 @@ extern "C" {
 }
 
 /**
+ * Truncated containers: every prefix of a valid document must be reported as
+ * an error without touching freed memory.
+ *
+ * A nested object lives in its parent's arena, and gtext_json_free() releases
+ * the whole arena; the object parser's error path freed nested objects
+ * anyway, so the parent was destroyed and the parent's own error path then
+ * read from freed memory. `{"":{` - five bytes - was enough. The array parser
+ * had guarded against this; the object parser had not.
+ *
+ * Found by the JSON fuzzer (tests/fuzz/fuzz_json.cpp).
+ */
+TEST(Truncated, NestedContainersDoNotUseFreedMemory) {
+    const char * inputs[] = {
+        "{\"\":{",
+        "{\"a\":{",
+        "{\"a\":{\"b\":{",
+        "{\"a\":{\"b\":{\"c\":{",
+        "{\"a\":{\"b\":1",
+        "{\"a\":[",
+        "{\"a\":[{",
+        "[{\"a\":{",
+        "[[[[",
+        "{\"a\":{\"b\":[{\"c\":",
+    };
+
+    for (const char * input : inputs) {
+        GTEXT_JSON_Error err{};
+        GTEXT_JSON_Value * v =
+            gtext_json_parse(input, strlen(input), nullptr, &err);
+        EXPECT_EQ(v, nullptr) << "truncated input should not parse: " << input;
+        if (v) {
+            gtext_json_free(v);
+        }
+        gtext_json_error_free(&err);
+    }
+}
+
+/**
  * Test default parse options match specification (strict JSON by default)
  */
 TEST(ParseOptions, Default) {

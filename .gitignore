@@ -11,3 +11,9 @@ example.output.*
 tasks
 
 tools
+
+# Fuzzer crash/leak artifacts (reproducers are promoted to tests instead)
+crash-*
+leak-*
+timeout-*
+oom-*

@@ -671,6 +671,9 @@ static GTEXT_JSON_Status json_parse_object(
   parser->depth++;
   GTEXT_JSON_Status result = GTEXT_JSON_OK;
 
+  // Track if this is a root object (has its own context)
+  int is_root_object = (ctx == NULL);
+
   // Create object value
   GTEXT_JSON_Value * object;
   if (ctx) {
@@ -1052,7 +1055,15 @@ static GTEXT_JSON_Status json_parse_object(
   parser->depth--;
 
   if (result != GTEXT_JSON_OK) {
-    gtext_json_free(object);
+    // Only free the object if it has its own context (root case). A nested
+    // object lives in the parent's arena, and gtext_json_free() frees the
+    // whole arena - so freeing it here destroyed the parent as well, and the
+    // parent's own error path then read from freed memory. Five bytes of
+    // truncated input ({"":{) were enough to reach it. The array parser
+    // already guarded against exactly this.
+    if (is_root_object) {
+      gtext_json_free(object);
+    }
     return result;
   }
 

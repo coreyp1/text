@@ -21,6 +21,29 @@
   inclusion point due to include-path differences. */
 typedef struct GTEXT_YAML_Scanner GTEXT_YAML_Scanner;
 
+/**
+ * Release the heap payload a token owns, if any.
+ *
+ * SCALAR and COMMENT tokens carry a malloc'd buffer that the consumer owns.
+ * An error path that abandons a token has to release it; the tag-parsing
+ * branches below did not, so a comment appearing where a tag name was
+ * expected leaked its buffer on every such document.
+ */
+static void yaml_token_release(GTEXT_YAML_Token *tok)
+{
+	if (!tok) {
+		return;
+	}
+	if (tok->type == GTEXT_YAML_TOKEN_SCALAR) {
+		free((void *)tok->u.scalar.ptr);
+		tok->u.scalar.ptr = NULL;
+	}
+	else if (tok->type == GTEXT_YAML_TOKEN_COMMENT) {
+		free((void *)tok->u.comment.ptr);
+		tok->u.comment.ptr = NULL;
+	}
+}
+
 static void directive_split(
   const char *line,
   size_t len,
@@ -96,7 +119,10 @@ static GTEXT_YAML_Status stream_apply_alias_limit(GTEXT_YAML_Stream *s) {
 
 static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Token *tok) {
   if (!s || !tok) return GTEXT_YAML_E_INVALID;
-  if (tok->type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+  if (tok->type != GTEXT_YAML_TOKEN_SCALAR) {
+    yaml_token_release(tok);
+    return GTEXT_YAML_E_BAD_TOKEN;
+  }
 
   char *name = (char *)tok->u.scalar.ptr;
   size_t namelen = tok->u.scalar.len;
@@ -265,7 +291,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
 
     if (s->pending_alias) {
-      if (tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+      if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
+        yaml_token_release(&tok);
+        return GTEXT_YAML_E_BAD_TOKEN;
+      }
       s->pending_alias = false;
       GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
       if (doc_rc != GTEXT_YAML_OK) return doc_rc;
@@ -434,7 +463,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           GTEXT_YAML_Error name_err;
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
-          if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+          if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
+            yaml_token_release(&name_tok);
+            return GTEXT_YAML_E_BAD_TOKEN;
+          }
           tag_len = name_tok.u.scalar.len;
           if (tag_len > sizeof(buf) - 3) tag_len = sizeof(buf) - 3;
           buf[0] = '!';
@@ -452,6 +484,9 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           buf[tag_len] = '\0';
           free((void *)tag_tok.u.scalar.ptr);
         } else {
+          /* Anything else here - a comment, most easily - is a malformed
+             tag, but the token may still own a buffer. */
+          yaml_token_release(&tag_tok);
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
@@ -549,7 +584,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
 
     if (s->pending_alias) {
-      if (tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+      if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
+        yaml_token_release(&tok);
+        return GTEXT_YAML_E_BAD_TOKEN;
+      }
       s->pending_alias = false;
       GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
       if (doc_rc != GTEXT_YAML_OK) return doc_rc;
@@ -697,7 +735,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           GTEXT_YAML_Error name_err;
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
-          if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
+          if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
+            yaml_token_release(&name_tok);
+            return GTEXT_YAML_E_BAD_TOKEN;
+          }
           tag_len = name_tok.u.scalar.len;
           if (tag_len > sizeof(buf) - 3) tag_len = sizeof(buf) - 3;
           buf[0] = '!';
@@ -715,6 +756,9 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           buf[tag_len] = '\0';
           free((void *)tag_tok.u.scalar.ptr);
         } else {
+          /* Anything else here - a comment, most easily - is a malformed
+             tag, but the token may still own a buffer. */
+          yaml_token_release(&tag_tok);
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
