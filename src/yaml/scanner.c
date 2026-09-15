@@ -48,6 +48,14 @@ struct GTEXT_YAML_Scanner {
   
   /* Track last indicator character for tag/anchor/alias parsing */
   int last_indicator;
+
+  /* Payload of the token most recently returned, owned here.
+     SCALAR and COMMENT tokens point into this buffer; it is released when the
+     next token is requested, which is the lifetime yaml_internal.h documents.
+     It used to be handed to the caller instead, and every error path that
+     abandoned a token without freeing it leaked - a class of bug the fuzzer
+     kept finding one site at a time. */
+  char *token_payload;
 };
 
 static int is_indicator_char(int c)
@@ -418,7 +426,11 @@ static void scanner_pop_context(GTEXT_YAML_Scanner *s)
 
 GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
 {
-  GTEXT_YAML_Scanner *s = (GTEXT_YAML_Scanner *)malloc(sizeof(*s));
+  /* Zeroed, so every field has a defined value before the members below set
+     the ones that need something other than zero. token_payload in
+     particular is freed on the first scanner_next(), which an uninitialised
+     pointer would not survive. */
+  GTEXT_YAML_Scanner *s = (GTEXT_YAML_Scanner *)calloc(1, sizeof(*s));
   if (!s) return NULL;
   if (!gtext_yaml_dynbuf_init(&s->input)) {
     free(s);
@@ -451,6 +463,7 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s)
   if (!s) return;
   gtext_yaml_dynbuf_free(&s->input);
   gtext_yaml_dynbuf_free(&s->raw_prefix);
+  free(s->token_payload);
   free(s);
 }
 
@@ -497,6 +510,11 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_finish(GTEXT_YAML_Scanner *s)
 
 GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner *s, GTEXT_YAML_Token *tok, GTEXT_YAML_Error *err)
 {
+  /* The previous token's payload dies here: the caller asked for another
+     token, so it is done with the last one. */
+  free(s->token_payload);
+  s->token_payload = NULL;
+
   if (!s || !tok) return GTEXT_YAML_E_INVALID;
 
   if (!s->encoding_determined && s->finished) {
@@ -583,6 +601,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       }
 
       tok->type = GTEXT_YAML_TOKEN_COMMENT;
+      s->token_payload = out;
       tok->u.comment.ptr = out;
       tok->u.comment.len = out_len;
       tok->u.comment.inline_comment = inline_comment;
@@ -667,6 +686,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     }
 
     tok->type = GTEXT_YAML_TOKEN_DIRECTIVE;
+    s->token_payload = out;
     tok->u.scalar.ptr = out;
     tok->u.scalar.len = out_len;
     tok->offset = off;
@@ -784,8 +804,11 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         /* if finished and no newline, still accept the remaining bytes */
       }
 
-      /* commit consumption up to pos2 */
-      while (s->cursor < pos2) {
+      /* Commit consumption up to pos2.
+         Bounded by the input as well: scanner_consume() cannot advance past
+         the end, so a pos2 beyond it would spin here forever rather than
+         stop. Same shape as the block scalar header loop above. */
+      while (s->cursor < pos2 && s->cursor < s->input.len) {
         int cc = scanner_consume(s);
         (void)cc;
       }
@@ -910,6 +933,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->scalar_style = (style == '>')
       ? GTEXT_YAML_SCALAR_STYLE_FOLDED
       : GTEXT_YAML_SCALAR_STYLE_LITERAL;
+  s->token_payload = out;
   tok->u.scalar.ptr = out;
   tok->u.scalar.len = out_len;
     tok->offset = off;
@@ -1175,6 +1199,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     tok->scalar_style = (quote == '\'')
       ? GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED
       : GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+    s->token_payload = out;
     tok->u.scalar.ptr = out;
     tok->u.scalar.len = slen;
     tok->offset = off;
@@ -1353,6 +1378,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
   tok->type = GTEXT_YAML_TOKEN_SCALAR;
   tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
+  s->token_payload = out;
   tok->u.scalar.ptr = out;
   tok->u.scalar.len = slen;
   /* scalar emitted */

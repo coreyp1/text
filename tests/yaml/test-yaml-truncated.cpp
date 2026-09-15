@@ -12,7 +12,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <stdio.h>
 #include <string.h>
+
+#include <string>
 
 extern "C" {
 #include <ghoti.io/text/yaml.h>
@@ -73,6 +76,45 @@ TEST(YamlTruncated, EveryPrefixOfADocumentTerminates) {
 		parse_and_free(doc, len);
 	}
 	SUCCEED() << "every prefix returned";
+}
+
+TEST(YamlTruncated, BlockScalarBodyAtEndOfInput) {
+	// A second loop with the same shape as the one above: the block scalar
+	// body committed its consumption with `while (cursor < pos2)`, and
+	// scanner_consume() cannot advance past the end of the input, so a pos2
+	// beyond it spun forever. The fuzzer found this one only after the header
+	// loop was fixed and it could reach deeper.
+	//
+	// The input is the fuzzer's own reproducer rather than a reconstruction:
+	// a hand-written approximation of it did not trigger the loop, which is
+	// exactly why the artifact is kept. Its first byte is the harness's parse
+	// options selector and is skipped here.
+	// Tests are run from the project root, as the other data-driven tests here
+	// assume.
+	const char *path = "tests/data/yaml/block-scalar-body-at-eof.bin";
+	FILE *f = fopen(path, "rb");
+	ASSERT_NE(f, nullptr) << "missing fixture: " << path;
+
+	std::string data;
+	char chunk[4096];
+	size_t n;
+	while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+		data.append(chunk, n);
+	}
+	fclose(f);
+	ASSERT_GT(data.size(), 1u);
+
+	const char *doc = data.data() + 1;
+	size_t doc_len = data.size() - 1;
+
+	parse_and_free(doc, doc_len);
+
+	// And truncated at every length, since the failure depended on exactly
+	// where the input ended.
+	for (size_t len = 0; len <= doc_len; len++) {
+		parse_and_free(doc, len);
+	}
+	SUCCEED() << "block scalar bodies ending at the input boundary returned";
 }
 
 int main(int argc, char **argv) {

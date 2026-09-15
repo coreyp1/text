@@ -51,16 +51,38 @@ The first run found four bugs, all fixed:
 - **Leaked token buffers.** Several error paths in the stream layer abandoned
   a token that owned a heap buffer.
 
-## Known outstanding
+Then, once token ownership was settled (below) and the fuzzer could reach
+deeper, a second infinite loop in the YAML scanner: the block scalar *body*
+committed its consumption with `while (cursor < pos2)`, and `scanner_consume()`
+cannot advance past the end of the input, so a `pos2` beyond it spun forever.
+Same shape as the header loop, one function further down.
 
-The YAML fuzzer still finds a small leak after roughly ten thousand
-executions, in the same family as the last item above: a token carrying a
-heap buffer abandoned on an error path in `stream.c`.
+## Token ownership
 
-The individual sites are easy to patch and several have been, but the cause
-is a disagreement about ownership rather than a missing `free`.
-`yaml_internal.h` documents the scalar payload as "owned by scanner until
-next token", while `scanner.c` allocates a fresh buffer per token and
-`stream.c` frees it. Settling that — scanner-owned, freed on the next
-`gtext_yaml_scanner_next()` — would remove the whole class at once, and is
-worth doing before chasing the remaining sites one at a time.
+The leaked token buffers were not five independent mistakes. `yaml_internal.h`
+documented the scalar payload as "owned by scanner until next token", while
+`scanner.c` allocated a fresh buffer per token and `stream.c` freed it — so
+every error path that abandoned a token leaked, and the fuzzer found them one
+at a time.
+
+The scanner owns the payload now, exactly as the header always said: it is
+released when the next token is requested, and on scanner teardown. All
+eighteen frees in `stream.c` are gone, consumers borrow rather than own, and
+the two that keep the text for longer (the DOM builder and the pull reader)
+already copied it.
+
+After the change the YAML fuzzer ran 2.4 million executions clean, with
+coverage up from 4,764 to 7,736 — the leak reports had been masking how much
+of the parser it could not get to.
+
+## Current state
+
+| Target | Executions | Result |
+| --- | ---: | --- |
+| JSON | 4.6M | clean |
+| YAML | 1.2M | clean |
+| CSV  | 6.5k | clean |
+
+CSV is much slower per execution because the harness reads back every field of
+every parsed table; that is deliberate, since indexing is where a row/column
+mismatch would show.

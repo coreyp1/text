@@ -71,7 +71,10 @@ typedef enum {
 typedef struct {
 	GTEXT_YAML_Token_Type type;
 	/* For INDICATOR: 1-byte char in `c`.
-		 For SCALAR: pointer/length into dynbuf (owned by scanner until next token).
+		 For SCALAR and COMMENT: pointer/length into a buffer owned by the
+		 scanner. It stays valid until the next gtext_yaml_scanner_next() call
+		 on the same scanner, and is released then; a consumer that needs the
+		 text for longer must copy it. Consumers must not free it.
 	*/
 	union {
 		char c;

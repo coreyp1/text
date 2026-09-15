@@ -21,29 +21,6 @@
   inclusion point due to include-path differences. */
 typedef struct GTEXT_YAML_Scanner GTEXT_YAML_Scanner;
 
-/**
- * Release the heap payload a token owns, if any.
- *
- * SCALAR and COMMENT tokens carry a malloc'd buffer that the consumer owns.
- * An error path that abandons a token has to release it; the tag-parsing
- * branches below did not, so a comment appearing where a tag name was
- * expected leaked its buffer on every such document.
- */
-static void yaml_token_release(GTEXT_YAML_Token *tok)
-{
-	if (!tok) {
-		return;
-	}
-	if (tok->type == GTEXT_YAML_TOKEN_SCALAR) {
-		free((void *)tok->u.scalar.ptr);
-		tok->u.scalar.ptr = NULL;
-	}
-	else if (tok->type == GTEXT_YAML_TOKEN_COMMENT) {
-		free((void *)tok->u.comment.ptr);
-		tok->u.comment.ptr = NULL;
-	}
-}
-
 static void directive_split(
   const char *line,
   size_t len,
@@ -120,11 +97,11 @@ static GTEXT_YAML_Status stream_apply_alias_limit(GTEXT_YAML_Stream *s) {
 static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Token *tok) {
   if (!s || !tok) return GTEXT_YAML_E_INVALID;
   if (tok->type != GTEXT_YAML_TOKEN_SCALAR) {
-    yaml_token_release(tok);
     return GTEXT_YAML_E_BAD_TOKEN;
   }
 
-  char *name = (char *)tok->u.scalar.ptr;
+  /* Borrowed from the scanner, valid until the next token is requested. */
+  const char *name = tok->u.scalar.ptr;
   size_t namelen = tok->u.scalar.len;
   char buf[256];
   if (namelen >= sizeof(buf)) namelen = sizeof(buf) - 1;
@@ -141,16 +118,12 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
 
   GTEXT_YAML_Status alias_limit = stream_apply_alias_limit(s);
   if (alias_limit != GTEXT_YAML_OK) {
-    free(name);
     return alias_limit;
   }
 
   if (s->cb) {
     GTEXT_YAML_Status cb_rc = s->cb(s, &alias_ev, s->user);
-    free(name);
     if (cb_rc != GTEXT_YAML_OK) return cb_rc;
-  } else {
-    free(name);
   }
 
   if (s->pending_tag) {
@@ -292,7 +265,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
 
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-        yaml_token_release(&tok);
         return GTEXT_YAML_E_BAD_TOKEN;
       }
       s->pending_alias = false;
@@ -342,13 +314,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         ev.data.comment.inline_comment = tok.u.comment.inline_comment;
         if (s->cb) {
           GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
-          free((void *)tok.u.comment.ptr);
           if (rc != GTEXT_YAML_OK) return rc;
         } else {
-          free((void *)tok.u.comment.ptr);
         }
       } else {
-        free((void *)tok.u.comment.ptr);
       }
       continue;
     }
@@ -368,7 +337,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) return rc;
       }
-      free((void *)tok.u.scalar.ptr);
       continue;
     }
 
@@ -446,7 +414,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
         
-        free((void *)name_tok.u.scalar.ptr);
         continue;
       } else if (tok.u.c == '!') {
         GTEXT_YAML_Token tag_tok;
@@ -464,7 +431,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-            yaml_token_release(&name_tok);
             return GTEXT_YAML_E_BAD_TOKEN;
           }
           tag_len = name_tok.u.scalar.len;
@@ -474,7 +440,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
           tag_len += 2;
           buf[tag_len] = '\0';
-          free((void *)name_tok.u.scalar.ptr);
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
           tag_len = tag_tok.u.scalar.len;
           if (tag_len > sizeof(buf) - 2) tag_len = sizeof(buf) - 2;
@@ -482,11 +447,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           memcpy(buf + 1, tag_tok.u.scalar.ptr, tag_len);
           tag_len += 1;
           buf[tag_len] = '\0';
-          free((void *)tag_tok.u.scalar.ptr);
         } else {
-          /* Anything else here - a comment, most easily - is a malformed
-             tag, but the token may still own a buffer. */
-          yaml_token_release(&tag_tok);
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
@@ -530,7 +491,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) return rc;
       }
-      free((void *)tok.u.scalar.ptr);
       continue;
     }
 
@@ -546,7 +506,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
-          free((void *)tok.u.scalar.ptr);
           return rc;
         }
       }
@@ -559,7 +518,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         free(s->pending_tag);
         s->pending_tag = NULL;
       }
-      free((void *)tok.u.scalar.ptr);
       continue;
     }
   }
@@ -585,7 +543,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
 
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-        yaml_token_release(&tok);
         return GTEXT_YAML_E_BAD_TOKEN;
       }
       s->pending_alias = false;
@@ -635,13 +592,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         ev.data.comment.inline_comment = tok.u.comment.inline_comment;
         if (s->cb) {
           GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
-          free((void *)tok.u.comment.ptr);
           if (rc != GTEXT_YAML_OK) return rc;
         } else {
-          free((void *)tok.u.comment.ptr);
         }
       } else {
-        free((void *)tok.u.comment.ptr);
       }
       continue;
     }
@@ -717,7 +671,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
         
-        free((void *)name_tok.u.scalar.ptr);
         continue;
       }
 
@@ -736,7 +689,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-            yaml_token_release(&name_tok);
             return GTEXT_YAML_E_BAD_TOKEN;
           }
           tag_len = name_tok.u.scalar.len;
@@ -746,7 +698,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
           tag_len += 2;
           buf[tag_len] = '\0';
-          free((void *)name_tok.u.scalar.ptr);
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
           tag_len = tag_tok.u.scalar.len;
           if (tag_len > sizeof(buf) - 2) tag_len = sizeof(buf) - 2;
@@ -754,11 +705,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           memcpy(buf + 1, tag_tok.u.scalar.ptr, tag_len);
           tag_len += 1;
           buf[tag_len] = '\0';
-          free((void *)tag_tok.u.scalar.ptr);
         } else {
-          /* Anything else here - a comment, most easily - is a malformed
-             tag, but the token may still own a buffer. */
-          yaml_token_release(&tag_tok);
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
@@ -801,7 +748,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
-          free((void *)tok.u.scalar.ptr);
           return rc;
         }
       }
@@ -814,7 +760,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         free(s->pending_tag);
         s->pending_tag = NULL;
       }
-      free((void *)tok.u.scalar.ptr);
       continue;
     }
   }
