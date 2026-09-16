@@ -304,6 +304,7 @@ $(OBJ_DIR)/%.o: src/%.cpp
 $(APP_DIR)/$(STATIC_TARGET): $(LIBOBJECTS)
 	@printf "\n### Archiving Text Library ###\n"
 	@mkdir -p $(@D)
+	@rm -f $@
 	ar rcs $@ $^
 
 $(APP_DIR)/$(TARGET): \
