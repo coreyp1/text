@@ -9,8 +9,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_MACROS_H
-#define GHOTI_IO_TEXT_MACROS_H
+#ifndef GHOTI_IO_GTEXT_MACROS_H
+#define GHOTI_IO_GTEXT_MACROS_H
 
 // Every public header reaches this one, directly or through a module header,
 // so the symbol renames land before any declaration they apply to.
@@ -182,4 +182,4 @@ typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_MACROS_H
+#endif // GHOTI_IO_GTEXT_MACROS_H
