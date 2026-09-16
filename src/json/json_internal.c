@@ -8,6 +8,7 @@
 
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 // Check if a length-delimited string exactly equals a null-terminated keyword
 int json_matches(const char * input, size_t len, const char * keyword) {

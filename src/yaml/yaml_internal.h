@@ -5,8 +5,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef TEXT_SRC_YAML_YAML_INTERNAL_H
-#define TEXT_SRC_YAML_YAML_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -357,4 +359,4 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
 /* Stream internal API */
 GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(GTEXT_YAML_Stream *s, bool sync);
 
-#endif /* TEXT_SRC_YAML_YAML_INTERNAL_H */
+#endif /* GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H */

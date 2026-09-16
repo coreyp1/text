@@ -9,8 +9,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_INTERNAL_H
-#define GHOTI_IO_GTEXT_CSV_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_CSV_CSV_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_CSV_CSV_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -571,4 +573,4 @@ typedef struct {
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_SRC_CSV_CSV_INTERNAL_H

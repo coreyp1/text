@@ -6,6 +6,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/json/json_core.h>
 GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   GTEXT_JSON_Parse_Options opts = {0};

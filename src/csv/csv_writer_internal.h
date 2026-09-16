@@ -9,8 +9,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_WRITER_INTERNAL_H
-#define GHOTI_IO_GTEXT_CSV_WRITER_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_CSV_CSV_WRITER_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_CSV_CSV_WRITER_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include "csv_internal.h"
 
@@ -105,4 +107,4 @@ extern "C" {
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_WRITER_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_SRC_CSV_CSV_WRITER_INTERNAL_H

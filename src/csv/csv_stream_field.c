@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "csv_stream_internal.h"
 // Clear field state
 void csv_stream_clear_field_state(GTEXT_CSV_Stream * stream) {

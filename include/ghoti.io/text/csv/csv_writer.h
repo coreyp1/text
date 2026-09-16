@@ -11,8 +11,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_WRITER_H
-#define GHOTI_IO_GTEXT_CSV_WRITER_H
+#ifndef GHOTI_IO_GTEXT_CSV_CSV_WRITER_H
+#define GHOTI_IO_GTEXT_CSV_CSV_WRITER_H
 
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/csv/csv_table.h>
@@ -298,4 +298,4 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_WRITER_H
+#endif // GHOTI_IO_GTEXT_CSV_CSV_WRITER_H

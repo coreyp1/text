@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "csv_stream_internal.h"
 // Field buffer helper functions
 void csv_field_buffer_init(csv_field_buffer * fb) {

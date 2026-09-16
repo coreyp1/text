@@ -8,8 +8,10 @@
  * @ref gtext_yaml_free(document) to release the whole graph.
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_DOM_H
-#define GHOTI_IO_TEXT_YAML_DOM_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_DOM_H
+#define GHOTI_IO_GTEXT_YAML_YAML_DOM_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <stdint.h>
 
@@ -1116,5 +1118,5 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_tags(
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_YAML_DOM_H
+#endif // GHOTI_IO_GTEXT_YAML_YAML_DOM_H
 

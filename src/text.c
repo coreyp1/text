@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/text.h>
 GTEXT_API uint32_t gtext_version_major(void) {
   return GTEXT_VERSION_MAJOR;

@@ -9,8 +9,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_H
-#define GHOTI_IO_TEXT_H
+#ifndef GHOTI_IO_GTEXT_TEXT_H
+#define GHOTI_IO_GTEXT_TEXT_H
 
 #include <ghoti.io/text/macros.h>
 #include <stdint.h>
@@ -47,4 +47,4 @@ GTEXT_API uint32_t gtext_version_patch(void);
  */
 GTEXT_API const char * gtext_version_string(void);
 
-#endif // GHOTI_IO_TEXT_H
+#endif // GHOTI_IO_GTEXT_TEXT_H

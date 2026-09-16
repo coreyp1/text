@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_stream.h>
 #include <ghoti.io/text/yaml/yaml_resolver.h>

@@ -10,7 +10,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_POINTER_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_POINTER_H
 #define GHOTI_IO_TEXT_POINTER_H
 
 #include <ghoti.io/text/json/json_core.h>
@@ -78,4 +78,4 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_pointer_get_mut(
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_JSON_POINTER_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_POINTER_H

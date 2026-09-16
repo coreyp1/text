@@ -23,8 +23,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_JSON_SCHEMA_H
-#define GHOTI_IO_GTEXT_JSON_SCHEMA_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_SCHEMA_H
+#define GHOTI_IO_GTEXT_JSON_JSON_SCHEMA_H
 
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/macros.h>
@@ -94,4 +94,4 @@ GTEXT_API GTEXT_JSON_Status gtext_json_schema_validate(
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_JSON_SCHEMA_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_SCHEMA_H

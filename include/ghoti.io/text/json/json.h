@@ -8,8 +8,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_H
-#define GHOTI_IO_TEXT_JSON_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_H
+#define GHOTI_IO_GTEXT_JSON_JSON_H
 
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
@@ -225,4 +225,4 @@ GTEXT_API void gtext_json_free(text_json_value * v);
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_JSON_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_H

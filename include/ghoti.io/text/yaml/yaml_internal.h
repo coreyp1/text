@@ -2,8 +2,8 @@
  * Internal YAML header exposed for test builds.
  * This mirrors `src/yaml/yaml_internal.h` and is intentionally minimal.
  */
-#ifndef GHOTI_IO_TEXT_YAML_INTERNAL_H
-#define GHOTI_IO_TEXT_YAML_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_INTERNAL_H
+#define GHOTI_IO_GTEXT_YAML_YAML_INTERNAL_H
 
 #include <stddef.h>
 #include <ghoti.io/text/macros.h>
@@ -24,4 +24,4 @@ GTEXT_INTERNAL_API void gtext_yaml_char_reader_position(
 	int * col
 );
 
-#endif // GHOTI_IO_TEXT_YAML_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_YAML_YAML_INTERNAL_H

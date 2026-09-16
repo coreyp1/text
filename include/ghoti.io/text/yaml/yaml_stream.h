@@ -7,8 +7,10 @@
  * inputs without needing to build a full DOM.
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_STREAM_H
-#define GHOTI_IO_TEXT_YAML_STREAM_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_STREAM_H
+#define GHOTI_IO_GTEXT_YAML_YAML_STREAM_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
@@ -174,4 +176,4 @@ GTEXT_API void gtext_yaml_reader_free(GTEXT_YAML_Reader * reader);
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_YAML_STREAM_H
+#endif // GHOTI_IO_GTEXT_YAML_YAML_STREAM_H

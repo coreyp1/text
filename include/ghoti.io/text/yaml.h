@@ -13,8 +13,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_H
-#define GHOTI_IO_TEXT_YAML_H
+#ifndef GHOTI_IO_GTEXT_YAML_H
+#define GHOTI_IO_GTEXT_YAML_H
+
+#include <ghoti.io/text/macros.h>
 
 /* Core types and definitions */
 #include <ghoti.io/text/yaml/yaml_core.h>
@@ -24,4 +26,4 @@
 #include <ghoti.io/text/yaml/yaml_stream.h>
 #include <ghoti.io/text/yaml/yaml_writer.h>
 
-#endif // GHOTI_IO_TEXT_YAML_H
+#endif // GHOTI_IO_GTEXT_YAML_H

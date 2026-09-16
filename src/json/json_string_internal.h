@@ -9,8 +9,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_JSON_STRING_INTERNAL_H
-#define GHOTI_IO_GTEXT_JSON_STRING_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_JSON_JSON_STRING_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_JSON_JSON_STRING_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include "json_internal.h"
 
@@ -130,4 +132,4 @@ extern "C" {
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_JSON_STRING_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_SRC_JSON_JSON_STRING_INTERNAL_H

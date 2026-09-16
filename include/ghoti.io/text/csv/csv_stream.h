@@ -9,8 +9,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_STREAM_H
-#define GHOTI_IO_GTEXT_CSV_STREAM_H
+#ifndef GHOTI_IO_GTEXT_CSV_CSV_STREAM_H
+#define GHOTI_IO_GTEXT_CSV_CSV_STREAM_H
 
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/macros.h>
@@ -112,4 +112,4 @@ GTEXT_API void gtext_csv_stream_free(GTEXT_CSV_Stream * stream);
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_STREAM_H
+#endif // GHOTI_IO_GTEXT_CSV_CSV_STREAM_H

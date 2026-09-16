@@ -11,6 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 
+#include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 #include <stdio.h>
 

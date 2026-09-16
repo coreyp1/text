@@ -10,8 +10,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_JSON_STREAM_H
-#define GHOTI_IO_GTEXT_JSON_STREAM_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_STREAM_H
+#define GHOTI_IO_GTEXT_JSON_JSON_STREAM_H
 
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/macros.h>
@@ -231,4 +231,4 @@ GTEXT_API void gtext_json_stream_free(GTEXT_JSON_Stream * st);
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_JSON_STREAM_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_STREAM_H

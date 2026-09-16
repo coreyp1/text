@@ -12,8 +12,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_CORE_H
-#define GHOTI_IO_TEXT_JSON_CORE_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_CORE_H
+#define GHOTI_IO_GTEXT_JSON_JSON_CORE_H
 
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
@@ -258,4 +258,4 @@ GTEXT_API void gtext_json_error_free(GTEXT_JSON_Error * err);
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_JSON_CORE_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_CORE_H

@@ -7,8 +7,8 @@
  * writing to growable buffers, fixed buffers, or custom callbacks.
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_WRITER_H
-#define GHOTI_IO_TEXT_YAML_WRITER_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_WRITER_H
+#define GHOTI_IO_GTEXT_YAML_YAML_WRITER_H
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 #include <ghoti.io/text/yaml/yaml_stream.h>
@@ -167,4 +167,4 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_finish(GTEXT_YAML_Writer * writer)
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_YAML_WRITER_H
+#endif // GHOTI_IO_GTEXT_YAML_YAML_WRITER_H

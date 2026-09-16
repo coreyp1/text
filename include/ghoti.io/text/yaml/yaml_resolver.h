@@ -3,8 +3,10 @@
  * @brief Minimal resolver API for anchor/alias accounting.
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_RESOLVER_H
-#define GHOTI_IO_TEXT_YAML_RESOLVER_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_RESOLVER_H
+#define GHOTI_IO_GTEXT_YAML_YAML_RESOLVER_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
@@ -34,4 +36,4 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_resolver_compute_expansion(Resol
 }
 #endif
 
-#endif /* GHOTI_IO_TEXT_YAML_RESOLVER_H */
+#endif /* GHOTI_IO_GTEXT_YAML_YAML_RESOLVER_H */

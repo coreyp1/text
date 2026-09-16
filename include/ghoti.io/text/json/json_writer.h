@@ -10,8 +10,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_JSON_WRITER_H
-#define GHOTI_IO_GTEXT_JSON_WRITER_H
+#ifndef GHOTI_IO_GTEXT_JSON_JSON_WRITER_H
+#define GHOTI_IO_GTEXT_JSON_JSON_WRITER_H
 
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_dom.h>
@@ -396,4 +396,4 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_finish(
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_JSON_WRITER_H
+#endif // GHOTI_IO_GTEXT_JSON_JSON_WRITER_H

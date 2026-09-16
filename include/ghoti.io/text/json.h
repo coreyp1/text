@@ -11,8 +11,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_JSON_H
-#define GHOTI_IO_TEXT_JSON_H
+#ifndef GHOTI_IO_GTEXT_JSON_H
+#define GHOTI_IO_GTEXT_JSON_H
+
+#include <ghoti.io/text/macros.h>
 
 // Include core types and definitions
 #include <ghoti.io/text/json/json_core.h>
@@ -25,4 +27,4 @@
 #include <ghoti.io/text/json/json_stream.h>
 #include <ghoti.io/text/json/json_writer.h>
 
-#endif // GHOTI_IO_TEXT_JSON_H
+#endif // GHOTI_IO_GTEXT_JSON_H

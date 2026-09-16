@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdint.h>
 
+#include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 
 /* UTF-8 validation: iterate bytes and ensure valid sequences. Returns 1 on valid, 0 on invalid. */

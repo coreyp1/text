@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 
 #include <ghoti.io/text/json/json_core.h>

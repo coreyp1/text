@@ -11,6 +11,7 @@
 
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "csv_stream_internal.h"
 
 // Advance position tracking

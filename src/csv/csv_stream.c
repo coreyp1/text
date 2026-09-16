@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "csv_stream_internal.h"
 
 #include <ghoti.io/text/csv/csv_core.h>

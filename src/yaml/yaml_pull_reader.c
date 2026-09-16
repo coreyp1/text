@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/yaml/yaml_stream.h>
 
 typedef struct {

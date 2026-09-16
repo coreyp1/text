@@ -12,8 +12,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_CSV_CORE_H
-#define GHOTI_IO_TEXT_CSV_CORE_H
+#ifndef GHOTI_IO_GTEXT_CSV_CSV_CORE_H
+#define GHOTI_IO_GTEXT_CSV_CSV_CORE_H
 
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
@@ -234,4 +234,4 @@ GTEXT_API void gtext_csv_error_free(GTEXT_CSV_Error * err);
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_CSV_CORE_H
+#endif // GHOTI_IO_GTEXT_CSV_CSV_CORE_H

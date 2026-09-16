@@ -13,8 +13,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_YAML_CORE_H
-#define GHOTI_IO_TEXT_YAML_CORE_H
+#ifndef GHOTI_IO_GTEXT_YAML_YAML_CORE_H
+#define GHOTI_IO_GTEXT_YAML_YAML_CORE_H
 
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
@@ -367,4 +367,4 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_file(
 }
 #endif
 
-#endif // GHOTI_IO_TEXT_YAML_CORE_H
+#endif // GHOTI_IO_GTEXT_YAML_YAML_CORE_H

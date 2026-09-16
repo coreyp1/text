@@ -9,8 +9,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_TABLE_H
-#define GHOTI_IO_GTEXT_CSV_TABLE_H
+#ifndef GHOTI_IO_GTEXT_CSV_CSV_TABLE_H
+#define GHOTI_IO_GTEXT_CSV_CSV_TABLE_H
 
 #include <ghoti.io/text/csv/csv_core.h>
 #include <ghoti.io/text/macros.h>
@@ -874,4 +874,4 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_clone(const GTEXT_CSV_Table * source);
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_TABLE_H
+#endif // GHOTI_IO_GTEXT_CSV_CSV_TABLE_H

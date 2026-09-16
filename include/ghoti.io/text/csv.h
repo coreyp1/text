@@ -11,8 +11,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_TEXT_CSV_H
-#define GHOTI_IO_TEXT_CSV_H
+#ifndef GHOTI_IO_GTEXT_CSV_H
+#define GHOTI_IO_GTEXT_CSV_H
+
+#include <ghoti.io/text/macros.h>
 
 // Include core types and definitions
 #include <ghoti.io/text/csv/csv_core.h>
@@ -22,4 +24,4 @@
 #include <ghoti.io/text/csv/csv_table.h>
 #include <ghoti.io/text/csv/csv_writer.h>
 
-#endif // GHOTI_IO_TEXT_CSV_H
+#endif // GHOTI_IO_GTEXT_CSV_H

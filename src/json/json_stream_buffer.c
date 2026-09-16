@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/macros.h>
 #include "json_stream_internal.h"
 // Token buffer helper functions
 void json_token_buffer_init(json_token_buffer * tb) {

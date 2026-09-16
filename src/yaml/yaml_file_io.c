@@ -24,6 +24,7 @@
 #include <unistd.h>
 #endif
 
+#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/yaml/yaml_core.h>
 #include <ghoti.io/text/yaml/yaml_dom.h>
 #include <ghoti.io/text/yaml/yaml_writer.h>

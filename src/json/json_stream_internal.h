@@ -9,8 +9,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H
-#define GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_JSON_JSON_STREAM_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_JSON_JSON_STREAM_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include "json_internal.h"
 #include <ghoti.io/text/json/json_core.h>
@@ -258,4 +260,4 @@ struct GTEXT_JSON_Stream {
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_JSON_STREAM_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_SRC_JSON_JSON_STREAM_INTERNAL_H

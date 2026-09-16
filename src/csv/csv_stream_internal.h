@@ -9,8 +9,10 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H
-#define GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H
+#ifndef GHOTI_IO_GTEXT_SRC_CSV_CSV_STREAM_INTERNAL_H
+#define GHOTI_IO_GTEXT_SRC_CSV_CSV_STREAM_INTERNAL_H
+
+#include <ghoti.io/text/macros.h>
 
 #include <limits.h>
 #include <stdbool.h>
@@ -845,4 +847,4 @@ GTEXT_CSV_Status csv_stream_set_error(
 }
 #endif
 
-#endif // GHOTI_IO_GTEXT_CSV_STREAM_INTERNAL_H
+#endif // GHOTI_IO_GTEXT_SRC_CSV_CSV_STREAM_INTERNAL_H

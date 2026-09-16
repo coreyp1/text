@@ -9,6 +9,7 @@
 
 #include <stdlib.h>
 
+#include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/yaml/yaml_core.h>
 #include "yaml_internal.h"
 

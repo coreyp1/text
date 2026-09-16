@@ -10,6 +10,7 @@
 
 #define _POSIX_C_SOURCE 200809L  /* for strdup */
 
+#include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_stream.h>
 #include <ghoti.io/text/json/json_dom.h>

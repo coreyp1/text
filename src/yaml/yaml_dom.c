@@ -8,6 +8,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_dom.h>
 #include <string.h>
