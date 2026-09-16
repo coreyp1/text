@@ -66,7 +66,7 @@ make
 
 # Compile a specific example
 gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/json/json_basic.c -lghoti.io-text-dev -o json_basic
+    examples/json/json_basic.c -lghoti.io-text-0 -o json_basic
 
 # Run (set LD_LIBRARY_PATH on Linux)
 LD_LIBRARY_PATH=build/linux/release/apps ./json_basic
@@ -75,9 +75,9 @@ LD_LIBRARY_PATH=build/linux/release/apps ./json_basic
 Or use pkg-config if installed:
 
 ```bash
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-dev) \
+gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
     examples/json/json_basic.c \
-    $(pkg-config --libs ghoti.io-text-dev) \
+    $(pkg-config --libs ghoti.io-text-0) \
     -o json_basic
 ```
 

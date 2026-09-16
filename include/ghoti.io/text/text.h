@@ -16,12 +16,12 @@
 #include <stdint.h>
 
 
-/**
- * @brief Library version information
+/*
+ * Library version information comes from libver.h, which takes it from the
+ * generated libver_gen.h: GTEXT_VERSION_MAJOR / _MINOR / _PATCH, plus
+ * GTEXT_VERSION_STRING and the packed GTEXT_VERSION_NUMBER. It used to be
+ * written out here as three zeros that no build step ever updated.
  */
-#define GTEXT_VERSION_MAJOR 0
-#define GTEXT_VERSION_MINOR 0
-#define GTEXT_VERSION_PATCH 0
 
 /**
  * @brief Get the major version number

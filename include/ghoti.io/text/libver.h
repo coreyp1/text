@@ -37,4 +37,39 @@
 /** Helper.  Concatenation needs two levels of expansion. */
 #define GHOTIIO_TEXT_RENAME(a, b) GHOTIIO_TEXT_RENAME_INNER(a, b)
 
+
+//-----------------------------------------------------------------------------
+// Version
+//-----------------------------------------------------------------------------
+//
+// The numbers come from libver_gen.h, which the Makefile writes from
+// MAJOR_VERSION and MINOR_VERSION. Writing them out here instead is correct
+// only until someone bumps the Makefile, at which point the soname, the .pc
+// Version: and the install directory all move and these do not.
+
+/** This build's major version. */
+#define GTEXT_VERSION_MAJOR GHOTIIO_TEXT_VERSION_MAJOR
+/** This build's minor version. */
+#define GTEXT_VERSION_MINOR GHOTIIO_TEXT_VERSION_MINOR
+/** This build's patch version. */
+#define GTEXT_VERSION_PATCH GHOTIIO_TEXT_VERSION_PATCH
+/** This build's version as a string, e.g. "1.2.3" or "1.2.3-dev". */
+#define GTEXT_VERSION_STRING GHOTIIO_TEXT_VERSION
+
+/**
+ * Pack a version into one comparable integer, one byte per component.
+ *
+ * This is libcurl's LIBCURL_VERSION_NUM layout, which is the common spelling
+ * across C libraries: 1.2.3 becomes 0x010203, and a plain `<` compares two
+ * versions correctly. Every library in the suite uses it, so a consumer
+ * checking one checks them all the same way.
+ */
+#define GTEXT_MAKE_VERSION(major, minor, patch)                                  \
+  ((((unsigned)(major)) << 16) | (((unsigned)(minor)) << 8) |                  \
+      ((unsigned)(patch)))
+
+/** This build's version, packed. Compare against GTEXT_MAKE_VERSION(1, 2, 3). */
+#define GTEXT_VERSION_NUMBER                                                     \
+  GTEXT_MAKE_VERSION(GTEXT_VERSION_MAJOR, GTEXT_VERSION_MINOR, GTEXT_VERSION_PATCH)
+
 #endif // GHOTI_IO_GTEXT_LIBVER_H

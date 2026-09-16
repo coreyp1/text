@@ -109,11 +109,11 @@ make
 
 # Compile a specific example (JSON)
 gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/json/json_basic.c -lghoti.io-text-dev -o json_basic
+    examples/json/json_basic.c -lghoti.io-text-0 -o json_basic
 
 # Compile a specific example (CSV)
 gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/csv/csv_basic.c -lghoti.io-text-dev -o csv_basic
+    examples/csv/csv_basic.c -lghoti.io-text-0 -o csv_basic
 
 # Run (set LD_LIBRARY_PATH on Linux)
 LD_LIBRARY_PATH=build/linux/release/apps ./json_basic
@@ -125,15 +125,15 @@ If the library is installed system-wide, you can use pkg-config:
 
 ```bash
 # JSON example
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-dev) \
+gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
     examples/json/json_basic.c \
-    $(pkg-config --libs ghoti.io-text-dev) \
+    $(pkg-config --libs ghoti.io-text-0) \
     -o json_basic
 
 # CSV example
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-dev) \
+gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
     examples/csv/csv_basic.c \
-    $(pkg-config --libs ghoti.io-text-dev) \
+    $(pkg-config --libs ghoti.io-text-0) \
     -o csv_basic
 ```
 

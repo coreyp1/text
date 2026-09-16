@@ -70,7 +70,7 @@ make
 
 # Compile a specific example
 gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/csv/csv_basic.c -lghoti.io-text-dev -o csv_basic
+    examples/csv/csv_basic.c -lghoti.io-text-0 -o csv_basic
 
 # Run (set LD_LIBRARY_PATH on Linux)
 LD_LIBRARY_PATH=build/linux/release/apps ./csv_basic
@@ -79,9 +79,9 @@ LD_LIBRARY_PATH=build/linux/release/apps ./csv_basic
 Or use pkg-config if installed:
 
 ```bash
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-dev) \
+gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
     examples/csv/csv_basic.c \
-    $(pkg-config --libs ghoti.io-text-dev) \
+    $(pkg-config --libs ghoti.io-text-0) \
     -o csv_basic
 ```
 
