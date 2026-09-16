@@ -15,6 +15,7 @@
 #include <ghoti.io/text/macros.h>
 #include <stdint.h>
 
+
 /**
  * @brief Library version information
  */

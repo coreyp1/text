@@ -12,6 +12,10 @@
 #ifndef GHOTI_IO_TEXT_MACROS_H
 #define GHOTI_IO_TEXT_MACROS_H
 
+// Every public header reaches this one, directly or through a module header,
+// so the symbol renames land before any declaration they apply to.
+#include <ghoti.io/text/namespace.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
