@@ -21,8 +21,8 @@ cases that were checked are listed under
   2013.
 - **JSON Merge Patch:** [RFC 7386](https://www.rfc-editor.org/rfc/rfc7386),
   October 2014.
-- **JSON Schema:** a core subset. **The implementation names no draft**, which
-  is a real gap - see [Not implemented](#json-not-implemented).
+- **JSON Schema:** a core subset that **names no draft**, and that now refuses
+  any schema it cannot fully enforce - see [Deviations](#json-deviations).
 - **JSONC:** no specification exists. The extensions are opt-in and named
   individually below; where the dialect is ambiguous this page states what the
   parser does, and that decision is the specification as far as this library
@@ -153,6 +153,59 @@ one as "incomplete" invites a caller to wait for more input that will not
 help. It is documented here because the status code is part of the API and
 changing it would break callers.
 
+**Fixed: the schema engine no longer accepts schemas it cannot enforce.**
+
+`gtext_json_schema_compile()` used to accept a schema containing any keyword
+it did not implement and ignore it, on the reasoning that unknown keywords are
+ignorable - which JSON Schema does require, but only for keywords that are
+genuinely unknown. Applied to standard assertion keywords the effect was that
+a schema which looked like it constrained data did not, and validation
+returned `GTEXT_JSON_OK` for instances the schema should have rejected. A
+caller porting a working draft-07 schema got a validator that approved
+everything the unimplemented half was meant to catch, with no error at compile
+time and no warning at validation time.
+
+This was the same failure shape as `validate_utf8` before it was wired up: an
+interface naming a guarantee it does not provide, with no way for a caller to
+notice.
+
+Compiling now fails with `GTEXT_JSON_E_SCHEMA_UNSUPPORTED` when the schema
+uses a standard keyword the engine does not enforce, and names the keyword in
+`err.context_snippet`, which `gtext_json_error_free()` owns. The refused set
+is the applicators - `$ref`, `$recursiveRef`, `$dynamicRef`, `allOf`, `anyOf`,
+`oneOf`, `not`, `if`, `then`, `else`, `additionalItems`, `prefixItems`,
+`contains`, `minContains`, `maxContains`, `additionalProperties`,
+`patternProperties`, `propertyNames`, `dependentSchemas`, `dependentRequired`,
+`dependencies`, `unevaluatedItems`, `unevaluatedProperties` - and the
+assertions `pattern`, `format`, `multipleOf`, `exclusiveMinimum`,
+`exclusiveMaximum`, `uniqueItems`, `minProperties`, `maxProperties`,
+`contentEncoding`, `contentMediaType` and `contentSchema`.
+
+The rule is that a keyword is refused when it changes which instances are
+valid and the engine does not implement it. Everything else is still ignored,
+because ignoring it is both correct and harmless:
+
+| Ignored | Why it cannot mislead |
+|---|---|
+| `title`, `description`, `default`, `examples`, `$comment`, `readOnly`, `writeOnly`, `deprecated` | annotation only |
+| `$schema` | selects a dialect where only one is implemented |
+| `$defs`, `definitions` | containers nothing can reach while `$ref` is refused |
+| `$id`, `$anchor`, `$vocabulary` | name a base URI nothing resolves against |
+| vendor extensions, newer-draft keywords | JSON Schema requires ignoring them |
+
+The check applies to subschemas as well as the root, since both go through the
+same recursive compile.
+
+This narrows what the engine accepts, so a caller who was relying on the old
+behavior - knowing the ignored keywords were decorative - can set
+`allow_unsupported_keywords` in `GTEXT_JSON_Schema_Options` and compile with
+`gtext_json_schema_compile_with_options()`. The option exists so that the
+strict default does not have to be argued about; it is not recommended.
+
+`GTEXT_JSON_E_SCHEMA_UNSUPPORTED` was appended to `GTEXT_JSON_Status` rather
+than grouped with `GTEXT_JSON_E_SCHEMA`, so no existing constant changed
+value.
+
 @anchor json-tested-scope
 ## Tested scope
 
@@ -196,7 +249,9 @@ page means "compliant as far as the cases below reach".
   `dependentRequired`, `pattern`, `format`, `uniqueItems`, `contains`,
   `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, and per-position
   `prefixItems`. `$ref` is the significant one: without it schemas cannot be
-  factored or recursive.
+  factored or recursive. Since the strict check described under
+  [Deviations](#json-deviations), a schema using any of them is refused
+  rather than silently under-enforced.
 - **No JSONPath**, listed as future work on the
   \ref json_module "JSON module page".
 - **`normalize_unicode` is not implemented, and now says so.** NFC

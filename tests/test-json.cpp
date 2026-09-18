@@ -9078,3 +9078,177 @@ TEST(JsonNormalizeUnicode, DefaultOptionsStillParse) {
 	gtext_json_free(v);
 	gtext_json_error_free(&err);
 }
+
+// A schema engine that implements a subset must refuse the schemas it cannot
+// enforce.  Accepting them and ignoring the keywords it does not know makes
+// invalid data validate clean, with nothing for the caller to check - the
+// same failure shape as an option that names a guarantee it does not provide.
+TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
+	// Each schema below constrains the instance that follows it.  Before the
+	// strict check, every one of these compiled and then reported OK.
+	struct Case {
+		const char * keyword;
+		const char * schema;
+	};
+	const Case cases[] = {
+	    {"$ref", "{\"$defs\":{\"p\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/p\"}"},
+	    {"allOf", "{\"allOf\":[{\"type\":\"string\"}]}"},
+	    {"anyOf", "{\"anyOf\":[{\"type\":\"string\"}]}"},
+	    {"oneOf", "{\"oneOf\":[{\"type\":\"string\"}]}"},
+	    {"not", "{\"not\":{\"type\":\"integer\"}}"},
+	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
+	    {"additionalProperties",
+	        "{\"type\":\"object\",\"additionalProperties\":false}"},
+	    {"uniqueItems", "{\"type\":\"array\",\"uniqueItems\":true}"},
+	    {"multipleOf", "{\"type\":\"number\",\"multipleOf\":10}"},
+	    {"exclusiveMaximum", "{\"type\":\"number\",\"exclusiveMaximum\":5}"},
+	    {"if", "{\"if\":{\"type\":\"integer\"},\"then\":{\"maximum\":3}}"},
+	    {"contains", "{\"type\":\"array\",\"contains\":{\"type\":\"string\"}}"},
+	    {"propertyNames", "{\"propertyNames\":{\"pattern\":\"^a$\"}}"},
+	    {"dependentRequired", "{\"dependentRequired\":{\"a\":[\"b\"]}}"},
+	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
+	    {"minProperties", "{\"minProperties\":2}"},
+	    {"format", "{\"type\":\"string\",\"format\":\"email\"}"},
+	};
+
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	for (const auto & c : cases) {
+		GTEXT_JSON_Error perr;
+		memset(&perr, 0, sizeof(perr));
+		GTEXT_JSON_Value * doc =
+		    gtext_json_parse(c.schema, strlen(c.schema), &po, &perr);
+		ASSERT_NE(doc, nullptr) << "schema did not parse for " << c.keyword;
+
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * sc = gtext_json_schema_compile(doc, &err);
+		EXPECT_EQ(sc, nullptr) << "compiled despite " << c.keyword;
+		EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED)
+		    << "wrong code for " << c.keyword;
+		// The offending keyword travels in context_snippet, which
+		// gtext_json_error_free() owns.
+		ASSERT_NE(err.context_snippet, nullptr)
+		    << "no keyword named for " << c.keyword;
+		EXPECT_STREQ(err.context_snippet, c.keyword);
+
+		gtext_json_schema_free(sc);
+		gtext_json_error_free(&err);
+		gtext_json_free(doc);
+	}
+}
+
+TEST(JsonSchemaStrictness, IgnoresAnnotationAndInertKeywords) {
+	// None of these can change which instances are valid, so they must not
+	// cause a refusal.  "x-vendor" stands for the extensions and
+	// newer-draft keywords JSON Schema requires an implementation to ignore.
+	const char * schemas[] = {
+	    "{\"type\":\"string\",\"title\":\"A name\"}",
+	    "{\"type\":\"string\",\"description\":\"text\"}",
+	    "{\"type\":\"string\",\"default\":\"x\"}",
+	    "{\"type\":\"string\",\"examples\":[\"x\"]}",
+	    "{\"type\":\"string\",\"$comment\":\"note\"}",
+	    "{\"type\":\"string\",\"readOnly\":true}",
+	    "{\"type\":\"string\",\"deprecated\":true}",
+	    "{\"type\":\"string\",\"$schema\":\"http://json-schema.org/draft-07/schema#\"}",
+	    "{\"type\":\"string\",\"$id\":\"http://example.com/s\"}",
+	    "{\"type\":\"string\",\"$defs\":{\"unused\":{\"type\":\"integer\"}}}",
+	    "{\"type\":\"string\",\"definitions\":{\"unused\":{\"type\":\"integer\"}}}",
+	    "{\"type\":\"string\",\"x-vendor\":42}",
+	};
+
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	for (const char * src : schemas) {
+		GTEXT_JSON_Error perr;
+		memset(&perr, 0, sizeof(perr));
+		GTEXT_JSON_Value * doc =
+		    gtext_json_parse(src, strlen(src), &po, &perr);
+		ASSERT_NE(doc, nullptr) << src;
+
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * sc = gtext_json_schema_compile(doc, &err);
+		EXPECT_NE(sc, nullptr) << "refused: " << src;
+
+		if (sc) {
+			// The surviving "type" assertion must still be enforced, so the
+			// ignored keyword did not disable the rest of the schema.
+			const char * bad = "123";
+			GTEXT_JSON_Value * inst =
+			    gtext_json_parse(bad, strlen(bad), &po, &perr);
+			ASSERT_NE(inst, nullptr);
+			GTEXT_JSON_Error verr;
+			memset(&verr, 0, sizeof(verr));
+			EXPECT_EQ(gtext_json_schema_validate(sc, inst, &verr),
+			    GTEXT_JSON_E_SCHEMA)
+			    << "type stopped being enforced for: " << src;
+			gtext_json_error_free(&verr);
+			gtext_json_free(inst);
+		}
+		gtext_json_schema_free(sc);
+		gtext_json_error_free(&err);
+		gtext_json_free(doc);
+	}
+}
+
+TEST(JsonSchemaStrictness, OptInRestoresTheLenientBehavior) {
+	const char * src = "{\"type\":\"string\",\"pattern\":\"^a+$\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * doc = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(doc, nullptr);
+
+	// Default refuses.
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile(doc, &err), nullptr);
+	gtext_json_error_free(&err);
+
+	// Explicit defaults refuse the same way.
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	EXPECT_FALSE(opts.allow_unsupported_keywords);
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile_with_options(doc, &opts, &err), nullptr);
+	gtext_json_error_free(&err);
+
+	// Opting in compiles, and "pattern" is then ignored - which is exactly
+	// what the option says it does, and why it is not the default.
+	opts.allow_unsupported_keywords = true;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Schema * sc =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	ASSERT_NE(sc, nullptr);
+
+	const char * inst_src = "\"zzz\""; // violates the pattern, matches type
+	GTEXT_JSON_Value * inst =
+	    gtext_json_parse(inst_src, strlen(inst_src), &po, &perr);
+	ASSERT_NE(inst, nullptr);
+	GTEXT_JSON_Error verr;
+	memset(&verr, 0, sizeof(verr));
+	EXPECT_EQ(gtext_json_schema_validate(sc, inst, &verr), GTEXT_JSON_OK);
+	gtext_json_error_free(&verr);
+
+	gtext_json_free(inst);
+	gtext_json_schema_free(sc);
+	gtext_json_error_free(&err);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaStrictness, RejectionReachesNestedSubschemas) {
+	// A property subschema is compiled by the same recursive function, so the
+	// check has to apply there too rather than only at the root.
+	const char * src =
+	    "{\"type\":\"object\",\"properties\":{\"a\":{\"pattern\":\"^x$\"}}}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * doc = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(doc, nullptr);
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile(doc, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+	gtext_json_error_free(&err);
+	gtext_json_free(doc);
+}

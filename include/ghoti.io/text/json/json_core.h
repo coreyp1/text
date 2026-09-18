@@ -51,7 +51,12 @@ typedef enum {
 
   // Writer errors
   GTEXT_JSON_E_WRITE, ///< Write operation failed
-  GTEXT_JSON_E_STATE  ///< Invalid state for operation
+  GTEXT_JSON_E_STATE, ///< Invalid state for operation
+
+  /// Schema uses a standard keyword this implementation does not enforce.
+  /// Appended rather than grouped with GTEXT_JSON_E_SCHEMA so that the
+  /// numeric value of every pre-existing constant is unchanged.
+  GTEXT_JSON_E_SCHEMA_UNSUPPORTED
 } GTEXT_JSON_Status;
 
 /**

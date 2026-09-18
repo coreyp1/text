@@ -23,7 +23,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | # | Finding | Scope | Severity |
 |---|---|---|---|
 | 1 | No `LICENSE` file, so the terms of use are undefined | suite-wide | blocks all adoption |
-| 2 | JSON Schema silently ignores 14 standard keywords | JSON | silently wrong results |
+| 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | all three | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
@@ -57,11 +57,17 @@ an outside adopter until this is resolved.
 
 ---
 
-## 2. JSON Schema accepts schemas it does not enforce
+## 2. JSON Schema accepted schemas it did not enforce - fixed
 
-`gtext_json_schema_compile()` accepts a schema containing keywords the engine
-does not implement, and `gtext_json_schema_validate()` then returns
-`GTEXT_JSON_OK` for instances those keywords should reject. A caller who ports
+**This has since been fixed**; the finding is kept because the reasoning is
+what justifies the fix. `gtext_json_schema_compile()` now refuses a schema
+that uses a standard keyword the engine does not enforce, failing with
+`GTEXT_JSON_E_SCHEMA_UNSUPPORTED` and naming the keyword. See the
+\ref format_json "JSON page" for the refused set and the opt-out.
+
+As found: `gtext_json_schema_compile()` accepted a schema containing keywords
+the engine does not implement, and `gtext_json_schema_validate()` then
+returned `GTEXT_JSON_OK` for instances those keywords should reject. A caller who ports
 a working draft-07 schema gets a validator that approves everything the
 unimplemented half of the schema was meant to catch, with no error at compile
 time and no warning at validation time.
@@ -94,10 +100,10 @@ engine cannot tell a caller that it did not understand the schema it was given.
 
 This is the same failure shape as the `validate_utf8` defect fixed earlier in
 this repository: an option that names a guarantee, and does not provide it,
-with no way for a caller to notice. The remedy does not require implementing
-the keywords. Rejecting a schema that uses a keyword the engine does not
-implement would convert a silent wrong answer into a loud, actionable one,
-and it is a much smaller change than the fourteen implementations.
+with no way for a caller to notice. The remedy did not require implementing
+the keywords: rejecting a schema that uses one converts a silent wrong answer
+into a loud, actionable one, and it was a much smaller change than the
+fourteen implementations. That is what was done.
 
 **How this compares.** Full draft-07 or 2020-12 validation is the normal
 offering elsewhere: `ajv`, `jsonschema`, and `valijson` all implement `$ref`

@@ -122,9 +122,63 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
   return GTEXT_JSON_OK;
 }
 
+/*
+ * Standard JSON Schema keywords this engine does not enforce.
+ *
+ * Every one of these changes which instances are valid.  Ignoring such a
+ * keyword means a schema that looks like it constrains data does not, and the
+ * caller has no way to find out - the failure mode this list exists to
+ * prevent.  A schema using one is refused at compile time instead.
+ */
+static const char * const json_schema_unsupported_keywords[] = {
+    /* Applicators. */
+    "$ref", "$recursiveRef", "$dynamicRef", "allOf", "anyOf", "oneOf", "not",
+    "if", "then", "else", "additionalItems", "prefixItems", "contains",
+    "minContains", "maxContains", "additionalProperties", "patternProperties",
+    "propertyNames", "dependentSchemas", "dependentRequired", "dependencies",
+    "unevaluatedItems", "unevaluatedProperties",
+    /* Assertions. */
+    "pattern", "format", "multipleOf", "exclusiveMinimum", "exclusiveMaximum",
+    "uniqueItems", "minProperties", "maxProperties", "contentEncoding",
+    "contentMediaType", "contentSchema",
+    NULL};
+
+static int json_schema_keyword_in(
+    const char * const * list, const char * key, size_t key_len) {
+  for (size_t i = 0; list[i]; i++) {
+    if (json_matches(key, key_len, list[i])) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+ * Report a keyword the engine cannot honor.  The message is a static string,
+ * as the error contract requires, so the keyword itself travels in
+ * context_snippet, which gtext_json_error_free() already owns and frees.
+ */
+static GTEXT_JSON_Status json_schema_reject_keyword(
+    const char * key, size_t key_len, GTEXT_JSON_Error * err) {
+  if (err) {
+    *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+        .message = "Schema uses a standard keyword this implementation does "
+                   "not enforce"};
+    char * name = (char *)malloc(key_len + 1);
+    if (name) {
+      memcpy(name, key, key_len);
+      name[key_len] = '\0';
+      err->context_snippet = name;
+      err->context_snippet_len = key_len;
+      err->caret_offset = 0;
+    }
+  }
+  return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+}
+
 static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     const GTEXT_JSON_Value * schema_doc, json_context * ctx,
-    GTEXT_JSON_Error * err) {
+    const GTEXT_JSON_Schema_Options * opts, GTEXT_JSON_Error * err) {
   if (schema_doc->type != GTEXT_JSON_OBJECT) {
     if (err) {
       *err = (GTEXT_JSON_Error){
@@ -227,7 +281,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
           }
 
           GTEXT_JSON_Status status =
-              json_schema_compile_node(prop->schema, prop_schema, ctx, err);
+              json_schema_compile_node(prop->schema, prop_schema, ctx, opts, err);
           if (status != GTEXT_JSON_OK) {
             free(prop->key);
             free(prop->schema);
@@ -330,7 +384,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       }
 
       GTEXT_JSON_Status status =
-          json_schema_compile_node(node->items_schema, value, ctx, err);
+          json_schema_compile_node(node->items_schema, value, ctx, opts, err);
       if (status != GTEXT_JSON_OK) {
         free(node->items_schema);
         node->items_schema = NULL;
@@ -574,7 +628,20 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       node->has_max_items = 1;
       node->max_items = (size_t)max_items_val;
     }
-    // Ignore unknown keywords (for forward compatibility)
+    else if (!opts->allow_unsupported_keywords &&
+             json_schema_keyword_in(
+                 json_schema_unsupported_keywords, key, key_len)) {
+      return json_schema_reject_keyword(key, key_len, err);
+    }
+    // Everything else is ignored, because none of it can change which
+    // instances are valid.  That covers the annotation keywords (title,
+    // description, default, examples, $comment, readOnly, writeOnly,
+    // deprecated); the core plumbing that is inert while $ref is
+    // unsupported ($schema selects a dialect when only one is implemented,
+    // $defs and definitions are containers nothing can reach, $id and
+    // $anchor name a base URI nothing resolves against, $vocabulary); and
+    // vendor extensions and keywords from newer drafts, which JSON Schema
+    // requires an implementation to ignore.
   }
 
   return GTEXT_JSON_OK;
@@ -781,8 +848,23 @@ static GTEXT_JSON_Status json_schema_validate_node(
 
 // Public API functions
 
+GTEXT_API GTEXT_JSON_Schema_Options gtext_json_schema_options_default(void) {
+  GTEXT_JSON_Schema_Options opts;
+  opts.allow_unsupported_keywords = false;
+  return opts;
+}
+
 GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile(
     const GTEXT_JSON_Value * schema_doc, GTEXT_JSON_Error * err) {
+  return gtext_json_schema_compile_with_options(schema_doc, NULL, err);
+}
+
+GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
+    const GTEXT_JSON_Value * schema_doc,
+    const GTEXT_JSON_Schema_Options * opts_in, GTEXT_JSON_Error * err) {
+  GTEXT_JSON_Schema_Options defaults = gtext_json_schema_options_default();
+  const GTEXT_JSON_Schema_Options * opts = opts_in ? opts_in : &defaults;
+
   if (!schema_doc) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
@@ -835,7 +917,7 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile(
 
   // Compile schema
   GTEXT_JSON_Status status =
-      json_schema_compile_node(schema->root, schema_doc, schema->ctx, err);
+      json_schema_compile_node(schema->root, schema_doc, schema->ctx, opts, err);
   if (status != GTEXT_JSON_OK) {
     json_schema_node_free(schema->root);
     json_context_free(schema->ctx);

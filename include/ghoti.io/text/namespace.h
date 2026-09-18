@@ -184,6 +184,8 @@
 #define gtext_json_pointer_get GHOTIIO_TEXT(gtext_json_pointer_get)
 #define gtext_json_pointer_get_mut GHOTIIO_TEXT(gtext_json_pointer_get_mut)
 #define gtext_json_schema_compile GHOTIIO_TEXT(gtext_json_schema_compile)
+#define gtext_json_schema_compile_with_options GHOTIIO_TEXT(gtext_json_schema_compile_with_options)
+#define gtext_json_schema_options_default GHOTIIO_TEXT(gtext_json_schema_options_default)
 #define gtext_json_schema_free GHOTIIO_TEXT(gtext_json_schema_free)
 #define gtext_json_schema_validate GHOTIIO_TEXT(gtext_json_schema_validate)
 #define gtext_json_sink_buffer GHOTIIO_TEXT(gtext_json_sink_buffer)
