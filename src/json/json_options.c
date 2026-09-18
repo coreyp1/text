@@ -22,7 +22,8 @@ GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   opts.allow_leading_bom = true;  // default on
   opts.validate_utf8 = true;      // default on
   opts.normalize_unicode = false; // v2 feature, off by default
-  opts.in_situ_mode = false;      // off by default
+  opts.in_situ_mode = false;
+  opts.allocator = NULL;      // off by default
 
   // Duplicate keys
   opts.dupkeys = GTEXT_JSON_DUPKEY_ERROR; // fail on duplicate keys

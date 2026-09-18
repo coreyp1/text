@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 
@@ -27,11 +28,14 @@
 // Create a new arena allocator
 // initial_block_size: Initial block size (0 = use default)
 // Returns: Pointer to arena, or NULL on failure
-static json_arena * json_arena_new(size_t initial_block_size) {
-  json_arena * arena = malloc(sizeof(json_arena));
+static json_arena * json_arena_new(
+    size_t initial_block_size, const GTEXT_Allocator * alloc) {
+  json_arena * arena = gtext_allocator_malloc(alloc, sizeof(json_arena));
   if (!arena) {
     return NULL;
   }
+
+  arena->alloc = alloc;
 
   arena->block_size = initial_block_size > 0 ? initial_block_size
                                              : JSON_ARENA_DEFAULT_BLOCK_SIZE;
@@ -88,7 +92,8 @@ static void * json_arena_alloc(json_arena * arena, size_t size, size_t align) {
   if (block_alloc_size < block_size) { // Overflow check
     return NULL;
   }
-  json_arena_block * block = malloc(block_alloc_size);
+  json_arena_block * block =
+      gtext_allocator_malloc(arena->alloc, block_alloc_size);
   if (!block) {
     return NULL;
   }
@@ -120,14 +125,18 @@ static void json_arena_free(json_arena * arena) {
     return;
   }
 
+  /* Captured before the arena itself is released, since the allocator
+   * pointer lives inside it. */
+  const GTEXT_Allocator * alloc = arena->alloc;
+
   json_arena_block * block = arena->first;
   while (block) {
     json_arena_block * next = block->next;
-    free(block);
+    gtext_allocator_free(alloc, block);
     block = next;
   }
 
-  free(arena);
+  gtext_allocator_free(alloc, arena);
 }
 
 
@@ -136,15 +145,22 @@ static void json_arena_free(json_arena * arena) {
 // The context is allocated with malloc (not in the arena) so it can
 // be accessed to free the arena.
 // Returns: New context, or NULL on failure
-json_context * json_context_new(void) {
-  json_context * ctx = malloc(sizeof(json_context));
+json_context * json_context_new(const GTEXT_Allocator * alloc) {
+  /* Resolved once here so that every later use - including the frees, which
+   * happen after the options struct may be gone - reads a stable pointer. */
+  if (!alloc) {
+    alloc = gtext_allocator_default();
+  }
+
+  json_context * ctx = gtext_allocator_malloc(alloc, sizeof(json_context));
   if (!ctx) {
     return NULL;
   }
 
-  ctx->arena = json_arena_new(0); // Use default block size
+  ctx->alloc = alloc;
+  ctx->arena = json_arena_new(0, alloc); // Use default block size
   if (!ctx->arena) {
-    free(ctx);
+    gtext_allocator_free(alloc, ctx);
     return NULL;
   }
 
@@ -177,8 +193,9 @@ void json_context_free(json_context * ctx) {
     return;
   }
 
+  const GTEXT_Allocator * alloc = ctx->alloc;
   json_arena_free(ctx->arena);
-  free(ctx);
+  gtext_allocator_free(alloc, ctx);
 }
 
 // Recursively free child values that have different contexts
@@ -288,7 +305,7 @@ void * json_arena_alloc_for_context(
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_null(void) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -303,7 +320,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_null(void) {
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_bool(bool b) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -324,7 +341,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_string(const char * s, size_t len) {
     return NULL;
   }
 
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -363,7 +380,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_from_lexeme(
     return NULL;
   }
 
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -393,7 +410,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_from_lexeme(
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_i64(int64_t x) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -432,7 +449,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_i64(int64_t x) {
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_u64(uint64_t x) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -471,7 +488,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_u64(uint64_t x) {
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_double(double x) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -511,7 +528,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_double(double x) {
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_array(void) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -530,7 +547,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_array(void) {
 }
 
 GTEXT_API GTEXT_JSON_Value * gtext_json_new_object(void) {
-  json_context * ctx = json_context_new();
+  json_context * ctx = json_context_new(NULL);
   if (!ctx) {
     return NULL;
   }
@@ -1230,7 +1247,7 @@ static GTEXT_JSON_Value * json_value_clone_into_new_context(
   }
 
   // Create a new context for the clone
-  json_context * new_ctx = json_context_new();
+  json_context * new_ctx = json_context_new(NULL);
   if (!new_ctx) {
     return NULL;
   }

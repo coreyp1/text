@@ -893,7 +893,7 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
   }
 
   // Create context for cloned enum/const values
-  schema->ctx = json_context_new();
+  schema->ctx = json_context_new(NULL);
   if (!schema->ctx) {
     free(schema);
     if (err) {

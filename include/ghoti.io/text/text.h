@@ -12,6 +12,7 @@
 #ifndef GHOTI_IO_GTEXT_TEXT_H
 #define GHOTI_IO_GTEXT_TEXT_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include <stdint.h>
 

@@ -462,7 +462,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean check-symbols
+.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean check-symbols check-allocators
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -538,6 +538,37 @@ endif
 # Symbol namespace check
 ####################################################################
 
+# Files whose allocations must all go through GTEXT_Allocator.  A file is
+# added here when it has been converted; the check then keeps it converted.
+# The list is the contract behind the "allocator" field in the parse options:
+# without it, one raw malloc() added later would silently reintroduce the
+# bypass the option exists to remove.
+# src/allocator.c is deliberately absent: it is the default allocator, so the
+# C library calls in it are the implementation rather than a bypass.
+ALLOCATOR_CLEAN_SOURCES := \
+	src/json/json_dom.c \
+	src/json/json_lexer.c \
+	src/json/json_number.c \
+	src/json/json_parser.c
+
+check-allocators: ## Fail if a converted file allocates without the allocator
+	@raw=$$(grep -nE '(^|[^_[:alnum:]])(malloc|calloc|realloc|free)[[:space:]]*\(' \
+		$(ALLOCATOR_CLEAN_SOURCES) /dev/null \
+		| grep -v 'gtext_allocator_' \
+		| grep -v 'allocator-exempt' \
+		| grep -vE ':[0-9]+:[[:space:]]*(\*|//|/\*)' || true); \
+	if [ -n "$$raw" ]; then \
+		printf "\033[0;31m\n### Raw allocation in a file that must use GTEXT_Allocator ###\033[0m\n" >&2; \
+		printf "%s\n" "$$raw" >&2; \
+		printf "\nGTEXT_JSON_Parse_Options::allocator promises that a caller-supplied\n" >&2; \
+		printf "allocator sees every allocation the parse makes. A direct malloc() or\n" >&2; \
+		printf "free() here breaks that promise silently - the caller cannot detect it,\n" >&2; \
+		printf "and a free() through the wrong allocator corrupts the heap.\n" >&2; \
+		printf "Use gtext_allocator_malloc()/_calloc()/_realloc()/_free().\n" >&2; \
+		exit 1; \
+	fi
+	@printf "\033[0;32mEvery allocation in the converted files goes through GTEXT_Allocator.\033[0m\n"
+
 check-symbols: ## Fail if any exported symbol lacks the version namespace
 check-symbols: $(APP_DIR)/$(TARGET)
 ifeq ($(OS_NAME), Linux)
@@ -610,7 +641,7 @@ else
 endif
 
 test: ## Make and run the Unit tests
-test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) check-symbols
+test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) check-symbols check-allocators
 	@printf "\033[0;30;43m\n"
 	@printf "############################\n"
 	@printf "### Running Text tests   ###\n"

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 #include "json_stream_internal.h"
@@ -820,7 +821,8 @@ static GTEXT_JSON_Status json_lexer_parse_string(
   }
   size_t decode_capacity =
       string_content_actual_len + 1; // +1 for null terminator
-  char * decoded = (char *)malloc(decode_capacity);
+  char * decoded = (char *)gtext_allocator_malloc(
+      lexer->opts ? lexer->opts->allocator : NULL, decode_capacity);
   if (!decoded) {
     if (tb) {
       json_token_buffer_clear(tb);
@@ -845,7 +847,8 @@ static GTEXT_JSON_Status json_lexer_parse_string(
           lexer->opts ? lexer->opts->allow_unescaped_controls : 0);
 
   if (status != GTEXT_JSON_OK) {
-    free(decoded);
+    gtext_allocator_free(
+        lexer->opts ? lexer->opts->allocator : NULL, decoded);
     if (tb) {
       json_token_buffer_clear(tb);
     }
@@ -855,6 +858,7 @@ static GTEXT_JSON_Status json_lexer_parse_string(
   token->type = JSON_TOKEN_STRING;
   token->pos = lexer->pos;
   token->length = token_length;
+  token->data.string.alloc = lexer->opts ? lexer->opts->allocator : NULL;
   token->data.string.value = decoded;
   token->data.string.value_len = decoded_len;
   if (resuming && tb) {
@@ -1665,7 +1669,8 @@ GTEXT_INTERNAL_API void json_token_cleanup(json_token * token) {
   switch (token->type) {
   case JSON_TOKEN_STRING:
     if (token->data.string.value) {
-      free(token->data.string.value);
+      gtext_allocator_free(
+          token->data.string.alloc, token->data.string.value);
       token->data.string.value = NULL;
       token->data.string.value_len = 0;
     }

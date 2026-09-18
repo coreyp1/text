@@ -1336,7 +1336,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_patch_apply(GTEXT_JSON_Value * root,
 
   // For atomicity: clone the root, apply operations to the clone,
   // then copy the clone's content back to the original only if all succeed
-  json_context * clone_ctx = json_context_new();
+  json_context * clone_ctx = json_context_new(NULL);
   if (!clone_ctx) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
@@ -1828,7 +1828,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_merge_patch(GTEXT_JSON_Value * target,
 
   // For atomicity: clone the target, apply merge to the clone,
   // then copy the clone's content back to the original only if all succeed
-  json_context * clone_ctx = json_context_new();
+  json_context * clone_ctx = json_context_new(NULL);
   if (!clone_ctx) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,

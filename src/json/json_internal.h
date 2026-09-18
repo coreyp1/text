@@ -14,6 +14,7 @@
 
 #include <ghoti.io/text/macros.h>
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_writer.h>
 #include <stddef.h>
@@ -121,7 +122,12 @@ typedef enum {
  * to free the temporary structure.
  */
 typedef struct {
-  char * lexeme;      ///< Original number lexeme (allocated with malloc)
+  /// Allocator that owns `lexeme`, or NULL for the default.  Carried in the
+  /// struct rather than passed to json_number_destroy(), which has 97 call
+  /// sites; this way the free always matches the allocation with no
+  /// signature churn.
+  const GTEXT_Allocator * alloc;
+  char * lexeme;      ///< Original number lexeme (owned by `alloc`)
   size_t lexeme_len;  ///< Length of lexeme
   int64_t i64;        ///< int64 representation
   uint64_t u64;       ///< uint64 representation
@@ -218,6 +224,9 @@ typedef struct {
   // Value data (only valid for certain token types)
   union {
     struct {
+      /// Allocator that owns `value`, or NULL for the default.  Same
+      /// reasoning as json_number::alloc.
+      const GTEXT_Allocator * alloc;
       char * value;     ///< Decoded string value (allocated, caller must free)
       size_t value_len; ///< Length of decoded string
       size_t original_start; ///< Original string start position in input (after
@@ -315,6 +324,7 @@ typedef struct json_arena {
   json_arena_block * first;   ///< First block in the arena
   json_arena_block * current; ///< Current block being used
   size_t block_size;          ///< Size of each new block
+  const GTEXT_Allocator * alloc; ///< Allocator for blocks (never NULL)
 } json_arena;
 
 // JSON context structure
@@ -322,6 +332,7 @@ typedef struct json_arena {
 // for a JSON DOM tree.
 typedef struct json_context {
   json_arena * arena; ///< Arena allocator for this DOM
+  const GTEXT_Allocator * alloc; ///< Allocator backing the arena (never NULL)
   const char *
       input_buffer; ///< Original input buffer (for in-situ mode, caller-owned)
   size_t input_buffer_len; ///< Length of input buffer (for in-situ mode)
@@ -407,7 +418,7 @@ void * json_arena_alloc_for_context(
  *
  * @return New context, or NULL on failure
  */
-json_context * json_context_new(void);
+json_context * json_context_new(const GTEXT_Allocator * alloc);
 
 /**
  * @brief Set input buffer for in-situ mode

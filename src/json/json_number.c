@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 
@@ -245,6 +246,7 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
 
   // Initialize output structure
   memset(num, 0, sizeof(json_number));
+  num->alloc = opts ? opts->allocator : NULL;
 
   // Check for nonfinite numbers first (always check, but return error if
   // disabled)
@@ -263,7 +265,7 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
       if (input_len > SIZE_MAX - 1) {
         return GTEXT_JSON_E_LIMIT;
       }
-      num->lexeme = malloc(input_len + 1);
+      num->lexeme = gtext_allocator_malloc(num->alloc, input_len + 1);
       if (!num->lexeme) {
         return GTEXT_JSON_E_OOM;
       }
@@ -286,7 +288,7 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
     if (input_len > SIZE_MAX - 1) {
       return GTEXT_JSON_E_LIMIT;
     }
-    num->lexeme = malloc(input_len + 1);
+    num->lexeme = gtext_allocator_malloc(num->alloc, input_len + 1);
     if (!num->lexeme) {
       return GTEXT_JSON_E_OOM;
     }
@@ -321,16 +323,16 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
     if (input_len > SIZE_MAX - 1) {
       // Clean up lexeme if allocated
       if (num->lexeme) {
-        free(num->lexeme);
+        gtext_allocator_free(num->alloc, num->lexeme);
         num->lexeme = NULL;
       }
       return GTEXT_JSON_E_LIMIT;
     }
-    char * strtod_input = malloc(input_len + 1);
+    char * strtod_input = gtext_allocator_malloc(num->alloc, input_len + 1);
     if (!strtod_input) {
       // Clean up lexeme if allocated
       if (num->lexeme) {
-        free(num->lexeme);
+        gtext_allocator_free(num->alloc, num->lexeme);
         num->lexeme = NULL;
       }
       return GTEXT_JSON_E_OOM;
@@ -355,7 +357,7 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
       }
     }
 
-    free(strtod_input);
+    gtext_allocator_free(num->alloc, strtod_input);
   }
 
   // Update position if provided
@@ -375,7 +377,7 @@ GTEXT_INTERNAL_API void json_number_destroy(json_number * num) {
 
   // Free the lexeme if it was allocated
   if (num->lexeme) {
-    free(num->lexeme);
+    gtext_allocator_free(num->alloc, num->lexeme);
     num->lexeme = NULL;
     num->lexeme_len = 0;
     num->flags &= ~JSON_NUMBER_HAS_LEXEME;

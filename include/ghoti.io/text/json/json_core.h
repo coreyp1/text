@@ -15,6 +15,7 @@
 #ifndef GHOTI_IO_GTEXT_JSON_JSON_CORE_H
 #define GHOTI_IO_GTEXT_JSON_JSON_CORE_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -140,6 +141,31 @@ typedef struct {
   /// API change.  Default: off.
   bool normalize_unicode;
   bool in_situ_mode;      ///< Zero-copy mode: reference input buffer directly
+
+  /**
+   * Allocator for everything the parse produces, or NULL for
+   * gtext_allocator_default().
+   *
+   * The DOM records it, so gtext_json_free() releases through the same
+   * allocator without the caller passing it again. It must stay valid for
+   * the lifetime of the value the parse returns.
+   *
+   * Covered: gtext_json_parse(), gtext_json_parse_multiple() and
+   * gtext_json_parse_file() - the arena and every DOM node, key and string in
+   * it, the preserved number lexemes, and the parser's transient buffers.
+   *
+   * Not covered, and still using the C library:
+   * - `GTEXT_JSON_Error::context_snippet`, because gtext_json_error_free()
+   *   receives only the error and has no way to learn which allocator made
+   *   it. Freeing it through a mismatched allocator would be worse than the
+   *   one diagnostic allocation it avoids.
+   * - The writer, the streaming parser, JSON Pointer, Patch and Schema, none
+   *   of which takes an allocator yet.
+   *
+   * Nothing silently falls back: `make check-allocators` fails the build if a
+   * file on the covered list calls malloc, calloc, realloc or free directly.
+   */
+  const GTEXT_Allocator * allocator;
                           ///< (default: off)
 
   // Duplicate keys

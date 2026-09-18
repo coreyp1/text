@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
 
@@ -42,9 +43,11 @@ static GTEXT_JSON_Status json_parser_set_error_with_tokens(json_parser * parser,
     GTEXT_JSON_Status code, const char * message, json_position pos,
     const char * expected_token, const char * actual_token) {
   if (parser->error_out) {
-    // Free any existing context snippet
+    // The error snippet is C-library memory by design, because
+    // gtext_json_error_free() receives only the error and cannot learn which
+    // allocator produced it.  See GTEXT_JSON_Parse_Options::allocator.
     if (parser->error_out->context_snippet) {
-      free(parser->error_out->context_snippet);
+      free(parser->error_out->context_snippet); // allocator-exempt
       parser->error_out->context_snippet = NULL;
     }
 
@@ -784,7 +787,8 @@ static GTEXT_JSON_Status json_parse_object(
         json_token_cleanup(&token);
         break;
       }
-      key_copy = (char *)malloc(key_len + 1);
+      key_copy = (char *)gtext_allocator_malloc(
+          parser->opts ? parser->opts->allocator : NULL, key_len + 1);
       if (!key_copy) {
         result = GTEXT_JSON_E_OOM;
         json_token_cleanup(&token);
@@ -800,7 +804,8 @@ static GTEXT_JSON_Status json_parse_object(
     if (status != GTEXT_JSON_OK) {
       result = status;
       if (key_copy) {
-        free(key_copy);
+        gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
       }
       break;
     }
@@ -812,7 +817,8 @@ static GTEXT_JSON_Status json_parse_object(
           json_token_type_description(token.type));
       json_token_cleanup(&token);
       if (key_copy) {
-        free(key_copy);
+        gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
       }
       break;
     }
@@ -824,7 +830,8 @@ static GTEXT_JSON_Status json_parse_object(
     if (status != GTEXT_JSON_OK) {
       result = status;
       if (key_copy) {
-        free(key_copy);
+        gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
       }
       break;
     }
@@ -835,7 +842,8 @@ static GTEXT_JSON_Status json_parse_object(
     if (status != GTEXT_JSON_OK) {
       result = status;
       if (key_copy) {
-        free(key_copy);
+        gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
       }
       break;
     }
@@ -859,7 +867,8 @@ static GTEXT_JSON_Status json_parse_object(
         result = json_parser_set_error(
             parser, GTEXT_JSON_E_DUPKEY, "Duplicate key in object", key_pos);
         if (key_copy) {
-          free(key_copy);
+          gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
         }
         should_break = 1;
         break;
@@ -871,7 +880,8 @@ static GTEXT_JSON_Status json_parse_object(
         // It will be freed when the object is freed. Just don't add it to the
         // object. Free temporary key copy (not needed)
         if (key_copy) {
-          free(key_copy);
+          gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
         }
         // Continue to next pair (don't break)
         status = GTEXT_JSON_OK;
@@ -890,14 +900,16 @@ static GTEXT_JSON_Status json_parse_object(
         else {
           // Bounds check failed - should not happen, but be defensive
           if (key_copy) {
-            free(key_copy);
+            gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
           }
           return json_parser_set_error(parser, GTEXT_JSON_E_INVALID,
               "Internal error: array index out of bounds", parser->lexer.pos);
         }
         // Free temporary key copy (key already in arena)
         if (key_copy) {
-          free(key_copy);
+          gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
         }
         // Continue to next pair (don't break)
         status = GTEXT_JSON_OK;
@@ -910,7 +922,8 @@ static GTEXT_JSON_Status json_parse_object(
         // Defensive bounds check before array access
         if (!json_check_bounds_index(existing_idx, object->as.object.count)) {
           if (key_copy) {
-            free(key_copy);
+            gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
           }
           return json_parser_set_error(parser, GTEXT_JSON_E_INVALID,
               "Internal error: array index out of bounds", parser->lexer.pos);
@@ -927,14 +940,16 @@ static GTEXT_JSON_Status json_parse_object(
             // Freeing object at the end will free everything including value.
             result = status;
             if (key_copy) {
-              free(key_copy);
+              gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
             }
             should_break = 1;
             break;
           }
           // Free temporary key copy (not needed)
           if (key_copy) {
-            free(key_copy);
+            gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
           }
           // Continue to next pair (don't break)
           status = GTEXT_JSON_OK;
@@ -947,7 +962,8 @@ static GTEXT_JSON_Status json_parse_object(
             // Note: Don't free value here - it's part of object's arena.
             result = GTEXT_JSON_E_OOM;
             if (key_copy) {
-              free(key_copy);
+              gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
             }
             should_break = 1;
             break;
@@ -960,7 +976,8 @@ static GTEXT_JSON_Status json_parse_object(
             // arena. Freeing object at the end will free everything.
             result = status;
             if (key_copy) {
-              free(key_copy);
+              gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
             }
             should_break = 1;
             break;
@@ -973,7 +990,8 @@ static GTEXT_JSON_Status json_parse_object(
             // arena. Freeing object at the end will free everything.
             result = status;
             if (key_copy) {
-              free(key_copy);
+              gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
             }
             should_break = 1;
             break;
@@ -988,14 +1006,16 @@ static GTEXT_JSON_Status json_parse_object(
           else {
             // Should not happen, but be defensive
             if (key_copy) {
-              free(key_copy);
+              gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
             }
             return json_parser_set_error(parser, GTEXT_JSON_E_INVALID,
                 "Internal error: array index out of bounds", parser->lexer.pos);
           }
           // Free temporary key copy (key already in arena)
           if (key_copy) {
-            free(key_copy);
+            gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
           }
           // Continue to next pair (don't break)
           status = GTEXT_JSON_OK;
@@ -1009,7 +1029,8 @@ static GTEXT_JSON_Status json_parse_object(
         // Note: Don't free value here - it's part of object's arena.
         result = GTEXT_JSON_E_INVALID;
         if (key_copy) {
-          free(key_copy);
+          gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
         }
         should_break = 1;
         break;
@@ -1035,14 +1056,16 @@ static GTEXT_JSON_Status json_parse_object(
         gtext_json_free(value);
         result = status;
         if (key_copy) {
-          free(key_copy);
+          gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
         }
         break;
       }
 
       // Free temporary key copy (json_object_add_pair copied it to arena)
       if (key_copy) {
-        free(key_copy);
+        gtext_allocator_free(
+            parser->opts ? parser->opts->allocator : NULL, key_copy);
       }
     }
 
@@ -1574,24 +1597,25 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
     return NULL;
   }
 
-  // Parse root value (ctx=NULL means it's the root and will create its own
-  // context) For in-situ mode, we need to create the context first and set the
-  // input buffer
-  json_context * root_ctx = NULL;
-  if (opt && opt->in_situ_mode) {
-    root_ctx = json_context_new();
-    if (!root_ctx) {
-      if (err) {
-        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
-            .message = "Failed to allocate context",
-            .line = 1,
-            .col = 1};
-      }
-      if (bytes_consumed) {
-        *bytes_consumed = 0;
-      }
-      return NULL;
+  // The root context is always created here rather than being left to
+  // json_parse_value(), which would fall back to gtext_json_new_*() and with
+  // it the default allocator.  That fallback is why a caller-supplied
+  // allocator used to see the parser's transient buffers but not the arena
+  // holding the DOM - everything the parse actually returns.
+  json_context * root_ctx = json_context_new(opt ? opt->allocator : NULL);
+  if (!root_ctx) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Failed to allocate context",
+          .line = 1,
+          .col = 1};
     }
+    if (bytes_consumed) {
+      *bytes_consumed = 0;
+    }
+    return NULL;
+  }
+  if (opt && opt->in_situ_mode) {
     json_context_set_input_buffer(root_ctx, bytes, len);
   }
 

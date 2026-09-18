@@ -25,7 +25,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 1 | No `LICENSE` file, so the terms of use are undefined | suite-wide | blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
-| 4 | No custom allocator hook in any format | all three | blocks embedded and arena callers |
+| 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
 | 7 | Thread-safety is documented for CSV only | JSON, YAML | unanswerable question |
@@ -171,9 +171,27 @@ that would settle it.
 
 ---
 
-## 5. No custom allocator hook
+## 5. No custom allocator hook - JSON parse done, CSV and YAML open
 
-None of the three formats lets a caller supply an allocator. There is no
+**Partly addressed.** `GTEXT_JSON_Parse_Options::allocator` now routes the
+whole JSON parse path - the arena, every DOM node, key and string in it, the
+preserved number lexemes and the parser's transient buffers - through a
+caller-supplied `GTEXT_Allocator`, with `gtext_json_free()` releasing through
+the same one. `make check-allocators` fails the build if a converted file
+calls `malloc`, `calloc`, `realloc` or `free` directly, so the coverage claim
+is enforced rather than promised. Still open: the JSON writer, streaming
+parser, Pointer, Patch and Schema, and all of CSV and YAML.
+
+`GTEXT_Allocator` deliberately matches cutil's `GCU_Allocator` member for
+member, which is what `image`, `model` and `compress` use under local names.
+`text` declares its own rather than including cutil's because CONVENTIONS.md
+records `text` as the one library with no cutil dependency; the structs are
+layout-compatible, so a program using both can cast between them, and if
+`text` ever does take that dependency the declaration becomes a typedef with
+no change for callers. **That fork is worth a decision** - sharing the type
+outright would match the rest of the suite.
+
+As found: none of the three formats let a caller supply an allocator. There is no
 `malloc`/`free` pair, no opaque user pointer, and no arena handle in any public
 options struct. Internally the parsers do use arenas, so the machinery is
 there; it is simply not reachable.
