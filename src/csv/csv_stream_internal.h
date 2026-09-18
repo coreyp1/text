@@ -128,6 +128,21 @@ struct GTEXT_CSV_Stream {
   size_t input_buffer_processed; ///< Number of bytes processed from buffer
   size_t buffer_start_offset;    ///< Start offset of buffered data
 
+  // Bytes held back from a feed because they cannot be decided until more
+  // input arrives: a partial BOM, or a trailing CR that may yet turn out to be
+  // the first half of a CRLF.  At most three, prepended to the next chunk and
+  // flushed by gtext_csv_stream_finish().  Without this the parse depended on
+  // where the caller happened to split the input.
+  char carry[4];     ///< Undecided bytes carried to the next feed
+  size_t carry_len;  ///< Number of bytes in carry
+  bool bom_resolved; ///< Whether the leading BOM question has been settled
+
+  /// Scratch for joining the carry to the head of the next chunk.  It belongs
+  /// to the stream rather than to a stack frame because a field in progress
+  /// may point into the buffer it was parsed from, and that reference has to
+  /// stay valid until the parser buffers the field at the end of the feed.
+  char join[5];
+
   // Position tracking
   csv_position pos; ///< Current parsing position (line, column, offset)
   size_t total_bytes_consumed; ///< Total bytes consumed across all chunks

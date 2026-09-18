@@ -161,40 +161,17 @@ GTEXT_API GTEXT_CSV_Stream * gtext_csv_stream_new(
   return stream;
 }
 
-GTEXT_API GTEXT_CSV_Status gtext_csv_stream_feed(GTEXT_CSV_Stream * stream,
+/**
+ * @brief Feed bytes that are known to be safe to process now.
+ *
+ * Everything the caller passes reaches the state machine through here, after
+ * gtext_csv_stream_feed() has settled the BOM and held back any trailing CR.
+ * It never buffers on its own account.
+ */
+static GTEXT_CSV_Status csv_stream_feed_settled(GTEXT_CSV_Stream * stream,
     const void * data, size_t len, GTEXT_CSV_Error * err) {
-  if (!stream) {
-    CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Stream must not be NULL");
-    return GTEXT_CSV_E_INVALID;
-  }
-
-  if (stream->state == CSV_STREAM_STATE_END) {
-    if (err) {
-      csv_error_copy(err, &stream->error);
-    }
-    return stream->error.code != GTEXT_CSV_OK ? stream->error.code
-                                              : GTEXT_CSV_E_INVALID;
-  }
-
   if (!data || len == 0) {
     return GTEXT_CSV_OK;
-  }
-
-  // Handle BOM on first feed
-  if (stream->total_bytes_consumed == 0 && !stream->opts.keep_bom) {
-    const char * input = (const char *)data;
-    size_t input_len = len;
-    bool was_stripped = false;
-    GTEXT_CSV_Status status =
-        csv_strip_bom(&input, &input_len, &stream->pos, true, &was_stripped);
-    if (status != GTEXT_CSV_OK) {
-      return csv_stream_set_error(stream, status, "Overflow in BOM stripping");
-    }
-    if (was_stripped) {
-      // BOM was stripped, adjust data pointer
-      data = input;
-      len = input_len;
-    }
   }
 
   // If we have a field in progress, we need to continue it
@@ -272,11 +249,198 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_feed(GTEXT_CSV_Stream * stream,
   return status;
 }
 
+/**
+ * @brief Number of bytes at the tail of a chunk that cannot be decided yet.
+ *
+ * A trailing CR is the only such case once the BOM is settled: whether it is a
+ * lone CR or the first half of a CRLF depends on the next byte, and
+ * csv_detect_newline() needs both in one buffer to see the pair.
+ */
+static size_t csv_stream_undecided_tail(
+    const GTEXT_CSV_Stream * stream, const char * data, size_t len) {
+  if (len == 0 || !stream->opts.dialect.accept_crlf) {
+    return 0;
+  }
+  return data[len - 1] == '\r' ? 1 : 0;
+}
+
+/**
+ * @brief Settle the leading BOM, buffering until enough bytes have arrived.
+ *
+ * Returns true when the caller may proceed; *consumed is the number of input
+ * bytes absorbed into the carry. While the answer is still unknown - fewer
+ * than three bytes seen, and more input promised - everything is carried and
+ * the caller returns.
+ */
+static bool csv_stream_settle_bom(GTEXT_CSV_Stream * stream, const char ** data,
+    size_t * len, bool final, GTEXT_CSV_Status * status) {
+  static const char BOM[3] = {'\xEF', '\xBB', '\xBF'};
+
+  *status = GTEXT_CSV_OK;
+  if (stream->bom_resolved) {
+    return true;
+  }
+
+  // The common case: the first feed already carries enough to decide, so the
+  // answer is read straight out of the caller's buffer and the data pointer is
+  // left alone.  Copying here instead would break in-situ parsing, whose whole
+  // point is that a field points into the buffer the caller supplied.
+  if (stream->carry_len == 0 && *len >= sizeof BOM) {
+    stream->bom_resolved = true;
+    if (!stream->opts.keep_bom && memcmp(*data, BOM, sizeof BOM) == 0) {
+      if (stream->pos.offset > SIZE_MAX - sizeof BOM) {
+        *status = csv_stream_set_error(
+            stream, GTEXT_CSV_E_LIMIT, "Overflow in BOM stripping");
+        return false;
+      }
+      *data += sizeof BOM;
+      *len -= sizeof BOM;
+      stream->pos.offset += sizeof BOM;
+    }
+    return true;
+  }
+
+  // Otherwise the chunk is too short to tell: hold what there is.
+  while (stream->carry_len < sizeof BOM && *len > 0) {
+    stream->carry[stream->carry_len++] = **data;
+    (*data)++;
+    (*len)--;
+  }
+
+  if (stream->carry_len < sizeof BOM && !final) {
+    return false; // Undecidable, and more input is coming.
+  }
+
+  stream->bom_resolved = true;
+
+  if (!stream->opts.keep_bom && stream->carry_len >= sizeof BOM &&
+      memcmp(stream->carry, BOM, sizeof BOM) == 0) {
+    // Drop it, and account for it the way csv_strip_bom() would have.
+    stream->carry_len = 0;
+    if (stream->pos.offset > SIZE_MAX - sizeof BOM) {
+      *status = csv_stream_set_error(
+          stream, GTEXT_CSV_E_LIMIT, "Overflow in BOM stripping");
+      return false;
+    }
+    stream->pos.offset += sizeof BOM;
+  }
+
+  return true;
+}
+
+/**
+ * @brief Feed a chunk, honoring and refreshing the carry.
+ *
+ * Carried bytes are joined to the front of the chunk and fed as one short
+ * buffer, so the state machine always sees a CRLF pair together rather than
+ * split across two calls. Only the join is copied - once the carry is drained
+ * the rest of the chunk is passed through untouched, so a large feed stays a
+ * single pass.
+ *
+ * @param final True when no more input will follow, so nothing may be held
+ *              back; gtext_csv_stream_finish() passes true.
+ */
+static GTEXT_CSV_Status csv_stream_feed_carried(GTEXT_CSV_Stream * stream,
+    const char * data, size_t len, bool final, GTEXT_CSV_Error * err) {
+  GTEXT_CSV_Status status = GTEXT_CSV_OK;
+
+  if (!csv_stream_settle_bom(stream, &data, &len, final, &status)) {
+    if (status != GTEXT_CSV_OK && err) {
+      csv_error_copy(err, &stream->error);
+    }
+    return status;
+  }
+
+  // Drain the carry against the head of the chunk before touching the bulk of
+  // it. Each pass takes at most one byte from the chunk, so this terminates.
+  while (stream->carry_len > 0) {
+    char * joined = stream->join;
+    size_t n = stream->carry_len;
+    memcpy(joined, stream->carry, n);
+    stream->carry_len = 0;
+
+    if (len > 0) {
+      joined[n++] = *data;
+      data++;
+      len--;
+    }
+
+    size_t held = final ? 0 : csv_stream_undecided_tail(stream, joined, n);
+    if (held == n) {
+      // Still undecidable and nothing was gained: wait for the next feed.
+      memcpy(stream->carry, joined, held);
+      stream->carry_len = held;
+      return GTEXT_CSV_OK;
+    }
+
+    status = csv_stream_feed_settled(stream, joined, n - held, err);
+    if (status != GTEXT_CSV_OK) {
+      return status;
+    }
+    if (held > 0) {
+      memcpy(stream->carry, joined + n - held, held);
+      stream->carry_len = held;
+      if (len == 0) {
+        return GTEXT_CSV_OK; // Nothing left to decide it against.
+      }
+    }
+  }
+
+  if (len == 0) {
+    return GTEXT_CSV_OK;
+  }
+
+  size_t held = final ? 0 : csv_stream_undecided_tail(stream, data, len);
+  status = csv_stream_feed_settled(stream, data, len - held, err);
+  if (status != GTEXT_CSV_OK) {
+    return status;
+  }
+  if (held > 0) {
+    memcpy(stream->carry, data + len - held, held);
+    stream->carry_len = held;
+  }
+  return GTEXT_CSV_OK;
+}
+
+GTEXT_API GTEXT_CSV_Status gtext_csv_stream_feed(GTEXT_CSV_Stream * stream,
+    const void * data, size_t len, GTEXT_CSV_Error * err) {
+  if (!stream) {
+    CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Stream must not be NULL");
+    return GTEXT_CSV_E_INVALID;
+  }
+
+  if (stream->state == CSV_STREAM_STATE_END) {
+    if (err) {
+      csv_error_copy(err, &stream->error);
+    }
+    return stream->error.code != GTEXT_CSV_OK ? stream->error.code
+                                              : GTEXT_CSV_E_INVALID;
+  }
+
+  if (!data || len == 0) {
+    return GTEXT_CSV_OK;
+  }
+
+  return csv_stream_feed_carried(stream, (const char *)data, len, false, err);
+}
+
 GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
     GTEXT_CSV_Stream * stream, GTEXT_CSV_Error * err) {
   if (!stream) {
     CSV_SET_ERROR(err, GTEXT_CSV_E_INVALID, "Stream must not be NULL");
     return GTEXT_CSV_E_INVALID;
+  }
+
+  // Nothing more is coming, so anything held back is now decidable: a carried
+  // CR is a lone CR, and fewer than three leading bytes are not a BOM.  Feed
+  // them before drawing any conclusion about the parser's final state.
+  if ((stream->carry_len > 0 || !stream->bom_resolved) &&
+      stream->state != CSV_STREAM_STATE_END) {
+    GTEXT_CSV_Status status =
+        csv_stream_feed_carried(stream, NULL, 0, true, err);
+    if (status != GTEXT_CSV_OK) {
+      return status;
+    }
   }
 
   // Check for unterminated quote
@@ -326,8 +490,25 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
         return status;
       }
     }
-    // If we're at START_OF_FIELD, we haven't started a field yet, so don't emit
-    // one This prevents creating empty records from trailing newlines
+    else if (stream->state == CSV_STREAM_STATE_START_OF_FIELD) {
+      // A delimiter was the last thing in the input, so the record has one
+      // more field and it is empty: "a," is two fields, per RFC 4180 section 2
+      // rule 5, and only a newline ends a record.  Reaching this state cannot
+      // mean "just after a newline" - that leaves the parser in
+      // START_OF_RECORD with in_record clear - so there is no risk of
+      // inventing a field for a trailing line break.  Without this, a file not
+      // ending in a newline silently lost its last field: "a," parsed as the
+      // single field "a".
+      GTEXT_CSV_Status status =
+          csv_stream_emit_event(stream, GTEXT_CSV_EVENT_FIELD, "", 0);
+      if (status != GTEXT_CSV_OK) {
+        if (err) {
+          csv_error_copy(err, &stream->error);
+        }
+        return status;
+      }
+    }
+
     GTEXT_CSV_Status status =
         csv_stream_emit_event(stream, GTEXT_CSV_EVENT_RECORD_END, NULL, 0);
     if (status != GTEXT_CSV_OK) {

@@ -1747,6 +1747,13 @@ TEST(CsvStream, QuoteAtBoundaryFollowedByInvalidCharacter) {
 
 // Test 11: Very small chunks with complex sequences (byte-by-byte doubled
 // quote)
+//
+// This case asserted the wrong answer until September 2026. A doubled quote
+// is an escaped quote only *inside* a quoted field - "a""b" is a"b - whereas
+// a "" that opens a field is an empty field, which is what the table parser
+// and Python's csv module both report for "","field2". Fed one byte at a
+// time, the streaming parser used to emit a literal quote for the first
+// field, and this test pinned that. It now checks the two parsers agree.
 TEST(CsvStream, VerySmallChunksWithComplexSequences) {
   // Test: "","field2" split byte-by-byte
   // Chunk1: "
@@ -1785,9 +1792,26 @@ TEST(CsvStream, VerySmallChunksWithComplexSequences) {
 
   gtext_csv_stream_free(stream);
 
-  EXPECT_EQ(fields.size(), 2u);
-  EXPECT_EQ(fields[0], "\""); // Doubled quote becomes literal quote
+  ASSERT_EQ(fields.size(), 2u);
+  EXPECT_EQ(fields[0], ""); // "" opens and closes an empty field
   EXPECT_EQ(fields[1], "field2");
+
+  // The table parser is the oracle: chunking must not change the answer.
+  const char * whole = "\"\",\"field2\"\n";
+  GTEXT_CSV_Error terr;
+  memset(&terr, 0, sizeof(terr));
+  GTEXT_CSV_Table * table =
+      gtext_csv_parse_table(whole, strlen(whole), &opts, &terr);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(gtext_csv_row_count(table), 1u);
+  ASSERT_EQ(gtext_csv_col_count(table, 0), 2u);
+  size_t n0 = 0, n1 = 0;
+  const char * f0 = gtext_csv_field(table, 0, 0, &n0);
+  const char * f1 = gtext_csv_field(table, 0, 1, &n1);
+  EXPECT_EQ(std::string(f0 ? f0 : "", n0), fields[0]);
+  EXPECT_EQ(std::string(f1 ? f1 : "", n1), fields[1]);
+  gtext_csv_free_table(table);
+  gtext_csv_error_free(&terr);
 }
 
 // Test 12: Unquoted field ending at chunk boundary, quote in next chunk
@@ -12003,4 +12027,179 @@ TEST(CsvUtf8Validation, ReportsOffsetPastAStrippedBom) {
 		gtext_csv_free_table(table);
 	}
 	gtext_csv_error_free(&err);
+}
+
+/*
+ * Streaming robustness.
+ *
+ * gtext_csv_stream_feed() lets a caller feed a document in chunks of any size,
+ * which means the result must not depend on where the chunk boundaries fall,
+ * and the parser must not keep a pointer into a chunk after the call returns.
+ * Neither held. The helper below feeds through a scratch buffer that is
+ * overwritten between calls, the way a caller reading into a fixed buffer
+ * does; feeding consecutive slices of one long-lived array hides the whole
+ * class of defect, which is why it went unnoticed.
+ */
+namespace {
+
+struct CsvCapture {
+	std::vector<std::vector<std::string>> rows;
+};
+
+GTEXT_CSV_Status csv_capture_cb(const GTEXT_CSV_Event *event, void *user) {
+	CsvCapture *cap = static_cast<CsvCapture *>(user);
+	switch (event->type) {
+	case GTEXT_CSV_EVENT_RECORD_BEGIN:
+		cap->rows.emplace_back();
+		break;
+	case GTEXT_CSV_EVENT_FIELD:
+		if (cap->rows.empty()) {
+			cap->rows.emplace_back();
+		}
+		cap->rows.back().emplace_back(
+		    event->data ? event->data : "", event->data_len);
+		break;
+	default:
+		break;
+	}
+	return GTEXT_CSV_OK;
+}
+
+/** Feed `src` in chunks of `chunk` bytes through a buffer that is scribbled
+ *  over after every call. Returns the records, or nullopt on parse failure. */
+std::vector<std::vector<std::string>> csv_stream_chunked(const std::string &src,
+    size_t chunk, const GTEXT_CSV_Parse_Options *opts, bool *ok) {
+	CsvCapture cap;
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Stream *st = gtext_csv_stream_new(opts, csv_capture_cb, &cap);
+	EXPECT_NE(st, nullptr);
+	GTEXT_CSV_Status s = GTEXT_CSV_OK;
+	std::vector<char> scratch(chunk + 8);
+	for (size_t i = 0; i < src.size() && s == GTEXT_CSV_OK; i += chunk) {
+		size_t n = std::min(chunk, src.size() - i);
+		std::fill(scratch.begin(), scratch.end(), '\xDD');
+		memcpy(scratch.data(), src.data() + i, n);
+		s = gtext_csv_stream_feed(st, scratch.data(), n, &err);
+		std::fill(scratch.begin(), scratch.end(), '\xEE');
+	}
+	if (s == GTEXT_CSV_OK) {
+		s = gtext_csv_stream_finish(st, &err);
+	}
+	*ok = (s == GTEXT_CSV_OK);
+	gtext_csv_stream_free(st);
+	gtext_csv_error_free(&err);
+	return cap.rows;
+}
+
+/** The same document through the table parser, for comparison. */
+std::vector<std::vector<std::string>> csv_dom_rows(
+    const std::string &src, const GTEXT_CSV_Parse_Options *opts, bool *ok) {
+	std::vector<std::vector<std::string>> rows;
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table *t =
+	    gtext_csv_parse_table(src.data(), src.size(), opts, &err);
+	*ok = (t != nullptr);
+	if (t) {
+		for (size_t r = 0; r < gtext_csv_row_count(t); r++) {
+			rows.emplace_back();
+			for (size_t c = 0; c < gtext_csv_col_count(t, r); c++) {
+				size_t n = 0;
+				const char *f = gtext_csv_field(t, r, c, &n);
+				rows.back().emplace_back(f ? f : "", n);
+			}
+		}
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+	return rows;
+}
+
+} // namespace
+
+TEST(CsvStreamChunking, ResultDoesNotDependOnChunkSize) {
+	const std::string docs[] = {
+	    "a,b\n1,2\n",
+	    "a,b\r\n1,2\r\n",            // CRLF split between the CR and the LF
+	    "\xEF\xBB\xBF" "a,b\n",      // BOM split mid-sequence
+	    "\"\",\"\"\n",               // empty quoted fields
+	    "\"a\"\"b\",c\n",            // doubled quote split in half
+	    "\"a\nb\",c\n",              // newline inside quotes
+	    "a, b\n",                    // field beginning with a space
+	    "a,\xC3\xA9\n",              // multi-byte UTF-8 split mid-character
+	    "one,two,three\nfour,five,six\n",
+	    "a,b,",                      // trailing delimiter, no newline
+	};
+
+	for (const std::string &doc : docs) {
+		bool dom_ok = false;
+		auto expected = csv_dom_rows(doc, nullptr, &dom_ok);
+		ASSERT_TRUE(dom_ok) << "table parse failed for " << doc;
+
+		for (size_t chunk = 1; chunk <= doc.size() + 1; chunk++) {
+			bool ok = false;
+			auto got = csv_stream_chunked(doc, chunk, nullptr, &ok);
+			ASSERT_TRUE(ok) << "chunk=" << chunk << " doc=" << doc;
+			EXPECT_EQ(got, expected) << "chunk=" << chunk << " doc=" << doc;
+		}
+	}
+}
+
+TEST(CsvStreamChunking, CrlfSplitAcrossFeedsIsOneNewline) {
+	/* The CRLF test needs its own case because the failure was an error rather
+	   than a wrong value: with the CR at the end of one chunk, the pair was
+	   never recognized and the CR became a stray character in a field. */
+	const std::string doc = "a,b\r\n1,2\r\n";
+	bool ok = false;
+	auto rows = csv_stream_chunked(doc, 4, nullptr, &ok);
+	ASSERT_TRUE(ok) << "CR/LF split across the boundary must still parse";
+	ASSERT_EQ(rows.size(), 2u);
+	EXPECT_EQ(rows[0], (std::vector<std::string>{"a", "b"}));
+	EXPECT_EQ(rows[1], (std::vector<std::string>{"1", "2"}));
+}
+
+TEST(CsvStreamChunking, FieldsAreCopiedOutOfTheCallersBuffer) {
+	/* "a, " then "b" used to yield a field of " \0": the parser held a pointer
+	   into the first chunk and read it after the caller had reused the memory.
+	   Only the two quote states were buffered at a chunk boundary, and several
+	   early returns skipped even that. */
+	const std::string doc = "a, b\n";
+	bool ok = false;
+	auto rows = csv_stream_chunked(doc, 3, nullptr, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(rows.size(), 1u);
+	EXPECT_EQ(rows[0], (std::vector<std::string>{"a", " b"}));
+}
+
+TEST(CsvTrailingDelimiter, YieldsAFinalEmptyField) {
+	/* RFC 4180 section 2: only a line break ends a record, so a delimiter at
+	   end of input is followed by one more - empty - field. A file with no
+	   trailing newline silently lost it. Python's csv module agrees with the
+	   expectations below. */
+	struct Case {
+		const char *input;
+		std::vector<std::vector<std::string>> expected;
+	};
+	const Case cases[] = {
+	    {",", {{"", ""}}},
+	    {",,", {{"", "", ""}}},
+	    {"a,", {{"a", ""}}},
+	    {",a", {{"", "a"}}},
+	    {"a,b,", {{"a", "b", ""}}},
+	    {"a\nb,", {{"a"}, {"b", ""}}},
+	    {"a,b", {{"a", "b"}}},
+	    {"a,b,\n", {{"a", "b", ""}}},
+	};
+
+	for (const Case &c : cases) {
+		bool ok = false;
+		auto dom = csv_dom_rows(c.input, nullptr, &ok);
+		ASSERT_TRUE(ok) << c.input;
+		EXPECT_EQ(dom, c.expected) << "table parser, input " << c.input;
+
+		auto st = csv_stream_chunked(c.input, 1, nullptr, &ok);
+		ASSERT_TRUE(ok) << c.input;
+		EXPECT_EQ(st, c.expected) << "streaming parser, input " << c.input;
+	}
 }

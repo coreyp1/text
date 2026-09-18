@@ -25,6 +25,9 @@ void csv_field_buffer_clear(csv_field_buffer * fb) {
   fb->length = 0;
   fb->is_buffered = false;
   fb->needs_unescape = false;
+  // Without this the quoted-ness of one field leaked into the next, so the
+  // field after a quoted one was searched for doubled quotes to unescape.
+  fb->is_quoted = false;
   fb->start_offset = SIZE_MAX;
   fb->buffer_used = 0; // Reset buffer usage for reuse
   // Note: Don't free buffer here - reuse it

@@ -419,8 +419,13 @@ GTEXT_CSV_Status csv_stream_unquoted_process_bulk(GTEXT_CSV_Stream * stream,
       csv_stream_scan_unquoted_field_ahead(stream, process_input, process_len,
           byte_pos, &found_special, &special_char, &special_pos);
 
-  // Respect field length limit
-  size_t remaining_capacity = stream->max_field_bytes - stream->field.length;
+  // Respect field length limit.  Saturate rather than subtract blind: if the
+  // field has already reached the limit this wraps to a huge capacity, and the
+  // bulk append below then asks the allocator for it - the fuzzer reached a
+  // malloc of 12 GiB from an input of a few hundred bytes.
+  size_t remaining_capacity = stream->max_field_bytes > stream->field.length
+      ? stream->max_field_bytes - stream->field.length
+      : 0;
   if (safe_chars > remaining_capacity) {
     safe_chars = remaining_capacity;
     found_special = false; // We'll hit the limit instead
@@ -938,7 +943,13 @@ GTEXT_CSV_Status csv_stream_process_comment(GTEXT_CSV_Stream * stream,
 // Key insight: We only buffer FIELD DATA when it spans chunks, not the input
 // chunks themselves. This avoids the complexity of reprocessing and state
 // conflicts.
-GTEXT_CSV_Status csv_stream_process_chunk(
+/**
+ * @brief Run the state machine over one chunk.
+ *
+ * Returns from many points; csv_stream_process_chunk() wraps it so that the
+ * end-of-chunk bookkeeping happens whichever one fired.
+ */
+static GTEXT_CSV_Status csv_stream_process_chunk_inner(
     GTEXT_CSV_Stream * stream, const char * input, size_t input_len) {
   // Always process the chunk directly - no input buffering
   const char * process_input = input;
@@ -1094,6 +1105,43 @@ GTEXT_CSV_Status csv_stream_process_chunk(
     }
     // Field data is now buffered - return to wait for next chunk
     return GTEXT_CSV_OK;
+  }
+
+  return GTEXT_CSV_OK;
+}
+
+GTEXT_CSV_Status csv_stream_process_chunk(
+    GTEXT_CSV_Stream * stream, const char * input, size_t input_len) {
+  GTEXT_CSV_Status status =
+      csv_stream_process_chunk_inner(stream, input, input_len);
+  if (status != GTEXT_CSV_OK) {
+    return status;
+  }
+
+  // A field still open when the chunk runs out must be copied out of the
+  // caller's buffer before returning.  gtext_csv_stream_feed() lets a caller
+  // feed from anywhere, and the usual pattern is one scratch array refilled
+  // per read, so the pointer this parser was holding into the previous chunk
+  // named whatever the caller wrote next.  "a, " followed by "b" yielded a
+  // field of " \0" instead of " b".
+  //
+  // The two quote states were already buffered at the bottom of the worker,
+  // but the ordinary field states were not, and several of the worker's early
+  // returns skipped even that.  Doing it here covers every exit.
+  //
+  // Not on the table-parsing path: there the whole document was handed over in
+  // one buffer that outlives the parse, which is what in-situ mode relies on,
+  // and copying out of it would both defeat that and disturb the field
+  // bookkeeping the table builder depends on.
+  if (!stream->original_input_buffer
+      && (stream->state == CSV_STREAM_STATE_UNQUOTED_FIELD
+          || stream->state == CSV_STREAM_STATE_QUOTED_FIELD
+          || stream->state == CSV_STREAM_STATE_QUOTE_IN_QUOTED
+          || stream->state == CSV_STREAM_STATE_ESCAPE_IN_QUOTED)) {
+    status = csv_field_buffer_ensure_buffered(&stream->field);
+    if (status != GTEXT_CSV_OK) {
+      return status;
+    }
   }
 
   return GTEXT_CSV_OK;
