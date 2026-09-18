@@ -100,7 +100,7 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1750 tests across 68 binaries with zero failures, clean
+The test suite runs 1125 tests across 66 binaries with zero failures, clean
 under valgrind and under ASan/UBSan. Three libFuzzer harnesses cover the three
 parsers; `tests/fuzz/README.md` records what they have found.
 
