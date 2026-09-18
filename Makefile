@@ -289,7 +289,14 @@ all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build the shared and st
 
 # Explicit list of dependency files (no wildcard: same set on all platforms, faster make startup).
 TEST_DEPFILES := $(addprefix $(APP_DIR)/,$(addsuffix .d,$(TEST_NAMES)))
-DEPFILES := $(LIBOBJECTS:.o=.d) $(TEST_DEPFILES)
+# The ASan build needs these as much as the release build does.  Without them
+# a header change rebuilds nothing under release-asan, and the stale objects
+# disagree with the freshly built ones about struct layout - which shows up as
+# an AddressSanitizer report in code that is correct, and can equally hide a
+# report in code that is not.
+ASAN_TEST_DEPFILES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix .d,$(TEST_NAMES)))
+DEPFILES := $(LIBOBJECTS:.o=.d) $(TEST_DEPFILES) \
+	$(ASAN_LIBOBJECTS:.o=.d) $(ASAN_TEST_DEPFILES)
 -include $(DEPFILES)
 
 
@@ -430,7 +437,7 @@ endif
 $(ASAN_OBJ_DIR)/%.o: src/%.c
 	@printf "\n### Compiling (ASan+UBSan instrumented): $< ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
+	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 # ASan-instrumented shared library
 # The soname has to name this file, not the release library's.  Using
@@ -451,7 +458,7 @@ $(ASAN_APP_DIR)/$2$(EXE_EXTENSION): \
 		| $(ASAN_APP_DIR)/$(ASAN_TARGET)
 	@printf "\n### Compiling ASan+UBSan %s Test ###\n" "$2"
 	@mkdir -p $$(@D)
-	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
+	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(ASAN_APP_DIR)/$2.d -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
 endef
 
 # Generate ASAN build rules from TEST_PAIRS
