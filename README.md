@@ -139,3 +139,7 @@ Cross-compiler macros live in `include/ghoti.io/text/macros.h`:
 
 See [the Core module page](@ref core_module) for the version API and the
 platform notes.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

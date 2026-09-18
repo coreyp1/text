@@ -22,7 +22,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 
 | # | Finding | Scope | Severity |
 |---|---|---|---|
-| 1 | No `LICENSE` file, so the terms of use are undefined | suite-wide | blocks all adoption |
+| 1 | ~~No `LICENSE` file~~ **fixed here**; still open for five others | suite-wide | was: blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
@@ -37,9 +37,14 @@ repository alone. See section 12 of `CONVENTIONS.md` for why.
 
 ---
 
-## 1. The license is the first blocker
+## 1. The license was the first blocker - fixed here
 
-There is no `LICENSE` file in this repository. Source files carry
+**`text` now carries an MIT `LICENSE`**, copied from `cutil/LICENSE` with the
+year changed, which is what `CONVENTIONS.md` specifies. The README names it.
+The other five libraries without one - `image`, `compress`, `model`, `ctang`
+and `cjelly` - are item 7 in the suite TODO.
+
+As found: there was no `LICENSE` file in this repository. Source files carry
 `Copyright 2026 by Corey Pennycuff` and no grant of any kind, which under
 default copyright means no one may use the library at all.
 

@@ -925,7 +925,8 @@ section 7.
 
 ## 17. License
 
-Copyright 2026 by Corey Pennycuff
+MIT. Copyright 2026 by Corey Pennycuff. The full text is in `LICENSE` at the
+root of the repository.
 
 Part of the ghoti.io text library.
 
