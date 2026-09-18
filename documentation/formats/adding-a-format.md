@@ -1,0 +1,141 @@
+@page format_adding Adding a format
+
+# Adding a format
+
+The documentation half of adding a parser. The code half - the headers, the
+option struct, the streaming and DOM entry points, the namespace block and
+the limits contract - is in \ref core_module "the Core module page" and in
+the suite `CONVENTIONS.md`; this page is about what the format's page must
+answer before the parser is considered finished.
+
+One format, one page, under `documentation/formats/`. A format does not share
+a page with another one: the two grow at different rates, their checklists
+answer different questions, and a reader looking for one of them should not
+have to scroll past the other.
+
+The format pages are not the module pages. \ref modules "Modules" documents
+the API - how to call it, what the options are, what the examples do. The
+format pages document the *format* - which specification, which clauses,
+which deviations, and what evidence exists for each claim. A sentence that
+would still be true if the library were rewritten in another language belongs
+on a format page.
+
+## Checklist
+
+- [ ] `documentation/formats/<format>.md` exists, opens with
+      `@page format_<format> <Title>`, and is linked from the table in
+      \ref format_references "Format and specification references".
+- [ ] The specification is **named with its version and date** and linked.
+      A format with no formal standard says so and links what documentation
+      there is; where that documentation is silent, the page states what the
+      parser does and why, because that decision is now the specification as
+      far as this library is concerned.
+- [ ] Every claim of support says which clause or production it refers to.
+      "Supports Unicode" is not a claim anyone can check; "surrogate pairs
+      per RFC 8259 §7, lone surrogates rejected with
+      `GTEXT_JSON_E_BAD_UNICODE`" is.
+- [ ] Every rejection names the status code it returns, and why that
+      malformation is refused rather than recovered from.
+- [ ] Every default is stated as a value, in a table. An option documented
+      without its default is an option the reader has to go and read the
+      source for.
+- [ ] Deviations from reference parsers are **listed as cases**, each with a
+      reproduction. A deviation nobody has written down is a defect waiting
+      to be reported as one by somebody else.
+- [ ] Tested scope says where the fixtures come from, how they were
+      generated, which external oracle checked which claim, and **where each
+      oracle's reach ends**. A round trip through this library alone proves
+      the parser and writer consistent with each other, not correct; say so
+      where that is all there is.
+- [ ] The gaps are listed. Absences are cheap to write down while they are
+      fresh and expensive to rediscover.
+- [ ] The module page and any option tables are updated for whatever the
+      format adds.
+- [ ] The parent `README.md` lists the format among the ones with a parser -
+      and does not list it before there is one.
+
+## Page template
+
+```markdown
+@page format_<format> <Title>
+
+# <Title>
+
+One paragraph: what the parser implements, that the claims below were
+checked, and a link back to the format index.
+
+## Normative references
+
+- **Specification:** <name, version, date, link>
+- <the individually linked parts, if the document is split>
+
+Which allocator owns what, and which free function releases it.
+
+## Parts implemented
+
+Bullets, one per structural area: grammar productions, encodings, extensions,
+metadata. Each cites its clause.
+
+## Limits
+
+A table of option and default value.
+
+## Save
+
+What the writer chooses and why; which options change it; what it never
+writes.
+
+## Compliance checklist
+
+| Area | Supported | Rejected / limitation |
+|------|-----------|-----------------------|
+
+## Deviations
+
+| Case | This parser | Elsewhere |
+|---|---|---|
+
+## Tested scope
+
+Fixtures and their generator; the oracles and the reach of each; the fuzz
+harnesses; the properties asserted without an oracle.
+
+## Not implemented
+
+What is absent, and what closing each gap would take.
+```
+
+Open and close the page with a link back to the index, written as
+`format_references` in a Doxygen reference command - the first in the opening
+paragraph, the last on its own line after a horizontal rule.
+
+## Why the tested-scope section is not optional
+
+The value of these pages is that a claim on them can be traced to something
+that runs. The JSON page can name the status code returned for each malformed
+input because each one was parsed and the result recorded. The CSV page can
+say that `validate_utf8` does not validate UTF-8 because the claim was
+checked rather than the code path read. The YAML page can give a
+seven-row table of plain scalars that a reference parser and this one
+disagree about - and can say that the YAML test suite has never been run, so
+nobody knows how long that table really is.
+
+That last sentence is the most useful one on any of the three pages. A format
+page that only lists features is a marketing document. Name the oracle, name
+its limit, and name what nothing checks.
+
+## Where a limitations document goes
+
+It goes in the format page, under **Deviations** and **Not implemented**.
+
+Not in a separate file. `documentation/YAML-LIMITATIONS.md` was a 504-line
+standalone status document with no `@page` directive, which meant Doxygen
+never rendered it and nothing linked to it. Because nothing linked to it,
+nothing kept it honest: by the time it was folded into
+\ref format_yaml "the YAML page" it described merge keys, DOM mutation, node
+cloning, YAML-to-JSON conversion and the fuzzing infrastructure as
+unimplemented, all five having shipped, and led with a critical bug whose
+description no longer matched the defect that was actually still there.
+
+A limitations list that lives next to the feature list gets corrected when
+the feature list does.

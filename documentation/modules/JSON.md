@@ -6,6 +6,12 @@ This document describes the **full‑featured JSON parsing/writing library in C*
 
 ---
 
+@note This page documents the **API**. For the specification-level view -
+which RFC clauses are implemented, what each malformed input returns, the
+deviations from other parsers, and what evidence backs each claim - see
+\ref format_json "JSON" under
+\ref format_references "Format and specification references".
+
 ## 1. Overview
 
 The JSON module provides comprehensive JSON processing capabilities with support for strict RFC 8259 / ECMA‑404 compliance, extended JSON modes, multiple parsing and writing models, and advanced features like JSON Pointer, Patch, and Schema validation.
@@ -54,7 +60,8 @@ The parser correctly handles values (strings, numbers) that span multiple chunks
 - **Total bytes limit**: Limited by `max_total_bytes` option (default: 64MB, configurable)
 - **State preservation**: Incomplete values are buffered until completion
 - **Examples**:
-  - String: `"hello` (chunk 1) + `world"` (chunk 2) → correctly parses as `"helloworld"`
+  - String: a quoted scalar split as `hello` / `world` across two chunks is
+    reassembled into the single value `helloworld`
   - Number: `12345` (chunk 1) + `.678` (chunk 2) → correctly parses as `12345.678`
   - Escape sequences and Unicode escapes also work correctly across chunks
 
@@ -260,7 +267,7 @@ Schemas are compiled once and can be reused for validating multiple instances.
 
 ### 12.2 Omitted Features
 
-This core subset is sufficient for many validation use cases while keeping the implementation focused and maintainable. For a complete list of omitted JSON Schema features that are planned for future releases, see [Section 17.1: Additional JSON Schema Keywords](#171-additional-json-schema-keywords).
+This core subset is sufficient for many validation use cases while keeping the implementation focused and maintainable. For a complete list of omitted JSON Schema features that are planned for future releases, see section 17.1, "Additional JSON Schema Keywords", below.
 
 ---
 
@@ -362,11 +369,11 @@ JSONPath support would complement the existing JSON Pointer functionality and pr
 
 ---
 
-## 15. Security Considerations
+## 18. Security Considerations
 
 The JSON library implements comprehensive defensive programming practices to ensure memory safety, prevent undefined behavior, and handle malicious or malformed input gracefully.
 
-### 15.1 Integer Overflow Protection
+### 18.1 Integer Overflow Protection
 
 All arithmetic operations throughout the library are protected against integer overflow and underflow:
 
@@ -388,7 +395,7 @@ The library uses shared utility functions from `json_utils.c` for consistent ove
 - Container element counts are validated against limits
 - Total bytes consumed are tracked with overflow protection
 
-### 15.2 Bounds Checking
+### 18.2 Bounds Checking
 
 All array and buffer accesses are protected with defensive bounds checking:
 
@@ -403,7 +410,7 @@ All array and buffer accesses are protected with defensive bounds checking:
 - Lexer and parser validate buffer offsets before reading
 - Stream operations validate stack indices before access
 
-### 15.3 NULL Pointer Handling
+### 18.3 NULL Pointer Handling
 
 All functions implement comprehensive NULL pointer checks:
 
@@ -418,7 +425,7 @@ All functions implement comprehensive NULL pointer checks:
 - `gtext_json_stream_free()` safely handles NULL (no-op)
 - All accessor functions validate value pointers before access
 
-### 15.4 Input Validation
+### 18.4 Input Validation
 
 Comprehensive input validation is performed at all API boundaries:
 
@@ -433,7 +440,7 @@ Comprehensive input validation is performed at all API boundaries:
 - String length limits are enforced during parsing
 - Container element limits are enforced during parsing
 
-### 15.5 Error Handling
+### 18.5 Error Handling
 
 The library provides comprehensive error handling with detailed diagnostics:
 
@@ -449,7 +456,7 @@ The library provides comprehensive error handling with detailed diagnostics:
 - Error messages are descriptive and actionable
 - Error cleanup is automatic (no resource leaks on error)
 
-### 15.6 Resource Management
+### 18.6 Resource Management
 
 The library implements safe resource management patterns:
 
@@ -464,7 +471,7 @@ The library implements safe resource management patterns:
 - Error context snippets are freed via `gtext_json_error_free()`
 - All cleanup functions handle NULL gracefully
 
-### 15.7 Testing and Validation
+### 18.7 Testing and Validation
 
 The library includes comprehensive test coverage for security-critical scenarios:
 
@@ -481,7 +488,7 @@ The library includes comprehensive test coverage for security-critical scenarios
 - All error handling paths are tested
 - Memory safety is validated with Valgrind
 
-### 15.8 Best Practices for Users
+### 18.8 Best Practices for Users
 
 When using the JSON library, follow these security best practices:
 

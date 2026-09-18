@@ -10,29 +10,38 @@ This document describes the **YAML parsing library in C** implemented in the `te
 
 The YAML module provides YAML 1.2.2 processing capabilities with support for streaming parsing, anchors/aliases, comprehensive error handling, and writer/serialization.
 
-### Current Status (February 2026)
+### Current status
 
-**Implemented:**
-- ✅ Streaming parser with event callbacks
-- ✅ UTF-8 validation and handling
-- ✅ Scalar styles (plain, single-quoted, double-quoted, literal `|`, folded `>`)
-- ✅ Flow and block collections (sequences `[]` and mappings `{}`)
-- ✅ Anchors (`&anchor`) and aliases (`*anchor`)
-- ✅ Multi-document streams (`---` and `...`)
-- ✅ Comprehensive limit enforcement
-- ✅ Memory-safe operation (zero leaks, valgrind-clean)
-- ✅ DOM parser with accessors, mutation, and cloning
-- ✅ Writer/serialization for DOM and streaming events
-- ✅ 951 comprehensive tests with real-world YAML examples
-- ✅ `%YAML` and `%TAG` directives with tag handle resolution
-- ✅ Schema-based implicit typing (Failsafe, JSON, Core)
-- ✅ Standard type tags (`!!timestamp`, `!!set`, `!!omap`, `!!pairs`) with validation
+Alpha. The API may change before 1.0.
 
-**Planned:**
-- ⏳ YAML 1.1 compatibility mode
-- ⏳ Merge keys (`<<`)
-- ⏳ Binary scalar support (`!!binary`)
-- ⏳ Custom tag resolution for application-defined types
+**Implemented:** the streaming parser with event callbacks, a pull-model
+reader, a DOM parser with accessors, mutation and cloning, and a writer for
+both DOM and streaming events. All five scalar styles, block and flow
+collections, anchors and aliases with cycle detection, merge keys (`<<`),
+multi-document streams, `%YAML` and `%TAG` directives, schema-based implicit
+typing (Failsafe, JSON, Core), YAML 1.1 compatibility mode, `!!binary`,
+the `!!timestamp`/`!!set`/`!!omap`/`!!pairs` types with validation, custom
+application tags, UTF-8/16/32 input with BOM detection, limit enforcement,
+and conversion to JSON.
+
+**Known defect:** a block-context plain scalar containing ` - `, ` , ` or
+` : ` is silently truncated at the indicator. Quote such values. The case
+table and the reference-parser comparison are on
+\ref format_yaml "the YAML format page".
+
+**Unmeasured:** the [YAML test suite](https://github.com/yaml/yaml-test-suite)
+has never been run against this parser, so conformance to 1.2.2 is not
+partial - it is unknown outside the cases the tests below cover. There are no
+benchmarks.
+
+**Verified:** the suite runs 1750 tests across 68 binaries with zero
+failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
+that has found two scanner hangs, a use-after-free and several leaks.
+
+For the specification-level detail - which clauses are implemented, the
+deviations, and what evidence backs each claim - see
+\ref format_yaml "YAML" under
+\ref format_references "Format and specification references".
 
 ### Core Capabilities
 
@@ -88,32 +97,14 @@ status = gtext_yaml_stream_finish(stream);
 gtext_yaml_stream_free(stream);
 ```
 
-opts.dupkeys = GTEXT_YAML_DUPKEY_LAST_WINS;  // Allow duplicate keys, last wins
-
-
-### 3.3 Schema and Tag Resolution
-
-The resolver supports schema-based implicit typing and explicit tag handling.
-
-- **`schema`**: Selects the implicit typing rules.
-  - `GTEXT_YAML_SCHEMA_FAILSAFE`: All scalars remain strings.
-  - `GTEXT_YAML_SCHEMA_JSON`: JSON-compatible null/bool/int/float/string.
-  - `GTEXT_YAML_SCHEMA_CORE`: YAML core schema (includes `.nan`, `.inf`, etc.).
-- **`resolve_tags`**: When disabled, preserves explicit tags and keeps scalars as strings.
-- **`yaml_1_1`**: When enabled, apply YAML 1.1 implicit typing (yes/no/on/off, 0755 octal, sexagesimal). This is also enabled automatically when a `%YAML 1.1` directive is present.
-
-```c
-GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
-opts.schema = GTEXT_YAML_SCHEMA_JSON;
-opts.resolve_tags = true;
-```
 The parser correctly handles values (strings, numbers, collections) that span multiple chunks. When a value is incomplete at the end of a chunk, the parser preserves state and waits for more input.
 
 - **No chunk count limit**: Values can span 2, 3, 100, or more chunks
 - **Total bytes limit**: Limited by `max_total_bytes` option (default: 64MB)
 - **State preservation**: Incomplete values are buffered until completion
 - **Examples**:
-  - String: `"hello` (chunk 1) + ` world"` (chunk 2) → correctly parses as `"hello world"`
+  - String: a quoted scalar split as `hello` / ` world` across two chunks is
+    reassembled into the single value `hello world`
   - Number: `12345` (chunk 1) + `.678` (chunk 2) → correctly parses as `12345.678`
   - Collections spanning chunks work correctly with proper state tracking
 
@@ -220,7 +211,24 @@ GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
 opts.dupkey_mode = GTEXT_YAML_DUPKEY_LAST_WINS;  // Allow duplicate keys, last wins
 ```
 
-### 3.3 Safe Mode
+### 3.3 Schema and Tag Resolution
+
+The resolver supports schema-based implicit typing and explicit tag handling.
+
+- **`schema`**: Selects the implicit typing rules.
+  - `GTEXT_YAML_SCHEMA_FAILSAFE`: All scalars remain strings.
+  - `GTEXT_YAML_SCHEMA_JSON`: JSON-compatible null/bool/int/float/string.
+  - `GTEXT_YAML_SCHEMA_CORE`: YAML core schema (includes `.nan`, `.inf`, etc.).
+- **`resolve_tags`**: When disabled, preserves explicit tags and keeps scalars as strings.
+- **`yaml_1_1`**: When enabled, apply YAML 1.1 implicit typing (yes/no/on/off, 0755 octal, sexagesimal). This is also enabled automatically when a `%YAML 1.1` directive is present.
+
+```c
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+opts.schema = GTEXT_YAML_SCHEMA_JSON;
+opts.resolve_tags = true;
+```
+
+### 3.4 Safe Mode
 
 Safe mode configures parsing for untrusted input by disabling potentially
 dangerous or surprising features and restricting mapping keys to strings.
@@ -253,7 +261,7 @@ For manual control, the relevant toggles are:
 - `allow_nonstandard_tags`
 - `enable_custom_tags`
 
-### 3.4 JSON Fast Path
+### 3.5 JSON Fast Path
 
 JSON is a valid subset of YAML. When the input begins with `{` or `[` and
 appears JSON-compatible, the parser attempts a JSON fast path for improved
@@ -386,7 +394,7 @@ special: "Tab:\t Quote:\" Backslash:\\"
 
 Double-quoted scalars support escape sequences:
 - `\\` - Backslash
-- `\"` - Quote
+- `\` followed by a double quote - Quote
 - `\n` - Newline
 - `\t` - Tab
 - `\r` - Carriage return
@@ -781,7 +789,8 @@ jobs:
 
 ## 13. Testing
 
-The YAML module includes 781 comprehensive tests covering:
+The YAML module is covered by 61 test files, part of a suite that runs
+1750 tests across 68 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -802,16 +811,29 @@ All tests pass with zero memory leaks (valgrind-verified).
 
 ### Planned Features
 
-- **Comment Preservation**: Maintain comments for round-trip editing
-- **Source Location Tracking**: Attach line/column info to DOM nodes
-- **Scalar Style Preservation**: Preserve scalar styles during round-trip
-- **YAML to JSON Conversion**: Provide a lossless conversion utility
+- **Comment preservation on write**: comments can be retained in the DOM
+  (`retain_comments`) but are not re-emitted by the writer.
+- **Scalar style preservation**: a parse-write cycle normalizes style, so a
+  round trip is semantically faithful but not textually faithful.
+- **YAML test suite integration**: see below - the largest single gap.
+- **Benchmarks**: parsing speed and memory use are unmeasured.
+
+Source location tracking and YAML-to-JSON conversion were previously listed
+here as planned; both have shipped, as
+`gtext_yaml_node_source_location()` and `gtext_yaml_to_json()`.
 
 ### Compatibility
 
-- The parser aims for YAML 1.2.2 compliance
-- Currently implements core features sufficient for common use cases
-- Extensions and advanced features being added incrementally
+The parser targets YAML 1.2.2. How closely it hits that target is **not
+known**: the [YAML test suite](https://github.com/yaml/yaml-test-suite) has
+never been run against it, and no differential testing against libyaml or
+PyYAML is automated. One deviation has been characterized by hand - plain
+scalars truncate at an embedded ` - `, ` , ` or ` : ` - and it was found
+within the first handful of inputs tried, which is the best available
+evidence that a real corpus would find more.
+
+See \ref format_yaml "the YAML format page" for the deviation table and the
+full statement of tested scope.
 
 ---
 
@@ -892,4 +914,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test Count:** 781 tests, all passing
+**Test count:** 1750 tests across 68 binaries, all passing

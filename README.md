@@ -1,108 +1,131 @@
 # Ghoti.io Text Library
 
-A C library for parsing and serializing text-based file formats, including JSON, CSV, YAML, and configuration formats.
+A C library for parsing and serializing structured text formats. It provides
+three parsers - JSON, CSV and YAML - each with a DOM model, a streaming model
+and a writer, sharing one result-code, allocation and limits contract.
 
-## Overview
+## Example
 
-The `text` library provides:
-- **JSON** - Fast, spec-compliant JSON parsing and serialization
-- **CSV** - RFC 4180 compliant CSV reader/writer
-- **YAML** - Streaming YAML 1.2 parser (DOM builder in progress)
-- **Config** - INI/TOML-like configuration format support
-- **Text encoding** - UTF-8 validation and encoding helpers
+```c
+#include <ghoti.io/text/json.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+  const char *src = "{\"name\":\"ghoti\",\"version\":[0,0,0]}";
+
+  GTEXT_JSON_Error err = {0};
+  GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+  GTEXT_JSON_Value *doc = gtext_json_parse(src, strlen(src), &opts, &err);
+  if (!doc) {
+    fprintf(stderr, "%s at line %d, column %d\n", err.message, err.line, err.col);
+    gtext_json_error_free(&err);
+    return 1;
+  }
+
+  const char *name = NULL;
+  size_t name_len = 0;
+  if (gtext_json_get_string(gtext_json_object_get(doc, "name", strlen("name")), &name, &name_len)
+      == GTEXT_JSON_OK) {
+    printf("%.*s\n", (int)name_len, name);
+  }
+
+  gtext_json_free(doc);
+  return 0;
+}
+```
 
 ## Dependencies
 
-- None beyond libc (Google Test is required only to build the test suite)
+None beyond libc. Google Test is required only to build the test suite, and
+clang only to build the fuzzers.
 
 ## Building
 
 ```bash
 make
-```
-
-## Testing
-
-```bash
 make test
-```
-
-## Installation
-
-```bash
 sudo make install
 ```
 
-## Usage
+`make help` lists every target. `make docs` builds the Doxygen manual into
+`docs/`.
 
-See the examples directory for usage examples.
+## The API
 
-### YAML File I/O Example
+Each format lives behind one header - `ghoti.io/text/json.h`,
+`ghoti.io/text/csv.h`, `ghoti.io/text/yaml.h` - and follows the same shape.
 
-```c
-#include <ghoti.io/text/yaml.h>
+**Parsing** has two models. The DOM parsers (`gtext_json_parse()`,
+`gtext_csv_parse_table()`, `gtext_yaml_parse()`) take a buffer and return an
+owned tree, freed by the format's free function. The streaming parsers take
+input in chunks of any size and deliver events through callbacks, for inputs
+too large to hold or arriving from a socket. YAML additionally offers a
+pull-model reader.
 
-GTEXT_YAML_Error err = {};
-GTEXT_YAML_Document *doc = gtext_yaml_parse_file("config.yaml", NULL, &err);
-if (!doc) {
-    /* Handle parse error */
-}
+**Options** are plain structs obtained from a `*_options_default()` function
+and modified before use, never global state. They carry the dialect or
+strictness settings, the resource limits, and the error-reporting detail
+level. `gtext_yaml_parse_options_safe()` returns a hardened variant for
+untrusted input.
 
-/* Modify doc or inspect values here */
+**Limits** are enforced by every parser - nesting depth, total input size,
+and per-format limits on string length, element counts, row and column
+counts. Each has a documented default rather than being unbounded.
 
-GTEXT_YAML_Status status = gtext_yaml_write_file("out.yaml", doc, NULL, &err);
-gtext_yaml_free(doc);
-```
+**Errors** come back as a status code plus a struct carrying byte offset,
+line and column, and optionally a context snippet with a caret. Snippets are
+owned by the caller and released with the format's `*_error_free()`.
+
+**Writing** mirrors parsing: serialize a DOM, or drive a streaming writer
+with events. Write options control formatting, escaping and canonical output.
+
+JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and a
+core subset of JSON Schema. YAML implements anchors and aliases, merge keys,
+multi-document streams, tag resolution and conversion to JSON.
 
 ## Documentation
 
-- [Modules](@ref modules) - Detailed documentation for JSON, CSV, and YAML modules
-- [Examples](@ref examples) - Example programs demonstrating library usage
-- [Function Index](@ref functions_index) - Complete API reference
+- [Modules](@ref modules) — the API, per module
+- [Format and specification references](@ref format_references) — which
+  specification each parser implements, its deviations, and the evidence
+- [Examples](@ref examples) — example programs
+- [Function Index](@ref functions_index) — complete API reference
 
-## Module Status
+## Status
 
-### JSON (Production Ready)
-- ✅ Complete DOM parser and serializer
-- ✅ Streaming parser and writer
-- ✅ Comprehensive test coverage (100+ tests)
-- ✅ Zero memory leaks verified with valgrind
-- ✅ Full JSON spec compliance
+The test suite runs 1750 tests across 68 binaries with zero failures, clean
+under valgrind and under ASan/UBSan. Three libFuzzer harnesses cover the three
+parsers; `tests/fuzz/README.md` records what they have found.
 
-### CSV (Production Ready)
-- ✅ RFC 4180 compliant reader and writer
-- ✅ Configurable delimiters and quoting
-- ✅ Comprehensive test coverage
-- ✅ Memory safe and validated
+**JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
+Exact number round-tripping through lexeme preservation. No external
+conformance corpus is wired up, so read
+[the JSON page](@ref format_json) before relying on the phrase "spec
+compliant".
 
-### YAML (Alpha - In Active Development)
-- ✅ Streaming parser with event callbacks
-- ✅ UTF-8 validation
-- ✅ Anchor/alias resolution with cycle detection
-- ✅ Multi-document stream support
-- ✅ Security limits (depth, bytes, alias expansion)
-- ✅ Memory safe (781 tests pass valgrind with zero leaks)
-- ✅ DOM builder with accessors and mutation
-- ✅ Writer/serializer for DOM and streaming events
-- ⏳ Full YAML 1.2 spec compliance (in progress)
+**CSV — stable.** RFC 4180 by default, with configurable dialects and
+support for ragged rows. One known defect: the `validate_utf8` option does
+not validate UTF-8. See [the CSV page](@ref format_csv).
 
-See [YAML Module Documentation](@ref yaml_module) for detailed status and usage.
+**YAML — alpha.** Block and flow collections, all five scalar styles,
+anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
+input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
+conversion. The API may change before 1.0. One known data-loss defect: a
+plain scalar containing ` - `, ` , ` or ` : ` is silently truncated, so
+quote such values. The YAML test suite has never been run against this
+parser, which means conformance is unmeasured rather than partial. See
+[the YAML page](@ref format_yaml).
 
 ## Macros and Utilities
 
-The library provides cross-compiler macros in `include/ghoti.io/text/macros.h`:
+Cross-compiler macros live in `include/ghoti.io/text/macros.h`:
 
-- `GTEXT_MAYBE_UNUSED(X)` - Mark unused function parameters
-- `GTEXT_DEPRECATED` - Mark deprecated functions
-- `GTEXT_API` - Mark functions for library export
-- `GTEXT_ARRAY_SIZE(a)` - Get compile-time array size
-- `GTEXT_BIT(x)` - Create bitmask with bit x set
+- `GTEXT_MAYBE_UNUSED(X)` — mark unused function parameters
+- `GTEXT_DEPRECATED` — mark deprecated functions
+- `GTEXT_API` — mark functions for library export
+- `GTEXT_ARRAY_SIZE(a)` — compile-time array size
+- `GTEXT_BIT(x)` — bitmask with bit x set
 
-Example:
-```c
-#include <ghoti.io/text/macros.h>
-
-void my_function(int GTEXT_MAYBE_UNUSED(param)) {
-    // param is intentionally unused
-}
-```
+See [the Core module page](@ref core_module) for the version API and the
+platform notes.

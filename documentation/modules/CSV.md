@@ -8,6 +8,12 @@ CSV in the wild is not a single format. This module supports a **strict RFC 4180
 
 ---
 
+@note This page documents the **API**. For the specification-level view -
+RFC 4180 conformance, what each dialect option actually means, the known
+defect in `validate_utf8`, and what evidence backs each claim - see
+\ref format_csv "CSV" under
+\ref format_references "Format and specification references".
+
 ## 1. Overview
 
 The CSV module provides comprehensive CSV processing capabilities with support for strict RFC 4180 compliance, configurable dialects, multiple parsing and writing models, and advanced features like header processing and zero-copy parsing.
@@ -70,15 +76,15 @@ The library provides extensive configuration options for parsing behavior:
 The dialect defines the exact format rules for parsing and writing CSV:
 
 - **`delimiter`**: Field delimiter — **Default: `','`**
-- **`quote`**: Quote character — **Default: `'"'`**
+- **`quote`**: Quote character — **Default: the double-quote character**
 - **`escape`**: Escape mode:
   - `GTEXT_CSV_ESCAPE_DOUBLED_QUOTE`: Escape quotes by doubling (`""`) — **Default**
-  - `GTEXT_CSV_ESCAPE_BACKSLASH`: Escape quotes with backslash (`\"`)
+  - `GTEXT_CSV_ESCAPE_BACKSLASH`: Escape quotes with a backslash
   - `GTEXT_CSV_ESCAPE_NONE`: No escaping
 - **`newline_in_quotes`**: Allow newlines inside quoted fields — **Default: `true`**
 - **`accept_lf`**: Accept LF (`\n`) as newline — **Default: `true`**
-- **`accept_crlf`**: Accept CRLF (`\r\n`) as newline — **Default: `true`**
-- **`accept_cr`**: Accept CR (`\r`) as newline — **Default: `false`**
+- **`accept_crlf`**: Accept CRLF as newline — **Default: `true`**
+- **`accept_cr`**: Accept a bare CR as newline — **Default: `false`**
 - **`trim_unquoted_fields`**: Trim whitespace from unquoted fields — **Default: `false`**
 - **`allow_space_after_delimiter`**: Allow spaces after delimiter — **Default: `false`**
 - **`allow_unquoted_quotes`**: Allow quotes in unquoted fields — **Default: `false`**
