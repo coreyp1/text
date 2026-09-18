@@ -426,6 +426,17 @@ GTEXT_CSV_Status csv_stream_unquoted_process_bulk(GTEXT_CSV_Stream * stream,
   size_t remaining_capacity = stream->max_field_bytes > stream->field.length
       ? stream->max_field_bytes - stream->field.length
       : 0;
+
+  // No room left means no progress is possible: taking the branch below with
+  // safe_chars of zero returns success having consumed nothing, and the
+  // caller's loop then calls straight back in.  That spun until the unrelated
+  // record-byte limit tripped - 64 MiB of counting for a fifteen byte input,
+  // most of a second - so say so here instead.
+  if (remaining_capacity == 0) {
+    return csv_stream_set_error(
+        stream, GTEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
+  }
+
   if (safe_chars > remaining_capacity) {
     safe_chars = remaining_capacity;
     found_special = false; // We'll hit the limit instead
@@ -785,7 +796,21 @@ GTEXT_CSV_Status csv_stream_process_quote_in_quoted(GTEXT_CSV_Stream * stream,
     if (status != GTEXT_CSV_OK) {
       return status;
     }
+    if (nl == CSV_NEWLINE_NONE && byte_pos + 1 < process_len) {
+      // The character after a closing quote must be a quote, a delimiter or a
+      // newline.  This is a CR or LF that the dialect does not accept as one -
+      // a lone CR with accept_cr off, say - and there is more of this chunk
+      // behind it, so no later byte can change that.  Returning success here
+      // consumed nothing and left the state alone, so the caller's loop called
+      // straight back in: the parse spun until the unrelated record-byte limit
+      // tripped, taking most of a second over a fifteen byte input.
+      return csv_stream_set_error(stream, GTEXT_CSV_E_INVALID,
+          "Quote in quoted field must be followed by quote, delimiter, or "
+          "newline");
+    }
     if (nl == CSV_NEWLINE_NONE) {
+      // Last byte of the chunk: a CR here may still be the first half of a
+      // CRLF that arrives next time, so wait rather than decide.
       return GTEXT_CSV_OK;
     }
 

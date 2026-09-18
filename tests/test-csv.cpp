@@ -6,6 +6,7 @@
 #include <ghoti.io/text/csv.h>
 #include <gtest/gtest.h>
 #include <string.h>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -12202,4 +12203,81 @@ TEST(CsvTrailingDelimiter, YieldsAFinalEmptyField) {
 		ASSERT_TRUE(ok) << c.input;
 		EXPECT_EQ(st, c.expected) << "streaming parser, input " << c.input;
 	}
+}
+
+/*
+ * Progress guarantees.
+ *
+ * Every iteration of the parser's loop must either consume a byte or change
+ * state. Two places returned success having done neither, so the caller's loop
+ * called straight back in and the parse spun until an unrelated limit tripped -
+ * terminating, but only after counting to 64 MiB, which took most of a second
+ * for a fifteen byte input. Found by the fuzzer reporting slow units.
+ */
+TEST(CsvProgress, MalformedInputFailsImmediatelyRatherThanSpinning) {
+	// A closing quote followed by a CR that the dialect does not accept as a
+	// newline: not a quote, not a delimiter, not a newline, so it is an error.
+	const std::string doc = std::string(",\0\0", 3) + "\x0f\rb.,\r\r\rK\r\rc\re";
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.dialect.delimiter = ';';
+	opts.dialect.quote = ',';
+	opts.dialect.allow_unquoted_newlines = true;
+	opts.dialect.allow_comments = true;
+	opts.validate_utf8 = false;
+
+	auto start = std::chrono::steady_clock::now();
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table *table =
+	    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+	auto elapsed = std::chrono::steady_clock::now() - start;
+
+	EXPECT_EQ(table, nullptr);
+	EXPECT_EQ(err.code, GTEXT_CSV_E_INVALID)
+	    << "should be rejected for what it is, not for exceeding a limit";
+
+	// Generous by three orders of magnitude; the point is that it is not
+	// proportional to a 64 MiB counter.
+	EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed)
+	              .count(),
+	    200)
+	    << "parsing 17 bytes must not take a measurable amount of time";
+
+	if (table) {
+		gtext_csv_free_table(table);
+	}
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvProgress, LongerMalformedInputIsNoSlower) {
+	// The cost was fixed rather than proportional, so a repeat of the same
+	// input must not multiply it.
+	const std::string unit = std::string(",\0\0", 3) + "\x0f\rb.,\r\r\rK\r\rc\re";
+	std::string doc;
+	for (int i = 0; i < 64; i++) {
+		doc += unit;
+	}
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.dialect.delimiter = ';';
+	opts.dialect.quote = ',';
+	opts.dialect.allow_unquoted_newlines = true;
+	opts.validate_utf8 = false;
+
+	auto start = std::chrono::steady_clock::now();
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table *table =
+	    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+	auto elapsed = std::chrono::steady_clock::now() - start;
+
+	EXPECT_EQ(table, nullptr);
+	EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed)
+	              .count(),
+	    200);
+	if (table) {
+		gtext_csv_free_table(table);
+	}
+	gtext_csv_error_free(&err);
 }
