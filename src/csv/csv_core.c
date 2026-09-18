@@ -32,6 +32,51 @@ GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_default(void) {
   return d;
 }
 
+/*
+ * The presets are all gtext_csv_dialect_default() with the smallest change
+ * that names the convention, so that a preset never quietly relaxes something
+ * the caller did not ask about.  The one exception says so in its name.
+ */
+
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_tsv(void) {
+  GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
+  d.delimiter = '\t';
+  return d;
+}
+
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_semicolon(void) {
+  GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
+  d.delimiter = ';';
+  return d;
+}
+
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_backslash_escape(void) {
+  GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
+  d.escape = GTEXT_CSV_ESCAPE_BACKSLASH;
+  return d;
+}
+
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_excel(void) {
+  /* RFC 4180 is Excel's format, so this is the default dialect.  It exists as
+   * a name because callers coming from Python's csv module look for "excel",
+   * and because a named constant is clearer at a call site than a comment
+   * saying the default happens to match. */
+  return gtext_csv_dialect_default();
+}
+
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_permissive(void) {
+  GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
+  d.trim_unquoted_fields = true;
+  d.allow_space_after_delimiter = true;
+  d.allow_unquoted_quotes = true;
+  d.accept_cr = true;
+  d.allow_comments = true;
+  /* allow_unquoted_newlines is deliberately left off: its meaning is still
+   * unsettled - the table parser disagrees with itself about a trailing CRLF
+   * - so a preset must not turn it on.  See documentation/formats/csv.md. */
+  return d;
+}
+
 GTEXT_API GTEXT_CSV_Parse_Options gtext_csv_parse_options_default(void) {
   GTEXT_CSV_Parse_Options opts = {0};
   opts.dialect = gtext_csv_dialect_default();

@@ -190,6 +190,43 @@ accident. Every real caller reads into one buffer and refills it.
 only a line break ends a record, so `a,` is two fields and the second is
 empty. A file with no trailing newline used to drop it.
 
+**Fixed: three dialect options did nothing at all.** `trim_unquoted_fields`,
+`allow_space_after_delimiter` and `newline_in_quotes` were declared in
+`GTEXT_CSV_Dialect`, documented, given defaults - and read by no parser code
+anywhere. Setting any of them changed no behavior whatsoever. They were found
+by checking every field of the dialect struct for a consumer rather than by a
+failing test, which is why they had survived so long.
+
+| Option | Now |
+|---|---|
+| `trim_unquoted_fields` | strips leading and trailing spaces and tabs from unquoted fields; quoted fields are untouched, since the quotes are how the document says the spaces are data |
+| `allow_space_after_delimiter` | skips spaces and tabs between a delimiter and the field, before deciding whether the field is quoted, so `a, "x,y"` reads as two fields |
+| `newline_in_quotes` | when false, a newline inside a quoted field is rejected with `GTEXT_CSV_E_INVALID` |
+
+Trimming happens at the single point where every field is emitted, so the
+table and streaming parsers cannot disagree about it, and it only narrows the
+view - in-situ fields stay in-situ.
+
+**Fixed: an empty quoted field mid-record depended on the chunk boundary.**
+The streaming parser had a special case treating `""` as a doubled quote - a
+literal `"` - when it entered the quote state at a chunk boundary with an
+empty field. RFC 4180 §2 makes `a,"",b` three fields whose middle one is
+empty; a field holding one literal quote is written `""""`. The table parser
+and larger chunk sizes both read it correctly, so the result depended on where
+the reader's buffer happened to end. The differential fuzzer found it.
+
+**Fixed: `GTEXT_CSV_ESCAPE_BACKSLASH` did not survive a round trip.** The
+writer has escaped quotes as `\"` since it was written and had tests for it;
+the reader decoded those escapes only when the field happened to be buffered,
+so on the zero-copy path the backslashes stayed in the field. Only the writer
+side had ever been tested. Two further faults were behind it: a chunk ending
+on a backslash discarded everything accumulated so far, because the state
+holding that position was missing from the list of states whose field survives
+a chunk, and an attempt to decode in the second of two places double-decoded,
+turning `p\\q` into `pq`. Decoding now happens in exactly one place, and the
+quoted-field handler buffers the field as soon as it sees a backslash so that
+place is always reached.
+
 **Open: `allow_unquoted_newlines` is not coherent.** With it set, the table
 parser keeps a trailing CRLF as field content but treats a CRLF in the middle
 of the document as a record separator, and the streaming parser disagrees with
@@ -256,10 +293,11 @@ was written, so this pins existing behavior rather than recording a fix.
 
 - **RFC 7111 fragment identifiers** (`#row=`, `#col=`, `#cell=`). Out of
   scope: it is a URI feature, not a parsing one.
-- **Dialect sniffing.** There is no equivalent of Python's `csv.Sniffer`.
-  `gtext_csv_dialect_default()` is the only constructor; the TSV, semicolon
-  and backslash dialects exercised in `tests/data/csv/dialects/` are built by
-  the caller setting fields, and no named presets are exported.
+- **Dialect sniffing.** There is no equivalent of Python's `csv.Sniffer`;
+  nothing inspects a document to guess its delimiter. Named dialects are now
+  exported, though: `gtext_csv_dialect_tsv()`, `_semicolon()`,
+  `_backslash_escape()`, `_excel()` and `_permissive()`, each differing from
+  `gtext_csv_dialect_default()` only in the field it names.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
   dates, by design.
 - **`validate_utf8` in the streaming parser**, as above.

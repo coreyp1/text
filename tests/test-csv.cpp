@@ -12411,3 +12411,314 @@ TEST(CsvRoundTrip, WriteThenReparsePreservesFields) {
 		}
 	}
 }
+
+// The TSV, semicolon and backslash-escape dialects existed only as fixtures
+// under tests/data/csv/dialects/, built field by field by whoever needed
+// them. These presets export the same three, plus the two names callers
+// coming from Python's csv module look for, and are checked against the
+// fixtures rather than against each other.
+TEST(CsvDialectPresets, MatchTheFixturesTheyWereNamedFor) {
+	const std::string dir = get_test_data_dir() + "/dialects";
+
+	{
+		GTEXT_CSV_Parse_Options o = gtext_csv_parse_options_default();
+		o.dialect = gtext_csv_dialect_tsv();
+		EXPECT_EQ(o.dialect.delimiter, '\t');
+		bool ok = false;
+		auto rows = csv_dom_rows(read_file(dir + "/tsv/basic.tsv"), &o, &ok);
+		ASSERT_TRUE(ok);
+		ASSERT_EQ(rows.size(), 3u);
+		EXPECT_EQ(rows[0][0], "name");
+		EXPECT_EQ(rows[0][2], "city");
+		EXPECT_EQ(rows[1][0], "Alice");
+		EXPECT_EQ(rows[1][1], "30");
+	}
+
+	{
+		GTEXT_CSV_Parse_Options o = gtext_csv_parse_options_default();
+		o.dialect = gtext_csv_dialect_semicolon();
+		EXPECT_EQ(o.dialect.delimiter, ';');
+		bool ok = false;
+		auto rows = csv_dom_rows(read_file(dir + "/semicolon/basic.csv"), &o, &ok);
+		ASSERT_TRUE(ok);
+		ASSERT_EQ(rows.size(), 3u);
+		EXPECT_EQ(rows[1][0], "Alice");
+		EXPECT_EQ(rows[2][2], "LA");
+	}
+
+	{
+		GTEXT_CSV_Parse_Options o = gtext_csv_parse_options_default();
+		o.dialect = gtext_csv_dialect_backslash_escape();
+		EXPECT_EQ(o.dialect.escape, GTEXT_CSV_ESCAPE_BACKSLASH);
+		bool ok = false;
+		auto rows =
+		    csv_dom_rows(read_file(dir + "/backslash-escape/basic.csv"), &o, &ok);
+		ASSERT_TRUE(ok);
+		ASSERT_EQ(rows.size(), 3u);
+		EXPECT_EQ(rows[1][1], "She said \"Hello\"");
+	}
+}
+
+TEST(CsvDialectPresets, ExcelIsTheDefaultAndPresetsChangeOnlyWhatTheyName) {
+	GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
+	GTEXT_CSV_Dialect excel = gtext_csv_dialect_excel();
+	EXPECT_EQ(std::memcmp(&d, &excel, sizeof(d)), 0)
+	    << "excel should be RFC 4180, which is the default";
+
+	// Each preset differs from the default in exactly the field it names, so
+	// that adopting one never quietly relaxes something else.
+	GTEXT_CSV_Dialect tsv = gtext_csv_dialect_tsv();
+	EXPECT_EQ(tsv.delimiter, '\t');
+	tsv.delimiter = d.delimiter;
+	EXPECT_EQ(std::memcmp(&d, &tsv, sizeof(d)), 0);
+
+	GTEXT_CSV_Dialect semi = gtext_csv_dialect_semicolon();
+	EXPECT_EQ(semi.delimiter, ';');
+	semi.delimiter = d.delimiter;
+	EXPECT_EQ(std::memcmp(&d, &semi, sizeof(d)), 0);
+
+	GTEXT_CSV_Dialect back = gtext_csv_dialect_backslash_escape();
+	EXPECT_EQ(back.escape, GTEXT_CSV_ESCAPE_BACKSLASH);
+	back.escape = d.escape;
+	EXPECT_EQ(std::memcmp(&d, &back, sizeof(d)), 0);
+}
+
+TEST(CsvDialectPresets, PermissiveRelaxesOnlyTheDocumentedThings) {
+	GTEXT_CSV_Dialect p = gtext_csv_dialect_permissive();
+	EXPECT_TRUE(p.trim_unquoted_fields);
+	EXPECT_TRUE(p.allow_space_after_delimiter);
+	EXPECT_TRUE(p.allow_unquoted_quotes);
+	EXPECT_TRUE(p.accept_cr);
+	EXPECT_TRUE(p.allow_comments);
+
+	// allow_unquoted_newlines stays off: its meaning is still unsettled, so a
+	// preset must not be what turns it on.
+	EXPECT_FALSE(p.allow_unquoted_newlines);
+
+	// And it does what it says on input a person would type.
+	GTEXT_CSV_Parse_Options o = gtext_csv_parse_options_default();
+	o.dialect = p;
+	bool ok = false;
+	auto rows = csv_dom_rows("# a comment\n  a  , b \nc,d\n", &o, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(rows.size(), 2u) << "comment line should be skipped";
+	EXPECT_EQ(rows[0][0], "a") << "unquoted field should be trimmed";
+	EXPECT_EQ(rows[0][1], "b");
+	EXPECT_EQ(rows[1][0], "c");
+}
+
+// The writer has escaped quotes with a backslash under
+// GTEXT_CSV_ESCAPE_BACKSLASH since it was written, and had tests for that.
+// The reader only decoded those escapes when the field happened to be
+// buffered; on the unbuffered path the backslashes survived into the field,
+// so writing a document and reading it back did not return what went in.
+// Only the writer side had ever been tested.
+TEST(CsvBackslashEscape, SurvivesAWriteAndReadRoundTrip) {
+	struct Case {
+		const char * literal;
+	};
+	const Case cases[] = {
+	    {"She said \"Hello\""},
+	    {"a\\b"},              // a lone backslash
+	    {"\\"},                // nothing but a backslash
+	    {"\""},                // nothing but a quote
+	    {"both \\ and \" here"},
+	    {"trailing backslash \\"},
+	    {"plain"},
+	};
+
+	for (const auto & c : cases) {
+		// Build a one-field table and write it with backslash escaping.
+		GTEXT_CSV_Table * t = gtext_csv_new_table();
+		ASSERT_NE(t, nullptr);
+		const char * row[] = {c.literal};
+		size_t lens[] = {strlen(c.literal)};
+		ASSERT_EQ(gtext_csv_row_append(t, row, lens, 1, nullptr), GTEXT_CSV_OK);
+
+		GTEXT_CSV_Sink sink;
+		ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+		GTEXT_CSV_Write_Options wo = gtext_csv_write_options_default();
+		wo.dialect = gtext_csv_dialect_backslash_escape();
+		wo.quote_all_fields = true;
+		ASSERT_EQ(gtext_csv_write_table(&sink, &wo, t), GTEXT_CSV_OK);
+		std::string written(
+		    gtext_csv_sink_buffer_data(&sink), gtext_csv_sink_buffer_size(&sink));
+		gtext_csv_sink_buffer_free(&sink);
+		gtext_csv_free_table(t);
+
+		GTEXT_CSV_Parse_Options po = gtext_csv_parse_options_default();
+		po.dialect = gtext_csv_dialect_backslash_escape();
+		bool ok = false;
+		auto rows = csv_dom_rows(written, &po, &ok);
+		ASSERT_TRUE(ok) << "reparse failed for [" << c.literal << "] -> ["
+		                << written << "]";
+		ASSERT_EQ(rows.size(), 1u);
+		ASSERT_EQ(rows[0].size(), 1u);
+		EXPECT_EQ(rows[0][0], c.literal)
+		    << "round trip changed the field; wrote [" << written << "]";
+	}
+}
+
+TEST(CsvBackslashEscape, BothReadPathsAgree) {
+	// The bug was a disagreement between the buffered and unbuffered field
+	// paths, and chunk size is what decides which one a field takes. Feeding
+	// the same document at several chunk sizes exercises both.
+	const std::string doc = "a,\"x\\\"y\"\nb,\"p\\\\q\"\n";
+	GTEXT_CSV_Parse_Options po = gtext_csv_parse_options_default();
+	po.dialect = gtext_csv_dialect_backslash_escape();
+
+	bool ok = false;
+	auto expected = csv_dom_rows(doc, &po, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(expected.size(), 2u);
+	EXPECT_EQ(expected[0][1], "x\"y");
+	EXPECT_EQ(expected[1][1], "p\\q");
+
+	for (size_t chunk = 1; chunk <= 8; chunk++) {
+		bool sok = false;
+		auto got = csv_stream_chunked(doc, chunk, &po, &sok);
+		ASSERT_TRUE(sok) << "chunk=" << chunk;
+		ASSERT_EQ(got.size(), expected.size()) << "chunk=" << chunk;
+		for (size_t r = 0; r < got.size(); r++) {
+			ASSERT_EQ(got[r].size(), expected[r].size()) << "chunk=" << chunk;
+			for (size_t c = 0; c < got[r].size(); c++) {
+				EXPECT_EQ(got[r][c], expected[r][c])
+				    << "chunk=" << chunk << " field (" << r << "," << c << ")";
+			}
+		}
+	}
+}
+
+// An empty quoted field in the middle of a record used to become a literal
+// quote character when the chunk boundary fell between the two quotes: the
+// streaming parser had a special case treating "" at a boundary as a doubled
+// quote. RFC 4180 section 2 makes `a,"",b` three fields whose middle one is
+// empty; a field holding one literal quote is written """". Found by the
+// differential fuzzer.
+TEST(CsvEmptyQuotedField, DoesNotDependOnChunkBoundary) {
+	const std::string docs[] = {
+	    "a,\"\",b\n",
+	    "x,\"\",y\n",
+	    ",\"\",\n",
+	    "\"\",a\n",
+	    "a,\"\"\n",
+	    "a,\"\",b,\"\",c\n",
+	    "\"\",\"\",\"\"\n",
+	    "a,\"\"\"\",b\n", // a real literal quote, for contrast
+	};
+
+	for (const auto & doc : docs) {
+		bool ok = false;
+		auto expected = csv_dom_rows(doc, nullptr, &ok);
+		ASSERT_TRUE(ok) << doc;
+		for (size_t chunk = 1; chunk <= 6; chunk++) {
+			bool sok = false;
+			auto got = csv_stream_chunked(doc, chunk, nullptr, &sok);
+			ASSERT_TRUE(sok) << "chunk=" << chunk << " doc=" << doc;
+			EXPECT_EQ(got, expected) << "chunk=" << chunk << " doc=" << doc;
+		}
+	}
+
+	// And the middle field really is empty rather than a quote.
+	bool ok = false;
+	auto rows = csv_dom_rows("a,\"\",b\n", nullptr, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(rows.size(), 1u);
+	ASSERT_EQ(rows[0].size(), 3u);
+	EXPECT_EQ(rows[0][1], "");
+	// Four quotes is the way to write one literal quote.
+	auto lit = csv_dom_rows("a,\"\"\"\",b\n", nullptr, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(lit[0][1], "\"");
+}
+
+// Three dialect options were declared in the public struct, documented, and
+// read by nothing at all: setting them changed no behavior whatsoever. They
+// are the same shape of defect as validate_utf8 before it was wired up.
+TEST(CsvDialectOptions, TrimUnquotedFieldsActuallyTrims) {
+	GTEXT_CSV_Parse_Options off = gtext_csv_parse_options_default();
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	on.dialect.trim_unquoted_fields = true;
+
+	bool ok = false;
+	auto plain = csv_dom_rows("  a  ,  b  \n", &off, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(plain[0][0], "  a  ") << "default must be unchanged";
+	EXPECT_EQ(plain[0][1], "  b  ");
+
+	auto trimmed = csv_dom_rows("  a  ,  b  \n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(trimmed[0][0], "a");
+	EXPECT_EQ(trimmed[0][1], "b");
+
+	// A quoted field is left alone: the quotes are how the document says the
+	// spaces are data.
+	auto quoted = csv_dom_rows("\"  a  \",  b  \n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(quoted[0][0], "  a  ");
+	EXPECT_EQ(quoted[0][1], "b");
+
+	// Tabs count as whitespace, and an all-whitespace field becomes empty.
+	auto tabs = csv_dom_rows("\ta\t,   \n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(tabs[0][0], "a");
+	EXPECT_EQ(tabs[0][1], "");
+
+	// Same answer however the document is chunked.
+	for (size_t chunk = 1; chunk <= 5; chunk++) {
+		bool sok = false;
+		auto got = csv_stream_chunked("  a  ,  b  \n", chunk, &on, &sok);
+		ASSERT_TRUE(sok) << "chunk=" << chunk;
+		EXPECT_EQ(got, trimmed) << "chunk=" << chunk;
+	}
+}
+
+TEST(CsvDialectOptions, AllowSpaceAfterDelimiterSkipsIt) {
+	GTEXT_CSV_Parse_Options off = gtext_csv_parse_options_default();
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	on.dialect.allow_space_after_delimiter = true;
+
+	bool ok = false;
+	auto plain = csv_dom_rows("a, b\n", &off, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(plain[0][1], " b") << "default must be unchanged";
+
+	auto skipped = csv_dom_rows("a, b\n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(skipped[0][1], "b");
+
+	// The point of skipping before deciding: a quoted field after a space is
+	// still recognized as quoted rather than read as a literal quote.
+	auto q = csv_dom_rows("a, \"x,y\"\n", &on, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(q[0].size(), 2u) << "the quoted comma should not split the field";
+	EXPECT_EQ(q[0][1], "x,y");
+
+	for (size_t chunk = 1; chunk <= 5; chunk++) {
+		bool sok = false;
+		auto got = csv_stream_chunked("a, b\n", chunk, &on, &sok);
+		ASSERT_TRUE(sok) << "chunk=" << chunk;
+		EXPECT_EQ(got, skipped) << "chunk=" << chunk;
+	}
+}
+
+TEST(CsvDialectOptions, NewlineInQuotesFalseRejectsTheNewline) {
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	EXPECT_TRUE(on.dialect.newline_in_quotes) << "default is to allow it";
+	bool ok = false;
+	auto allowed = csv_dom_rows("a,\"x\ny\"\n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(allowed[0][1], "x\ny");
+
+	GTEXT_CSV_Parse_Options off = gtext_csv_parse_options_default();
+	off.dialect.newline_in_quotes = false;
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	const std::string doc = "a,\"x\ny\"\n";
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(doc.data(), doc.size(), &off, &err);
+	EXPECT_EQ(t, nullptr) << "a newline in quotes should now be refused";
+	EXPECT_EQ(err.code, GTEXT_CSV_E_INVALID);
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+}

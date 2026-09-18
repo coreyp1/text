@@ -191,6 +191,66 @@ typedef struct {
 GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_default(void);
 
 /**
+ * @brief Get a tab-separated-values dialect
+ *
+ * The default dialect with a tab delimiter. TSV in the wild is usually
+ * written without quoting at all, on the assumption that fields contain no
+ * tabs; this dialect still honors `"` quoting when it is present, so it reads
+ * both the quoted and unquoted conventions.
+ *
+ * @return TSV dialect
+ */
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_tsv(void);
+
+/**
+ * @brief Get a semicolon-delimited dialect
+ *
+ * The default dialect with a `;` delimiter. This is what spreadsheet programs
+ * export in locales where `,` is the decimal separator, so it is the common
+ * shape of a European CSV file.
+ *
+ * @return Semicolon-delimited dialect
+ */
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_semicolon(void);
+
+/**
+ * @brief Get a dialect that escapes with a backslash
+ *
+ * The default dialect with GTEXT_CSV_ESCAPE_BACKSLASH, so a quote inside a
+ * quoted field is written `\"` rather than `""`. This is the MySQL and
+ * PostgreSQL convention rather than the RFC 4180 one.
+ *
+ * @return Backslash-escape dialect
+ */
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_backslash_escape(void);
+
+/**
+ * @brief Get a dialect matching Microsoft Excel's export
+ *
+ * Comma delimiter, doubled-quote escaping, and CRLF line endings on write.
+ * Equivalent to Python's `csv` "excel" dialect, and to RFC 4180 proper.
+ * Reading accepts LF as well, because files move between platforms.
+ *
+ * @return Excel dialect
+ */
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_excel(void);
+
+/**
+ * @brief Get a permissive dialect for hand-written input
+ *
+ * Trims whitespace around unquoted fields, allows a space after a delimiter,
+ * tolerates a bare quote inside an unquoted field, accepts a lone CR as a line
+ * ending, and treats `#` lines as comments.
+ *
+ * Every one of those relaxations can change what a document means, so this is
+ * for input a person typed rather than input a machine produced. Use
+ * gtext_csv_dialect_default() for anything that has to round-trip.
+ *
+ * @return Permissive dialect
+ */
+GTEXT_API GTEXT_CSV_Dialect gtext_csv_dialect_permissive(void);
+
+/**
  * @brief Initialize parse options with strict CSV defaults
  *
  * Returns a parse options structure with:

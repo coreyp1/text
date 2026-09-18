@@ -158,6 +158,19 @@ GTEXT_CSV_Status csv_stream_process_start_of_field(GTEXT_CSV_Stream * stream,
         stream, GTEXT_CSV_E_TOO_MANY_COLS, "Too many columns in record");
   }
 
+  // Skip whitespace between the delimiter and the field, if the dialect asks.
+  // Staying in START_OF_FIELD means the next character is reconsidered from
+  // scratch, so `a, "x"` recognizes the quoted field rather than reading a
+  // space followed by a literal quote.  One character per call keeps it
+  // indifferent to where a chunk happens to end.
+  //
+  // The delimiter itself is never skipped, so a space- or tab-delimited
+  // dialect still separates fields correctly.
+  if (stream->opts.dialect.allow_space_after_delimiter && (c == ' ' || c == '\t')
+      && c != stream->opts.dialect.delimiter) {
+    return csv_stream_advance_position(stream, offset, 1);
+  }
+
   // Clear any previous field buffering
   csv_field_buffer_clear(&stream->field);
   stream->just_processed_doubled_quote = false;
@@ -594,7 +607,27 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
     }
   }
 
+  // A newline inside a quoted field is ordinary content unless the dialect
+  // says otherwise.  The option is documented and defaults to true; until now
+  // nothing read it, so setting it to false changed nothing at all.
+  if ((c == '\n' || c == '\r') && !stream->opts.dialect.newline_in_quotes) {
+    return csv_stream_set_error(
+        stream, GTEXT_CSV_E_INVALID, "Newline in quoted field");
+  }
+
   if (stream->opts.dialect.escape == GTEXT_CSV_ESCAPE_BACKSLASH && c == '\\') {
+    // Buffer everything up to the backslash before switching state.  The
+    // escaped character is appended by csv_stream_process_escape_in_quoted(),
+    // which only appends when the field is buffered - so without this the
+    // field silently restarts at the escape and every character before it is
+    // lost.  It showed up only when a chunk ended inside the field, because
+    // otherwise the field was still aliasing an intact input buffer.  The
+    // doubled-quote path has always done the same thing at the same point.
+    GTEXT_CSV_Status buffer_status = csv_stream_ensure_field_buffered(
+        stream, process_input, process_len, byte_pos);
+    if (buffer_status != GTEXT_CSV_OK) {
+      return buffer_status;
+    }
     stream->state = CSV_STREAM_STATE_ESCAPE_IN_QUOTED;
     GTEXT_CSV_Status advance_status =
         csv_stream_advance_position(stream, offset, 1);
@@ -737,40 +770,15 @@ GTEXT_CSV_Status csv_stream_process_quote_in_quoted(GTEXT_CSV_Stream * stream,
     // when entering QUOTE_IN_QUOTED)
     size_t quote_pos = byte_pos - 1;
 
-    // Special case: if we transitioned to QUOTE_IN_QUOTED at chunk boundary
-    // with empty field, and we're using doubled quote escape, treat "" as
-    // doubled quote (literal quote)
-    if (stream->quote_in_quoted_at_chunk_boundary &&
-        stream->opts.dialect.escape == GTEXT_CSV_ESCAPE_DOUBLED_QUOTE) {
-      bool is_empty = stream->field.is_buffered
-          ? (stream->field.buffer_used == 0)
-          : (stream->field.length == 0);
-      if (is_empty) {
-        // Treat as doubled quote - ensure buffer is ready
-        if (!stream->field.is_buffered) {
-          GTEXT_CSV_Status status = csv_field_buffer_grow(&stream->field, 2);
-          if (status != GTEXT_CSV_OK) {
-            return status;
-          }
-          stream->field.buffer_used = 0;
-          stream->field.is_buffered = true;
-          stream->field.data = stream->field.buffer;
-          stream->field.length = 0;
-        }
-        // Append both quotes
-        char quote_char = stream->opts.dialect.quote;
-        GTEXT_CSV_Status status =
-            csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-        if (status != GTEXT_CSV_OK) {
-          return status;
-        }
-        status = csv_stream_append_to_field_buffer(stream, &quote_char, 1);
-        if (status != GTEXT_CSV_OK) {
-          return status;
-        }
-        stream->field.needs_unescape = true;
-      }
-    }
+    // There used to be a special case here: if QUOTE_IN_QUOTED was entered at
+    // a chunk boundary and the field was empty, "" was treated as a doubled
+    // quote and the field became a literal quote character.  That is not what
+    // "" means.  RFC 4180 section 2 makes `a,"",b` three fields whose middle
+    // one is empty; a field holding one literal quote is written """".  The
+    // table parser and the streaming parser fed in larger chunks both read it
+    // correctly, so the special case made the result depend on where the
+    // chunk boundary fell - the class of defect the differential fuzzer
+    // exists to catch, and what it caught here.
     // Clear the flag
     stream->quote_in_quoted_at_chunk_boundary = false;
 

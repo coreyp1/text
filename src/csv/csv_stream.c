@@ -225,10 +225,19 @@ static GTEXT_CSV_Status csv_stream_feed_settled(GTEXT_CSV_Stream * stream,
     GTEXT_CSV_Status status =
         csv_stream_process_chunk(stream, (const char *)data, len);
 
-    // Reset field buffering state after processing if field completed
+    // Reset field buffering state after processing if field completed.
+    //
+    // ESCAPE_IN_QUOTED belongs in this list for the same reason as the other
+    // three: the field is still open, waiting for the character after the
+    // backslash.  While it was missing, a chunk that ended on a backslash had
+    // everything accumulated so far thrown away, so "x\"y" fed one byte at a
+    // time produced "y rather than x"y.  It only showed up at chunk sizes
+    // that put the backslash last, which is why feeding whole documents never
+    // found it.
     if (stream->state != CSV_STREAM_STATE_UNQUOTED_FIELD &&
         stream->state != CSV_STREAM_STATE_QUOTED_FIELD &&
-        stream->state != CSV_STREAM_STATE_QUOTE_IN_QUOTED) {
+        stream->state != CSV_STREAM_STATE_QUOTE_IN_QUOTED &&
+        stream->state != CSV_STREAM_STATE_ESCAPE_IN_QUOTED) {
       // Field completed, clear buffer
       csv_field_buffer_clear(&stream->field);
     }

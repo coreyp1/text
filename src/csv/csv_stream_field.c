@@ -108,6 +108,34 @@ GTEXT_CSV_Status csv_stream_emit_field(
     return status;
   }
 
+  // Trim an unquoted field if the dialect asks for it.
+  //
+  // Done here because this is the one place every field is emitted, on both
+  // the table and the streaming path, so the two cannot disagree.  It only
+  // narrows the view - no copying, and in-situ fields stay in-situ.
+  //
+  // Quoted fields are left alone: the quotes are what the writer uses to say
+  // the spaces are data, so trimming them would discard information the
+  // document went to the trouble of encoding.
+  //
+  // The delimiter is never trimmed even when it is a space or a tab, since it
+  // would have ended the field rather than sat inside it.
+  if (stream->opts.dialect.trim_unquoted_fields && !stream->field.is_quoted) {
+    char delim = stream->opts.dialect.delimiter;
+    while (unescaped_len > 0
+        && (unescaped_data[0] == ' ' || unescaped_data[0] == '\t')
+        && unescaped_data[0] != delim) {
+      unescaped_data++;
+      unescaped_len--;
+    }
+    while (unescaped_len > 0
+        && (unescaped_data[unescaped_len - 1] == ' '
+            || unescaped_data[unescaped_len - 1] == '\t')
+        && unescaped_data[unescaped_len - 1] != delim) {
+      unescaped_len--;
+    }
+  }
+
   // Emit field
   status = csv_stream_emit_event(
       stream, GTEXT_CSV_EVENT_FIELD, unescaped_data, unescaped_len);
@@ -433,6 +461,13 @@ GTEXT_CSV_Status csv_stream_unescape_field_with_unescape(
   }
 
   // Unescape doubled quotes (in-place if input is field buffer, otherwise copy)
+  //
+  // There is deliberately no backslash case here.  Backslash escapes are
+  // decoded once, by csv_stream_process_escape_in_quoted(), which is why the
+  // quoted-field handler forces the field to be buffered the moment it sees a
+  // backslash.  Decoding them here as well would double-decode: "p\\q" would
+  // become p\q in the state machine and then pq here, silently eating the
+  // character the escape was protecting.
   size_t out_idx = 0;
   for (size_t in_idx = 0; in_idx < actual_input_len; in_idx++) {
     if (stream->opts.dialect.escape == GTEXT_CSV_ESCAPE_DOUBLED_QUOTE &&
