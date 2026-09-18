@@ -215,6 +215,14 @@ csv_utf8_result csv_validate_utf8(const char * input, size_t input_len,
       if ((byte & 0x0F) == 0 && (input[offset + 1] & 0x20) == 0) {
         return CSV_UTF8_INVALID; // Overlong encoding
       }
+      // Surrogate halves, U+D800 to U+DFFF, encode as ED A0 80 through
+      // ED BF BF.  RFC 3629 section 3 excludes them from UTF-8: they exist
+      // only to let UTF-16 address the supplementary planes, and a decoder
+      // that accepts them here will hand a caller a code point that is not a
+      // character.  They were accepted until now.
+      if (byte == 0xED && (unsigned char)input[offset + 1] >= 0xA0) {
+        return CSV_UTF8_INVALID;
+      }
     }
     else if (seq_len == 4) {
       // Bounds check: ensure offset + 1 is valid

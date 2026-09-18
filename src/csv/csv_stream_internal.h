@@ -141,6 +141,14 @@ struct GTEXT_CSV_Stream {
   /// to the stream rather than to a stack frame because a field in progress
   /// may point into the buffer it was parsed from, and that reference has to
   /// stay valid until the parser buffers the field at the end of the feed.
+  /* Incremental UTF-8 validation state.  A sequence can straddle a chunk
+   * boundary, so the bytes seen so far are held here until the rest arrives.
+   * u8_need is 0 when no sequence is open. */
+  unsigned char u8_bytes[4]; ///< Bytes of the sequence seen so far
+  int u8_have;               ///< How many of them
+  int u8_need;               ///< How many the lead byte calls for (0 = idle)
+  size_t u8_offset;          ///< Document offset of the lead byte
+
   char join[5];
 
   // Position tracking

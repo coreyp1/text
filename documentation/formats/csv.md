@@ -163,11 +163,22 @@ BOM stripping and before tokenizing, and returns
 Lone `FF` bytes, truncated sequences, stray continuation bytes and overlong
 encodings are all rejected; `validate_utf8 = false` still accepts them.
 
-**The streaming parser does not validate.** `gtext_csv_stream_new()` takes
-the same options struct and ignores `validate_utf8`, because a UTF-8 sequence
-can straddle a chunk boundary and incremental validation has not been
-written. Validate in the caller, or use the DOM parser, if the input is
-untrusted and arrives in pieces.
+**Fixed: the streaming parser validates too.** `gtext_csv_stream_new()` takes
+the same options struct and used to ignore `validate_utf8` entirely, so a
+caller who asked for validation and fed the document in pieces got none. A
+sequence can straddle a chunk boundary, so the bytes seen so far are now
+carried in the stream and the verdict is deferred until the rest arrives; a
+sequence still open when the input ends is reported as truncated. The rules
+are the same ones `csv_validate_utf8()` applies, because the two parsers
+disagreeing about which documents are well-formed is exactly what the
+differential fuzzer is there to catch.
+
+**Fixed: surrogate halves were accepted.** `ED A0 80` through `ED BF BF`
+encode U+D800 to U+DFFF, which RFC 3629 §3 excludes from UTF-8 - they exist
+only so UTF-16 can address the supplementary planes, and decoding one hands
+the caller something that is not a character. Both parsers now reject them.
+Overlong encodings, lone `FF` bytes, stray continuation bytes, sequences
+beyond U+10FFFF and truncated sequences were already rejected.
 
 **Fixed: the streaming parser no longer depends on where chunks are split.**
 `gtext_csv_stream_feed()` accepts a document in pieces of any size, so the
@@ -300,7 +311,6 @@ was written, so this pins existing behavior rather than recording a fix.
   `gtext_csv_dialect_default()` only in the field it names.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
   dates, by design.
-- **`validate_utf8` in the streaming parser**, as above.
 - **A coherent `allow_unquoted_newlines`**, as above.
 
 ---

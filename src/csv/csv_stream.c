@@ -168,10 +168,127 @@ GTEXT_API GTEXT_CSV_Stream * gtext_csv_stream_new(
  * gtext_csv_stream_feed() has settled the BOM and held back any trailing CR.
  * It never buffers on its own account.
  */
+/*
+ * Incremental UTF-8 validation.
+ *
+ * The table parser validates the whole buffer in one pass before tokenizing.
+ * A stream cannot: a sequence may be split across feeds, so the bytes seen so
+ * far are carried in the stream and the verdict is deferred until the rest
+ * arrives.  The rules are RFC 3629's and match csv_validate_utf8() exactly -
+ * the two must agree, or the same document would be accepted one way and
+ * refused the other, which is precisely what the differential fuzzer looks
+ * for.
+ *
+ * Returns the offset of the offending byte in *bad_offset when it fails.
+ */
+static bool csv_utf8_lead_length(unsigned char b, int * need) {
+  if ((b & 0x80) == 0) {
+    *need = 1;
+  }
+  else if ((b & 0xE0) == 0xC0) {
+    *need = 2;
+  }
+  else if ((b & 0xF0) == 0xE0) {
+    *need = 3;
+  }
+  else if ((b & 0xF8) == 0xF0) {
+    *need = 4;
+  }
+  else {
+    return false; /* continuation byte or 0xF8..0xFF with no lead */
+  }
+  return true;
+}
+
+/* Check a complete sequence for the things the length alone does not catch. */
+static bool csv_utf8_sequence_ok(const unsigned char * b, int n) {
+  for (int i = 1; i < n; i++) {
+    if ((b[i] & 0xC0) != 0x80) {
+      return false;
+    }
+  }
+  if (n == 2) {
+    return (b[0] & 0x1E) != 0; /* overlong */
+  }
+  if (n == 3) {
+    if ((b[0] & 0x0F) == 0 && (b[1] & 0x20) == 0) {
+      return false; /* overlong */
+    }
+    /* Surrogate halves, U+D800..U+DFFF, are excluded by RFC 3629 section 3. */
+    return !(b[0] == 0xED && b[1] >= 0xA0);
+  }
+  if (n == 4) {
+    if ((b[0] & 0x07) == 0 && (b[1] & 0x30) == 0) {
+      return false; /* overlong */
+    }
+    if (b[0] > 0xF4 || (b[0] == 0xF4 && (b[1] & 0xF0) != 0)) {
+      return false; /* beyond U+10FFFF */
+    }
+  }
+  return true;
+}
+
+static bool csv_stream_validate_utf8_chunk(GTEXT_CSV_Stream * stream,
+    const unsigned char * data, size_t len, size_t base_offset,
+    size_t * bad_offset) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned char b = data[i];
+
+    if (stream->u8_need == 0) {
+      int need = 0;
+      if (!csv_utf8_lead_length(b, &need)) {
+        *bad_offset = base_offset + i;
+        return false;
+      }
+      if (need == 1) {
+        continue; /* ASCII, nothing to carry */
+      }
+      stream->u8_bytes[0] = b;
+      stream->u8_have = 1;
+      stream->u8_need = need;
+      stream->u8_offset = base_offset + i;
+      continue;
+    }
+
+    stream->u8_bytes[stream->u8_have++] = b;
+    if (stream->u8_have < stream->u8_need) {
+      continue; /* still incomplete, wait for more */
+    }
+
+    bool ok = csv_utf8_sequence_ok(stream->u8_bytes, stream->u8_need);
+    size_t seq_offset = stream->u8_offset;
+    stream->u8_need = 0;
+    stream->u8_have = 0;
+    if (!ok) {
+      *bad_offset = seq_offset;
+      return false;
+    }
+  }
+  return true;
+}
+
 static GTEXT_CSV_Status csv_stream_feed_settled(GTEXT_CSV_Stream * stream,
     const void * data, size_t len, GTEXT_CSV_Error * err) {
   if (!data || len == 0) {
     return GTEXT_CSV_OK;
+  }
+
+  // Validate the encoding before tokenizing, as the table parser does.  The
+  // option was accepted and ignored here for as long as the streaming parser
+  // has existed, so a caller who asked for validation and fed the document in
+  // pieces got none.
+  if (stream->opts.validate_utf8) {
+    size_t bad = 0;
+    if (!csv_stream_validate_utf8_chunk(
+            stream, (const unsigned char *)data, len, stream->pos.offset, &bad)) {
+      GTEXT_CSV_Status status = csv_stream_set_error(stream,
+          GTEXT_CSV_E_INVALID_UTF8, "Invalid UTF-8 sequence in input");
+      stream->error.byte_offset = bad;
+      if (err) {
+        csv_error_copy(err, &stream->error);
+      }
+      return status;
+    }
   }
 
   // If we have a field in progress, we need to continue it
@@ -450,6 +567,18 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
     if (status != GTEXT_CSV_OK) {
       return status;
     }
+  }
+
+  // A UTF-8 sequence still waiting for its continuation bytes when the input
+  // ends is truncated, which the table parser reports as invalid too.
+  if (stream->opts.validate_utf8 && stream->u8_need != 0) {
+    GTEXT_CSV_Status status = csv_stream_set_error(stream,
+        GTEXT_CSV_E_INVALID_UTF8, "Truncated UTF-8 sequence at end of input");
+    stream->error.byte_offset = stream->u8_offset;
+    if (err) {
+      csv_error_copy(err, &stream->error);
+    }
+    return status;
   }
 
   // Check for unterminated quote

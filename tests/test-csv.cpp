@@ -12722,3 +12722,70 @@ TEST(CsvDialectOptions, NewlineInQuotesFalseRejectsTheNewline) {
 	gtext_csv_free_table(t);
 	gtext_csv_error_free(&err);
 }
+
+// validate_utf8 defaults to true and the streaming parser ignored it, so a
+// caller who asked for validation and fed the document in pieces got none.
+// A sequence can straddle a chunk boundary, so the verdict has to be deferred
+// until the rest of it arrives.
+TEST(CsvStreamUtf8, ValidatesAcrossChunkBoundaries) {
+	struct Case {
+		const char * label;
+		std::string bytes;
+		bool valid;
+	};
+	const Case cases[] = {
+	    {"ASCII", "a,b\n", true},
+	    {"2-byte e-acute", std::string("a,\xC3\xA9\n"), true},
+	    {"3-byte CJK", std::string("a,\xE6\x97\xA5\n"), true},
+	    {"4-byte emoji", std::string("a,\xF0\x9F\x98\x80\n"), true},
+	    {"lone FF", std::string("a,\xFF\n"), false},
+	    {"stray continuation", std::string("a,\x80\n"), false},
+	    {"overlong 2-byte", std::string("a,\xC0\xAF\n"), false},
+	    {"overlong 3-byte", std::string("a,\xE0\x80\xAF\n"), false},
+	    {"beyond U+10FFFF", std::string("a,\xF5\x80\x80\x80\n"), false},
+	    // RFC 3629 section 3 excludes the surrogate halves from UTF-8.
+	    {"surrogate U+D800", std::string("a,\xED\xA0\x80\n"), false},
+	    {"surrogate U+DFFF", std::string("a,\xED\xBF\xBF\n"), false},
+	    {"truncated at end", std::string("a,\xC3"), false},
+	};
+
+	for (const auto & c : cases) {
+		// The table parser is the reference; the stream must agree with it at
+		// every chunk size, including sizes that split a sequence.
+		bool dom_ok = false;
+		csv_dom_rows(c.bytes, nullptr, &dom_ok);
+		EXPECT_EQ(dom_ok, c.valid) << "table parser: " << c.label;
+
+		for (size_t chunk = 1; chunk <= 4; chunk++) {
+			bool sok = false;
+			csv_stream_chunked(c.bytes, chunk, nullptr, &sok);
+			EXPECT_EQ(sok, c.valid)
+			    << "stream disagreed: " << c.label << " chunk=" << chunk;
+		}
+	}
+}
+
+TEST(CsvStreamUtf8, ReportsTheOffendingOffsetAndRespectsTheOption) {
+	// The offset names the lead byte of the bad sequence, not wherever the
+	// parser happened to notice.
+	const std::string doc = std::string("abc,\xFF\n");
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	CsvCapture cap;
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Stream * s = gtext_csv_stream_new(&on, csv_capture_cb, &cap);
+	ASSERT_NE(s, nullptr);
+	GTEXT_CSV_Status st = gtext_csv_stream_feed(s, doc.data(), doc.size(), &err);
+	EXPECT_EQ(st, GTEXT_CSV_E_INVALID_UTF8);
+	EXPECT_EQ(err.byte_offset, 4u);
+	gtext_csv_stream_free(s);
+	gtext_csv_error_free(&err);
+
+	// With validation off, the same bytes go through untouched.
+	GTEXT_CSV_Parse_Options off = gtext_csv_parse_options_default();
+	off.dialect.allow_unquoted_quotes = true;
+	off.validate_utf8 = false;
+	bool ok = false;
+	auto rows = csv_stream_chunked(doc, 1, &off, &ok);
+	EXPECT_TRUE(ok) << "validate_utf8 = false should accept the bytes";
+}
