@@ -225,6 +225,13 @@ ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
 
 # Sanitizer target names
 ASAN_TARGET := $(BASE_NAME_PREFIX)-asan.$(LIB_EXTENSION)
+# Soname for the instrumented library: its own filename, since it is only ever
+# loaded out of the build tree and never installed.
+ifeq ($(UNAME_S),Linux)
+	ASAN_LIBRARY_NAME_FLAG := -Wl,-soname,$(ASAN_TARGET)
+else
+	ASAN_LIBRARY_NAME_FLAG :=
+endif
 STATIC_TARGET := $(BASE_NAME_PREFIX).a
 ASAN_STATIC_TARGET := $(BASE_NAME_PREFIX)-asan.a
 
@@ -256,15 +263,22 @@ TEST_EXECUTABLES := $(addprefix $(APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_
 # ASan test executables
 ASAN_TEST_EXECUTABLES := $(patsubst $(APP_DIR)/%,$(ASAN_APP_DIR)/%,$(TEST_EXECUTABLES))
 
-# Automatically collect all example .c files under examples/json and examples/csv directories.
+# Automatically collect all example .c files, one directory per module.  A new
+# module's examples are picked up by adding it to EXAMPLE_MODULES; yaml was
+# omitted here for a long time, so its examples were never compiled and nothing
+# noticed when they stopped building.
+EXAMPLE_MODULES := json csv yaml
+
 JSON_EXAMPLE_SOURCES := $(shell find examples/json -type f -name '*.c' 2>/dev/null)
 CSV_EXAMPLE_SOURCES := $(shell find examples/csv -type f -name '*.c' 2>/dev/null)
-EXAMPLE_SOURCES := $(JSON_EXAMPLE_SOURCES) $(CSV_EXAMPLE_SOURCES)
+YAML_EXAMPLE_SOURCES := $(shell find examples/yaml -type f -name '*.c' 2>/dev/null)
+EXAMPLE_SOURCES := $(JSON_EXAMPLE_SOURCES) $(CSV_EXAMPLE_SOURCES) $(YAML_EXAMPLE_SOURCES)
 
 # Convert each example source file path to an executable path.
 JSON_EXAMPLES := $(patsubst examples/json/%.c,$(APP_DIR)/examples/json/%$(EXE_EXTENSION),$(JSON_EXAMPLE_SOURCES))
 CSV_EXAMPLES := $(patsubst examples/csv/%.c,$(APP_DIR)/examples/csv/%$(EXE_EXTENSION),$(CSV_EXAMPLE_SOURCES))
-EXAMPLES := $(JSON_EXAMPLES) $(CSV_EXAMPLES)
+YAML_EXAMPLES := $(patsubst examples/yaml/%.c,$(APP_DIR)/examples/yaml/%$(EXE_EXTENSION),$(YAML_EXAMPLE_SOURCES))
+EXAMPLES := $(JSON_EXAMPLES) $(CSV_EXAMPLES) $(YAML_EXAMPLES)
 
 
 all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build the shared and static libraries
@@ -391,6 +405,12 @@ $(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c $(APP_DIR)/$(TARGET)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
 
+# Pattern rule for YAML example executables
+$(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c $(APP_DIR)/$(TARGET)
+	@printf "\n### Compiling Example: $* ###\n"
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+
 ####################################################################
 # Sanitizer Builds (ASan + UBSan)
 ####################################################################
@@ -413,10 +433,16 @@ $(ASAN_OBJ_DIR)/%.o: src/%.c
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
 
 # ASan-instrumented shared library
+# The soname has to name this file, not the release library's.  Using
+# OS_SPECIFIC_LIBRARY_NAME_FLAG here stamped the instrumented library with the
+# release soname, so every ASan test binary recorded a dependency on
+# libghoti.io-text-0.so.0 - which is not what this file is called and is not in
+# ASAN_APP_DIR.  `make test-asan` died at the first test with "error while
+# loading shared libraries" before running anything.
 $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@printf "\n### Compiling ASan+UBSan-instrumented Shared Library ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
+	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(ASAN_LIBRARY_NAME_FLAG)
 
 # Pattern rule for ASan test executables - uses same TEST_PAIRS
 define asan-test-executable-rule
@@ -468,7 +494,7 @@ test-watch: ## Watch the file directory for changes and run the unit tests
 		inotifywait -qr -e modify -e create -e delete -e move src include tests Makefile --exclude '/\.'; \
 		done
 
-examples: ## Build all JSON and CSV examples
+examples: ## Build all JSON, CSV and YAML examples
 examples: $(APP_DIR)/$(TARGET) $(EXAMPLES)
 	@printf "\033[0;32m\n"
 	@printf "############################\n"
@@ -477,6 +503,7 @@ examples: $(APP_DIR)/$(TARGET) $(EXAMPLES)
 	@printf "\033[0m\n"
 	@printf "JSON examples are available in: $(APP_DIR)/examples/json/\n"
 	@printf "CSV examples are available in: $(APP_DIR)/examples/csv/\n"
+	@printf "YAML examples are available in: $(APP_DIR)/examples/yaml/\n"
 	@printf "\n"
 	@printf "\033[0;33mTo run examples:\033[0m\n"
 ifeq ($(OS_NAME), Linux)
@@ -719,6 +746,10 @@ else
 endif
 
 test-asan: ## Run all tests with AddressSanitizer + UndefinedBehaviorSanitizer (Linux only)
+# LD_PRELOAD is cleared for each run: the ASan runtime has to be first in the
+# initial library list, and a desktop-wide preload (Debian sets
+# libgtk3-nocsd.so.0 in many sessions) gets ahead of it, at which point ASan
+# aborts before the test starts.
 test-asan: $(ASAN_APP_DIR)/$(ASAN_TARGET) $(ASAN_TEST_EXECUTABLES)
 ifeq ($(OS_NAME), Linux)
 	@printf "\033[0;36m\n"
@@ -733,7 +764,7 @@ ifeq ($(OS_NAME), Linux)
 		printf "### Running %s tests (ASan+UBSan) ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
+		LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
 	done
 	@printf "\033[0;32m\n"
 	@printf "###########################################\n"
@@ -758,7 +789,7 @@ ifeq ($(OS_NAME), Linux)
 	printf "\033[1;33m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
 	for test_exe in $(ASAN_TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
-		output=$$(LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
+		output=$$(LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
 		exit_code=$$?; \
 		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
 		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \

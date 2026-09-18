@@ -60,9 +60,13 @@ The CSV examples are located in `examples/csv/` and demonstrate various aspects 
 
 ## YAML Module Examples
 
-The YAML examples demonstrate the streaming parser API with practical applications.
+The YAML examples demonstrate the parser and writer APIs.
 
-**Note:** The YAML module is in active development (February 2026). These examples focus on the implemented streaming parser. DOM and writer examples will be added as those features are completed.
+**Note:** `examples/yaml/` currently holds one program, `yaml_writer_formatting.c`,
+which `make examples` builds into `build/<platform>/<config>/apps/examples/yaml/`.
+The security, streaming and configuration pages linked below are guides rather
+than walkthroughs of files in the tree - the programs they describe have not
+been written yet.
 
 @subpage yaml_examples
 
