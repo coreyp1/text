@@ -541,6 +541,13 @@ GTEXT_API void gtext_csv_stream_free(GTEXT_CSV_Stream * stream) {
   free(stream);
 }
 
+GTEXT_INTERNAL_API void csv_stream_mark_bom_resolved(
+    GTEXT_CSV_Stream * stream) {
+  if (stream) {
+    stream->bom_resolved = true;
+  }
+}
+
 GTEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
     GTEXT_CSV_Stream * stream, const char * input_buffer,
     size_t input_buffer_len) {

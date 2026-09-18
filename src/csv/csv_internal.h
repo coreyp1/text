@@ -265,6 +265,18 @@ GTEXT_INTERNAL_API void csv_stream_set_original_input_buffer(
     size_t input_buffer_len);
 
 /**
+ * @brief Tell a stream that the leading BOM has already been dealt with.
+ *
+ * gtext_csv_parse_table() strips the BOM itself, because the buffer it hands
+ * on is also what in-situ fields and error snippets point into.  Without this
+ * the stream then looked for a BOM at the start of what it was given and
+ * stripped a second one, so a document beginning with two BOMs lost both
+ * through the table parser and one through the streaming parser.  Only the
+ * first is a BOM; a second is a zero-width no-break space, which is data.
+ */
+GTEXT_INTERNAL_API void csv_stream_mark_bom_resolved(GTEXT_CSV_Stream * stream);
+
+/**
  * @brief Generate a context snippet around an error position
  *
  * Extracts a snippet of text around the error position for better error

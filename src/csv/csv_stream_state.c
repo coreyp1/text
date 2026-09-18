@@ -981,9 +981,26 @@ static GTEXT_CSV_Status csv_stream_process_chunk_inner(
   size_t process_len = input_len;
   size_t offset = 0;
 
+  // Every pass must either consume a byte or change state.  A pass that does
+  // neither will repeat forever, and the only thing that stopped it was the
+  // record-byte counter below, which meant a malformed document was answered
+  // slowly and with the wrong error.  Two such passes have been found and
+  // fixed; this turns any that remain into an immediate failure rather than a
+  // second of counting, and makes the next one show up as a test failure
+  // instead of a slow unit.
+  size_t last_offset = (size_t)-1;
+  int last_state = -1;
+
   while (offset < process_len && stream->state != CSV_STREAM_STATE_END) {
     char c = process_input[offset];
     size_t byte_pos = offset;
+
+    if (offset == last_offset && (int)stream->state == last_state) {
+      return csv_stream_set_error(stream, GTEXT_CSV_E_INVALID,
+          "Parser made no progress on this input");
+    }
+    last_offset = offset;
+    last_state = (int)stream->state;
 
     // Check limits
     if (stream->total_bytes_consumed >= stream->max_total_bytes) {

@@ -14,6 +14,9 @@ tools
 
 # Fuzzer crash/leak artifacts (reproducers are promoted to tests instead)
 crash-*
+# libFuzzer also writes one of these for an input that is merely very slow -
+# a finding to act on, not a file to keep.
+slow-unit-*
 leak-*
 timeout-*
 oom-*

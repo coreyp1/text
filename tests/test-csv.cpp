@@ -12281,3 +12281,52 @@ TEST(CsvProgress, LongerMalformedInputIsNoSlower) {
 	}
 	gtext_csv_error_free(&err);
 }
+
+TEST(CsvBom, OnlyTheFirstIsStripped) {
+	/* A BOM is stripped once at the start of a document. A second one is a
+	   zero-width no-break space, which is data. The table parser stripped the
+	   BOM itself and then handed the remainder to the stream, which stripped
+	   another, so a document beginning with two lost both - while the streaming
+	   parser, stripping once, lost only one. Found by the differential fuzzer. */
+	const std::string bom = "\xEF\xBB\xBF";
+
+	struct Case {
+		std::string input;
+		std::string expected_first_field;
+	};
+	const Case cases[] = {
+	    {bom + "a\n", "a"},
+	    {bom + bom + "a\n", bom + "a"},
+	    {bom + bom + bom + "a\n", bom + bom + "a"},
+	    {"a\n", "a"},
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		opts.validate_utf8 = false;
+
+		bool ok = false;
+		auto dom = csv_dom_rows(c.input, &opts, &ok);
+		ASSERT_TRUE(ok);
+		ASSERT_EQ(dom.size(), 1u);
+		EXPECT_EQ(dom[0][0], c.expected_first_field) << "table parser";
+
+		// And chunking must not change it either.
+		for (size_t chunk = 1; chunk <= 4; chunk++) {
+			auto st = csv_stream_chunked(c.input, chunk, &opts, &ok);
+			ASSERT_TRUE(ok) << "chunk=" << chunk;
+			ASSERT_EQ(st.size(), 1u) << "chunk=" << chunk;
+			EXPECT_EQ(st[0][0], c.expected_first_field) << "chunk=" << chunk;
+		}
+	}
+
+	// keep_bom leaves even the first one alone.
+	GTEXT_CSV_Parse_Options keep = gtext_csv_parse_options_default();
+	keep.validate_utf8 = false;
+	keep.keep_bom = true;
+	bool ok = false;
+	auto kept = csv_dom_rows(bom + "a\n", &keep, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(kept.size(), 1u);
+	EXPECT_EQ(kept[0][0], bom + "a");
+}

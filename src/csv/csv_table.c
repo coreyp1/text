@@ -761,6 +761,10 @@ static GTEXT_CSV_Status csv_table_parse_internal(GTEXT_CSV_Table * table,
   // BOM)
   csv_stream_set_original_input_buffer(stream, input, input_len);
 
+  // The BOM was already stripped above, from this very buffer; without saying
+  // so the stream would strip another one from what is left.
+  csv_stream_mark_bom_resolved(stream);
+
   // Feed input
   GTEXT_CSV_Status status =
       gtext_csv_stream_feed(stream, input, input_len, err);
