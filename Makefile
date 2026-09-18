@@ -1047,14 +1047,21 @@ FUZZ_DIR := $(BUILD_DIR)/fuzz
 FUZZ_OBJ_DIR := $(FUZZ_DIR)/objects
 FUZZ_APP_DIR := $(FUZZ_DIR)/apps
 FUZZ_OBJECTS := $(patsubst src/%.c,$(FUZZ_OBJ_DIR)/%.o,$(SOURCES))
+# Included here rather than added to DEPFILES, which is simply-expanded and
+# defined long before FUZZ_OBJECTS exists.
+-include $(FUZZ_OBJECTS:.o=.d)
 FUZZ_CORPUS := tests/fuzz/corpus
 # Long enough to be worth running, short enough for a coffee. Override for a
 # real campaign: make fuzz FUZZ_TIME=3600
 FUZZ_TIME ?= 60
 
+# -MMD -MP -MF for the same reason as the release and ASan rules: without it a
+# header change rebuilds nothing here, and the stale objects disagree with the
+# fresh ones about struct layout.  That shows up as a fuzzer "finding" -
+# a _Bool loaded as 255, a SEGV in free() - in code that is correct.
 $(FUZZ_OBJ_DIR)/%.o: src/%.c
 	@mkdir -p $(@D)
-	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@
+	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 # $1 = harness basename (fuzz_json), $2 = target suffix (json)
 define fuzz-rule
