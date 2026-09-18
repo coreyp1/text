@@ -113,12 +113,13 @@ paragraph, the last on its own line after a horizontal rule.
 
 The value of these pages is that a claim on them can be traced to something
 that runs. The JSON page can name the status code returned for each malformed
-input because each one was parsed and the result recorded. The CSV page can
-say that `validate_utf8` does not validate UTF-8 because the claim was
-checked rather than the code path read. The YAML page can give a
-seven-row table of plain scalars that a reference parser and this one
-disagree about - and can say that the YAML test suite has never been run, so
-nobody knows how long that table really is.
+input because each one was parsed and the result recorded. The CSV page could
+say that `validate_utf8` did not validate UTF-8 - a defect found by checking
+the claim rather than reading the code path, and fixed as a result. The YAML
+page could give a table of plain scalars that a reference parser and this one
+disagreed about, which is how a silent data-loss bug was found and fixed; and
+it still says that the YAML test suite has never been run, so nobody knows
+how long that table really is.
 
 That last sentence is the most useful one on any of the three pages. A format
 page that only lists features is a marketing document. Name the oracle, name

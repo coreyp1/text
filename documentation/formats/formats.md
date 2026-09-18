@@ -62,8 +62,9 @@ JSON has a small, closed grammar and the page's claims are checked case by
 case. CSV has no single grammar to conform to, so its page spends most of its
 length on what the dialect options actually mean. YAML has the largest
 specification of the three by an order of magnitude, no conformance corpus is
-wired up, and its page carries the deviations found so far - including one
-that silently truncates data.
+wired up, and its page carries the deviations found so far - including the
+silent truncation of plain scalars, which a differential comparison against
+PyYAML found and which is now fixed.
 
 ## Adding a format
 

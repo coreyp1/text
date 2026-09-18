@@ -9,8 +9,8 @@ CSV in the wild is not a single format. This module supports a **strict RFC 4180
 ---
 
 @note This page documents the **API**. For the specification-level view -
-RFC 4180 conformance, what each dialect option actually means, the known
-defect in `validate_utf8`, and what evidence backs each claim - see
+RFC 4180 conformance, what each dialect option actually means, the reach of
+`validate_utf8`, and what evidence backs each claim - see
 \ref format_csv "CSV" under
 \ref format_references "Format and specification references".
 

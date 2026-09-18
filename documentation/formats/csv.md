@@ -132,33 +132,35 @@ for consumers that treat a trailing delimiter as an error.
 | Input of a single newline | 0 rows, not an error | |
 | Trailing delimiter | yields a final empty field | |
 | Leading BOM | stripped by default | |
-| Invalid UTF-8 | **accepted** - see below | `validate_utf8` does not do this |
+| Invalid UTF-8 | rejected by default | `GTEXT_CSV_E_INVALID_UTF8`; streaming does not check |
 | Size limits | five, configurable | `GTEXT_CSV_E_LIMIT`, `E_TOO_MANY_ROWS`, `E_TOO_MANY_COLS` |
 
 @anchor csv-deviations
 ## Deviations
 
-**`validate_utf8` does not validate UTF-8.** This is a defect, not a design
-choice, and it is the most important line on this page.
+**Fixed: `validate_utf8` now validates UTF-8.**
 
 `GTEXT_CSV_Parse_Options::validate_utf8` defaults to `true` and is documented
-as "Validate UTF-8 sequences in input". A validator exists and is correct:
-`csv_validate_utf8()` in `src/csv/csv_utils.c`, exercised directly by seven
-cases in `tests/test-csv.cpp`. No production code path calls it. The only
-place the parser reads the option is `src/csv/csv_table.c:625`, where it is
-used to decide whether in-situ mode may alias the input buffer - so the
-option's sole observable effect today is to *disable zero-copy*.
+as "Validate UTF-8 sequences in input". For a long time it did nothing of the
+kind. A validator existed and was correct - `csv_validate_utf8()` in
+`src/csv/csv_utils.c`, exercised directly by seven cases in
+`tests/test-csv.cpp` - but no production path called it. The only place the
+parser read the option was to decide whether in-situ mode could alias the
+input buffer, so the option's sole observable effect was to *disable*
+zero-copy. `GTEXT_CSV_E_INVALID_UTF8` was declared in the public enum and
+raised nowhere.
 
-`GTEXT_CSV_E_INVALID_UTF8` is declared in the public enum and raised nowhere
-in `src/csv/`.
+`gtext_csv_parse_table()` now validates the whole buffer in one pass, after
+BOM stripping and before tokenizing, and returns
+`GTEXT_CSV_E_INVALID_UTF8` with the byte offset of the first bad sequence.
+Lone `FF` bytes, truncated sequences, stray continuation bytes and overlong
+encodings are all rejected; `validate_utf8 = false` still accepts them.
 
-Observed: a field containing the byte `FF`, and a field containing the
-invalid sequence `C3 28`, both parse successfully with default options. The
-JSON module wires the equivalent check through its lexer at
-`src/json/json_lexer.c:844`; CSV has the parts and not the wiring.
-
-Until this is fixed, treat CSV field bytes as untrusted and validate encoding
-in the caller.
+**The streaming parser does not validate.** `gtext_csv_stream_new()` takes
+the same options struct and ignores `validate_utf8`, because a UTF-8 sequence
+can straddle a chunk boundary and incremental validation has not been
+written. Validate in the caller, or use the DOM parser, if the input is
+untrusted and arrives in pieces.
 
 **Bare CR rejected by default**, as described above - stricter than Python's
 `csv` module, which accepts it.
@@ -173,8 +175,9 @@ empty tables, empty and consecutive-empty fields and ragged rows, and
 
 **Direct behavioral check.** The compliance checklist was produced by parsing
 each literal input with `gtext_csv_parse_options_default()` and recording the
-status and the resulting field bytes. The UTF-8 deviation above was found
-that way, by checking a claim rather than a code path.
+status and the resulting field bytes. The UTF-8 defect above was found that
+way, by checking a claim rather than reading a code path, and the fix is
+pinned by four cases in `tests/test-csv.cpp`.
 
 **Fuzzing.** `tests/fuzz/fuzz_csv.cpp` under libFuzzer with ASan and UBSan,
 seeded from `tests/fuzz/corpus/csv/`. CSV's harness consumes the first *two*

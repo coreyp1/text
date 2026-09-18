@@ -129,7 +129,11 @@ typedef struct {
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)
-  bool normalize_unicode; ///< NFC normalization (v2 feature, default: off)
+  /// NFC normalization.  **Not implemented.**  Setting it makes the parse
+  /// fail with GTEXT_JSON_E_INVALID rather than silently returning
+  /// unnormalized text; the field is kept so that enabling it later is not an
+  /// API change.  Default: off.
+  bool normalize_unicode;
   bool in_situ_mode;      ///< Zero-copy mode: reference input buffer directly
                           ///< (default: off)
 

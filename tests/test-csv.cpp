@@ -11913,3 +11913,94 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+/*
+ * validate_utf8 wiring.
+ *
+ * csv_validate_utf8() is exercised directly above, but for a long time no
+ * production path called it: GTEXT_CSV_Parse_Options::validate_utf8 defaulted
+ * to true, was read only to decide whether in-situ mode could alias the input,
+ * and GTEXT_CSV_E_INVALID_UTF8 was returned by nothing.  These tests pin the
+ * option to the behaviour its documentation promises.
+ */
+TEST(CsvUtf8Validation, RejectsInvalidSequencesByDefault) {
+	struct Case {
+		const char *name;
+		std::string input;
+	};
+	const Case cases[] = {
+	    {"lone 0xFF", std::string("a,") + '\xFF' + "\n"},
+	    {"truncated 2-byte", std::string("a,") + '\xC3' + "\n"},
+	    {"bad continuation", std::string("a,") + '\xC3' + '\x28' + "\n"},
+	    {"lone continuation", std::string("a,") + '\x80' + "\n"},
+	    {"overlong 2-byte", std::string("a,") + '\xC0' + '\xAF' + "\n"},
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_CSV_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		ASSERT_TRUE(opts.validate_utf8) << "default should validate";
+
+		GTEXT_CSV_Table *table =
+		    gtext_csv_parse_table(c.input.data(), c.input.size(), &opts, &err);
+		EXPECT_EQ(table, nullptr) << c.name << " should be rejected";
+		EXPECT_EQ(err.code, GTEXT_CSV_E_INVALID_UTF8) << c.name;
+		if (table) {
+			gtext_csv_free_table(table);
+		}
+		gtext_csv_error_free(&err);
+	}
+}
+
+TEST(CsvUtf8Validation, AcceptsValidSequences) {
+	/* U+00E9, U+4E2D, U+1F600 - two, three and four byte sequences. */
+	const std::string input =
+	    std::string("a,") + "\xC3\xA9" + "," + "\xE4\xB8\xAD" + ","
+	    + "\xF0\x9F\x98\x80" + "\n";
+
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Table *table =
+	    gtext_csv_parse_table(input.data(), input.size(), &opts, &err);
+	ASSERT_NE(table, nullptr) << (err.message ? err.message : "unknown");
+	EXPECT_EQ(gtext_csv_col_count(table, 0), 4u);
+	gtext_csv_free_table(table);
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvUtf8Validation, CanBeTurnedOff) {
+	const std::string input = std::string("a,") + '\xFF' + "\n";
+
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.validate_utf8 = false;
+
+	GTEXT_CSV_Table *table =
+	    gtext_csv_parse_table(input.data(), input.size(), &opts, &err);
+	ASSERT_NE(table, nullptr) << "opting out should still parse the bytes";
+	EXPECT_EQ(gtext_csv_col_count(table, 0), 2u);
+	gtext_csv_free_table(table);
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvUtf8Validation, ReportsOffsetPastAStrippedBom) {
+	/* The offset must be relative to the caller's buffer, BOM included. */
+	const std::string input =
+	    std::string("\xEF\xBB\xBF") + "ab," + '\xFF' + "\n";
+
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Table *table =
+	    gtext_csv_parse_table(input.data(), input.size(), &opts, &err);
+	EXPECT_EQ(table, nullptr);
+	EXPECT_EQ(err.code, GTEXT_CSV_E_INVALID_UTF8);
+	EXPECT_EQ(err.byte_offset, 6u) << "3 BOM bytes + \"ab,\"";
+	if (table) {
+		gtext_csv_free_table(table);
+	}
+	gtext_csv_error_free(&err);
+}

@@ -105,16 +105,18 @@ conformance corpus is wired up, so read
 compliant".
 
 **CSV — stable.** RFC 4180 by default, with configurable dialects and
-support for ragged rows. One known defect: the `validate_utf8` option does
-not validate UTF-8. See [the CSV page](@ref format_csv).
+support for ragged rows. `validate_utf8` is honored by the DOM parser; the
+streaming parser does not yet check encoding. See
+[the CSV page](@ref format_csv).
 
 **YAML — alpha.** Block and flow collections, all five scalar styles,
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
-conversion. The API may change before 1.0. One known data-loss defect: a
-plain scalar containing ` - `, ` , ` or ` : ` is silently truncated, so
-quote such values. The YAML test suite has never been run against this
-parser, which means conformance is unmeasured rather than partial. See
+conversion. The API may change before 1.0. The YAML test suite has never been
+run against this parser, so conformance to 1.2.2 is unmeasured rather than
+partial; a differential comparison against PyYAML found and fixed the silent
+truncation of plain scalars containing ` - `, ` , ` or ` # `. Multi-line and
+flow plain scalars containing spaces are still unsupported. See
 [the YAML page](@ref format_yaml).
 
 ## Macros and Utilities

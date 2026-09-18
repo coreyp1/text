@@ -9034,3 +9034,47 @@ int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+/*
+ * normalize_unicode was declared, documented as a v2 feature, and read by
+ * nothing: setting it produced unnormalized output with no indication that the
+ * request had been dropped.  Until NFC is implemented the option must fail
+ * loudly instead.
+ */
+TEST(JsonNormalizeUnicode, IsRefusedRatherThanIgnored) {
+	const char *src = "{\"a\":\"e\\u0301\"}";
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_FALSE(opts.normalize_unicode) << "must stay off by default";
+
+	opts.normalize_unicode = true;
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	EXPECT_EQ(v, nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_INVALID);
+	if (v) {
+		gtext_json_free(v);
+	}
+	gtext_json_error_free(&err);
+
+	/* The streaming parser refuses it at construction for the same reason. */
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+	                             GTEXT_JSON_Error *) { return GTEXT_JSON_OK; };
+	GTEXT_JSON_Stream *st = gtext_json_stream_new(&opts, cb, nullptr);
+	EXPECT_EQ(st, nullptr);
+	if (st) {
+		gtext_json_stream_free(st);
+	}
+}
+
+TEST(JsonNormalizeUnicode, DefaultOptionsStillParse) {
+	const char *src = "{\"a\":\"e\\u0301\"}";
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(v, nullptr) << (err.message ? err.message : "unknown");
+	gtext_json_free(v);
+	gtext_json_error_free(&err);
+}

@@ -155,57 +155,71 @@ semantically equal to the input, not textually equal.
 | Depth | 256 default | `GTEXT_YAML_E_DEPTH` |
 | Comment round-trip | opt-in retention | not preserved on write by default |
 | Scalar style round-trip | no | |
-| **Plain scalars containing `-`, `,` or `:`** | **no - truncated** | see below |
+| Plain scalars containing `-`, `,`, `?`, `#` | yes, since the §7.3.3 fix | `: ` and ` #` still end the scalar |
+| Multi-line plain scalars | no | use a quoted or block scalar |
+| Flow plain scalars with spaces | no | `[a - b]` does not parse |
 
 @anchor yaml-deviations
 ## Deviations
 
-**Plain scalars are truncated at an embedded indicator. Silently.**
+**Fixed: plain scalars are no longer truncated at an embedded indicator.**
 
-This is a data-loss bug and the most serious thing on any of these pages.
+A block-context plain scalar used to end at a space followed by `-`, `,` or
+`:`, as though the scanner were in flow context, discarding the rest of the
+value with no error and no warning. `key: a - b c` yielded `a`. The scanner
+now follows §7.3.3: `c-indicator` (§5.3) restricts those characters to the
+position where a node may *begin*, and `ns-plain-char` makes them ordinary
+content thereafter. Flow context got the same correction, which is why
+`key: [a-b, c]` now parses at all.
 
-A block-context plain scalar ends at a space followed by `-`, `,` or `:`, as
-though the scanner were in flow context. The remainder of the value is
-discarded, no error is raised and no warning is emitted. Checked against
-PyYAML as an oracle:
+Each row below was cross-checked against PyYAML and is pinned by a case in
+`tests/yaml/test-yaml-plain-scalars.cpp`:
 
-| Input | PyYAML | This parser |
-|---|---|---|
-| `key: a - b c` | `a - b c` | `a` |
-| `key: a -b c` | `a -b c` | `a` |
-| `key: a b - c` | `a b - c` | `a b` |
-| `key: a, b` | `a, b` | `a` |
-| `key: 3 - 4` | `3 - 4` | `3` |
-| `key: a : b` | `ScannerError` | `a` |
-| `key: a # b` | `a` | `a` — correct |
-| `key: a-b c` | `a-b c` | `a-b c` — correct |
+| Input | PyYAML | Before | Now |
+|---|---|---|---|
+| `key: a - b c` | `a - b c` | `a` | `a - b c` |
+| `key: a -b c` | `a -b c` | `a` | `a -b c` |
+| `key: a b - c` | `a b - c` | `a b` | `a b - c` |
+| `key: a, b` | `a, b` | `a` | `a, b` |
+| `key: 3 - 4` | `3 - 4` | `3` | `3 - 4` |
+| `key: a ? b` | `a ? b` | `a` | `a ? b` |
+| `key: end-` | `end-` | `end` | `end-` |
+| `key: a#b` | `a#b` | `a` | `a#b` |
+| `key: a :b c` | `a :b c` | `a` | `a :b c` |
+| `key: [a-b, c]` | `['a-b', 'c']` | fails to parse | `['a-b', 'c']` |
+| `key: a # b` | `a` | `a` | `a` — unchanged, correct |
+| `key: a-b c` | `a-b c` | `a-b c` | `a-b c` — unchanged, correct |
 
-Per §7.3.3, `,`, `[`, `]`, `{` and `}` are indicators only in flow context;
-in block context they are ordinary plain-scalar characters. A `-` is an
-indicator only at the start of a token followed by a space. A `:` followed by
-a space genuinely does end a plain scalar - but it should then be a parse
-error in this position, not a silent truncation.
-
-The last two rows are the control cases: `#` after a space correctly starts a
-comment, and a `-` with no preceding space is correctly kept, which locates
-the fault in the space-then-indicator transition rather than in indicator
+The last two are control cases: `#` after a space still opens a comment, and
+a `-` with no space before it was always kept, which is what located the
+fault in the space-then-indicator transition rather than in indicator
 handling generally.
 
-Until this is fixed, **quote any plain scalar that may contain a dash, comma
-or colon**. Ranges (`1 - 10`), lists written inline (`a, b`), times
-(`12:00`) and prose containing a dash are all affected.
+Of a 48-case comparison against PyYAML, agreement went from 11 to 38. The
+ten that still differ are listed under
+[Tested scope](#yaml-tested-scope); four of them are cases where this parser
+is right and PyYAML is applying YAML 1.1 rules.
 
-`documentation/YAML-LIMITATIONS.md`, now folded into this page, described this
-as "plain scalars are space-delimited tokens (breaks multi-word values)".
-That description is out of date in a way that understates and mislocates the
-problem: ordinary multi-word plain scalars work correctly, and
-`key: hello world here` yields the whole of `hello world here`. What remains
-broken is narrower, and harder to notice.
+**Still open: `key: a : b` is truncated rather than rejected.** A `:`
+followed by a space does end a plain scalar, and PyYAML raises a
+`ScannerError` for the trailing `b`. This parser yields `a` and discards the
+rest. It is the one remaining case in that family, and it is a malformed
+document either way.
+
+**Still open: a block plain scalar does not continue onto the next line.**
+`key: a\n  b` is `a b` to PyYAML and `a` here. Multi-line plain scalars
+(§7.3.3's `ns-plain-multi-line`) are not implemented; quote or use a block
+scalar.
+
+**Still open: flow plain scalars cannot contain spaces.** `key: [a - b, c]`
+is two entries to PyYAML and does not parse here. Block context gained
+multi-word plain scalars; flow context has not.
 
 **`!!timestamp`, `!!set`, `!!omap` and `!!pairs` are honored at all**, which
 1.2 does not require, since they are 1.1 repository types. Parsers that
 implement 1.2 strictly will reject or ignore them.
 
+@anchor yaml-tested-scope
 ## Tested scope
 
 **Tests.** 61 test files under `tests/yaml/`, part of a suite that runs 1750
@@ -263,9 +277,14 @@ before trusting the word "conformant" anywhere near this parser.
 
 Alpha. The API may change before 1.0. The parser is appropriate for
 configuration files from sources you control, and for prototyping. For
-untrusted input use `gtext_yaml_parse_options_safe()` - and note that safe
-mode bounds resource consumption and does nothing about the truncation bug,
-which affects trusted and untrusted documents equally.
+untrusted input use `gtext_yaml_parse_options_safe()`, which bounds resource
+consumption.
+
+The silent-truncation defect that previously made every plain scalar suspect
+is fixed. What remains open is narrower and listed under
+[Deviations](#yaml-deviations): multi-line plain scalars, flow plain scalars
+containing spaces, and one malformed input reported as truncation rather
+than as an error.
 
 ---
 

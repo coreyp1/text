@@ -1253,11 +1253,32 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
           next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
         }
         
-        /* Always break if followed by structural elements or EOF */
+        /* Break at end of input or end of line. */
         if (next_c == -1 || next_c == '\r' || next_c == '\n') break;
-        if (next_c == ':' || next_c == '-' || next_c == '?') break;
-        if (next_c == '#' || next_c == '&' || next_c == '*') break;
-        if (next_c == '[' || next_c == ']' || next_c == '{' || next_c == '}' || next_c == ',') break;
+
+        /* " #" starts a comment (7.3.3): a '#' only does so when it follows
+           whitespace, which is exactly the case being looked at here. */
+        if (next_c == '#') break;
+
+        /* ": " is the value indicator and ends the scalar.  A ':' followed by
+           anything else is ordinary content, so " :b" is not a terminator. */
+        if (next_c == ':') {
+          int after_colon = -1;
+          if (s->cursor + look + ws_len + 1 < s->input.len) {
+            after_colon =
+                (unsigned char)s->input.data[s->cursor + look + ws_len + 1];
+          }
+          if (after_colon == -1 || after_colon == ' ' || after_colon == '\t'
+              || after_colon == '\r' || after_colon == '\n') {
+            break;
+          }
+        }
+
+        /* Everything else - '-', '?', ',', '[', ']', '{', '}', '&', '*', '!',
+           '|', '>', '%' - is an indicator only where a node may begin, not in
+           the middle of one.  In block context they are plain content, so
+           "a - b", "a, b" and "1 - 2" keep their whole value.  Breaking here
+           is what silently truncated them. */
         
         /* Only include space if we've already collected significant content
            AND what follows looks like continuation of the same value */
@@ -1287,26 +1308,42 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         }
       }
       
-      /* Check for list/key indicators */
-      if (c == '-' || c == '?') {
-        int next_c = -1;
-        if (s->cursor + look + 1 < s->input.len) {
-          next_c = (unsigned char)s->input.data[s->cursor + look + 1];
+      /* The remaining indicators matter only at the point where a node may
+         begin.  Once the scalar has content they are plain characters, so
+         "a#b", "end-" and "a ! b" are whole values.  c-indicator (5.3)
+         applies to the first character; ns-plain-char (7.3.3) to the rest. */
+      if (scalar.len == 0) {
+        /* "- " and "? " begin a block entry or an explicit key. */
+        if (c == '-' || c == '?') {
+          int next_c = -1;
+          if (s->cursor + look + 1 < s->input.len) {
+            next_c = (unsigned char)s->input.data[s->cursor + look + 1];
+          }
+          if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c == '\n') {
+            break;
+          }
         }
-        if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c == '\n') {
-          break;
-        }
+
+        if (c == '#' || c == '&' || c == '*' || c == '!') break;
+        if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') break;
+        if (c == '|' || c == '>' || c == '%') break;
       }
-      
-      /* Other structural indicators */
-      if (c == '#' || c == '&' || c == '*' || c == '!') break;
-      if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') break;
-      if (c == '|' || c == '>' || c == '%') break;
     } else {
-      /* In flow context, plain scalars are space-delimited (original behavior)
-         Also applies to anchor/alias names which must be space-delimited */
+      /* In flow context, and for anchor/alias names, a plain scalar is
+         space-delimited. */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
-      if (is_indicator_char(c)) {
+
+      /* The flow indicators always end the scalar: without them the
+         collection could never be closed. */
+      if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break;
+
+      /* ':' separates a key from its value here regardless of what follows. */
+      if (c == ':') break;
+
+      /* The rest are indicators only where a node may begin (5.3).  Mid-scalar
+         they are content, so "[a-b, c]" holds "a-b" rather than ending the
+         scalar at the dash. */
+      if (scalar.len == 0 && is_indicator_char(c)) {
         if (!(s->last_indicator == '!' && c == '!')) break;
       }
     }

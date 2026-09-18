@@ -1520,6 +1520,22 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
     return NULL;
   }
 
+  // normalize_unicode has never been implemented.  Refuse it rather than
+  // accept the option and silently hand back unnormalized text: a caller that
+  // asked for NFC and did not get it would have no way to tell.
+  if (opt && opt->normalize_unicode) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "normalize_unicode is not implemented",
+          .line = 1,
+          .col = 1};
+    }
+    if (bytes_consumed) {
+      *bytes_consumed = 0;
+    }
+    return NULL;
+  }
+
   // Input size validation: check for reasonable input size before processing
   // This is a defensive check - actual limits are enforced during parsing
   if (len > SIZE_MAX / 2) {

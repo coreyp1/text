@@ -24,10 +24,13 @@ the `!!timestamp`/`!!set`/`!!omap`/`!!pairs` types with validation, custom
 application tags, UTF-8/16/32 input with BOM detection, limit enforcement,
 and conversion to JSON.
 
-**Known defect:** a block-context plain scalar containing ` - `, ` , ` or
-` : ` is silently truncated at the indicator. Quote such values. The case
-table and the reference-parser comparison are on
-\ref format_yaml "the YAML format page".
+**Recently fixed:** block-context plain scalars containing ` - `, ` , `,
+` ? ` or a bare `#` were silently truncated at the indicator; they are now
+kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
+the PyYAML comparison are on \ref format_yaml "the YAML format page".
+
+**Still unsupported:** multi-line plain scalars, and flow plain scalars
+containing spaces. Quote those, or use a block scalar.
 
 **Unmeasured:** the [YAML test suite](https://github.com/yaml/yaml-test-suite)
 has never been run against this parser, so conformance to 1.2.2 is not

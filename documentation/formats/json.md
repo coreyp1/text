@@ -199,9 +199,12 @@ page means "compliant as far as the cases below reach".
   factored or recursive.
 - **No JSONPath**, listed as future work on the
   \ref json_module "JSON module page".
-- **`normalize_unicode` is declared and does nothing.** The option exists in
-  `GTEXT_JSON_Parse_Options` and is documented as a v2 feature; NFC
-  normalization is not performed. It is inert, not partial.
+- **`normalize_unicode` is not implemented, and now says so.** NFC
+  normalization is not performed. The option used to be accepted and ignored,
+  so a caller who asked for normalization got unnormalized text with no way to
+  tell; setting it now fails the parse with `GTEXT_JSON_E_INVALID`, and
+  `gtext_json_stream_new()` returns NULL. The field is kept so that
+  implementing NFC later is not an API change.
 - **No JSONTestSuite integration**, as above.
 - **Error messages are coarse.** Several distinct lexer failures report the
   string `"Lexer error"`. The status code distinguishes them; the message does

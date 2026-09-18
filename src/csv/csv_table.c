@@ -836,6 +836,38 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
     }
   }
 
+  // Validate the encoding before tokenizing.  csv_validate_utf8() has always
+  // existed and been tested directly, but nothing called it, so validate_utf8
+  // silently did nothing and GTEXT_CSV_E_INVALID_UTF8 was never returned.
+  // Checking the whole buffer once here costs a single pass and gives the
+  // offset of the first bad byte.
+  if (opts->validate_utf8) {
+    csv_position vpos = {0, 1, 1};
+    GTEXT_CSV_Status utf8_status = GTEXT_CSV_OK;
+    csv_utf8_result utf8 =
+        csv_validate_utf8(input, input_len, &vpos, true, &utf8_status);
+    if (utf8 != CSV_UTF8_VALID) {
+      // A truncated sequence at the end of a complete buffer is malformed,
+      // not a request for more input; only the streaming parser can wait.
+      GTEXT_CSV_Status code = (utf8_status != GTEXT_CSV_OK)
+                                  ? utf8_status
+                                  : GTEXT_CSV_E_INVALID_UTF8;
+      CSV_SET_ERROR(err, code,
+          utf8 == CSV_UTF8_INCOMPLETE
+              ? "Truncated UTF-8 sequence at end of input"
+              : "Invalid UTF-8 sequence in input");
+      if (err) {
+        // Offsets are relative to the caller's buffer, so re-add any BOM.
+        err->byte_offset = vpos.offset + (len - input_len);
+        err->line = vpos.line;
+        err->column = vpos.column;
+      }
+      free(table);
+      csv_context_free(ctx);
+      return NULL;
+    }
+  }
+
   // Set input buffer for in-situ mode (use adjusted input after BOM stripping)
   if (opts->in_situ_mode) {
     csv_context_set_input_buffer(ctx, input, input_len);

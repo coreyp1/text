@@ -886,6 +886,12 @@ GTEXT_API GTEXT_JSON_Stream * gtext_json_stream_new(
     return NULL;
   }
 
+  // normalize_unicode has never been implemented; refuse it rather than
+  // silently ignore it.  See json_parse_internal() for the same check.
+  if (opt && opt->normalize_unicode) {
+    return NULL;
+  }
+
   GTEXT_JSON_Stream * st =
       (GTEXT_JSON_Stream *)calloc(1, sizeof(GTEXT_JSON_Stream));
   if (!st) {
