@@ -29,7 +29,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
-| 8 | No dialect presets and no sniffing | CSV | small friction, common need |
+| 8 | ~~No dialect presets~~ **fixed**; no sniffing | CSV | was: small friction, common need |
 
 Findings 1 and 3 are properties of the shared template rather than of `text`,
 so they belong in the suite's `SUITE-TODO.md` rather than being fixed in this
@@ -316,10 +316,11 @@ suite*, not in the parser, and it is now closed:
 **Missing.**
 
 - A pull reader, as above.
-- Dialect presets. TSV, semicolon and backslash-escape dialects exist as test
-  fixtures in `tests/data/csv/dialects/` but are not exported, so every caller
-  rebuilds them field by field. `gtext_csv_dialect_default()` is the only
-  constructor.
+- ~~Dialect presets.~~ **Added**: `gtext_csv_dialect_tsv()`, `_semicolon()`,
+  `_backslash_escape()`, `_excel()` and `_permissive()`. Exporting them turned
+  into a correctness pass - writing a test per preset was the first time
+  several dialect options had been exercised, and three of them turned out to
+  do nothing at all. See the \ref format_csv "CSV page".
 - Dialect sniffing, equivalent to Python's `csv.Sniffer`.
 - Quoting policies beyond a `quote_all_fields` boolean. Python offers minimal,
   all, non-numeric and none; only the first two are reachable here.
