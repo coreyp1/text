@@ -243,8 +243,14 @@ ambiguous cases, and comparing against them would say which of this parser's
 choices are unusual. Today the answer is "unknown except where this page
 names it".
 
-No round-trip property test asserts that writing a table and reparsing it
-yields the same table.
+**Round-trip is now pinned.** `CsvRoundTrip.WriteThenReparsePreservesFields`
+in `tests/test-csv.cpp` parses, writes and reparses twelve documents chosen
+for difficulty - embedded delimiters, doubled quotes, embedded newlines,
+empty and consecutive-empty fields, a trailing delimiter, preserved
+surrounding spaces, CRLF, ragged rows, multi-byte UTF-8, a field whose only
+content is a quote character, and a record of nothing but delimiters - and
+requires the fields to come back identical. The property held before the test
+was written, so this pins existing behavior rather than recording a fix.
 
 ## Not implemented
 
@@ -256,7 +262,6 @@ yields the same table.
   the caller setting fields, and no named presets are exported.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
   dates, by design.
-- **No round-trip property test**, as above.
 - **`validate_utf8` in the streaming parser**, as above.
 - **A coherent `allow_unquoted_newlines`**, as above.
 

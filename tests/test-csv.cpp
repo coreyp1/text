@@ -12330,3 +12330,84 @@ TEST(CsvBom, OnlyTheFirstIsStripped) {
 	ASSERT_EQ(kept.size(), 1u);
 	EXPECT_EQ(kept[0][0], bom + "a");
 }
+
+namespace {
+
+// Serialize a table back to CSV with the default writer.  Returns false if
+// either the sink or the writer refuses.
+bool csv_write_rows(const std::string &src,
+    const GTEXT_CSV_Parse_Options *opts, std::string *out) {
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table *t =
+	    gtext_csv_parse_table(src.data(), src.size(), opts, &err);
+	gtext_csv_error_free(&err);
+	if (!t) {
+		return false;
+	}
+	GTEXT_CSV_Sink sink;
+	if (gtext_csv_sink_buffer(&sink) != GTEXT_CSV_OK) {
+		gtext_csv_free_table(t);
+		return false;
+	}
+	GTEXT_CSV_Write_Options wo = gtext_csv_write_options_default();
+	bool wrote = gtext_csv_write_table(&sink, &wo, t) == GTEXT_CSV_OK;
+	if (wrote) {
+		out->assign(gtext_csv_sink_buffer_data(&sink),
+		    gtext_csv_sink_buffer_size(&sink));
+	}
+	gtext_csv_sink_buffer_free(&sink);
+	gtext_csv_free_table(t);
+	return wrote;
+}
+
+} // namespace
+
+// Parsing a document, writing it back out and parsing the result must yield
+// the same fields.  The CSV page listed this as an untested property; the
+// September 2026 competitive audit found the property already holds, so this
+// pins it rather than changing anything.
+TEST(CsvRoundTrip, WriteThenReparsePreservesFields) {
+	const std::string docs[] = {
+	    "a,b\n1,2\n",                    // plain
+	    "a,\"x,y\"\n",                   // embedded delimiter
+	    "a,\"he said \"\"hi\"\"\"\n",    // embedded doubled quote
+	    "a,\"line1\nline2\"\n",          // embedded newline
+	    "a,,c\n,,\n",                    // empty and consecutive-empty fields
+	    "a,b,\n",                        // trailing delimiter
+	    "  a  ,  b  \n",                 // surrounding spaces are content
+	    "a,b\r\n1,2\r\n",                // CRLF
+	    "a,b,c\n1\n2,3\n",               // ragged rows
+	    "\xC3\xA9,\xE6\x97\xA5\xE6\x9C\xAC\n", // multi-byte UTF-8
+	    "\"\"\"\",x\n",                  // a field whose content is one quote
+	    ",,,\n",                         // nothing but delimiters
+	};
+
+	for (const auto &doc : docs) {
+		bool ok = false;
+		auto before = csv_dom_rows(doc, nullptr, &ok);
+		ASSERT_TRUE(ok) << "parse failed for [" << doc << "]";
+
+		std::string written;
+		ASSERT_TRUE(csv_write_rows(doc, nullptr, &written))
+		    << "write failed for [" << doc << "]";
+
+		bool ok2 = false;
+		auto after = csv_dom_rows(written, nullptr, &ok2);
+		ASSERT_TRUE(ok2) << "reparse failed for [" << doc << "] -> ["
+		                 << written << "]";
+
+		ASSERT_EQ(before.size(), after.size())
+		    << "row count changed for [" << doc << "] -> [" << written << "]";
+		for (size_t r = 0; r < before.size(); r++) {
+			ASSERT_EQ(before[r].size(), after[r].size())
+			    << "column count changed at row " << r << " for [" << doc
+			    << "] -> [" << written << "]";
+			for (size_t c = 0; c < before[r].size(); c++) {
+				EXPECT_EQ(before[r][c], after[r][c])
+				    << "field (" << r << "," << c << ") changed for [" << doc
+				    << "] -> [" << written << "]";
+			}
+		}
+	}
+}
