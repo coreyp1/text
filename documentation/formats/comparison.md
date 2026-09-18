@@ -1,0 +1,343 @@
+@page format_comparison Comparison with other libraries
+
+# Comparison with other libraries
+
+The goal this page measures against is a specific one: that a project could
+choose `ghoti.io/text` *instead of* libyaml, RapidJSON, libcsv or PyYAML, and
+not give anything up that it depended on. That is a higher bar than "parses
+the format correctly", which the \ref format_references "format pages" already
+cover. This page is about what a migrating caller would find missing.
+
+Everything below was checked by compiling and running against the library, not
+by reading headers. Where a number appears, the program that produced it is
+named. Claims about *other* libraries are from their published feature sets
+and are marked as such; only this library and the Python standard library were
+measured here, on one machine, in one sitting.
+
+---
+
+## Summary: what would block an adoption today
+
+Ordered by how many callers it stops, not by how hard it is to fix.
+
+| # | Finding | Scope | Severity |
+|---|---|---|---|
+| 1 | No `LICENSE` file, so the terms of use are undefined | suite-wide | blocks all adoption |
+| 2 | JSON Schema silently ignores 14 standard keywords | JSON | silently wrong results |
+| 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
+| 4 | No custom allocator hook in any format | all three | blocks embedded and arena callers |
+| 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
+| 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
+| 7 | Thread-safety is documented for CSV only | JSON, YAML | unanswerable question |
+| 8 | No dialect presets and no sniffing | CSV | small friction, common need |
+
+Findings 1 and 3 are properties of the shared template rather than of `text`,
+so they belong in the suite's `SUITE-TODO.md` rather than being fixed in this
+repository alone. See section 12 of `CONVENTIONS.md` for why.
+
+---
+
+## 1. The license is the first blocker
+
+There is no `LICENSE` file in this repository. Source files carry
+`Copyright 2026 by Corey Pennycuff` and no grant of any kind, which under
+default copyright means no one may use the library at all.
+
+This is not a new observation. `CONVENTIONS.md` already lists `LICENSE` (MIT)
+as part of the required repository layout, and its departures table records
+that `cutil` is the only library that has one, with the note that the other
+six should. `cutil/LICENSE` is a standard MIT text and is the obvious
+template.
+
+It is listed first because the stated reason for building this library is that
+the alternatives have licenses that do not suit. A library with no license is
+strictly worse on that axis than the libraries it means to replace: libyaml is
+MIT, RapidJSON is MIT, and PyYAML is MIT. Nothing else on this page matters to
+an outside adopter until this is resolved.
+
+---
+
+## 2. JSON Schema accepts schemas it does not enforce
+
+`gtext_json_schema_compile()` accepts a schema containing keywords the engine
+does not implement, and `gtext_json_schema_validate()` then returns
+`GTEXT_JSON_OK` for instances those keywords should reject. A caller who ports
+a working draft-07 schema gets a validator that approves everything the
+unimplemented half of the schema was meant to catch, with no error at compile
+time and no warning at validation time.
+
+The eleven keywords the header lists all work. These fourteen are accepted and
+ignored, each verified by compiling a schema using it and validating an
+instance that violates it:
+
+| Keyword | Instance that should fail | Result |
+|---|---|---|
+| `$ref` | `123` against a string definition | passes |
+| `allOf` | `123` against a string branch | passes |
+| `anyOf` | `123` against a string branch | passes |
+| `oneOf` | `123` against a string branch | passes |
+| `not` | `123` against a negated integer | passes |
+| `pattern` | `"zzz"` against `^a+$` | passes |
+| `additionalProperties` | an extra property under `false` | passes |
+| `uniqueItems` | `[1,1]` | passes |
+| `multipleOf` | `7` against a multiple of 10 | passes |
+| `exclusiveMaximum` | `5` against an exclusive 5 | passes |
+| `if` / `then` | `99` against a maximum of 3 | passes |
+| `contains` | `[1,2]` with no string | passes |
+| `propertyNames` | a non-matching key | passes |
+| `dependentRequired` | a missing dependent key | passes |
+
+Ignoring a genuinely unknown keyword is correct JSON Schema behavior, and the
+engine does that too: a made-up keyword is ignored, as it should be. The defect
+is that standard keywords are indistinguishable from made-up ones, so the
+engine cannot tell a caller that it did not understand the schema it was given.
+
+This is the same failure shape as the `validate_utf8` defect fixed earlier in
+this repository: an option that names a guarantee, and does not provide it,
+with no way for a caller to notice. The remedy does not require implementing
+the keywords. Rejecting a schema that uses a keyword the engine does not
+implement would convert a silent wrong answer into a loud, actionable one,
+and it is a much smaller change than the fourteen implementations.
+
+**How this compares.** Full draft-07 or 2020-12 validation is the normal
+offering elsewhere: `ajv`, `jsonschema`, and `valijson` all implement `$ref`
+and the applicator keywords, because without `$ref` a schema cannot be
+recursive or modular. The absence of `$ref` alone rules out most real schemas.
+
+---
+
+## 3. The optimized build is not the one anyone gets
+
+The `Makefile` sets `CFLAGS := ... -std=c17 -O0 -g`, and the directory it
+writes to is named `build/linux/release`. There is no separate optimized
+configuration, so the library a caller links against after a plain `make` is
+unoptimized.
+
+Rebuilding with `EXTRA_CFLAGS="-O2"` and re-running the same benchmark on the
+same inputs:
+
+| Parser | `release` as shipped (`-O0`) | Rebuilt `-O2` | Gain |
+|---|---|---|---|
+| JSON DOM parse | 37.4 MB/s | 57.5 MB/s | 1.5x |
+| CSV DOM parse | 47.4 MB/s | 101.8 MB/s | 2.1x |
+
+Because `CFLAGS` appends `$(EXTRA_CFLAGS)` after `-O0`, the override works
+without editing the file, which is what made the measurement easy. That same
+ordering is what makes the default harmless to change.
+
+This is template-wide, not specific to `text`.
+
+---
+
+## 4. Throughput
+
+Measured with a 3.7 MB JSON document of 20,000 records and a 12.4 MB CSV of
+200,000 rows, best of three runs each, library built `-O2`, compared against
+the Python standard library on the same machine and the same files.
+
+| Parser | This library | Python stdlib | Ratio |
+|---|---|---|---|
+| JSON to DOM | 57.5 MB/s | 151.5 MB/s (`json.loads`) | 0.38x |
+| CSV to DOM | 101.8 MB/s | 110.7 MB/s (`csv.reader`) | 0.92x |
+
+**CSV is competitive.** Parity with the Python C implementation is a
+reasonable place for a general-purpose C parser to sit.
+
+**JSON is not.** Being 2.6x slower than Python's standard library is a poor
+showing for a C library, and the gap against the libraries people pick JSON
+parsers for is far larger: RapidJSON and yyjson are positioned an order of
+magnitude above this, and simdjson one beyond that. A caller choosing a JSON
+parser on speed will not choose this one.
+
+A `gprof` profile of both parsers shows no single dominant hotspot; the cost is
+spread across per-byte state-machine work. Two structural observations worth
+following up, neither yet acted on:
+
+- The CSV table parser runs on top of the streaming parser, paying an event
+  callback per field and a position update per byte, at 17.4 million calls to
+  `csv_stream_advance_position()` for the 12.4 MB input.
+- `json_get_limit()` is called 1.8 million times parsing 3.7 MB, which is a
+  limits lookup on the hot path rather than a value hoisted before the loop.
+
+Both are guesses about where the time goes, stated as guesses. Neither has
+been confirmed by changing the code and re-measuring, which is the only thing
+that would settle it.
+
+---
+
+## 5. No custom allocator hook
+
+None of the three formats lets a caller supply an allocator. There is no
+`malloc`/`free` pair, no opaque user pointer, and no arena handle in any public
+options struct. Internally the parsers do use arenas, so the machinery is
+there; it is simply not reachable.
+
+This is a hard requirement in several of the markets this library would be
+adopted into: embedded targets that forbid `malloc` after startup, game engines
+with frame allocators, and any host that wants allocation accounted per
+subsystem. RapidJSON makes the allocator a template parameter, yyjson takes an
+allocator struct, jansson has `json_set_alloc_funcs()`, and libyaml lets the
+caller control the emitter buffer. It is the most commonly cited reason to
+reject a C parser outright.
+
+---
+
+## 6. Push streaming exists everywhere; pull only in YAML
+
+| Format | DOM | Push (feed) | Pull (next) |
+|---|---|---|---|
+| JSON | yes | `gtext_json_stream_feed()` | none |
+| CSV | yes | `gtext_csv_stream_feed()` | none |
+| YAML | yes | `gtext_yaml_stream_feed()` | `gtext_yaml_reader_next()` |
+
+YAML's pull reader is the interface a caller wants when the consuming code owns
+the loop, which is the usual case when parsing into an application's own types.
+With only a push interface, a JSON or CSV caller has to invert control, hold
+their own state machine, and reassemble structure across callbacks.
+
+`gtext_yaml_reader_next()` shows the intended shape already exists in this
+codebase, which makes the asymmetry an omission rather than a design position.
+For JSON in particular, the pull reader is the interface that the fastest
+competing libraries lead with.
+
+---
+
+## 7. Thread safety is documented once
+
+`documentation/modules/CSV.md` states plainly that the module is not
+thread-safe, that a table belongs to one thread, and that distinct tables may
+be used concurrently because they share no state. That is exactly what a caller
+needs to know.
+
+Neither the JSON nor the YAML documentation says anything on the subject. The
+answer is very probably the same for all three, but a caller integrating into a
+threaded server cannot act on a probably. This is a documentation gap, not
+necessarily a code one, and it is cheap to close.
+
+---
+
+## 8. Per-format feature comparison
+
+### JSON
+
+Compared against nlohmann/json, RapidJSON, jansson and cJSON.
+
+**Present, and competitive.** DOM with typed accessors; push streaming; a
+writer with buffer and fixed-buffer sinks; file read and write; JSON Pointer
+(RFC 6901); JSON Patch (RFC 6902); JSON Merge Patch (RFC 7386); duplicate-key
+policy with four modes including collect-into-array; number handling that keeps
+the original lexeme and offers exact `int64`, `uint64`, `double` and
+string-backed big decimal; in-situ zero-copy parsing; depth, string, element
+and total-size limits; JSONC comments, trailing commas, single quotes,
+non-finite numbers and unescaped controls as opt-in extensions; canonical
+output with sorted keys; error reporting with offset, line, column, a context
+snippet and a caret.
+
+That patch and pointer set is better than most C JSON libraries ship. The
+duplicate-key modes and the preserved lexeme are genuinely uncommon and are
+real advantages over cJSON and jansson.
+
+**Missing.**
+
+- A pull reader, as above.
+- Schema beyond the core subset, and honest failure when a schema exceeds it.
+- A custom allocator.
+- NFC normalization. `normalize_unicode` now fails loudly rather than silently
+  doing nothing, which is the right interim behavior, but the feature is absent.
+- JSON5 proper, as distinct from the JSONC subset that is supported.
+- Conversion to YAML. The reverse direction exists.
+- SIMD-accelerated scanning, which is what the throughput gap is really about.
+
+### CSV
+
+Compared against libcsv, Python's `csv` module and rapidcsv.
+
+**Present, and competitive.** A table DOM with row and column insert, append,
+remove, rename and set; header handling with an index and duplicate-key
+iteration; irregular-row support with explicit normalize-to-max and validate
+operations; clone, clear and compact; configurable dialect covering delimiter,
+quote character, escape mode, and which newlines to accept; push streaming with
+record-begin, field and record-end events; a writer; file read and write;
+in-situ mode; error reporting carrying byte offset, line, column, and both row
+and column indices, plus a snippet and caret.
+
+The row and column index in the error struct is better than libcsv, which
+reports very little, and the column-level table operations have no equivalent in
+Python's `csv`.
+
+**Round-trip fidelity is sound.** Parsing, writing and re-parsing twelve
+documents chosen for difficulty - embedded commas, embedded quotes, embedded
+newlines, empty and consecutive-empty fields, a trailing delimiter, preserved
+surrounding spaces, CRLF, ragged rows, multi-byte UTF-8, a field whose content
+is a single quote character, and a record of nothing but delimiters - produced
+byte-identical fields in every case. The gap was therefore in the *test
+suite*, not in the parser, and it is now closed:
+`CsvRoundTrip.WriteThenReparsePreservesFields` pins all twelve.
+
+**Missing.**
+
+- A pull reader, as above.
+- Dialect presets. TSV, semicolon and backslash-escape dialects exist as test
+  fixtures in `tests/data/csv/dialects/` but are not exported, so every caller
+  rebuilds them field by field. `gtext_csv_dialect_default()` is the only
+  constructor.
+- Dialect sniffing, equivalent to Python's `csv.Sniffer`.
+- Quoting policies beyond a `quote_all_fields` boolean. Python offers minimal,
+  all, non-numeric and none; only the first two are reachable here.
+- Type inference, which is deliberate and correctly documented as such.
+- Conversion to JSON.
+- RFC 7111 fragments, deliberately out of scope.
+- `validate_utf8` in the streaming parser, and a coherent
+  `allow_unquoted_newlines`, both already recorded on the CSV page.
+
+### YAML
+
+Compared against libyaml, libfyaml, PyYAML and yaml-cpp.
+
+**Present, and strongly competitive.** This is the most complete of the three.
+DOM with mappings, sequences, and the `omap`, `pairs` and `set` types that most
+libraries omit; anchors and aliases with a separate resolver and an expansion
+limit; merge keys; complex keys; custom and non-standard tags; comment
+retention, both leading and inline, with setters as well as getters; scalar
+style preservation and control; source location per node; typed accessors
+including binary and timestamp; multi-document parse and emit; a JSON fast
+path; a safe-mode option set; partial parsing; both push streaming and a pull
+reader; a YAML 1.1 resolution mode; conversion to JSON with and without tag
+information; file read and write, including read-all-documents.
+
+Comment retention with round-trip emission and per-node source locations are
+the standout features. libyaml discards comments entirely and yaml-cpp's
+support is partial, so a configuration-rewriting tool that must preserve a
+file's comments is a case where this library is the better choice outright.
+
+**Missing.**
+
+- Schema validation. The `GTEXT_YAML_Schema` option selects an implicit typing
+  schema - failsafe, JSON, core - and is not a validator. There is no
+  equivalent of the JSON Schema engine, nor of Kwalify or Rx.
+- A custom allocator.
+- In-situ zero-copy parsing, which JSON and CSV both offer.
+- Conversion from JSON, the reverse of the supported direction.
+- A documented thread-safety position.
+- `key: a : b` truncates rather than rejecting, already recorded on the YAML
+  page as the one open case in that family.
+
+---
+
+## What this adds up to
+
+On correctness and on breadth of feature, the library is in good shape, and in
+two places - YAML comment and style preservation, JSON patch and pointer
+together with the duplicate-key modes - it is ahead of the common alternatives.
+The format pages are unusually honest about deviations, which is itself worth
+something to an adopter.
+
+What stands between it and the stated goal is a short list, and most of it is
+not parser work: a license, an optimized default build, an allocator hook, two
+pull readers, one honest failure in the schema engine, and a paragraph each on
+thread safety for JSON and YAML. Throughput on the JSON side is the one item
+that is genuinely a project rather than a task.
+
+---
+
+Back to \ref format_references "Format and specification references".

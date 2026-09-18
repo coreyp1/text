@@ -23,6 +23,9 @@ sequence, and how confident anyone should be about that.
 | CSV | \ref format_csv "CSV" | RFC 4180, plus configurable dialects | RFC 4180 and looser dialects; irregular rows | RFC 4180 with configurable quoting |
 | YAML | \ref format_yaml "YAML" | YAML 1.2.2, with a 1.1 resolution mode | block and flow, anchors, tags, multi-document | DOM and streaming event serialization |
 
+A cross-format audit against the libraries these are meant to replace is in
+\ref format_comparison "Comparison with other libraries".
+
 Formats named in the README's roadmap but with no parser - INI, TOML and the
 rest - have no page here. A page is written with the parser, not after it.
 
@@ -65,6 +68,16 @@ specification of the three by an order of magnitude, no conformance corpus is
 wired up, and its page carries the deviations found so far - including the
 silent truncation of plain scalars, which a differential comparison against
 PyYAML found and which is now fixed.
+
+## Comparison with other libraries
+
+\ref format_comparison "Comparison with other libraries" asks a different
+question from the pages above. They ask whether a parser implements its
+specification; that page asks what a caller migrating from libyaml, RapidJSON,
+libcsv or PyYAML would find missing, and ranks the answers by how many
+adoptions each one blocks. Its findings are measured rather than surveyed, and
+two of them - the absent `LICENSE` file and the unoptimized default build - are
+suite-wide rather than particular to this library.
 
 ## Adding a format
 
