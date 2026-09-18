@@ -79,6 +79,14 @@ adoptions each one blocks. Its findings are measured rather than surveyed, and
 two of them - the absent `LICENSE` file and the unoptimized default build - are
 suite-wide rather than particular to this library.
 
+## Work in progress
+
+\ref format_allocator_todo "Extending the allocator to CSV and YAML" records
+what remains of the allocator work, and why it was stopped rather than
+half-finished: a parse option that covers an arena but not the structure
+around it is heap corruption for anyone who uses it, not an incomplete
+feature.
+
 ## Adding a format
 
 \ref format_adding "Adding a format" is the checklist and the page template:
