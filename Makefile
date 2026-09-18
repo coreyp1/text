@@ -385,9 +385,14 @@ endif
 # Compile each test .cpp directly to executable. Fewer targets = faster make graph.
 # Args: $1 = source path, $2 = executable name (from TEST_PAIRS).
 define test-executable-rule
+# The library is a normal prerequisite, not an order-only one.  The tests link
+# $(STATIC_TARGET) with --whole-archive, so a change to the library has to
+# relink them; behind `|` it did not, and `make test` would happily run last
+# build's binaries against this build's sources.  That produces both phantom
+# failures and, worse, phantom passes.
 $(APP_DIR)/$2$(EXE_EXTENSION): \
 		$1 \
-		| $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET)
+		$(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET)
 	@printf "\n### Compiling %s Test ###\n" "$2"
 	@mkdir -p $$(@D)
 	$$(CXX) $$(CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(APP_DIR)/$2.d -o $$@ $$< $$(TEXTLIBRARY) $$(LDFLAGS) $$(TESTFLAGS)
@@ -453,9 +458,11 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 
 # Pattern rule for ASan test executables - uses same TEST_PAIRS
 define asan-test-executable-rule
+# Same reasoning as the release rule: a normal prerequisite, so a library
+# change relinks the ASan binaries.
 $(ASAN_APP_DIR)/$2$(EXE_EXTENSION): \
 		$1 \
-		| $(ASAN_APP_DIR)/$(ASAN_TARGET)
+		$(ASAN_APP_DIR)/$(ASAN_TARGET)
 	@printf "\n### Compiling ASan+UBSan %s Test ###\n" "$2"
 	@mkdir -p $$(@D)
 	$$(CXX) $$(ASAN_CXXFLAGS) $$(INCLUDE) -MMD -MP -MF $$(ASAN_APP_DIR)/$2.d -o $$@ $$< $$(ASAN_LDFLAGS) $$(TESTFLAGS) $$(ASAN_APP_DIR)/$$(ASAN_TARGET)
