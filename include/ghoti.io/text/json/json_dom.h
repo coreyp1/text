@@ -452,6 +452,43 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_parse(const char * bytes, size_t len,
     const GTEXT_JSON_Parse_Options * opt, GTEXT_JSON_Error * err);
 
 /**
+ * @brief Parse a JSON file into a value
+ *
+ * Reads the whole file and parses it. The file is read incrementally rather
+ * than by seeking to the end first, so a pipe, a FIFO or /dev/stdin works as
+ * well as a regular file. `max_total_bytes` is applied while reading, so a
+ * file larger than the caller allows is refused without being held in memory.
+ *
+ * `in_situ_mode` is ignored: the buffer the value would point into belongs to
+ * this function and does not outlive it.
+ *
+ * @param path Path to read (must not be NULL)
+ * @param opts Parse options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL)
+ * @return Parsed value on success, NULL on failure; free with
+ *         gtext_json_free()
+ */
+GTEXT_API GTEXT_JSON_Value * gtext_json_parse_file(const char * path,
+    const GTEXT_JSON_Parse_Options * opts, GTEXT_JSON_Error * err);
+
+/**
+ * @brief Write a value to a JSON file, atomically
+ *
+ * The content is written to a temporary file beside @p path and renamed over
+ * it only once it is complete, so an interrupted write or a full disk leaves
+ * the previous file intact rather than truncated.
+ *
+ * @param path Destination path (must not be NULL)
+ * @param value Value to serialize (must not be NULL)
+ * @param opts Write options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL)
+ * @return GTEXT_JSON_OK on success, error code on failure
+ */
+GTEXT_API GTEXT_JSON_Status gtext_json_write_file(const char * path,
+    const GTEXT_JSON_Value * value, const GTEXT_JSON_Write_Options * opts,
+    GTEXT_JSON_Error * err);
+
+/**
  * @brief Parse a single JSON value from input, returning bytes consumed
  *
  * Parses a single JSON value from the input buffer and returns the number

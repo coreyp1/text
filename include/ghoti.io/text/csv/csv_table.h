@@ -52,6 +52,43 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
     const GTEXT_CSV_Parse_Options * opts, GTEXT_CSV_Error * err);
 
 /**
+ * @brief Parse a CSV file into a table
+ *
+ * Reads the whole file and parses it. The file is read incrementally rather
+ * than by seeking to the end first, so a pipe, a FIFO or /dev/stdin works as
+ * well as a regular file. `max_total_bytes` is applied while reading, so a
+ * file larger than the caller allows is refused without being held in memory.
+ *
+ * `in_situ_mode` is ignored: the buffer the fields would point into belongs to
+ * this function and does not outlive it.
+ *
+ * @param path Path to read (must not be NULL)
+ * @param opts Parse options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL)
+ * @return Parsed table on success, NULL on failure; free with
+ *         gtext_csv_free_table()
+ */
+GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_file(const char * path,
+    const GTEXT_CSV_Parse_Options * opts, GTEXT_CSV_Error * err);
+
+/**
+ * @brief Write a table to a CSV file, atomically
+ *
+ * The content is written to a temporary file beside @p path and renamed over
+ * it only once it is complete, so an interrupted write or a full disk leaves
+ * the previous file intact rather than truncated.
+ *
+ * @param path Destination path (must not be NULL)
+ * @param table Table to serialize (must not be NULL)
+ * @param opts Write options (can be NULL for defaults)
+ * @param err Error output structure (can be NULL)
+ * @return GTEXT_CSV_OK on success, error code on failure
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_write_file(const char * path,
+    const GTEXT_CSV_Table * table, const GTEXT_CSV_Write_Options * opts,
+    GTEXT_CSV_Error * err);
+
+/**
  * @brief Free a CSV table
  *
  * Frees all memory associated with the table, including all fields and rows.
