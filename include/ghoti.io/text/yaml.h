@@ -7,7 +7,7 @@
  * provide the core types, DOM inspection API, streaming parser, and writer.
  *
  * Usage:
- * - From a C source: #include <ghoti.io/text/yaml.h>
+ * - From a C source: `#include <ghoti.io/text/yaml.h>`
  * - From C++ sources the headers are C-linkage guarded.
  *
  * Copyright 2026 by Corey Pennycuff

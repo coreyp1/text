@@ -1,8 +1,15 @@
-@page example_yaml_config_parser yaml_config_parser.c - Configuration File Parser
+@page example_yaml_config_parser YAML Configuration File Parser
 
-# yaml_config_parser.c - Configuration File Parser
+# YAML Configuration File Parser
 
 This example demonstrates building a structured configuration from YAML events: collecting key-value pairs, handling nested sections, and constructing a usable config object.
+
+@note This page is a guide, not a walkthrough of a file in the tree.
+The standalone program `examples/yaml/yaml_config_parser.c` has not been written yet, so
+the code below is meant to be read and adapted rather than built. The one
+YAML example that does exist is
+\ref example_yaml_writer_formatting "yaml_writer_formatting.c".
+
 
 ## What This Example Demonstrates
 

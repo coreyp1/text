@@ -173,4 +173,4 @@ To build and run the examples, you need:
 - [CSV Module](@ref csv_module) - Complete CSV module documentation
 - [Core Module](@ref core_module) - Core utilities and macros
 - [Function Index](@ref functions_index) - Complete API reference
-- [Main Documentation](@ref mainpage) - Library overview
+- [Main Documentation](@ref index) - Library overview

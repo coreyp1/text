@@ -3,9 +3,9 @@
  * @brief DOM inspection helpers for YAML documents.
  *
  * The DOM API provides read-only accessors for nodes produced by the
- * in-memory parser. The DOM is owned by a @ref GTEXT_YAML_Document and
+ * in-memory parser. The DOM is owned by a `GTEXT_YAML_Document` and
  * callers must not attempt to free individual nodes; instead call
- * @ref gtext_yaml_free(document) to release the whole graph.
+ * `gtext_yaml_free()` to release the whole graph.
  */
 
 #ifndef GHOTI_IO_GTEXT_YAML_YAML_DOM_H

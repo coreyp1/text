@@ -45,7 +45,7 @@ The first run found four bugs, all fixed:
 - **Infinite loop in the YAML scanner.** A block scalar header running to
   end of input had no exit from the loop skipping the rest of the header
   line. `>[` — two bytes — hung the parser indefinitely.
-- **Undefined behaviour on empty quoted scalars.** `a: ""` passed a NULL
+- **Undefined behavior on empty quoted scalars.** `a: ""` passed a NULL
   pointer to `memcpy`, and asked `malloc(0)` for the buffer, whose NULL
   return would have been reported as an allocation failure.
 - **Leaked token buffers.** Several error paths in the stream layer abandoned

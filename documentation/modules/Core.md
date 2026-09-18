@@ -290,4 +290,4 @@ void process_with_flags(unsigned int flags) {
 - [JSON Module](@ref json_module) - JSON parsing and serialization
 - [CSV Module](@ref csv_module) - CSV reading and writing
 - [Function Index](@ref functions_index) - Complete API reference
-- [Main Documentation](@ref mainpage) - Library overview
+- [Main Documentation](@ref index) - Library overview

@@ -1,8 +1,15 @@
-@page example_yaml_security yaml_security.c - Security Limits and Validation
+@page example_yaml_security YAML Security Limits and Validation
 
-# yaml_security.c - Security Limits and Validation
+# YAML Security Limits and Validation
 
 This example demonstrates security best practices when parsing untrusted YAML input: enforcing depth limits, byte limits, alias expansion limits, and proper error handling.
+
+@note This page is a guide, not a walkthrough of a file in the tree.
+The standalone program `examples/yaml/yaml_security.c` has not been written yet, so
+the code below is meant to be read and adapted rather than built. The one
+YAML example that does exist is
+\ref example_yaml_writer_formatting "yaml_writer_formatting.c".
+
 
 ## What This Example Demonstrates
 

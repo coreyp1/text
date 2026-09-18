@@ -1188,7 +1188,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
        things went wrong there: malloc(0) may return NULL, which this would
        have reported as an allocation failure, and memcpy() declares both
        pointers non-null even for a zero length, so passing the NULL was
-       undefined behaviour. Ask for at least one byte, and skip the copy when
+       undefined behavior. Ask for at least one byte, and skip the copy when
        there is nothing to copy. */
     size_t slen = scalar.len;
     char *out = (char *)malloc(slen ? slen : 1);

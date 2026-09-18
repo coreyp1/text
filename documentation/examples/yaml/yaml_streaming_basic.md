@@ -1,8 +1,15 @@
-@page example_yaml_streaming_basic yaml_streaming_basic.c - Basic Streaming YAML Parser
+@page example_yaml_streaming_basic Basic Streaming YAML Parser
 
-# yaml_streaming_basic.c - Basic Streaming YAML Parser
+# Basic Streaming YAML Parser
 
 This example demonstrates the fundamental streaming YAML parser: parsing YAML documents using the event-driven callback interface.
+
+@note This page is a guide, not a walkthrough of a file in the tree.
+The standalone program `examples/yaml/yaml_streaming_basic.c` has not been written yet, so
+the code below is meant to be read and adapted rather than built. The one
+YAML example that does exist is
+\ref example_yaml_writer_formatting "yaml_writer_formatting.c".
+
 
 ## What This Example Demonstrates
 
@@ -196,8 +203,6 @@ The parser buffers internally as needed.
 ## Related Examples
 
 - [yaml_config_parser.c](@ref example_yaml_config_parser) - Build config structure from YAML
-- [yaml_multidoc.c](@ref example_yaml_multidoc) - Parse multi-document YAML streams
-- [yaml_anchors.c](@ref example_yaml_anchors) - Working with anchors and aliases
 - [Examples Overview](@ref examples) - Return to examples index
 
 ## Status Note
