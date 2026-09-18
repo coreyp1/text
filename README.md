@@ -80,6 +80,12 @@ owned by the caller and released with the format's `*_error_free()`.
 **Writing** mirrors parsing: serialize a DOM, or drive a streaming writer
 with events. Write options control formatting, escaping and canonical output.
 
+**Files.** Each format reads and writes a path directly -
+`gtext_json_parse_file()` / `gtext_json_write_file()` and the CSV and YAML
+equivalents. Reads are incremental, so a pipe or `/dev/stdin` works and the
+size limit applies before the file is in memory; writes are atomic, going to a
+temporary file beside the destination and replacing it only once complete.
+
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and a
 core subset of JSON Schema. YAML implements anchors and aliases, merge keys,
 multi-document streams, tag resolution and conversion to JSON.
@@ -105,9 +111,11 @@ conformance corpus is wired up, so read
 compliant".
 
 **CSV — stable.** RFC 4180 by default, with configurable dialects and
-support for ragged rows. `validate_utf8` is honored by the DOM parser; the
-streaming parser does not yet check encoding. See
-[the CSV page](@ref format_csv).
+support for ragged rows. The streaming parser gives the same answer whatever
+chunk sizes it is fed, and the fuzzer checks it against the table parser on
+every input. `validate_utf8` is honored by the DOM parser but not yet by the
+streaming one, and `allow_unquoted_newlines` is a known incoherent option.
+See [the CSV page](@ref format_csv).
 
 **YAML — alpha.** Block and flow collections, all five scalar styles,
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32

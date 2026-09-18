@@ -85,7 +85,14 @@ square them up. Nothing is padded or truncated behind the caller's back.
 field data.
 
 **Streaming.** An event-driven parser covering the same grammar, for inputs
-that should not be materialized as a table.
+that should not be materialized as a table. The result does not depend on how
+the caller divides the input into chunks.
+
+**Files.** `gtext_csv_parse_file()` and `gtext_csv_write_file()`. Reading is
+incremental, so a pipe or `/dev/stdin` works and `max_total_bytes` is enforced
+before the whole file is in memory. Writing is atomic - a temporary file
+beside the destination, renamed over it once complete - so an interrupted
+write leaves the previous file intact.
 
 ## Limits
 
@@ -162,6 +169,35 @@ can straddle a chunk boundary and incremental validation has not been
 written. Validate in the caller, or use the DOM parser, if the input is
 untrusted and arrives in pieces.
 
+**Fixed: the streaming parser no longer depends on where chunks are split.**
+`gtext_csv_stream_feed()` accepts a document in pieces of any size, so the
+result has to be the same whatever those sizes are. Four things made it
+otherwise, all found by parsing the same document three ways - table parser,
+one whole feed, one byte at a time - and comparing:
+
+| Case | Was | Now |
+|---|---|---|
+| A field spanning two feeds | kept a pointer into the freed chunk: `"a, "` then `"b"` gave `" \0"` | copied out at the boundary |
+| CRLF split between the CR and the LF | `GTEXT_CSV_E_INVALID`, "Newline in unquoted field" | one newline |
+| A BOM arriving in pieces | not stripped | stripped |
+| `""` fed a byte at a time | a literal `"` | an empty field |
+
+The first is the one to know about: feeding consecutive slices of a single
+long-lived array hides it completely, because the stale pointer stays valid by
+accident. Every real caller reads into one buffer and refills it.
+
+**Fixed: a trailing delimiter no longer loses its field.** RFC 4180 §2 says
+only a line break ends a record, so `a,` is two fields and the second is
+empty. A file with no trailing newline used to drop it.
+
+**Open: `allow_unquoted_newlines` is not coherent.** With it set, the table
+parser keeps a trailing CRLF as field content but treats a CRLF in the middle
+of the document as a record separator, and the streaming parser disagrees with
+both depending on where a chunk starts - the bulk scanner honors the option
+and the per-character path does not. The option is off by default. Deciding
+what it should mean is a prerequisite to fixing it, so it is recorded here
+rather than guessed at, and the fuzzer's differential check excludes it.
+
 **Bare CR rejected by default**, as described above - stricter than Python's
 `csv` module, which accepts it.
 
@@ -183,6 +219,20 @@ pinned by four cases in `tests/test-csv.cpp`.
 seeded from `tests/fuzz/corpus/csv/`. CSV's harness consumes the first *two*
 input bytes as an options selector, since the delimiter and quote characters
 have to come from somewhere for the dialect paths to be reachable.
+
+It parses each document **both** ways and compares, so a wrong answer fails as
+loudly as a crash. Chunk sizes come from the document's own bytes, letting the
+fuzzer steer a boundary onto whichever byte breaks the parser, and each chunk
+is copied through a scratch buffer that is overwritten immediately afterwards,
+so a retained pointer is caught rather than tolerated.
+
+Until September 2026 the harness called only `gtext_csv_parse_table()`. The
+streaming parser - the most stateful code in the module - was never fuzzed at
+all, which is why the chunk-boundary defects above survived. Reaching it took
+coverage from 1744 edges to 2149 and immediately produced: a load of 2 from a
+`_Bool`, a `malloc` of 12 GiB from a few hundred bytes, and two places where
+the parser made no progress and spun until an unrelated limit tripped - 850ms
+for fifteen bytes. All fixed.
 
 **Reach of the oracles, and where it ends.** There is **no external CSV
 corpus and no differential test against another parser**. This matters less
@@ -207,6 +257,8 @@ yields the same table.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
   dates, by design.
 - **No round-trip property test**, as above.
+- **`validate_utf8` in the streaming parser**, as above.
+- **A coherent `allow_unquoted_newlines`**, as above.
 
 ---
 
