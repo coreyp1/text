@@ -907,7 +907,23 @@ See `<ghoti.io/text/yaml/yaml_core.h>` for complete type definitions and enumera
 
 ---
 
-## 16. License
+## 16. Thread Safety
+
+No YAML object is thread-safe. A document, a parser, a stream, a pull reader,
+a resolver and a writer each belong to one thread at a time; two that were
+created separately share nothing and may be used concurrently. A document that
+no thread is modifying may be read from several at once.
+
+The read accessors really are reads. `gtext_yaml_mapping_get()` is a linear
+scan of the stored pairs and `gtext_yaml_alias_target()` returns a stored
+pointer; aliases and merge keys are resolved while parsing, not cached lazily
+on first access. So concurrent readers of a finished document are safe, alias
+and merge keys included.
+
+The full rule and the reasoning are in the \ref core_module "Core module page",
+section 7.
+
+## 17. License
 
 Copyright 2026 by Corey Pennycuff
 

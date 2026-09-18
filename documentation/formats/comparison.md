@@ -28,7 +28,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
-| 7 | Thread-safety is documented for CSV only | JSON, YAML | unanswerable question |
+| 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
 | 8 | No dialect presets and no sniffing | CSV | small friction, common need |
 
 Findings 1 and 3 are properties of the shared template rather than of `text`,
@@ -226,17 +226,32 @@ competing libraries lead with.
 
 ---
 
-## 7. Thread safety is documented once
+## 7. Thread safety is documented once - fixed
 
 `documentation/modules/CSV.md` states plainly that the module is not
 thread-safe, that a table belongs to one thread, and that distinct tables may
 be used concurrently because they share no state. That is exactly what a caller
 needs to know.
 
-Neither the JSON nor the YAML documentation says anything on the subject. The
-answer is very probably the same for all three, but a caller integrating into a
-threaded server cannot act on a probably. This is a documentation gap, not
-necessarily a code one, and it is cheap to close.
+Neither the JSON nor the YAML documentation said anything on the subject.
+
+**Now closed.** Section 7 of the \ref core_module "Core module page" states the
+rule for all three, with per-module sections on the JSON and YAML pages. The
+answer was indeed the same for all three, but establishing that meant checking
+rather than assuming, and the check found two things:
+
+- `gtext_version_string()` raced with itself, formatting into a function-local
+  static guarded by a second static flag. It returns a compile-time constant
+  now, so the buffer and the race are both gone.
+- Number formatting forces the C locale. Where `uselocale()` exists - this
+  build included - that is thread-local and harmless. The `setlocale()`
+  fallback for platforms without it is process-global and can corrupt another
+  thread's number formatting; it is documented as the compromise it is.
+
+A claim that YAML accessors lazily cached alias resolution was also written
+and then removed, because reading the code showed they do not: aliases and
+merge keys resolve during the parse, so concurrent readers of a finished
+document are safe.
 
 ---
 

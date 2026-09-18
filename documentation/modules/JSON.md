@@ -488,7 +488,21 @@ The library includes comprehensive test coverage for security-critical scenarios
 - All error handling paths are tested
 - Memory safety is validated with Valgrind
 
-### 18.8 Best Practices for Users
+### 18.8 Thread Safety
+
+No JSON object is thread-safe. A `GTEXT_JSON_Value` tree, a parser, a stream
+and a writer each belong to one thread at a time; two that were created
+separately share nothing and may be used concurrently. A DOM that no thread is
+modifying may be read from several at once.
+
+If you pass an allocator through `GTEXT_JSON_Parse_Options::allocator`, that
+allocator must itself be thread-safe when the values built from it are used
+from more than one thread - the library adds no locking.
+
+The full rule, the reasoning, and the one platform caveat about locale and
+number formatting are in the \ref core_module "Core module page", section 7.
+
+### 18.9 Best Practices for Users
 
 When using the JSON library, follow these security best practices:
 

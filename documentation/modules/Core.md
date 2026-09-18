@@ -285,7 +285,53 @@ void process_with_flags(unsigned int flags) {
 
 ---
 
-## 7. Related Documentation
+@anchor core-thread-safety
+## 7. Thread Safety
+
+The rule is the same for JSON, CSV and YAML, and it is the usual one for a C
+parser: **no object in this library is thread-safe, and no two threads may
+touch the same object at once, but distinct objects share nothing and may be
+used concurrently.**
+
+Concretely:
+
+| Used by two threads at once | Safe |
+|---|---|
+| The same DOM, table, parser, stream, reader or writer | **no** |
+| Two DOMs, tables, streams or writers created separately | yes |
+| The same DOM read-only from both, with no writer anywhere | yes |
+| `gtext_*_parse()` on separate inputs into separate results | yes |
+| The version accessors and the `*_options_default()` functions | yes |
+
+This holds because the library keeps no mutable global state. Every parse
+writes only into the context, arena or table it was given, and the only
+file-scope variables in the sources are `const` tables. It was checked by
+searching for non-const file-scope variables rather than assumed - two things
+that turned up are worth naming:
+
+- **`gtext_version_string()` used to race with itself.** It formatted the
+  version into a function-local static the first time it was called, guarded
+  by a second static flag, so two threads calling it at once both saw the flag
+  clear and both wrote the buffer. It now returns a compile-time constant, so
+  there is no buffer and no race.
+- **Number formatting changes the locale.** `LC_NUMERIC` decides whether a
+  double is written with `.` or `,`, so the writer forces the C locale around
+  each conversion. Where `uselocale()` is available - which includes Linux,
+  macOS and the BSDs, and is what this build uses - the change is thread-local
+  and invisible to other threads. On a platform without it the writer falls
+  back to `setlocale()`, which is **process-global**: another thread
+  formatting a number at that moment can see the wrong decimal separator.
+  That fallback is a portability compromise, not the intended path.
+
+**A caller-supplied `GTEXT_Allocator` must be thread-safe if the objects using
+it are touched from more than one thread.** The library adds no locking of its
+own. The default stdlib allocator is thread-safe.
+
+None of this is enforced. There is no internal locking to disable and no
+thread-safe build variant; a caller that needs shared access provides its own
+mutual exclusion.
+
+## 8. Related Documentation
 
 - [JSON Module](@ref json_module) - JSON parsing and serialization
 - [CSV Module](@ref csv_module) - CSV reading and writing

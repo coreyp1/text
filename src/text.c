@@ -28,17 +28,11 @@ GTEXT_API uint32_t gtext_version_patch(void) {
 }
 
 GTEXT_API const char * gtext_version_string(void) {
-  static char version_string[32];
-  static int initialized = 0;
-
-  if (!initialized) {
-    snprintf(version_string, sizeof(version_string),
-      "%" PRIu32 ".%" PRIu32 ".%" PRIu32,
-      (uint32_t)GTEXT_VERSION_MAJOR,
-      (uint32_t)GTEXT_VERSION_MINOR,
-      (uint32_t)GTEXT_VERSION_PATCH);
-    initialized = 1;
-  }
-
-  return version_string;
+  /* GTEXT_VERSION_STRING is produced by the build from the same three numbers
+   * this used to format at run time into a function-local static, guarded by
+   * a second static flag.  Two threads calling this at once both saw the flag
+   * clear and both wrote the buffer - a data race, and a reader could observe
+   * a partially written string.  The values are known at compile time, so the
+   * formatting, the buffer and the race all go away together. */
+  return GTEXT_VERSION_STRING;
 }
