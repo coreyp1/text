@@ -1560,7 +1560,6 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
   }
 
   // Input size validation: check for reasonable input size before processing
-  // This is a defensive check - actual limits are enforced during parsing
   if (len > SIZE_MAX / 2) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
@@ -1572,6 +1571,33 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
       *bytes_consumed = 0;
     }
     return NULL;
+  }
+
+  // max_total_bytes was enforced for file reads (json_file_io.c) and for the
+  // streaming parser (json_stream.c) but not here, so an in-memory parse
+  // ignored it entirely: a 600-byte document parsed with max_total_bytes set
+  // to 50.  The comment in gtext_json_parse() asserted that this function did
+  // the check, which is presumably why nobody looked.
+  //
+  // The whole input is already in hand, so the check is on len rather than on
+  // bytes consumed so far; the streaming parser necessarily does it the other
+  // way, and both use the same limit and message.
+  {
+    size_t max_total =
+        json_get_limit(opt ? opt->max_total_bytes : 0,
+            JSON_DEFAULT_MAX_TOTAL_BYTES);
+    if (len > max_total) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_LIMIT,
+            .message = "Maximum total input size exceeded",
+            .line = 1,
+            .col = 1};
+      }
+      if (bytes_consumed) {
+        *bytes_consumed = 0;
+      }
+      return NULL;
+    }
   }
 
   // Initialize parser state
@@ -1740,10 +1766,8 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_parse(const char * bytes, size_t len,
     return NULL;
   }
 
-  // Input validation: check for reasonable input size (prevent obvious overflow
-  // issues) Note: We don't enforce a hard limit here, but check for obviously
-  // invalid values The actual limit checking happens in json_parse_internal via
-  // max_total_bytes
+  // Check for obviously invalid values here; max_total_bytes is enforced in
+  // json_parse_internal.
   if (len > SIZE_MAX / 2) {
     // Input size is suspiciously large (more than half of SIZE_MAX)
     // This could indicate an overflow or invalid input

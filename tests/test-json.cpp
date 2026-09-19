@@ -9028,10 +9028,7 @@ TEST(StateValidation, IncompleteStructure) {
 // Note: ErrorStateRecovery test removed - it duplicates ContinueAfterError functionality
 // Both tests verify that streams handle error states gracefully when used after an error
 
-int main(int argc, char * * argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
+
 
 /*
  * normalize_unicode was declared, documented as a v2 feature, and read by
@@ -9589,4 +9586,121 @@ TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {
 	EXPECT_TRUE(schema_accepts(mixed, "{\"a\":1,\"b\":2}"));
 	EXPECT_FALSE(schema_accepts(mixed, "{\"c\":1}"));
 	EXPECT_TRUE(schema_accepts(mixed, "{\"c\":1,\"d\":2}"));
+}
+
+// ---------------------------------------------------------------------------
+// max_total_bytes
+//
+// Enforced for file reads (json_file_io.c) and for the streaming parser
+// (json_stream.c), but not for an in-memory parse: a 600-byte document parsed
+// cleanly with max_total_bytes set to 50.  The comment in gtext_json_parse()
+// said the check happened in json_parse_internal, and it did not.
+// ---------------------------------------------------------------------------
+
+TEST(JsonMaxTotalBytes, RejectsInputLargerThanTheLimit) {
+	std::string src = "[";
+	for (int i = 0; i < 300; ++i) {
+		src += (i ? ",1" : "1");
+	}
+	src += "]";
+	ASSERT_GT(src.size(), 50u);
+
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.max_total_bytes = 50;
+
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * v = gtext_json_parse(src.data(), src.size(), &opts, &err);
+
+	EXPECT_EQ(v, nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_LIMIT);
+	if (v) {
+		gtext_json_free(v);
+	}
+	gtext_json_error_free(&err);
+}
+
+TEST(JsonMaxTotalBytes, AcceptsInputAtTheLimit) {
+	// The boundary: exactly max_total_bytes must parse, one more must not.
+	const std::string src = "[1,2,3]";
+
+	{
+		GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+		opts.max_total_bytes = src.size();
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * v =
+		    gtext_json_parse(src.data(), src.size(), &opts, &err);
+		EXPECT_NE(v, nullptr) << (err.message ? err.message : "");
+		if (v) {
+			gtext_json_free(v);
+		}
+		gtext_json_error_free(&err);
+	}
+	{
+		GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+		opts.max_total_bytes = src.size() - 1;
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * v =
+		    gtext_json_parse(src.data(), src.size(), &opts, &err);
+		EXPECT_EQ(v, nullptr);
+		EXPECT_EQ(err.code, GTEXT_JSON_E_LIMIT);
+		if (v) {
+			gtext_json_free(v);
+		}
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(JsonMaxTotalBytes, ZeroMeansLibraryDefault) {
+	const std::string src = "[1,2,3]";
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.max_total_bytes = 0;
+
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * v = gtext_json_parse(src.data(), src.size(), &opts, &err);
+	EXPECT_NE(v, nullptr) << (err.message ? err.message : "");
+	if (v) {
+		gtext_json_free(v);
+	}
+	gtext_json_error_free(&err);
+}
+
+TEST(JsonMaxTotalBytes, StreamingParserAgrees) {
+	// The two parsers must give the same answer for the same limit.
+	std::string src = "[";
+	for (int i = 0; i < 300; ++i) {
+		src += (i ? ",1" : "1");
+	}
+	src += "]";
+
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.max_total_bytes = 50;
+
+	auto cb = [](void *, const GTEXT_JSON_Event *,
+	              GTEXT_JSON_Error *) -> GTEXT_JSON_Status {
+		return GTEXT_JSON_OK;
+	};
+
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+	ASSERT_NE(st, nullptr);
+
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Status s = GTEXT_JSON_OK;
+	for (size_t i = 0; i < src.size() && s == GTEXT_JSON_OK; i += 16) {
+		size_t n = std::min<size_t>(16, src.size() - i);
+		s = gtext_json_stream_feed(st, src.data() + i, n, &err);
+	}
+	EXPECT_EQ(s, GTEXT_JSON_E_LIMIT);
+
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+}
+
+int main(int argc, char * * argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
