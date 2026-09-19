@@ -1,0 +1,158 @@
+# Continuous integration for ghoti.io-text.
+#
+# There was none until now, so every guarantee this project makes - the test
+# suite, the ASan and valgrind runs, the symbol and allocator gates - depended
+# on somebody remembering to run the right target before pushing.
+#
+# The suite resolves its dependencies through pkg-config and nothing else, so
+# cutil is built and installed into a prefix inside the workspace first, the
+# same way ../bootstrap.sh does it locally. There is deliberately no
+# sibling-checkout fallback in the Makefile, so this is the only path.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PREFIX: ${{ github.workspace }}/.local
+  PKG_CONFIG_PATH: ${{ github.workspace }}/.local/share/pkgconfig
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: text
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtest-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Ghoti-io/CUtil
+          path: cutil
+
+      - name: Build and install cutil
+        working-directory: cutil
+        run: |
+          make -j"$(nproc)" PREFIX="$PREFIX"
+          make install PREFIX="$PREFIX"
+
+      - name: Build
+        working-directory: text
+        run: make -j"$(nproc)" PREFIX="$PREFIX"
+
+      # Run the gates on their own as well as through `make test`, so that a
+      # gate failure is reported as its own step rather than buried in the
+      # test output.
+      - name: Gates
+        working-directory: text
+        run: make check-symbols check-allocators check-headers PREFIX="$PREFIX"
+
+      - name: Tests
+        working-directory: text
+        run: make test PREFIX="$PREFIX"
+
+      - name: Examples
+        working-directory: text
+        run: make examples PREFIX="$PREFIX"
+
+  asan:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: text
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtest-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Ghoti-io/CUtil
+          path: cutil
+
+      - name: Build and install cutil
+        working-directory: cutil
+        run: |
+          make -j"$(nproc)" PREFIX="$PREFIX"
+          make install PREFIX="$PREFIX"
+
+      - name: Tests under ASan and UBSan
+        working-directory: text
+        run: make test-asan -j"$(nproc)" PREFIX="$PREFIX"
+
+  valgrind:
+    name: Valgrind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: text
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtest-dev valgrind
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Ghoti-io/CUtil
+          path: cutil
+
+      - name: Build and install cutil
+        working-directory: cutil
+        run: |
+          make -j"$(nproc)" PREFIX="$PREFIX"
+          make install PREFIX="$PREFIX"
+
+      - name: Build
+        working-directory: text
+        run: make -j"$(nproc)" PREFIX="$PREFIX"
+
+      # The -quiet variant is the one that aggregates leaks as failures.
+      - name: Tests under valgrind
+        working-directory: text
+        run: make test-valgrind-quiet PREFIX="$PREFIX"
+
+  fuzz:
+    name: Fuzzers (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: text
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtest-dev clang
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Ghoti-io/CUtil
+          path: cutil
+
+      - name: Build and install cutil
+        working-directory: cutil
+        run: |
+          make -j"$(nproc)" PREFIX="$PREFIX"
+          make install PREFIX="$PREFIX"
+
+      # `make fuzz` builds and runs all three harnesses for FUZZ_TIME seconds
+      # each. Sixty seconds apiece is a smoke test that they still build and
+      # start clean, not a campaign; a real campaign belongs in a scheduled job
+      # with a persistent corpus.
+      - name: Build and run the fuzzers
+        working-directory: text
+        run: make fuzz FUZZ_TIME=60 PREFIX="$PREFIX"
