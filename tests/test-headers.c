@@ -1,11 +1,16 @@
 /**
  * @file test-headers.c
- * @brief Test that all headers compile independently
+ * @brief Runtime smoke test for the types and functions each header declares
  *
- * This test verifies that:
- * - Each header can be included independently
- * - The umbrella header includes all modules correctly
- * - Headers don't have missing dependencies
+ * Whether a header compiles on its own is checked by `make check-headers`,
+ * which globs include/ and so cannot fall behind the tree.  This file does
+ * the part a glob cannot: it constructs the types and calls the entry points,
+ * so that a header which compiles but declares something the library does not
+ * define fails here rather than in a consumer's link.
+ *
+ * Every function defined here must be called from main().  The YAML and CSV
+ * smoke tests below went uncalled for some time, which the build did not
+ * report because -Wno-error=unused-function is on for other reasons.
  */
 
 // Test json_core.h independently
@@ -107,6 +112,49 @@ static void test_yaml_umbrella(void) {
   (void)opt;
 }
 
+// --- CSV header smoke tests ---
+#include <ghoti.io/text/csv/csv_core.h>
+static void test_csv_core(void) {
+  GTEXT_CSV_Parse_Options opt = gtext_csv_parse_options_default();
+  GTEXT_CSV_Write_Options wopt = gtext_csv_write_options_default();
+  (void)opt;
+  (void)wopt;
+}
+
+#include <ghoti.io/text/csv/csv_table.h>
+static void test_csv_table(void) {
+  (void)GTEXT_CSV_OK;
+}
+
+#include <ghoti.io/text/csv/csv_stream.h>
+static void test_csv_stream(void) {
+  (void)gtext_csv_parse_options_default;
+}
+
+#include <ghoti.io/text/csv/csv_writer.h>
+static void test_csv_writer(void) {
+  (void)gtext_csv_write_options_default;
+}
+
+// umbrella
+#include <ghoti.io/text/csv.h>
+static void test_csv_umbrella(void) {
+  GTEXT_CSV_Parse_Options opt = gtext_csv_parse_options_default();
+  (void)opt;
+}
+
+// --- Library-wide headers ---
+#include <ghoti.io/text/allocator.h>
+static void test_allocator(void) {
+  const GTEXT_Allocator * a = gtext_allocator_default();
+  (void)a;
+}
+
+#include <ghoti.io/text/text.h>
+static void test_text(void) {
+  (void)gtext_version_string();
+}
+
 int main(void) {
   test_json_core();
   test_json_dom();
@@ -116,5 +164,20 @@ int main(void) {
   test_json_patch();
   test_json_schema();
   test_umbrella();
+
+  test_yaml_core();
+  test_yaml_dom();
+  test_yaml_writer();
+  test_yaml_stream();
+  test_yaml_umbrella();
+
+  test_csv_core();
+  test_csv_table();
+  test_csv_stream();
+  test_csv_writer();
+  test_csv_umbrella();
+
+  test_allocator();
+  test_text();
   return 0;
 }

@@ -274,7 +274,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators
+TEST_GATES ?= check-symbols check-allocators check-headers
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -426,6 +426,32 @@ endef
 # Generate build rules from TEST_PAIRS (one pair = source|name)
 $(foreach pair,$(TEST_PAIRS),$(eval $(call test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
 
+# tests/test-headers.c is C, and TEST_PAIRS above globs only test*.cpp and
+# test-*.cpp - so this file had never been compiled, not once, since it was
+# written.  That is why its YAML smoke functions were defined and never called
+# from main(), and why it covered no CSV header at all: nothing was ever in a
+# position to notice.
+#
+# It is kept as C rather than renamed to .cpp because every other test in this
+# project is C++, and this is the only place a C consumer compiles against
+# these headers.  It links the library but not gtest; success is exit 0.
+#
+# Appended to TEST_EXECUTABLES here, below the point where
+# ASAN_TEST_EXECUTABLES is derived from it, so the ASan build does not try to
+# apply the C++ test rule to a C source.
+$(APP_DIR)/testHeaders$(EXE_EXTENSION): \
+		tests/test-headers.c \
+		$(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET)
+	@printf "\n### Compiling testHeaders Test ###\n"
+	@mkdir -p $(@D)
+# -Werror=unused-function overrides the -Wno-error=unused-function in CFLAGS,
+# which is set for reasons elsewhere in the tree.  Every smoke function here
+# must be reachable from main(); a new one that nobody calls is the defect
+# this file already had, so it is a build error here rather than a warning.
+	$(CC) $(CFLAGS) -Werror=unused-function $(INCLUDE) -MMD -MP -MF $(APP_DIR)/testHeaders.d -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
+
+TEST_EXECUTABLES += $(APP_DIR)/testHeaders$(EXE_EXTENSION)
+
 ####################################################################
 # Examples
 ####################################################################
@@ -501,7 +527,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean check-symbols check-allocators
+.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean check-symbols check-allocators check-headers
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -607,6 +633,47 @@ check-allocators: ## Fail if a converted file allocates without the allocator
 		exit 1; \
 	fi
 	@printf "\033[0;32mEvery allocation in the converted files goes through GTEXT_Allocator.\033[0m\n"
+
+check-headers: ## Fail if any installed header is not self-contained
+# `make install` copies include/ghoti.io wholesale, so every header under
+# include/ ships whether or not anything includes it.  Globbing that directory
+# is therefore the authoritative list, and the reason this is a gate rather
+# than a test file: tests/test-headers.c was a hand-maintained list of fifteen
+# includes, which covered no CSV header at all and did not notice that
+# json/json.h had been dead since the great rename.  A list someone has to
+# remember to extend is a list that silently stops matching the tree.
+#
+# Each header is compiled alone, so it must include what it uses; twice, so a
+# broken or duplicated include guard shows up as a redefinition; and once as
+# C++, because every test in this project is C++ and a header that forgets
+# `extern "C"` links against nothing.
+	@mkdir -p $(BUILD_DIR)
+	@fail=0; checked=0; \
+	for h in $$(find include -name '*.h' | sed 's|^include/||' | sort); do \
+		checked=$$((checked + 1)); \
+		printf '#include <%s>\n#include <%s>\nint main(void) { return 0; }\n' "$$h" "$$h" \
+			> $(BUILD_DIR)/hdrcheck.c; \
+		if ! $(CC) $(CFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) \
+				-c -o /dev/null $(BUILD_DIR)/hdrcheck.c 2> $(BUILD_DIR)/hdrcheck.log; then \
+			printf "\033[0;31m\n### %s is not self-contained (C) ###\033[0m\n" "$$h" >&2; \
+			sed 's/^/    /' $(BUILD_DIR)/hdrcheck.log >&2; \
+			fail=1; \
+		fi; \
+		cp $(BUILD_DIR)/hdrcheck.c $(BUILD_DIR)/hdrcheck.cpp; \
+		if ! $(CXX) $(CXXFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) \
+				-c -o /dev/null $(BUILD_DIR)/hdrcheck.cpp 2> $(BUILD_DIR)/hdrcheck.log; then \
+			printf "\033[0;31m\n### %s is not self-contained (C++) ###\033[0m\n" "$$h" >&2; \
+			sed 's/^/    /' $(BUILD_DIR)/hdrcheck.log >&2; \
+			fail=1; \
+		fi; \
+	done; \
+	rm -f $(BUILD_DIR)/hdrcheck.c $(BUILD_DIR)/hdrcheck.cpp $(BUILD_DIR)/hdrcheck.log; \
+	if [ "$$fail" -ne 0 ]; then \
+		printf "\nA header that does not compile alone works only for callers who\n" >&2; \
+		printf "happen to have included its dependencies first.\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mAll %s installed headers compile standalone, twice, as C and C++.\033[0m\n" "$$checked"
 
 check-symbols: ## Fail if any exported symbol lacks the version namespace
 check-symbols: $(APP_DIR)/$(TARGET)
