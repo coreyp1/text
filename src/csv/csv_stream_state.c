@@ -149,6 +149,33 @@ GTEXT_CSV_Status csv_stream_process_start_of_record(GTEXT_CSV_Stream * stream,
   return GTEXT_CSV_OK;
 }
 
+// End the current record and count the row.
+//
+// max_rows was computed in gtext_csv_stream_new() and then compared against
+// nothing, so a documented resource limit rejected no input: a 100-row
+// document parsed cleanly with max_rows set to 5.  It was the only one of the
+// five CSV limits not enforced - max_cols, max_field_bytes, max_record_bytes
+// and max_total_bytes all were.  GTEXT_CSV_E_TOO_MANY_ROWS had been declared
+// for it and never returned.
+//
+// The overflow guard was duplicated at all five record-end sites and the limit
+// check was absent from all five, which is the usual outcome for a check that
+// has to be remembered in more than one place.  Both now live here.
+static GTEXT_CSV_Status csv_stream_end_record(GTEXT_CSV_Stream * stream) {
+  stream->state = CSV_STREAM_STATE_START_OF_RECORD;
+  stream->in_record = false;
+  if (stream->row_count >= SIZE_MAX) {
+    return csv_stream_set_error(
+        stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
+  }
+  stream->row_count++;
+  if (stream->row_count > stream->max_rows) {
+    return csv_stream_set_error(
+        stream, GTEXT_CSV_E_TOO_MANY_ROWS, "Too many rows");
+  }
+  return GTEXT_CSV_OK;
+}
+
 // Process START_OF_FIELD state
 GTEXT_CSV_Status csv_stream_process_start_of_field(GTEXT_CSV_Stream * stream,
     const char * process_input, size_t process_len, size_t * offset,
@@ -248,15 +275,8 @@ GTEXT_CSV_Status csv_stream_process_start_of_field(GTEXT_CSV_Stream * stream,
       return status;
     }
     stream->field_count = 0;
-    stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-    stream->in_record = false;
-    if (stream->row_count >= SIZE_MAX) {
-      return csv_stream_set_error(
-          stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
-    }
-    stream->row_count++;
     // Position already updated by csv_stream_handle_newline
-    return GTEXT_CSV_OK;
+    return csv_stream_end_record(stream);
   }
 
   // Start unquoted field
@@ -311,15 +331,8 @@ GTEXT_CSV_Status csv_stream_unquoted_handle_newline(GTEXT_CSV_Stream * stream,
   }
   csv_stream_clear_field_state(stream);
   stream->field_count = 0;
-  stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-  stream->in_record = false;
-  if (stream->row_count >= SIZE_MAX) {
-    return csv_stream_set_error(
-        stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
-  }
-  stream->row_count++;
   // Position already updated by csv_stream_handle_newline
-  return GTEXT_CSV_OK;
+  return csv_stream_end_record(stream);
 }
 
 // Helper: Validate character in unquoted field
@@ -375,15 +388,8 @@ GTEXT_CSV_Status csv_stream_unquoted_handle_special_char(
       }
       csv_stream_clear_field_state(stream);
       stream->field_count = 0;
-      stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-      stream->in_record = false;
-      if (stream->row_count >= SIZE_MAX) {
-        return csv_stream_set_error(
-            stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
-      }
-      stream->row_count++;
       // Position already updated by csv_stream_handle_newline
-      return GTEXT_CSV_OK;
+      return csv_stream_end_record(stream);
     }
 
     // If newlines are allowed, continue processing
@@ -595,15 +601,8 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
       }
       csv_stream_clear_field_state(stream);
       stream->field_count = 0;
-      stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-      stream->in_record = false;
-      if (stream->row_count >= SIZE_MAX) {
-        return csv_stream_set_error(
-            stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
-      }
-      stream->row_count++;
       // Position already updated by csv_stream_handle_newline
-      return GTEXT_CSV_OK;
+      return csv_stream_end_record(stream);
     }
   }
 
@@ -838,15 +837,8 @@ GTEXT_CSV_Status csv_stream_process_quote_in_quoted(GTEXT_CSV_Stream * stream,
     }
     csv_stream_clear_field_state(stream);
     stream->field_count = 0;
-    stream->state = CSV_STREAM_STATE_START_OF_RECORD;
-    stream->in_record = false;
-    if (stream->row_count >= SIZE_MAX) {
-      return csv_stream_set_error(
-          stream, GTEXT_CSV_E_LIMIT, "Row count overflow");
-    }
-    stream->row_count++;
     // Position already updated by csv_stream_handle_newline
-    return GTEXT_CSV_OK;
+    return csv_stream_end_record(stream);
   }
 
   // Regular character after quote - invalid quote usage

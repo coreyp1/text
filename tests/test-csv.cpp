@@ -13179,6 +13179,138 @@ TEST(CsvAlwaysEscapeQuotes, QuotedFieldsAlwaysEscapeRegardless) {
 	}
 }
 
+
+
+// ---------------------------------------------------------------------------
+// max_rows
+//
+// The only one of the five CSV limits that was not enforced.  It was computed
+// in gtext_csv_stream_new() by csv_get_limit() and then compared against
+// nothing, so a 100-row document parsed cleanly with max_rows set to 5.
+// GTEXT_CSV_E_TOO_MANY_ROWS had been declared for it and was never returned.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string csv_rows(size_t count) {
+	std::string s;
+	for (size_t i = 0; i < count; ++i) {
+		s += std::to_string(i) + ",x\n";
+	}
+	return s;
+}
+
+} // namespace
+
+TEST(CsvMaxRows, RejectsMoreRowsThanTheLimit) {
+	std::string src = csv_rows(100);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_rows = 5;
+
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src.data(), src.size(), &opts, &err);
+
+	EXPECT_EQ(t, nullptr);
+	EXPECT_EQ(err.code, GTEXT_CSV_E_TOO_MANY_ROWS);
+	if (t) {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvMaxRows, AcceptsExactlyTheLimit) {
+	// The boundary is the point of a limit: N rows must pass and N+1 must not.
+	for (size_t limit = 1; limit <= 4; ++limit) {
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		opts.max_rows = limit;
+
+		std::string ok = csv_rows(limit);
+		GTEXT_CSV_Error e1;
+		std::memset(&e1, 0, sizeof(e1));
+		GTEXT_CSV_Table * t1 =
+		    gtext_csv_parse_table(ok.data(), ok.size(), &opts, &e1);
+		EXPECT_NE(t1, nullptr) << "limit=" << limit << " should accept " << limit
+		                       << " rows";
+		if (t1) {
+			gtext_csv_free_table(t1);
+		}
+		gtext_csv_error_free(&e1);
+
+		std::string too_many = csv_rows(limit + 1);
+		GTEXT_CSV_Error e2;
+		std::memset(&e2, 0, sizeof(e2));
+		GTEXT_CSV_Table * t2 = gtext_csv_parse_table(
+		    too_many.data(), too_many.size(), &opts, &e2);
+		EXPECT_EQ(t2, nullptr) << "limit=" << limit << " should reject "
+		                       << (limit + 1) << " rows";
+		EXPECT_EQ(e2.code, GTEXT_CSV_E_TOO_MANY_ROWS) << "limit=" << limit;
+		if (t2) {
+			gtext_csv_free_table(t2);
+		}
+		gtext_csv_error_free(&e2);
+	}
+}
+
+TEST(CsvMaxRows, ZeroMeansLibraryDefault) {
+	// Consistent with the other limits in this struct.
+	std::string src = csv_rows(100);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_rows = 0;
+
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src.data(), src.size(), &opts, &err);
+	EXPECT_NE(t, nullptr);
+	if (t) {
+		EXPECT_EQ(gtext_csv_row_count(t), 100u);
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvMaxRows, StreamingParserEnforcesItToo) {
+	// The streaming parser must agree with the table parser, including when
+	// the rows arrive split across feeds.
+	struct Ctx {
+		size_t rows = 0;
+	};
+	Ctx ctx;
+	auto cb = [](const GTEXT_CSV_Event * ev, void * user) -> GTEXT_CSV_Status {
+		if (ev->type == GTEXT_CSV_EVENT_RECORD_END) {
+			static_cast<Ctx *>(user)->rows++;
+		}
+		return GTEXT_CSV_OK;
+	};
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_rows = 3;
+
+	GTEXT_CSV_Stream * s = gtext_csv_stream_new(&opts, cb, &ctx);
+	ASSERT_NE(s, nullptr);
+
+	std::string src = csv_rows(50);
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+
+	GTEXT_CSV_Status st = GTEXT_CSV_OK;
+	for (size_t i = 0; i < src.size() && st == GTEXT_CSV_OK; i += 3) {
+		size_t n = std::min<size_t>(3, src.size() - i);
+		st = gtext_csv_stream_feed(s, src.data() + i, n, &err);
+	}
+	if (st == GTEXT_CSV_OK) {
+		st = gtext_csv_stream_finish(s, &err);
+	}
+
+	EXPECT_EQ(st, GTEXT_CSV_E_TOO_MANY_ROWS);
+	EXPECT_LE(ctx.rows, 4u) << "should have stopped near the limit";
+
+	gtext_csv_stream_free(s);
+	gtext_csv_error_free(&err);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
