@@ -1231,21 +1231,31 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 # and leaving the tree cleaned would break any sibling project that links
 # this one. The cost is one extra build; coverage is not run often.
 	@$(MAKE) --no-print-directory clean > /dev/null
+# The instrumented build, the report, and the restoration of the tree are one
+# shell command so that the cleanup runs whatever fails.  Letting a failure
+# stop the recipe leaves the --coverage objects in build/, and the next
+# ordinary `make` links them into a library that needs the gcov runtime; every
+# later build then fails with undefined references to __gcov_init until
+# somebody works out why.  That is exactly what the cleanup exists to prevent,
+# so it must not itself be skipped by the failure it is there to survive.
+#
 # TEST_GATES is cleared because --coverage links the gcov runtime, which
 # exports mangle_path.  check-symbols is right to reject that in a shipping
 # build, but it is not a defect in an instrumented one, and it made this
 # target fail before it ever produced a report.
-	@$(MAKE) --no-print-directory test TEST_GATES= \
-		EXTRA_CFLAGS="--coverage -O0" \
-		EXTRA_LDFLAGS="--coverage" > /dev/null
+#
 # COVERAGE_MIN, when set, makes the report fail below that percentage.  CI
 # passes one so that coverage can only be argued upward; a local run without it
 # just prints the numbers.
-#
-# The status is held until after the rebuild rather than being allowed to stop
-# the recipe, because leaving the instrumented objects in the tree is exactly
-# what the cleanup above exists to prevent - a later `make` would link them.
-	@COVERAGE_MIN=$(COVERAGE_MIN) tools/coverage.sh $(OBJ_DIR); status=$$?; \
+	@status=0; \
+	$(MAKE) --no-print-directory test TEST_GATES= \
+		EXTRA_CFLAGS="--coverage -O0" \
+		EXTRA_LDFLAGS="--coverage" > /dev/null || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		COVERAGE_MIN=$(COVERAGE_MIN) tools/coverage.sh $(OBJ_DIR) || status=$$?; \
+	else \
+		printf "coverage: the instrumented test run failed; no report\n" >&2; \
+	fi; \
 	$(MAKE) --no-print-directory clean > /dev/null; \
 	$(MAKE) --no-print-directory all > /dev/null; \
 	exit $$status
