@@ -61,7 +61,14 @@ typedef enum {
  */
 typedef struct {
   GTEXT_CSV_Status code; ///< Error code
-  const char * message;  ///< Human-readable error message (static string)
+  const char * message;  ///< Human-readable error message.  Usually a static
+                         ///< string; when @ref message_is_owned is true it is
+                         ///< heap-allocated and released by
+                         ///< gtext_csv_error_free().
+  bool message_is_owned; ///< True when @ref message must be freed by
+                         ///< gtext_csv_error_free().  A caller that copies the
+                         ///< error struct and frees both copies must clear
+                         ///< this on one of them.
   size_t byte_offset;    ///< Byte offset from start of input (0-based)
   int line;              ///< Line number (1-based)
   int column;            ///< Column number (1-based, byte-based)

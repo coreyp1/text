@@ -40,15 +40,14 @@ GTEXT_CSV_Status csv_stream_emit_event(GTEXT_CSV_Stream * stream,
 // Set stream error
 GTEXT_CSV_Status csv_stream_set_error(
     GTEXT_CSV_Stream * stream, GTEXT_CSV_Status code, const char * message) {
-  // Free any existing context snippet
-  if (stream->error.context_snippet) {
-    free(stream->error.context_snippet);
-    stream->error.context_snippet = NULL;
-  }
+  // Release whatever the error already owns before overwriting it.
+  gtext_csv_error_free(&stream->error);
 
   // Set error fields first
   stream->error.code = code;
   stream->error.message = message;
+  // Every message reaching this function is a static string.
+  stream->error.message_is_owned = false;
   stream->error.byte_offset = stream->pos.offset;
   stream->error.line = stream->pos.line;
   stream->error.column = stream->pos.column;

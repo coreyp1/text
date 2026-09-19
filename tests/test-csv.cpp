@@ -11921,23 +11921,30 @@ TEST(CsvErrorMessages, ErrorMessageMemoryManagement) {
   status = gtext_csv_row_append(table, row2, nullptr, 2, &err);
   EXPECT_EQ(status, GTEXT_CSV_E_INVALID);
 
-  // Verify error message was allocated
+  // Verify the error message was allocated and is flagged as owned.
   EXPECT_NE(err.message, nullptr);
-  EXPECT_NE(err.context_snippet, nullptr); // Message stored in context_snippet
+  EXPECT_TRUE(err.message_is_owned);
 
-  // Free error - should clean up allocated message
+  // The message is not smuggled through context_snippet.  This assertion used
+  // to read EXPECT_NE(err.context_snippet, nullptr) with the comment "Message
+  // stored in context_snippet", and the lines below it recorded that
+  // err.message was left dangling after the free as though that were the
+  // contract rather than a bug.  A row appended from a caller's array has no
+  // input text, so there is nothing to take a snippet of.
+  EXPECT_EQ(err.context_snippet, nullptr);
+
+  // Free error - should clean up the allocated message and clear both fields,
+  // so that a caller who reads message afterwards, as the "static string"
+  // documentation invites, does not read freed memory.
   gtext_csv_error_free(&err);
   EXPECT_EQ(err.context_snippet, nullptr);
-  // Note: err.message may still point to freed memory, but context_snippet is NULL
-  // which means the allocated memory has been freed
+  EXPECT_EQ(err.message, nullptr);
+  EXPECT_FALSE(err.message_is_owned);
 
   gtext_csv_free_table(table);
 }
 
-int main(int argc, char ** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
+
 
 /*
  * validate_utf8 wiring.
@@ -12868,4 +12875,117 @@ TEST(CsvUnquotedNewlines, TableAndStreamAgreeAtEveryChunkSize) {
 			EXPECT_EQ(got, expected) << "chunk=" << chunk << " doc=" << doc;
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Error ownership
+//
+// GTEXT_CSV_Error::message was documented as a static string, and every site
+// in the library honored that except csv_set_field_count_error(), which
+// formatted a message onto the heap, stored it in context_snippet, and pointed
+// message at it.  gtext_csv_error_free() released the snippet and left message
+// pointing at the freed block, so reading the message after freeing the error
+// - which the "static string" contract invites - was a use-after-free.
+// ---------------------------------------------------------------------------
+
+TEST(CsvErrorOwnership, FieldCountMismatchMessageIsNotTheSnippet) {
+	const char * src = "a,b,c\n1,2,3\n";
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src, std::strlen(src), &opts, &err);
+	ASSERT_NE(t, nullptr);
+
+	const char * fields[2] = {"x", "y"};
+	size_t lens[2] = {1, 1};
+	GTEXT_CSV_Error aerr;
+	std::memset(&aerr, 0, sizeof(aerr));
+
+	EXPECT_EQ(gtext_csv_row_append(t, fields, lens, 2, &aerr),
+	    GTEXT_CSV_E_INVALID);
+
+	// The detail is still reported.
+	ASSERT_NE(aerr.message, nullptr);
+	EXPECT_NE(std::string(aerr.message).find("expected 3"), std::string::npos)
+	    << "message was: " << aerr.message;
+	EXPECT_NE(std::string(aerr.message).find("got 2"), std::string::npos)
+	    << "message was: " << aerr.message;
+
+	// There is no input buffer for an appended row, so there is no snippet to
+	// take.  The message must not be smuggled through the snippet field: a
+	// caller printing context_snippet with caret_offset would otherwise get a
+	// caret under an arbitrary character of an English sentence.
+	EXPECT_EQ(aerr.context_snippet, nullptr);
+	EXPECT_EQ(aerr.context_snippet_len, 0u);
+	EXPECT_TRUE(aerr.message_is_owned);
+
+	gtext_csv_error_free(&aerr);
+
+	// Both are cleared rather than dangling.  Under ASan the old code failed
+	// here on the read, not on the comparison.
+	EXPECT_EQ(aerr.message, nullptr);
+	EXPECT_EQ(aerr.context_snippet, nullptr);
+	EXPECT_FALSE(aerr.message_is_owned);
+
+	// Freeing twice must stay safe.
+	gtext_csv_error_free(&aerr);
+
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvErrorOwnership, StaticMessagesAreNotFreed) {
+	// A parse error carries a static message; gtext_csv_error_free() must not
+	// try to free it.  This is the case that a naive "always free the message"
+	// fix would corrupt.
+	const char * src = "a,b\n\"unterminated\n";
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src, std::strlen(src), &opts, &err);
+	if (!t) {
+		EXPECT_FALSE(err.message_is_owned);
+		gtext_csv_error_free(&err);
+	}
+	else {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvErrorOwnership, ReusingOneErrorStructDoesNotLeak) {
+	// csv_set_field_count_error() now routes through gtext_csv_error_free()
+	// before overwriting, so an error struct reused across several failing
+	// appends releases each message.  Under ASan's leak checker this fails if
+	// that release is dropped.
+	const char * src = "a,b,c\n1,2,3\n";
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src, std::strlen(src), &opts, &err);
+	ASSERT_NE(t, nullptr);
+
+	const char * fields[2] = {"x", "y"};
+	size_t lens[2] = {1, 1};
+	GTEXT_CSV_Error aerr;
+	std::memset(&aerr, 0, sizeof(aerr));
+
+	for (int i = 0; i < 5; ++i) {
+		EXPECT_EQ(gtext_csv_row_append(t, fields, lens, 2, &aerr),
+		    GTEXT_CSV_E_INVALID);
+		EXPECT_TRUE(aerr.message_is_owned);
+	}
+
+	gtext_csv_error_free(&aerr);
+	gtext_csv_free_table(t);
+}
+
+int main(int argc, char ** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }

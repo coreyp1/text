@@ -233,11 +233,8 @@ static void csv_set_field_count_error(GTEXT_CSV_Error * err,
     return;
   }
 
-  // Free any existing context snippet
-  if (err->context_snippet) {
-    free(err->context_snippet);
-    err->context_snippet = NULL;
-  }
+  // Release whatever the error already owns before overwriting it.
+  gtext_csv_error_free(err);
 
   err->code = GTEXT_CSV_E_INVALID;
   err->byte_offset = 0;
@@ -246,6 +243,15 @@ static void csv_set_field_count_error(GTEXT_CSV_Error * err,
   err->row_index = row_index;
   err->col_index = actual_count; // Store actual count in col_index
   err->caret_offset = 0;
+
+  // There is no input buffer at this point - the row came from the caller's
+  // array, not from parsed text - so there is nothing to take a snippet of.
+  // context_snippet used to carry the formatted message instead, with
+  // err->message pointing into it.  That gave one field two meanings and left
+  // message dangling after gtext_csv_error_free(), so the message is now
+  // owned outright and the snippet stays empty.
+  err->context_snippet = NULL;
+  err->context_snippet_len = 0;
 
   // Allocate and format error message with expected and actual counts
   size_t msg_len = 128; // Sufficient for formatted message
@@ -260,15 +266,12 @@ static void csv_set_field_count_error(GTEXT_CSV_Error * err,
           "Field count mismatch on append: expected %zu fields, got %zu",
           expected_count, actual_count);
     }
-    err->context_snippet = msg;
-    err->context_snippet_len = strlen(msg);
-    // Point message to the formatted string (caller must free via gtext_csv_error_free)
-    err->message = err->context_snippet;
+    err->message = msg;
+    err->message_is_owned = true;
   } else {
     // Fallback to static message if allocation fails
     err->message = "Field count mismatch: row field count does not match table column count";
-    err->context_snippet = NULL;
-    err->context_snippet_len = 0;
+    err->message_is_owned = false;
   }
 }
 

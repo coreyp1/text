@@ -7,6 +7,7 @@
  */
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,11 +16,26 @@
 
 #include <ghoti.io/text/csv/csv_core.h>
 GTEXT_API void gtext_csv_error_free(GTEXT_CSV_Error * err) {
-  if (err && err->context_snippet) {
+  if (!err) {
+    return;
+  }
+  if (err->context_snippet) {
     free(err->context_snippet);
     err->context_snippet = NULL;
     err->context_snippet_len = 0;
     err->caret_offset = 0;
+  }
+  /* A formatted message is owned by the error.  This used to be handled by
+   * pointing message at context_snippet and freeing only the snippet, which
+   * left message dangling at a heap block this function had just released -
+   * reachable from gtext_csv_row_append() with a mismatched field count,
+   * because the struct documents message as a static string and a caller may
+   * reasonably read it after freeing. */
+  if (err->message_is_owned) {
+    /* Cast away const: when the flag is set, the library allocated it. */
+    free((void *)(uintptr_t)err->message);
+    err->message = NULL;
+    err->message_is_owned = false;
   }
 }
 
