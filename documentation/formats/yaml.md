@@ -162,6 +162,30 @@ semantically equal to the input, not textually equal.
 @anchor yaml-deviations
 ## Deviations
 
+**Open: a tag on a block-style collection is dropped.**
+
+`!!omap [{a: 1}]` keeps its tag; `!!omap` followed by a block sequence does
+not. The scanner attaches the tag to the *next scalar* instead of to the
+collection it introduces - for `!!omap\na: 1` the streaming events are
+`DOCUMENT_START`, then `SCALAR tag=!!omap value="a"` - so by the time the DOM
+exists the mapping is untagged and `gtext_yaml_node_tag()` returns `NULL`.
+This affects standard and application tags alike, at the document root and
+nested, for both block sequences and block mappings. Flow collections and
+scalars are unaffected.
+
+It has consequences beyond the tag itself. `gtext_yaml_to_json()` refuses
+`!!set`, `!!omap` and `!!pairs` so that a YAML-specific collection cannot
+silently become a JSON array; with the tag gone that refusal does not happen,
+and `!!omap\n- a: 1` converts to `[{"a":1}]` without complaint. Custom tag
+handlers registered through `enable_custom_tags` will not fire for a block
+collection either. Block style is the common style in real YAML, so this is
+the usual case rather than a corner.
+
+The correct expectation is written down as
+`YamlToJsonRefusals.DISABLED_BlockStyleCollectionsKeepTheirTag` in
+`tests/yaml/test-yaml-to-json.cpp`; remove the `DISABLED_` prefix when the
+parser is fixed.
+
 **Fixed: plain scalars are no longer truncated at an embedded indicator.**
 
 A block-context plain scalar used to end at a space followed by `-`, `,` or

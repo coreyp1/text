@@ -862,3 +862,350 @@ TEST(YamlToJsonAliasBudget, LimitIsTakenFromTheParseOptions) {
 		gtext_yaml_free(doc);
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Conversion options and refusals
+//
+// yaml_to_json.c sat at 52.5%, the second-least-covered file in the library.
+// Almost all of the untested part is the set of documents it is supposed to
+// refuse, and the options that decide what it does instead - which is exactly
+// the part a caller depends on when the input is not theirs.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+GTEXT_YAML_Document * parse_yaml_or_die(const char * src) {
+	GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * d = gtext_yaml_parse(src, strlen(src), &po, &err);
+	EXPECT_NE(d, nullptr) << (err.message ? err.message : "parse failed");
+	gtext_yaml_error_free(&err);
+	return d;
+}
+
+} // namespace
+
+TEST(YamlToJsonLargeInt, DefaultPolicyRefuses) {
+	// 2^53 + 1: representable in YAML, not exactly representable as a JSON
+	// number under the interoperable range of RFC 8259 section 6.
+	GTEXT_YAML_Document * d = parse_yaml_or_die("n: 9007199254740993\n");
+	ASSERT_NE(d, nullptr);
+
+	GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+	EXPECT_EQ(o.large_int_policy, GTEXT_YAML_JSON_LARGE_INT_ERROR);
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * out = nullptr;
+	EXPECT_NE(gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
+	EXPECT_EQ(out, nullptr);
+
+	if (out) {
+		gtext_json_free(out);
+	}
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonLargeInt, StringPolicyKeepsTheDigits) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("n: 9007199254740993\n");
+	ASSERT_NE(d, nullptr);
+
+	GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+	o.large_int_policy = GTEXT_YAML_JSON_LARGE_INT_STRING;
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * out = nullptr;
+	ASSERT_EQ(gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK)
+	    << (err.message ? err.message : "");
+	ASSERT_NE(out, nullptr);
+
+	const GTEXT_JSON_Value * n = gtext_json_object_get(out, "n", 1);
+	ASSERT_NE(n, nullptr);
+	EXPECT_EQ(gtext_json_typeof(n), GTEXT_JSON_STRING);
+
+	const char * s = nullptr;
+	size_t len = 0;
+	ASSERT_EQ(gtext_json_get_string(n, &s, &len), GTEXT_JSON_OK);
+	// The point of this policy is that no digit is lost.
+	EXPECT_EQ(std::string(s, len), "9007199254740993");
+
+	gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonLargeInt, DoublePolicyProducesANumber) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("n: 9007199254740993\n");
+	ASSERT_NE(d, nullptr);
+
+	GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+	o.large_int_policy = GTEXT_YAML_JSON_LARGE_INT_DOUBLE;
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * out = nullptr;
+	ASSERT_EQ(gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK)
+	    << (err.message ? err.message : "");
+	ASSERT_NE(out, nullptr);
+
+	const GTEXT_JSON_Value * n = gtext_json_object_get(out, "n", 1);
+	ASSERT_NE(n, nullptr);
+	EXPECT_EQ(gtext_json_typeof(n), GTEXT_JSON_NUMBER);
+
+	double v = 0;
+	ASSERT_EQ(gtext_json_get_double(n, &v), GTEXT_JSON_OK);
+	// This policy trades exactness for a number, so the value is the nearest
+	// double rather than the original integer.
+	EXPECT_DOUBLE_EQ(v, 9007199254740992.0);
+
+	gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonLargeInt, SafeRangeIsUnaffectedByThePolicy) {
+	// An integer inside the safe range must convert identically whatever the
+	// policy says, or the policy is changing more than it claims to.
+	const GTEXT_YAML_JSON_Large_Int_Policy policies[] = {
+	    GTEXT_YAML_JSON_LARGE_INT_ERROR,
+	    GTEXT_YAML_JSON_LARGE_INT_STRING,
+	    GTEXT_YAML_JSON_LARGE_INT_DOUBLE,
+	};
+
+	for (auto policy : policies) {
+		GTEXT_YAML_Document * d = parse_yaml_or_die("n: 42\n");
+		ASSERT_NE(d, nullptr);
+
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		o.large_int_policy = policy;
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		ASSERT_EQ(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
+		ASSERT_NE(out, nullptr);
+
+		const GTEXT_JSON_Value * n = gtext_json_object_get(out, "n", 1);
+		ASSERT_NE(n, nullptr);
+		EXPECT_EQ(gtext_json_typeof(n), GTEXT_JSON_NUMBER);
+		int64_t v = 0;
+		EXPECT_EQ(gtext_json_get_i64(n, &v), GTEXT_JSON_OK);
+		EXPECT_EQ(v, 42);
+
+		gtext_json_free(out);
+		gtext_yaml_error_free(&err);
+		gtext_yaml_free(d);
+	}
+}
+
+TEST(YamlToJsonKeys, NonStringKeysNeedCoercion) {
+	// JSON object names are strings; YAML keys need not be.  The default is to
+	// refuse rather than to invent a spelling.
+	GTEXT_YAML_Document * d = parse_yaml_or_die("1: one\ntrue: yes\n");
+	ASSERT_NE(d, nullptr);
+
+	{
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		EXPECT_FALSE(o.coerce_keys_to_strings);
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		EXPECT_NE(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
+		if (out) {
+			gtext_json_free(out);
+		}
+		gtext_yaml_error_free(&err);
+	}
+	{
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		o.coerce_keys_to_strings = true;
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		ASSERT_EQ(gtext_yaml_to_json_with_options(d, &out, &o, &err),
+		    GTEXT_YAML_OK)
+		    << (err.message ? err.message : "");
+		ASSERT_NE(out, nullptr);
+		EXPECT_EQ(gtext_json_typeof(out), GTEXT_JSON_OBJECT);
+		EXPECT_NE(gtext_json_object_get(out, "1", 1), nullptr)
+		    << "the integer key should have become the string \"1\"";
+
+		gtext_json_free(out);
+		gtext_yaml_error_free(&err);
+	}
+
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonRefusals, YamlSpecificCollectionsAreRefused) {
+	// !!set, !!omap and !!pairs have no JSON spelling.  Converting them to
+	// something plausible would lose the distinction silently.
+	//
+	// Flow style only.  In block style the parser drops the tag before the
+	// DOM is built, so the conversion never sees it and does not refuse - see
+	// DISABLED_BlockStyleCollectionsKeepTheirTag below.
+	const char * docs[] = {
+	    "!!set {a: ~, b: ~}",
+	    "!!omap [{a: 1}, {b: 2}]",
+	    "!!pairs [{a: 1}, {a: 2}]",
+	};
+
+	for (const char * src : docs) {
+		SCOPED_TRACE(src);
+		GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document * d = gtext_yaml_parse(src, strlen(src), &po, &err);
+		if (!d) {
+			// Refused at parse time is also a refusal; the point is that it
+			// never silently becomes JSON.
+			gtext_yaml_error_free(&err);
+			continue;
+		}
+
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		GTEXT_JSON_Value * out = nullptr;
+		EXPECT_NE(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
+		if (out) {
+			gtext_json_free(out);
+		}
+		gtext_yaml_error_free(&err);
+		gtext_yaml_free(d);
+	}
+}
+
+TEST(YamlToJsonRefusals, AliasesAreRefusedUnlessAllowed) {
+	GTEXT_YAML_Document * d =
+	    parse_yaml_or_die("a: &x 1\nb: *x\n");
+	ASSERT_NE(d, nullptr);
+
+	{
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		EXPECT_FALSE(o.allow_resolved_aliases);
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		EXPECT_NE(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
+		if (out) {
+			gtext_json_free(out);
+		}
+		gtext_yaml_error_free(&err);
+	}
+	{
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		o.allow_resolved_aliases = true;
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		ASSERT_EQ(gtext_yaml_to_json_with_options(d, &out, &o, &err),
+		    GTEXT_YAML_OK)
+		    << (err.message ? err.message : "");
+		ASSERT_NE(out, nullptr);
+
+		// Both names carry the resolved value.
+		const GTEXT_JSON_Value * b = gtext_json_object_get(out, "b", 1);
+		ASSERT_NE(b, nullptr);
+		int64_t v = 0;
+		EXPECT_EQ(gtext_json_get_i64(b, &v), GTEXT_JSON_OK);
+		EXPECT_EQ(v, 1);
+
+		gtext_json_free(out);
+		gtext_yaml_error_free(&err);
+	}
+
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonRefusals, NullArgumentsAreRejected) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("a: 1\n");
+	ASSERT_NE(d, nullptr);
+
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+
+	EXPECT_NE(gtext_yaml_to_json(nullptr, &out, &err), GTEXT_YAML_OK);
+	EXPECT_NE(gtext_yaml_to_json(d, nullptr, &err), GTEXT_YAML_OK);
+
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+TEST(YamlToJsonEmpty, EmptyDocumentBecomesNull) {
+	GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * d = gtext_yaml_parse("", 0, &po, &err);
+	if (!d) {
+		gtext_yaml_error_free(&err);
+		GTEST_SKIP() << "an empty document does not parse";
+	}
+
+	GTEXT_JSON_Value * out = nullptr;
+	ASSERT_EQ(gtext_yaml_to_json(d, &out, &err), GTEXT_YAML_OK)
+	    << (err.message ? err.message : "");
+	ASSERT_NE(out, nullptr);
+	EXPECT_EQ(gtext_json_typeof(out), GTEXT_JSON_NULL);
+
+	gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+// Disabled, not deleted: this is the correct expectation for a bug that is
+// still open, so it is written down where it will be found rather than left
+// as a note somewhere.  Remove the DISABLED_ prefix when the parser is fixed.
+//
+// A tag on a block-style collection is dropped.  The scanner emits it as the
+// tag of the *next scalar* instead - for "!!omap\na: 1" the streaming events
+// are DOCUMENT_START, then SCALAR tag=!!omap value="a" - so by the time the
+// DOM exists the mapping is untagged and gtext_yaml_node_tag() returns NULL.
+// Flow style is unaffected; so are tags on scalars.
+//
+// It matters beyond cosmetics.  Block style is the common style in real YAML,
+// and gtext_yaml_to_json() refuses !!set, !!omap and !!pairs precisely so that
+// a YAML-specific collection cannot silently become a JSON array.  With the
+// tag gone that refusal does not happen: "!!omap\n- a: 1" converts to
+// [{"a":1}] without complaint.  Custom tag handlers registered through
+// enable_custom_tags will not fire for a block collection either.
+TEST(YamlToJsonRefusals, DISABLED_BlockStyleCollectionsKeepTheirTag) {
+	const char * docs[] = {
+	    "!!omap\n- a: 1\n- b: 2\n",
+	    "!!pairs\n- a: 1\n- a: 2\n",
+	};
+
+	for (const char * src : docs) {
+		SCOPED_TRACE(src);
+		GTEXT_YAML_Document * d = parse_yaml_or_die(src);
+		ASSERT_NE(d, nullptr);
+
+		const GTEXT_YAML_Node * root = gtext_yaml_document_root(d);
+		ASSERT_NE(root, nullptr);
+		EXPECT_NE(gtext_yaml_node_tag(root), nullptr)
+		    << "the document's tag was dropped";
+
+		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * out = nullptr;
+		EXPECT_NE(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK)
+		    << "a YAML-specific collection converted to JSON silently";
+		if (out) {
+			gtext_json_free(out);
+		}
+		gtext_yaml_error_free(&err);
+		gtext_yaml_free(d);
+	}
+}
