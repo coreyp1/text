@@ -156,9 +156,12 @@ typedef struct {
 
   // Error context
   bool enable_context_snippet; ///< Generate context snippet for errors (default
-                               ///< true)
-  size_t context_radius_bytes; ///< Bytes before/after error in snippet (default
-                               ///< 40)
+                               ///< true).  When false no snippet is allocated
+                               ///< and GTEXT_CSV_Error::context_snippet stays
+                               ///< NULL.
+  size_t context_radius_bytes; ///< Bytes before and after the error position to
+                               ///< include in the snippet (0 = library
+                               ///< default, 40)
 } GTEXT_CSV_Parse_Options;
 
 /**

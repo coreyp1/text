@@ -12985,6 +12985,114 @@ TEST(CsvErrorOwnership, ReusingOneErrorStructDoesNotLeak) {
 	gtext_csv_free_table(t);
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Error context options
+//
+// enable_context_snippet and context_radius_bytes were both set by
+// gtext_csv_parse_options_default() and then read by nothing.  The streaming
+// parser generated a snippet unconditionally at a hardcoded radius, so turning
+// the option off did not stop the allocation and changing the radius did
+// nothing.  Both were present in the test suite only as default-value
+// assertions, which pass whether or not the option is implemented.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Parse a deliberately malformed document through the streaming parser and
+// return the resulting error by value, with the snippet copied out.
+struct CsvSnippetResult {
+	bool had_error = false;
+	bool has_snippet = false;
+	std::string snippet;
+	size_t caret_offset = 0;
+};
+
+CsvSnippetResult csv_snippet_for(const GTEXT_CSV_Parse_Options & opts) {
+	// A quoted field that never closes, far enough into the input that a
+	// 40-byte radius and a 4-byte radius give visibly different answers.
+	std::string src(200, 'x');
+	src += ",\"unterminated";
+
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src.data(), src.size(), &opts, &err);
+
+	CsvSnippetResult out;
+	if (!t) {
+		out.had_error = true;
+		if (err.context_snippet) {
+			out.has_snippet = true;
+			out.snippet.assign(err.context_snippet, err.context_snippet_len);
+			out.caret_offset = err.caret_offset;
+		}
+	}
+	else {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+	return out;
+}
+
+} // namespace
+
+TEST(CsvErrorContextOptions, SnippetIsProducedByDefault) {
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	ASSERT_TRUE(opts.enable_context_snippet);
+
+	CsvSnippetResult r = csv_snippet_for(opts);
+	ASSERT_TRUE(r.had_error) << "the input must fail to parse for this to test anything";
+	EXPECT_TRUE(r.has_snippet);
+	EXPECT_GT(r.snippet.size(), 0u);
+}
+
+TEST(CsvErrorContextOptions, DisablingSuppressesTheSnippet) {
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.enable_context_snippet = false;
+
+	CsvSnippetResult r = csv_snippet_for(opts);
+	ASSERT_TRUE(r.had_error);
+	EXPECT_FALSE(r.has_snippet)
+	    << "snippet was still allocated: " << r.snippet;
+}
+
+TEST(CsvErrorContextOptions, RadiusChangesTheSnippetLength) {
+	GTEXT_CSV_Parse_Options wide = gtext_csv_parse_options_default();
+	wide.context_radius_bytes = 40;
+
+	GTEXT_CSV_Parse_Options narrow = gtext_csv_parse_options_default();
+	narrow.context_radius_bytes = 4;
+
+	CsvSnippetResult w = csv_snippet_for(wide);
+	CsvSnippetResult n = csv_snippet_for(narrow);
+
+	ASSERT_TRUE(w.had_error);
+	ASSERT_TRUE(n.had_error);
+	ASSERT_TRUE(w.has_snippet);
+	ASSERT_TRUE(n.has_snippet);
+
+	EXPECT_LT(n.snippet.size(), w.snippet.size())
+	    << "narrow=" << n.snippet.size() << " wide=" << w.snippet.size();
+}
+
+TEST(CsvErrorContextOptions, ZeroRadiusMeansLibraryDefault) {
+	// Consistent with every other size_t in this options struct.
+	GTEXT_CSV_Parse_Options zero = gtext_csv_parse_options_default();
+	zero.context_radius_bytes = 0;
+
+	GTEXT_CSV_Parse_Options forty = gtext_csv_parse_options_default();
+	forty.context_radius_bytes = 40;
+
+	CsvSnippetResult z = csv_snippet_for(zero);
+	CsvSnippetResult f = csv_snippet_for(forty);
+
+	ASSERT_TRUE(z.has_snippet);
+	ASSERT_TRUE(f.has_snippet);
+	EXPECT_EQ(z.snippet, f.snippet);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

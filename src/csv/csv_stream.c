@@ -80,15 +80,23 @@ GTEXT_CSV_Status csv_stream_set_error(
     }
   }
 
-  if (input_for_snippet && input_len_for_snippet > 0 &&
-      error_offset <= input_len_for_snippet) {
+  // Both of these options were set by gtext_csv_parse_options_default() and
+  // then read by nothing: the snippet was generated unconditionally, at a
+  // hardcoded radius.  Turning enable_context_snippet off did not stop the
+  // allocation, and context_radius_bytes did not change its size.
+  if (stream->opts.enable_context_snippet && input_for_snippet &&
+      input_len_for_snippet > 0 && error_offset <= input_len_for_snippet) {
     char * snippet = NULL;
     size_t snippet_len = 0;
     size_t caret_offset = 0;
+    // 0 means "library default", as it does for every other size_t in this
+    // options struct.  Callers who want no snippet clear
+    // enable_context_snippet rather than asking for a radius of zero.
+    const size_t radius = csv_get_limit(
+        stream->opts.context_radius_bytes, CSV_DEFAULT_CONTEXT_RADIUS_BYTES);
 
     GTEXT_CSV_Status snippet_status = csv_error_generate_context_snippet(
-        input_for_snippet, input_len_for_snippet, error_offset,
-        CSV_DEFAULT_CONTEXT_RADIUS_BYTES, CSV_DEFAULT_CONTEXT_RADIUS_BYTES,
+        input_for_snippet, input_len_for_snippet, error_offset, radius, radius,
         &snippet, &snippet_len, &caret_offset);
 
     if (snippet_status == GTEXT_CSV_OK && snippet) {
