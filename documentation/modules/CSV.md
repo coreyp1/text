@@ -135,7 +135,7 @@ The library provides extensive configuration options for output formatting:
 ### 5.2 Formatting
 
 - **`newline`**: Newline string for output — **Default: `"\n"`** (can use `"\r\n"`)
-- **`trailing_newline`**: Add trailing newline at end of output — **Default: `false`**
+- **`trailing_newline`**: Terminate the final record with a newline — **Default: `true`**. Records are always separated by one; this decides whether the last is followed by one too. An empty table writes nothing either way. It was documented as defaulting to `false` and was read by no code, so every non-empty table got a trailing newline regardless; the default now states what the writer does.
 
 ### 5.3 Field Trimming
 

@@ -101,7 +101,12 @@ GTEXT_API GTEXT_CSV_Write_Options gtext_csv_write_options_default(void) {
   opts.quote_empty_fields = true;
   opts.quote_if_needed = true;
   opts.always_escape_quotes = true; // Default behavior depends on escape mode
-  opts.trailing_newline = false;
+  // True, which is what the writer has always done for a non-empty table:
+  // the option was read by nothing, so every document got one regardless.
+  // Defaulting to true keeps that output unchanged now that the option is
+  // honored, rather than silently dropping a newline from every file the
+  // library writes.
+  opts.trailing_newline = true;
   opts.trim_trailing_empty_fields = false;
   return opts;
 }

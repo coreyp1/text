@@ -187,7 +187,12 @@ typedef struct {
                              ///< unescaped would end the field early.  No
                              ///< effect when the dialect's escape mode is
                              ///< GTEXT_CSV_ESCAPE_NONE.
-  bool trailing_newline;     ///< Add trailing newline at end (default false)
+  bool trailing_newline;     ///< Terminate the final record with a newline
+                             ///< (default true).  Records are always
+                             ///< separated by one; this decides whether the
+                             ///< last one is followed by one too.  An empty
+                             ///< table writes nothing either way, since it has
+                             ///< no record to terminate.
   bool trim_trailing_empty_fields; ///< Trim trailing empty fields from rows
                                    ///< (default false)
 } GTEXT_CSV_Write_Options;

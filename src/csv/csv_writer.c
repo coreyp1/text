@@ -809,14 +809,13 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
     return GTEXT_CSV_E_INVALID;
   }
 
-  // Handle empty table
+  // Handle empty table.  A trailing newline terminates the last record, and a
+  // table with no records has none to terminate, so nothing is written either
+  // way.  This used to emit a lone newline when trailing_newline was set,
+  // which was the option's only observable effect anywhere.  Both forms read
+  // back as zero rows, so nothing is lost by dropping it, and "no records"
+  // producing no bytes is the easier rule to state.
   if (table_internal->row_count == 0) {
-    // Empty table - write nothing (or trailing newline if requested)
-    if (opts->trailing_newline) {
-      const char * newline = opts->newline ? opts->newline : "\n";
-      size_t newline_len = strlen(newline);
-      return sink->write(sink->user, newline, newline_len);
-    }
     return GTEXT_CSV_OK;
   }
 
@@ -947,20 +946,24 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
       }
     }
 
-    // Write newline after row (except possibly last row if trailing_newline is
-    // false) For CSV, we typically write newline after each row
-    const char * newline = opts->newline ? opts->newline : "\n";
-    size_t newline_len = strlen(newline);
-    GTEXT_CSV_Status status = sink->write(sink->user, newline, newline_len);
-    if (status != GTEXT_CSV_OK) {
-      return status;
+    // A newline separates records, so every row but the last one gets one.
+    // Whether the last one does is what trailing_newline decides.
+    //
+    // This comment used to read "except possibly last row if trailing_newline
+    // is false" and then wrote the newline unconditionally, so the option
+    // changed nothing for any non-empty table - its only observable effect was
+    // to make an empty table emit a lone newline.  It now does what its name
+    // and its documentation say.
+    const bool is_last_row = (row + 1 == table_internal->row_count);
+    if (!is_last_row || opts->trailing_newline) {
+      const char * newline = opts->newline ? opts->newline : "\n";
+      size_t newline_len = strlen(newline);
+      GTEXT_CSV_Status status = sink->write(sink->user, newline, newline_len);
+      if (status != GTEXT_CSV_OK) {
+        return status;
+      }
     }
   }
-
-  // trailing_newline option is typically handled per-row above,
-  // but if the table is empty and trailing_newline is true, we already handled
-  // it. For non-empty tables, we've written newlines after each row, which is
-  // standard CSV.
 
   return GTEXT_CSV_OK;
 }

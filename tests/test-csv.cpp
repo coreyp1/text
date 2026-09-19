@@ -338,9 +338,18 @@ TEST(CsvOptions, WriteOptionsDefault) {
   EXPECT_TRUE(opts.quote_empty_fields);
   EXPECT_TRUE(opts.quote_if_needed);
   EXPECT_TRUE(opts.always_escape_quotes);
-  EXPECT_FALSE(opts.trailing_newline);
+  EXPECT_TRUE(opts.trailing_newline);
   EXPECT_FALSE(opts.trim_trailing_empty_fields);
 }
+
+// Note on the two tests above: an assertion about a default value says the
+// struct was initialized, and nothing whatever about whether the option is
+// implemented.  It passes just as happily when the field is read by no code
+// anywhere - which is how validate_utf8, normalize_unicode, three dialect
+// flags, enable_context_snippet, context_radius_bytes, always_escape_quotes,
+// max_rows and trailing_newline all reached a green suite while doing nothing.
+// Every option needs a test that changes it and observes the difference; the
+// ones for the options named here are further down this file.
 
 // Internal Infrastructure - Arena
 TEST(CsvArena, ContextCreation) {
@@ -3593,11 +3602,11 @@ TEST(CsvTableWrite, EmptyTable) {
   status = gtext_csv_write_table(&sink, nullptr, table);
   EXPECT_EQ(status, GTEXT_CSV_OK);
 
-  // Empty table should produce empty output (or just newline if
-  // trailing_newline is set)
+  // An empty table produces empty output whatever trailing_newline says: a
+  // trailing newline terminates the final record, and there is no record to
+  // terminate.  It used to emit a lone newline when the option was set, which
+  // was the only place that option did anything at all.
   size_t output_len = gtext_csv_sink_buffer_size(&sink);
-  // With default options (trailing_newline=false), empty table produces empty
-  // output
   EXPECT_EQ(output_len, 0u);
 
   gtext_csv_free_table(table);
@@ -13309,6 +13318,119 @@ TEST(CsvMaxRows, StreamingParserEnforcesItToo) {
 
 	gtext_csv_stream_free(s);
 	gtext_csv_error_free(&err);
+}
+
+
+
+// ---------------------------------------------------------------------------
+// trailing_newline
+//
+// Documented as "Add trailing newline at end (default false)" and read by no
+// code in the table writer, which wrote a newline after every row including
+// the last.  Setting it changed nothing for any non-empty table; its only
+// observable effect anywhere was to make an empty table emit a lone newline.
+//
+// It now decides whether the final record is terminated, and defaults to true
+// so that the output of a default-configured writer is unchanged.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string csv_write_rows(
+    const std::vector<std::vector<std::string>> & rows,
+    const GTEXT_CSV_Write_Options & opts) {
+	GTEXT_CSV_Table * table = gtext_csv_new_table();
+	EXPECT_NE(table, nullptr);
+	for (const auto & row : rows) {
+		std::vector<const char *> ptrs;
+		std::vector<size_t> lens;
+		for (const std::string & f : row) {
+			ptrs.push_back(f.data());
+			lens.push_back(f.size());
+		}
+		EXPECT_EQ(gtext_csv_row_append(table, ptrs.data(), lens.data(),
+		              ptrs.size(), nullptr),
+		    GTEXT_CSV_OK);
+	}
+
+	GTEXT_CSV_Sink sink;
+	EXPECT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	EXPECT_EQ(gtext_csv_write_table(&sink, &opts, table), GTEXT_CSV_OK);
+	std::string out(
+	    gtext_csv_sink_buffer_data(&sink), gtext_csv_sink_buffer_size(&sink));
+	gtext_csv_sink_buffer_free(&sink);
+	gtext_csv_free_table(table);
+	return out;
+}
+
+} // namespace
+
+TEST(CsvTrailingNewline, DefaultTerminatesTheFinalRecord) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	EXPECT_TRUE(opts.trailing_newline);
+
+	EXPECT_EQ(csv_write_rows({{"a", "b"}}, opts), "a,b\n");
+	EXPECT_EQ(csv_write_rows({{"a", "b"}, {"c", "d"}}, opts), "a,b\nc,d\n");
+}
+
+TEST(CsvTrailingNewline, ClearingOmitsOnlyTheFinalNewline) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.trailing_newline = false;
+
+	// Records are still separated; only the terminator is gone.
+	EXPECT_EQ(csv_write_rows({{"a", "b"}}, opts), "a,b");
+	EXPECT_EQ(csv_write_rows({{"a", "b"}, {"c", "d"}}, opts), "a,b\nc,d");
+}
+
+TEST(CsvTrailingNewline, AnEmptyTableWritesNothingEitherWay) {
+	// There is no record to terminate.  This used to emit a lone newline when
+	// the option was set, which was the only place the option did anything.
+	for (bool trailing : {false, true}) {
+		GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+		opts.trailing_newline = trailing;
+		EXPECT_EQ(csv_write_rows({}, opts), "")
+		    << "trailing_newline=" << trailing;
+	}
+}
+
+TEST(CsvTrailingNewline, OutputRoundTripsWithAndWithoutIt) {
+	// The parser must read both forms back identically.  Before the parser was
+	// taught that a quoted final field needs no trailing newline, writing with
+	// trailing_newline cleared could produce a document the library itself
+	// could not read.
+	const std::vector<std::vector<std::string>> rows = {
+	    {"plain", "has,comma"},
+	    {"has\"quote", "last"},
+	};
+
+	for (bool trailing : {false, true}) {
+		SCOPED_TRACE("trailing_newline=" + std::to_string(trailing));
+		GTEXT_CSV_Write_Options wopts = gtext_csv_write_options_default();
+		wopts.trailing_newline = trailing;
+		const std::string out = csv_write_rows(rows, wopts);
+
+		GTEXT_CSV_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table * back =
+		    gtext_csv_parse_table(out.data(), out.size(), nullptr, &err);
+		ASSERT_NE(back, nullptr)
+		    << "could not read back its own output: \"" << out << "\" - "
+		    << (err.message ? err.message : "");
+		ASSERT_EQ(gtext_csv_row_count(back), rows.size());
+
+		for (size_t r = 0; r < rows.size(); ++r) {
+			ASSERT_EQ(gtext_csv_col_count(back, r), rows[r].size());
+			for (size_t c = 0; c < rows[r].size(); ++c) {
+				size_t len = 0;
+				const char * f = gtext_csv_field(back, r, c, &len);
+				ASSERT_NE(f, nullptr);
+				EXPECT_EQ(std::string(f, len), rows[r][c])
+				    << "row " << r << " col " << c;
+			}
+		}
+		gtext_csv_free_table(back);
+		gtext_csv_error_free(&err);
+	}
 }
 
 int main(int argc, char ** argv) {
