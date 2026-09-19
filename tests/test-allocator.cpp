@@ -253,3 +253,78 @@ TEST(Allocator, NullAllocatorOptionStillParses) {
 	gtext_json_free(v);
 	gtext_json_error_free(&err);
 }
+
+// ---------------------------------------------------------------------------
+// The wrappers with no allocator
+//
+// Each of gtext_allocator_malloc/_calloc/_realloc/_free accepts NULL and falls
+// back to gcu_allocator_default(), which is what lets every call site pass an
+// optional allocator straight through without checking it first.  That
+// fallback was reached by no test for _realloc, which tools/coverage.sh
+// reported among the lines no test executes.
+//
+// The whole point of the NULL contract is that a caller need not care, so it
+// has to work for all four, not three.
+// ---------------------------------------------------------------------------
+
+TEST(Allocator, NullMeansTheDefaultForEveryWrapper) {
+	// malloc
+	void * p = gtext_allocator_malloc(nullptr, 64);
+	ASSERT_NE(p, nullptr);
+	std::memset(p, 0xAB, 64);
+
+	// realloc, growing - the contents must survive
+	p = gtext_allocator_realloc(nullptr, p, 256);
+	ASSERT_NE(p, nullptr);
+	for (int i = 0; i < 64; ++i) {
+		EXPECT_EQ(static_cast<unsigned char *>(p)[i], 0xAB) << "byte " << i;
+	}
+
+	// realloc, shrinking
+	p = gtext_allocator_realloc(nullptr, p, 32);
+	ASSERT_NE(p, nullptr);
+	for (int i = 0; i < 32; ++i) {
+		EXPECT_EQ(static_cast<unsigned char *>(p)[i], 0xAB) << "byte " << i;
+	}
+
+	gtext_allocator_free(nullptr, p);
+
+	// realloc from NULL behaves as malloc
+	void * q = gtext_allocator_realloc(nullptr, nullptr, 48);
+	ASSERT_NE(q, nullptr);
+	gtext_allocator_free(nullptr, q);
+
+	// calloc zeroes
+	unsigned char * z =
+	    static_cast<unsigned char *>(gtext_allocator_calloc(nullptr, 16, 4));
+	ASSERT_NE(z, nullptr);
+	for (int i = 0; i < 64; ++i) {
+		EXPECT_EQ(z[i], 0) << "byte " << i << " was not zeroed";
+	}
+	gtext_allocator_free(nullptr, z);
+
+	// free(NULL, NULL) must be a no-op rather than a crash
+	gtext_allocator_free(nullptr, nullptr);
+}
+
+TEST(Allocator, ExplicitDefaultMatchesTheNullFallback) {
+	// Passing gtext_allocator_default() explicitly and passing NULL must be
+	// the same thing, or the fallback is a second implementation.
+	const GTEXT_Allocator * def = gtext_allocator_default();
+	ASSERT_NE(def, nullptr);
+
+	void * a = gtext_allocator_malloc(def, 32);
+	void * b = gtext_allocator_malloc(nullptr, 32);
+	ASSERT_NE(a, nullptr);
+	ASSERT_NE(b, nullptr);
+
+	// Cross-free: a block from one must be releasable through the other.
+	gtext_allocator_free(nullptr, a);
+	gtext_allocator_free(def, b);
+
+	void * c = gtext_allocator_malloc(def, 16);
+	ASSERT_NE(c, nullptr);
+	c = gtext_allocator_realloc(nullptr, c, 64);
+	ASSERT_NE(c, nullptr);
+	gtext_allocator_free(def, c);
+}
