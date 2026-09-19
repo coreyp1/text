@@ -13708,6 +13708,105 @@ TEST(CsvMaxFieldBytes, StreamingParserAgreesAcrossChunkSizes) {
 	}
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Row insertion past the initial row capacity
+//
+// A table starts with room for 16 rows and doubles.  Appending past that was
+// already exercised; inserting past it was not - tools/coverage.sh listed the
+// capacity update in gtext_csv_row_insert() among the lines no test executes.
+//
+// Insertion is the harder of the two, because it both reallocates the row
+// array and shifts every row above the insertion point.  Getting the order of
+// those wrong leaves the table readable and in the wrong order, which no
+// crash and no leak check would notice.
+// ---------------------------------------------------------------------------
+
+TEST(CsvRowInsertGrowth, InsertingAtTheFrontPastTheInitialCapacity) {
+	GTEXT_CSV_Table * t = gtext_csv_new_table();
+	ASSERT_NE(t, nullptr);
+
+	// Each insert goes to index 0, so every existing row shifts and the
+	// expected order is the reverse of the insertion order.
+	std::vector<std::string> expected;
+	for (int i = 0; i < 40; ++i) {
+		const std::string v = "row" + std::to_string(i);
+		const char * fields[] = {v.c_str()};
+		const size_t lens[] = {v.size()};
+		ASSERT_EQ(gtext_csv_row_insert(t, 0, fields, lens, 1, nullptr),
+		    GTEXT_CSV_OK)
+		    << "inserting row " << i;
+		expected.insert(expected.begin(), v);
+
+		// Check the whole table after every insert, so a growth step that
+		// mis-shifts is attributed to the step that caused it.
+		ASSERT_EQ(gtext_csv_row_count(t), expected.size());
+		for (size_t r = 0; r < expected.size(); ++r) {
+			size_t len = 0;
+			const char * f = gtext_csv_field(t, r, 0, &len);
+			ASSERT_NE(f, nullptr) << "row " << r << " after insert " << i;
+			EXPECT_EQ(std::string(f, len), expected[r])
+			    << "row " << r << " after insert " << i;
+		}
+	}
+
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvRowInsertGrowth, InsertingInTheMiddleAcrossTheGrowthPoint) {
+	GTEXT_CSV_Table * t = gtext_csv_new_table();
+	ASSERT_NE(t, nullptr);
+
+	std::vector<std::string> expected;
+	for (int i = 0; i < 30; ++i) {
+		const std::string v = "v" + std::to_string(i);
+		const char * fields[] = {v.c_str()};
+		const size_t lens[] = {v.size()};
+		const size_t at = expected.size() / 2; // middle
+		ASSERT_EQ(gtext_csv_row_insert(t, at, fields, lens, 1, nullptr),
+		    GTEXT_CSV_OK)
+		    << "inserting " << v << " at " << at;
+		expected.insert(expected.begin() + static_cast<long>(at), v);
+	}
+
+	ASSERT_EQ(gtext_csv_row_count(t), expected.size());
+	for (size_t r = 0; r < expected.size(); ++r) {
+		size_t len = 0;
+		const char * f = gtext_csv_field(t, r, 0, &len);
+		ASSERT_NE(f, nullptr) << "row " << r;
+		EXPECT_EQ(std::string(f, len), expected[r]) << "row " << r;
+	}
+
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvRowInsertGrowth, AppendViaInsertAtTheEndStillGrows) {
+	// Inserting at row_count is an append, and must grow the same way.
+	GTEXT_CSV_Table * t = gtext_csv_new_table();
+	ASSERT_NE(t, nullptr);
+
+	for (int i = 0; i < 50; ++i) {
+		const std::string v = "e" + std::to_string(i);
+		const char * fields[] = {v.c_str()};
+		const size_t lens[] = {v.size()};
+		ASSERT_EQ(gtext_csv_row_insert(
+		              t, gtext_csv_row_count(t), fields, lens, 1, nullptr),
+		    GTEXT_CSV_OK)
+		    << "inserting at the end, step " << i;
+	}
+
+	ASSERT_EQ(gtext_csv_row_count(t), 50u);
+	for (size_t r = 0; r < 50; ++r) {
+		size_t len = 0;
+		const char * f = gtext_csv_field(t, r, 0, &len);
+		ASSERT_NE(f, nullptr) << "row " << r;
+		EXPECT_EQ(std::string(f, len), "e" + std::to_string(r)) << "row " << r;
+	}
+
+	gtext_csv_free_table(t);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

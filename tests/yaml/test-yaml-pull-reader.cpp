@@ -148,3 +148,132 @@ int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }
+
+// ---------------------------------------------------------------------------
+// The event queue, past its initial capacity
+//
+// The pull reader buffers events in a ring until the caller drains them. The
+// ring starts at eight entries and doubles, and growth copies the entries out
+// in ring order into a fresh array. tools/coverage.sh reported that copy loop
+// as never executed, which means no test had queued more than eight events
+// before draining any.
+//
+// A ring copy that gets the modular arithmetic wrong does not crash - it
+// reorders or duplicates events, and the reader goes on working. So the check
+// is the full event sequence, compared against the same document drained
+// event-by-event where the queue never grows at all.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Drain a document, either feeding it all first (which fills the queue and
+// forces it to grow) or draining after every feed (which keeps it small).
+std::vector<CapturedEvent> drain_document(
+    const std::string &doc, bool drain_as_we_go) {
+	std::vector<CapturedEvent> out;
+
+	GTEXT_YAML_Reader *reader = gtext_yaml_reader_new(nullptr);
+	EXPECT_NE(reader, nullptr);
+	if (!reader) {
+		return out;
+	}
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+
+	auto pump = [&]() {
+		for (;;) {
+			GTEXT_YAML_Event ev;
+			memset(&ev, 0, sizeof(ev));
+			GTEXT_YAML_Status st = gtext_yaml_reader_next(reader, &ev, &err);
+			if (st != GTEXT_YAML_OK) {
+				break;
+			}
+			CapturedEvent c;
+			c.type = ev.type;
+			if (ev.type == GTEXT_YAML_EVENT_SCALAR && ev.data.scalar.ptr) {
+				c.scalar.assign(ev.data.scalar.ptr, ev.data.scalar.len);
+			}
+			out.push_back(c);
+		}
+	};
+
+	if (drain_as_we_go) {
+		for (size_t i = 0; i < doc.size(); ++i) {
+			EXPECT_EQ(gtext_yaml_reader_feed(reader, doc.data() + i, 1, &err),
+			    GTEXT_YAML_OK);
+			pump();
+		}
+	}
+	else {
+		EXPECT_EQ(
+		    gtext_yaml_reader_feed(reader, doc.data(), doc.size(), &err),
+		    GTEXT_YAML_OK);
+	}
+
+	// End of input.
+	gtext_yaml_reader_feed(reader, nullptr, 0, &err);
+	pump();
+
+	gtext_yaml_reader_free(reader);
+	gtext_yaml_error_free(&err);
+	return out;
+}
+
+std::string sequence_document(int items) {
+	std::string doc = "seq:\n";
+	for (int i = 0; i < items; ++i) {
+		doc += "  - item" + std::to_string(i) + "\n";
+	}
+	return doc;
+}
+
+} // namespace
+
+TEST(YamlPullReader, QueueGrowthPreservesEventOrder) {
+	// Well past the initial eight, so the ring grows several times with a
+	// non-zero head.
+	for (int items : {2, 7, 8, 9, 20, 64}) {
+		SCOPED_TRACE("items=" + std::to_string(items));
+		const std::string doc = sequence_document(items);
+
+		const std::vector<CapturedEvent> buffered = drain_document(doc, false);
+		const std::vector<CapturedEvent> incremental =
+		    drain_document(doc, true);
+
+		ASSERT_FALSE(buffered.empty());
+		ASSERT_EQ(buffered.size(), incremental.size())
+		    << "queueing everything first produced a different event count";
+
+		for (size_t i = 0; i < buffered.size(); ++i) {
+			EXPECT_EQ(buffered[i].type, incremental[i].type)
+			    << "event " << i << " differs in type";
+			EXPECT_EQ(buffered[i].scalar, incremental[i].scalar)
+			    << "event " << i << " differs in value";
+		}
+	}
+}
+
+TEST(YamlPullReader, EveryScalarSurvivesQueueGrowth) {
+	// The values themselves, in order, so a duplicated or dropped ring entry
+	// is visible rather than only a count mismatch.
+	const int items = 50;
+	const std::vector<CapturedEvent> events =
+	    drain_document(sequence_document(items), false);
+
+	std::vector<std::string> scalars;
+	for (const CapturedEvent &e : events) {
+		if (e.type == GTEXT_YAML_EVENT_SCALAR) {
+			scalars.push_back(e.scalar);
+		}
+	}
+
+	// "seq" plus one per item.
+	ASSERT_EQ(scalars.size(), static_cast<size_t>(items) + 1)
+	    << "expected the key and " << items << " items";
+	EXPECT_EQ(scalars[0], "seq");
+	for (int i = 0; i < items; ++i) {
+		EXPECT_EQ(scalars[static_cast<size_t>(i) + 1], "item" + std::to_string(i))
+		    << "item " << i << " came back out of order";
+	}
+}
