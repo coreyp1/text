@@ -103,8 +103,10 @@ them.
 
 **Schema.** A core subset: `type` (including arrays of types), `properties`,
 `required`, `items`, `enum`, `const`, `minimum`, `maximum`, `minLength`,
-`maxLength`, `minItems`, `maxItems`. Schemas compile once and validate many
-instances.
+`maxLength`, `minItems`, `maxItems`, and the applicators listed on the
+\ref json_module "JSON module page". `minLength` and `maxLength` count
+characters, not bytes - see [Deviations](#json-deviations). Schemas compile
+once and validate many instances.
 
 ## Limits
 
@@ -230,6 +232,34 @@ strict default does not have to be argued about; it is not recommended.
 `GTEXT_JSON_E_SCHEMA_UNSUPPORTED` was appended to `GTEXT_JSON_Status` rather
 than grouped with `GTEXT_JSON_E_SCHEMA`, so no existing constant changed
 value.
+
+**Fixed: `minLength` and `maxLength` counted bytes.**
+
+JSON Schema validation section 6.3 defines both over "the number of its
+characters as defined by RFC 8259", and an RFC 8259 string is a sequence of
+Unicode code points. This engine measured `instance->as.string.len`, which is
+a byte count, so every non-ASCII instance was measured wrong - and wrong in
+both directions at once. `{"maxLength": 1}` rejected `"é"`, which is one
+character in two bytes; `{"minLength": 2}` accepted it.
+
+Code points, not UTF-16 code units. An astral character such as U+1F4A9 is one
+character here even though ECMAScript's own `.length` reports two, which is
+the shape of the same mistake an implementation written in or ported from
+JavaScript tends to make. The published test suite carries exactly that case
+for this reason, and it is what caught this: `maxLength.json`'s "two graphemes
+is long enough" expects `"💩💩"` - eight bytes, two characters - to satisfy
+`maxLength: 2`.
+
+The count is of bytes that are not UTF-8 continuation bytes, which is exact
+for well-formed UTF-8 and cannot run past the end of the buffer for anything
+else. That matters because the parser only validates UTF-8 when asked to, so
+a caller who turned that off can reach the validator with bytes that decode to
+nothing; an approximate count on input that is already invalid is the right
+failure, and walking off the end is not.
+
+`pattern` still receives *bytes*, because that is what the provider vtable
+promises it. The two lengths now live in separate variables; sharing one is
+how this arm came to measure both in bytes.
 
 @anchor json-tested-scope
 ## Tested scope

@@ -1663,6 +1663,38 @@ static GTEXT_JSON_Status json_schema_regex_search(
   return GTEXT_JSON_OK;
 }
 
+/*
+ * The length of a string instance, in characters.
+ *
+ * JSON Schema validation section 6.3 defines `minLength` and `maxLength` over
+ * "the number of its characters as defined by RFC 8259", and an RFC 8259
+ * string is a sequence of Unicode code points.  This counted bytes, so every
+ * non-ASCII instance was measured wrong: `{"maxLength": 1}` called "e-acute"
+ * too long, and `{"minLength": 2}` called it long enough.  Neither is a
+ * borderline reading of the specification.
+ *
+ * Code points, not UTF-16 code units: an astral character such as U+1F4A9 is
+ * one character here even though ECMAScript's own `.length` says two.  The
+ * published test suite has that case precisely because it is the one an
+ * implementation is most likely to get wrong.
+ *
+ * Counting the bytes that are not continuation bytes is exact for
+ * well-formed UTF-8 and cannot run past the end of the buffer for anything
+ * else - which matters, because the parser only validates UTF-8 when it is
+ * asked to, so a caller who turned that off can reach here with bytes that
+ * decode to nothing.  An approximate count on input that is already invalid
+ * is the right failure; walking off the end is not.
+ */
+static size_t json_schema_string_length(const char * bytes, size_t byte_len) {
+  size_t characters = 0;
+  for (size_t i = 0; i < byte_len; i++) {
+    if (((unsigned char)bytes[i] & 0xC0) != 0x80) {
+      characters++;
+    }
+  }
+  return characters;
+}
+
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     int depth, GTEXT_JSON_Error * err);
@@ -1965,21 +1997,28 @@ static GTEXT_JSON_Status json_schema_validate_depth(
   }
 
   case GTEXT_JSON_STRING: {
-    // Check string length constraints
-    size_t str_len = instance->as.string.len;
-    if (node->has_min_length && str_len < node->min_length) {
-      if (err) {
-        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
-            .message = "String is shorter than minLength"};
+    /* Two lengths, and they are not interchangeable.  `minLength` and
+     * `maxLength` count characters; `pattern` is handed bytes, because that
+     * is what the provider's vtable promises it.  Sharing one variable
+     * between them is how this arm came to measure both in bytes. */
+    size_t byte_len = instance->as.string.len;
+    if (node->has_min_length || node->has_max_length) {
+      size_t char_len =
+          json_schema_string_length(instance->as.string.data, byte_len);
+      if (node->has_min_length && char_len < node->min_length) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "String is shorter than minLength"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
       }
-      return GTEXT_JSON_E_SCHEMA;
-    }
-    if (node->has_max_length && str_len > node->max_length) {
-      if (err) {
-        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
-            .message = "String is longer than maxLength"};
+      if (node->has_max_length && char_len > node->max_length) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "String is longer than maxLength"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
       }
-      return GTEXT_JSON_E_SCHEMA;
     }
 
     /* `pattern` searches: the expression need only match somewhere in the
@@ -1990,7 +2029,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
     if (node->pattern_regex) {
       int matched = 0;
       GTEXT_JSON_Status status = json_schema_regex_search(node,
-          node->pattern_regex, instance->as.string.data, str_len, &matched,
+          node->pattern_regex, instance->as.string.data, byte_len, &matched,
           err);
       if (status != GTEXT_JSON_OK) {
         return status;

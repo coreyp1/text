@@ -258,7 +258,7 @@ The library provides a pragmatic core subset of JSON Schema support. This subset
 - **Array validation**: `items` (single schema for all items)
 - **Value constraints**: `enum`, `const`
 - **Numeric constraints**: `minimum`, `maximum` (inclusive)
-- **String constraints**: `minLength`, `maxLength`
+- **String constraints**: `minLength`, `maxLength`, counted in Unicode code points rather than bytes or UTF-16 units, and `pattern` when a regular-expression provider is supplied
 - **Array constraints**: `minItems`, `maxItems`
 
 Schemas are compiled once and can be reused for validating multiple instances.

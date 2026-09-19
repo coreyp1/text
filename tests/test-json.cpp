@@ -6464,6 +6464,103 @@ TEST(JsonSchema, StringLengthConstraints) {
 /**
  * Test schema - array size constraints
  */
+/**
+ * minLength and maxLength count characters, not bytes and not UTF-16 units.
+ *
+ * JSON Schema validation section 6.3 defines both over "the number of its
+ * characters as defined by RFC 8259", and an RFC 8259 string is a sequence of
+ * Unicode code points. This counted bytes, so every non-ASCII instance was
+ * measured wrong in both directions at once: a two-byte character was too
+ * long for `maxLength: 1` and long enough for `minLength: 2`.
+ *
+ * The astral cases are the ones worth having. An implementation that reached
+ * for a UTF-16 length - which is what ECMAScript's `.length` gives, and what
+ * a JavaScript-shaped implementation would do without thinking - counts
+ * U+1F4A9 as two. The published test suite carries that case for the same
+ * reason.
+ */
+TEST(JsonSchema, StringLengthIsInCharactersNotBytes) {
+	struct Case {
+		const char * schema;
+		const char * instance;
+		GTEXT_JSON_Status expected;
+		const char * why;
+	};
+	const Case cases[] = {
+	    // U+00E9: one character, two bytes, one UTF-16 unit.
+	    {"{\"maxLength\":1}", "\"\\u00e9\"", GTEXT_JSON_OK,
+	        "one character fits maxLength 1"},
+	    {"{\"minLength\":2}", "\"\\u00e9\"", GTEXT_JSON_E_SCHEMA,
+	        "one character does not reach minLength 2"},
+
+	    // U+4E2D U+6587: two characters, six bytes.
+	    {"{\"maxLength\":2}", "\"\\u4e2d\\u6587\"", GTEXT_JSON_OK,
+	        "two three-byte characters fit maxLength 2"},
+	    {"{\"maxLength\":1}", "\"\\u4e2d\\u6587\"", GTEXT_JSON_E_SCHEMA,
+	        "two characters exceed maxLength 1"},
+
+	    // U+1F4A9 twice: two characters, eight bytes, four UTF-16 units.
+	    {"{\"maxLength\":2}", "\"\\ud83d\\udca9\\ud83d\\udca9\"",
+	        GTEXT_JSON_OK, "two astral characters fit maxLength 2"},
+	    {"{\"minLength\":2}", "\"\\ud83d\\udca9\\ud83d\\udca9\"",
+	        GTEXT_JSON_OK, "two astral characters reach minLength 2"},
+	    // The UTF-16 trap: a units-based count says four and accepts this.
+	    {"{\"minLength\":3}", "\"\\ud83d\\udca9\\ud83d\\udca9\"",
+	        GTEXT_JSON_E_SCHEMA,
+	        "two astral characters do not reach minLength 3"},
+
+	    // One of each: 1 + 2 + 4 = seven bytes, four UTF-16 units, three
+	    // characters.
+	    {"{\"maxLength\":3}", "\"a\\u00e9\\ud83d\\udca9\"", GTEXT_JSON_OK,
+	        "three mixed characters fit maxLength 3"},
+	    {"{\"maxLength\":2}", "\"a\\u00e9\\ud83d\\udca9\"",
+	        GTEXT_JSON_E_SCHEMA, "three characters exceed maxLength 2"},
+	    {"{\"minLength\":4}", "\"a\\u00e9\\ud83d\\udca9\"",
+	        GTEXT_JSON_E_SCHEMA,
+	        "three characters do not reach minLength 4"},
+
+	    // ASCII is unchanged, which is why this went unnoticed.
+	    {"{\"minLength\":3,\"maxLength\":3}", "\"abc\"", GTEXT_JSON_OK,
+	        "ASCII still counts the way it always did"},
+
+	    // The empty string, at the boundary.
+	    {"{\"maxLength\":0}", "\"\"", GTEXT_JSON_OK, "empty fits maxLength 0"},
+	    {"{\"minLength\":1}", "\"\"", GTEXT_JSON_E_SCHEMA,
+	        "empty does not reach minLength 1"},
+
+	    // The same count through propertyNames, which wraps each key as a
+	    // string instance and runs it through this arm.
+	    {"{\"propertyNames\":{\"maxLength\":1}}", "{\"\\u00e9\":1}",
+	        GTEXT_JSON_OK, "a one-character key fits maxLength 1"},
+	    {"{\"propertyNames\":{\"maxLength\":1}}", "{\"\\u00e9\\u00e9\":1}",
+	        GTEXT_JSON_E_SCHEMA, "a two-character key exceeds maxLength 1"},
+	};
+
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	for (const auto & c : cases) {
+		GTEXT_JSON_Error perr;
+		memset(&perr, 0, sizeof(perr));
+		GTEXT_JSON_Value * doc =
+		    gtext_json_parse(c.schema, strlen(c.schema), &po, &perr);
+		ASSERT_NE(doc, nullptr) << c.schema;
+		GTEXT_JSON_Schema * schema = gtext_json_schema_compile(doc, &perr);
+		ASSERT_NE(schema, nullptr) << c.schema;
+
+		memset(&perr, 0, sizeof(perr));
+		GTEXT_JSON_Value * instance =
+		    gtext_json_parse(c.instance, strlen(c.instance), &po, &perr);
+		ASSERT_NE(instance, nullptr) << c.instance;
+
+		EXPECT_EQ(gtext_json_schema_validate(schema, instance, nullptr),
+		    c.expected)
+		    << c.why;
+
+		gtext_json_free(instance);
+		gtext_json_schema_free(schema);
+		gtext_json_free(doc);
+	}
+}
+
 TEST(JsonSchema, ArraySizeConstraints) {
     const char * schema_json = "{\"type\":\"array\",\"minItems\":2,\"maxItems\":5}";
 
