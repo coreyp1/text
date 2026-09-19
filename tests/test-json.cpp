@@ -9090,24 +9090,22 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 		const char * keyword;
 		const char * schema;
 	};
+	// Only the keywords still unimplemented belong here. As each is
+	// implemented it moves out of this list and into a test that checks it
+	// actually constrains something.
 	const Case cases[] = {
 	    {"$ref", "{\"$defs\":{\"p\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/p\"}"},
-	    {"allOf", "{\"allOf\":[{\"type\":\"string\"}]}"},
-	    {"anyOf", "{\"anyOf\":[{\"type\":\"string\"}]}"},
-	    {"oneOf", "{\"oneOf\":[{\"type\":\"string\"}]}"},
-	    {"not", "{\"not\":{\"type\":\"integer\"}}"},
 	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
+	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
 	    {"additionalProperties",
 	        "{\"type\":\"object\",\"additionalProperties\":false}"},
-	    {"uniqueItems", "{\"type\":\"array\",\"uniqueItems\":true}"},
-	    {"multipleOf", "{\"type\":\"number\",\"multipleOf\":10}"},
-	    {"exclusiveMaximum", "{\"type\":\"number\",\"exclusiveMaximum\":5}"},
-	    {"if", "{\"if\":{\"type\":\"integer\"},\"then\":{\"maximum\":3}}"},
+	    {"propertyNames", "{\"propertyNames\":{\"minLength\":1}}"},
 	    {"contains", "{\"type\":\"array\",\"contains\":{\"type\":\"string\"}}"},
-	    {"propertyNames", "{\"propertyNames\":{\"pattern\":\"^a$\"}}"},
-	    {"dependentRequired", "{\"dependentRequired\":{\"a\":[\"b\"]}}"},
-	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
-	    {"minProperties", "{\"minProperties\":2}"},
+	    {"prefixItems", "{\"prefixItems\":[{\"type\":\"string\"}]}"},
+	    {"additionalItems", "{\"additionalItems\":false}"},
+	    {"dependentSchemas", "{\"dependentSchemas\":{\"a\":{\"required\":[\"b\"]}}}"},
+	    {"dependencies", "{\"dependencies\":{\"a\":[\"b\"]}}"},
+	    {"unevaluatedProperties", "{\"unevaluatedProperties\":false}"},
 	    {"format", "{\"type\":\"string\",\"format\":\"email\"}"},
 	};
 
@@ -9251,4 +9249,157 @@ TEST(JsonSchemaStrictness, RejectionReachesNestedSubschemas) {
 	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
 	gtext_json_error_free(&err);
 	gtext_json_free(doc);
+}
+
+namespace {
+
+/// Compile a schema and validate an instance, returning whether it passed.
+/// Fails the test if either does not parse, or the schema does not compile.
+bool schema_accepts(const char * schema_src, const char * instance_src) {
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * sv =
+	    gtext_json_parse(schema_src, strlen(schema_src), &po, &perr);
+	EXPECT_NE(sv, nullptr) << "schema did not parse: " << schema_src;
+	GTEXT_JSON_Value * iv =
+	    gtext_json_parse(instance_src, strlen(instance_src), &po, &perr);
+	EXPECT_NE(iv, nullptr) << "instance did not parse: " << instance_src;
+	if (!sv || !iv) {
+		return false;
+	}
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	GTEXT_JSON_Schema * sc = gtext_json_schema_compile(sv, &serr);
+	EXPECT_NE(sc, nullptr)
+	    << "schema did not compile: " << schema_src << " - "
+	    << (serr.message ? serr.message : "");
+	bool ok = false;
+	if (sc) {
+		GTEXT_JSON_Error verr;
+		memset(&verr, 0, sizeof(verr));
+		ok = gtext_json_schema_validate(sc, iv, &verr) == GTEXT_JSON_OK;
+		gtext_json_error_free(&verr);
+	}
+	gtext_json_schema_free(sc);
+	gtext_json_error_free(&serr);
+	gtext_json_free(iv);
+	gtext_json_free(sv);
+	return ok;
+}
+
+} // namespace
+
+TEST(JsonSchemaKeywords, BooleanApplicators) {
+	EXPECT_TRUE(schema_accepts(
+	    "{\"allOf\":[{\"type\":\"integer\"},{\"minimum\":3}]}", "5"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"allOf\":[{\"type\":\"integer\"},{\"minimum\":3}]}", "1"));
+
+	EXPECT_TRUE(schema_accepts(
+	    "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"integer\"}]}", "5"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"integer\"}]}", "true"));
+
+	// oneOf is "exactly one", so two matches is a failure, not a success.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"integer\"}]}", "5"));
+	EXPECT_FALSE(
+	    schema_accepts("{\"oneOf\":[{\"minimum\":1},{\"minimum\":2}]}", "5"));
+	EXPECT_FALSE(
+	    schema_accepts("{\"oneOf\":[{\"minimum\":10},{\"minimum\":20}]}", "5"));
+
+	EXPECT_TRUE(schema_accepts("{\"not\":{\"type\":\"integer\"}}", "\"x\""));
+	EXPECT_FALSE(schema_accepts("{\"not\":{\"type\":\"integer\"}}", "5"));
+
+	// Nesting, so the recursive compile and free are exercised.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"allOf\":[{\"anyOf\":[{\"type\":\"integer\"}]},{\"not\":{\"maximum\":2}}]}",
+	    "5"));
+}
+
+TEST(JsonSchemaKeywords, IfThenElseSelectsRatherThanAsserts) {
+	EXPECT_TRUE(schema_accepts(
+	    "{\"if\":{\"type\":\"integer\"},\"then\":{\"maximum\":3}}", "2"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"if\":{\"type\":\"integer\"},\"then\":{\"maximum\":3}}", "99"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"if\":{\"type\":\"integer\"},\"else\":{\"type\":\"string\"}}", "\"s\""));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"if\":{\"type\":\"integer\"},\"else\":{\"type\":\"string\"}}", "true"));
+
+	// "if" on its own asserts nothing, and a failing "if" with no "else" is
+	// not a failure.
+	EXPECT_TRUE(schema_accepts("{\"if\":{\"type\":\"integer\"}}", "\"x\""));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"if\":{\"type\":\"integer\"},\"then\":{\"maximum\":3}}", "\"x\""));
+}
+
+TEST(JsonSchemaKeywords, NumericAssertions) {
+	EXPECT_FALSE(schema_accepts("{\"exclusiveMaximum\":5}", "5"));
+	EXPECT_TRUE(schema_accepts("{\"exclusiveMaximum\":5}", "4"));
+	EXPECT_FALSE(schema_accepts("{\"exclusiveMinimum\":5}", "5"));
+	EXPECT_TRUE(schema_accepts("{\"exclusiveMinimum\":5}", "6"));
+
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":10}", "30"));
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":10}", "7"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.5}", "1.5"));
+
+	// A non-number is unconstrained by a numeric keyword.
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":10}", "\"x\""));
+
+	// multipleOf must be positive: zero would be a division with no meaning.
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	const char * bad = "{\"multipleOf\":0}";
+	GTEXT_JSON_Value * sv = gtext_json_parse(bad, strlen(bad), &po, &perr);
+	ASSERT_NE(sv, nullptr);
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	EXPECT_EQ(gtext_json_schema_compile(sv, &serr), nullptr);
+	gtext_json_error_free(&serr);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaKeywords, IntegerTypeWasMissingEntirely) {
+	// "integer" is a standard JSON Schema type and the engine did not know it
+	// at all - {"type":"integer"} failed to compile with "Unknown type in
+	// schema". JSON has one number type, so this constrains the value.
+	EXPECT_TRUE(schema_accepts("{\"type\":\"integer\"}", "5"));
+	EXPECT_TRUE(schema_accepts("{\"type\":\"integer\"}", "5.0"));
+	EXPECT_TRUE(schema_accepts("{\"type\":\"integer\"}", "-7"));
+	EXPECT_FALSE(schema_accepts("{\"type\":\"integer\"}", "5.5"));
+	EXPECT_FALSE(schema_accepts("{\"type\":\"integer\"}", "\"5\""));
+
+	// A whole number is both a number and an integer.
+	EXPECT_TRUE(schema_accepts("{\"type\":\"number\"}", "5"));
+	EXPECT_TRUE(schema_accepts("{\"type\":\"number\"}", "5.5"));
+	EXPECT_TRUE(schema_accepts("{\"type\":[\"integer\",\"string\"]}", "5"));
+	EXPECT_TRUE(schema_accepts("{\"type\":[\"integer\",\"string\"]}", "\"x\""));
+	EXPECT_FALSE(schema_accepts("{\"type\":[\"integer\",\"string\"]}", "5.5"));
+}
+
+TEST(JsonSchemaKeywords, ObjectAndArrayAssertions) {
+	EXPECT_FALSE(schema_accepts("{\"uniqueItems\":true}", "[1,1]"));
+	EXPECT_TRUE(schema_accepts("{\"uniqueItems\":true}", "[1,2]"));
+	EXPECT_TRUE(schema_accepts("{\"uniqueItems\":false}", "[1,1]"));
+	EXPECT_TRUE(schema_accepts("{\"uniqueItems\":true}", "[]"));
+	// Equality is structural, not identity.
+	EXPECT_FALSE(
+	    schema_accepts("{\"uniqueItems\":true}", "[{\"a\":1},{\"a\":1}]"));
+	EXPECT_TRUE(
+	    schema_accepts("{\"uniqueItems\":true}", "[{\"a\":1},{\"a\":2}]"));
+
+	EXPECT_FALSE(schema_accepts("{\"minProperties\":2}", "{\"a\":1}"));
+	EXPECT_TRUE(schema_accepts("{\"minProperties\":2}", "{\"a\":1,\"b\":2}"));
+	EXPECT_FALSE(schema_accepts("{\"maxProperties\":1}", "{\"a\":1,\"b\":2}"));
+
+	EXPECT_FALSE(
+	    schema_accepts("{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"a\":1}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"a\":1,\"b\":2}"));
+	// The trigger being absent means nothing is required.
+	EXPECT_TRUE(
+	    schema_accepts("{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"c\":1}"));
 }

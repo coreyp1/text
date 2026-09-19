@@ -829,6 +829,15 @@ typedef struct {
 } json_schema_property;
 
 /**
+ * @brief One entry of a `dependentRequired` map
+ */
+typedef struct {
+  char * key;         ///< Property whose presence triggers the requirement
+  char ** required;   ///< Property names that must then also be present
+  size_t required_count; ///< Number of them
+} json_schema_dep_required;
+
+/**
  * @brief Compiled schema node
  */
 typedef struct json_schema_node {
@@ -872,6 +881,42 @@ typedef struct json_schema_node {
   size_t min_items;  ///< Minimum array size
   int has_max_items; ///< 1 if maxItems is set
   size_t max_items;  ///< Maximum array size
+
+  int has_unique_items; ///< 1 if uniqueItems was given
+  int unique_items;     ///< Its value
+
+  // Numeric constraints beyond minimum/maximum
+  int has_exclusive_minimum; ///< 1 if exclusiveMinimum is set
+  double exclusive_minimum;  ///< Exclusive lower bound
+  int has_exclusive_maximum; ///< 1 if exclusiveMaximum is set
+  double exclusive_maximum;  ///< Exclusive upper bound
+  int has_multiple_of;       ///< 1 if multipleOf is set
+  double multiple_of;        ///< Divisor; must be greater than zero
+
+  // Object size constraints
+  int has_min_properties; ///< 1 if minProperties is set
+  size_t min_properties;  ///< Minimum number of properties
+  int has_max_properties; ///< 1 if maxProperties is set
+  size_t max_properties;  ///< Maximum number of properties
+
+  // dependentRequired
+  json_schema_dep_required * dep_required; ///< Entries (NULL if none)
+  size_t dep_required_count;               ///< Number of entries
+
+  // Boolean applicators.  Each is a list of subschemas, or a single one.
+  struct json_schema_node ** all_of; ///< Every one must match
+  size_t all_of_count;
+  struct json_schema_node ** any_of; ///< At least one must match
+  size_t any_of_count;
+  struct json_schema_node ** one_of; ///< Exactly one must match
+  size_t one_of_count;
+  struct json_schema_node * not_schema; ///< Must NOT match
+
+  // if / then / else.  `if` alone asserts nothing; it selects which of the
+  // other two applies.
+  struct json_schema_node * if_schema;
+  struct json_schema_node * then_schema;
+  struct json_schema_node * else_schema;
 } json_schema_node;
 
 /**
@@ -883,7 +928,11 @@ typedef enum {
   JSON_SCHEMA_TYPE_NUMBER = 4,
   JSON_SCHEMA_TYPE_STRING = 8,
   JSON_SCHEMA_TYPE_ARRAY = 16,
-  JSON_SCHEMA_TYPE_OBJECT = 32
+  JSON_SCHEMA_TYPE_OBJECT = 32,
+  /// JSON Schema's "integer": a number with nothing after the decimal point.
+  /// JSON itself has one number type, so this is a constraint on the value
+  /// rather than a distinct instance type.
+  JSON_SCHEMA_TYPE_INTEGER = 64
 } json_schema_type_flags;
 
 /**

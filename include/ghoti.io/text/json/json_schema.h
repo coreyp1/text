@@ -24,8 +24,10 @@
  * allow_unsupported_keywords in GTEXT_JSON_Schema_Options and compile with
  * gtext_json_schema_compile_with_options().
  *
- * Supported schema keywords (core subset):
- * - type: Validate value type (null, boolean, number, string, array, object)
+ * Supported schema keywords:
+ * - type: null, boolean, object, array, number, integer, string - and arrays
+ *   of those. "integer" constrains the value rather than naming a distinct
+ *   JSON type, so 5 and 5.0 satisfy it and 5.5 does not.
  * - properties: Object property schemas (recursive validation)
  * - required: List of required property names
  * - items: Array item schema (all items must match)
@@ -34,16 +36,27 @@
  * - minimum/maximum: Numeric constraints
  * - minLength/maxLength: String length constraints
  * - minItems/maxItems: Array size constraints
+ * - uniqueItems: Array elements must be pairwise distinct, by structural
+ *   equality
+ * - exclusiveMinimum/exclusiveMaximum: Strict numeric bounds
+ * - multipleOf: Exact divisibility; the divisor must be greater than zero
+ * - minProperties/maxProperties: Object size constraints
+ * - dependentRequired: One property's presence requires others
+ * - allOf/anyOf/oneOf/not: Boolean applicators. oneOf is exactly one, so two
+ *   matching branches is a failure
+ * - if/then/else: "if" selects rather than asserts; an absent branch is no
+ *   constraint
  *
  * Unsupported standard keywords (rejected at compile time):
- * - Applicators: $ref, $recursiveRef, $dynamicRef, allOf, anyOf, oneOf, not,
- *   if, then, else, additionalItems, prefixItems, contains, minContains,
- *   maxContains, additionalProperties, patternProperties, propertyNames,
- *   dependentSchemas, dependentRequired, dependencies, unevaluatedItems,
- *   unevaluatedProperties
- * - Assertions: pattern, format, multipleOf, exclusiveMinimum,
- *   exclusiveMaximum, uniqueItems, minProperties, maxProperties,
- *   contentEncoding, contentMediaType, contentSchema
+ * - Applicators: $ref, $recursiveRef, $dynamicRef, additionalItems,
+ *   prefixItems, contains, minContains, maxContains, additionalProperties,
+ *   patternProperties, propertyNames, dependentSchemas, dependencies,
+ *   unevaluatedItems, unevaluatedProperties
+ * - Assertions: pattern, format, contentEncoding, contentMediaType,
+ *   contentSchema
+ *
+ * pattern and patternProperties need a regular-expression engine, which is a
+ * dependency decision rather than an implementation detail.
  *
  * The schema engine is designed to be modular and optional at compile time.
  *
