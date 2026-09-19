@@ -111,9 +111,18 @@ into a loud, actionable one, and it was a much smaller change than the
 fourteen implementations. That is what was done.
 
 **How this compares.** Full draft-07 or 2020-12 validation is the normal
-offering elsewhere: `ajv`, `jsonschema`, and `valijson` all implement `$ref`
+offering elsewhere: `ajv`, `jsonschema` and `valijson` all implement `$ref`
 and the applicator keywords, because without `$ref` a schema cannot be
-recursive or modular. The absence of `$ref` alone rules out most real schemas.
+recursive or modular.
+
+**That gap is now closed.** `$ref` resolves same-document JSON Pointers,
+recursion included, alongside the boolean applicators, `if`/`then`/`else`,
+`contains`, `additionalProperties`, `propertyNames`, `prefixItems`,
+`dependentSchemas` and draft-07's `dependencies`. What remains unimplemented
+is `pattern` and `patternProperties` (a regular-expression engine is a
+dependency decision), `unevaluated*` (needs annotation collection), the
+dynamic-scope references, `format`, and the `content*` family - and each is
+still refused rather than ignored.
 
 ---
 

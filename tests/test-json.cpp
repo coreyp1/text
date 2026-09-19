@@ -9094,19 +9094,12 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 	// implemented it moves out of this list and into a test that checks it
 	// actually constrains something.
 	const Case cases[] = {
-	    {"$ref", "{\"$defs\":{\"p\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/p\"}"},
 	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
 	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
-	    {"additionalProperties",
-	        "{\"type\":\"object\",\"additionalProperties\":false}"},
-	    {"propertyNames", "{\"propertyNames\":{\"minLength\":1}}"},
-	    {"contains", "{\"type\":\"array\",\"contains\":{\"type\":\"string\"}}"},
-	    {"prefixItems", "{\"prefixItems\":[{\"type\":\"string\"}]}"},
-	    {"additionalItems", "{\"additionalItems\":false}"},
-	    {"dependentSchemas", "{\"dependentSchemas\":{\"a\":{\"required\":[\"b\"]}}}"},
-	    {"dependencies", "{\"dependencies\":{\"a\":[\"b\"]}}"},
 	    {"unevaluatedProperties", "{\"unevaluatedProperties\":false}"},
+	    {"unevaluatedItems", "{\"unevaluatedItems\":false}"},
 	    {"format", "{\"type\":\"string\",\"format\":\"email\"}"},
+	    {"contentEncoding", "{\"contentEncoding\":\"base64\"}"},
 	};
 
 	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
@@ -9402,4 +9395,200 @@ TEST(JsonSchemaKeywords, ObjectAndArrayAssertions) {
 	// The trigger being absent means nothing is required.
 	EXPECT_TRUE(
 	    schema_accepts("{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"c\":1}"));
+}
+
+TEST(JsonSchemaKeywords, RefResolvesAndRecurses) {
+	// $ref was the significant gap: without it a schema cannot be factored or
+	// recursive, which rules out most real schemas.
+	const char * defs =
+	    "{\"$defs\":{\"p\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/p\"}";
+	EXPECT_TRUE(schema_accepts(defs, "\"x\""));
+	EXPECT_FALSE(schema_accepts(defs, "5"));
+
+	// draft-07 spelled the container "definitions".
+	const char * legacy =
+	    "{\"definitions\":{\"p\":{\"type\":\"string\"}},"
+	    "\"$ref\":\"#/definitions/p\"}";
+	EXPECT_TRUE(schema_accepts(legacy, "\"x\""));
+	EXPECT_FALSE(schema_accepts(legacy, "5"));
+
+	// A pointer at anything in the document, not only a definitions container.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"properties\":{\"a\":{\"type\":\"string\"},"
+	    "\"b\":{\"$ref\":\"#/properties/a\"}}}",
+	    "{\"b\":5}"));
+
+	// Recursive: the registry entry is made before the target's children
+	// compile, so this terminates.
+	const char * tree =
+	    "{\"$defs\":{\"n\":{\"type\":\"object\","
+	    "\"properties\":{\"c\":{\"$ref\":\"#/$defs/n\"}}}},"
+	    "\"$ref\":\"#/$defs/n\"}";
+	EXPECT_TRUE(schema_accepts(tree, "{\"c\":{\"c\":{}}}"));
+	EXPECT_FALSE(schema_accepts(tree, "{\"c\":{\"c\":5}}"));
+
+	// In 2020-12 a $ref sits alongside other keywords and all of them apply.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"$defs\":{\"s\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/s\","
+	    "\"minLength\":3}",
+	    "\"ab\""));
+}
+
+TEST(JsonSchemaKeywords, RefFailuresAreRefusedAtCompileTime) {
+	// A reference that does not resolve constrains nothing, which is the
+	// failure this engine exists not to have.
+	struct Case {
+		const char * why;
+		const char * schema;
+	};
+	const Case cases[] = {
+	    {"dangling pointer", "{\"$ref\":\"#/$defs/nope\"}"},
+	    {"external URI", "{\"$ref\":\"http://example.com/s\"}"},
+	    {"named anchor", "{\"$ref\":\"#someAnchor\"}"},
+	    {"not a string", "{\"$ref\":5}"},
+	};
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	for (const auto & c : cases) {
+		GTEXT_JSON_Error perr;
+		memset(&perr, 0, sizeof(perr));
+		GTEXT_JSON_Value * sv =
+		    gtext_json_parse(c.schema, strlen(c.schema), &po, &perr);
+		ASSERT_NE(sv, nullptr) << c.why;
+		GTEXT_JSON_Error serr;
+		memset(&serr, 0, sizeof(serr));
+		EXPECT_EQ(gtext_json_schema_compile(sv, &serr), nullptr) << c.why;
+		gtext_json_error_free(&serr);
+		gtext_json_free(sv);
+	}
+}
+
+TEST(JsonSchemaKeywords, SelfReferenceTerminates) {
+	// {"$ref":"#"} consumes no instance as it recurses, so instance depth is
+	// not a bound. It must stop rather than hang or overflow the stack.
+	const char * src = "{\"$ref\":\"#\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(sv, nullptr);
+	GTEXT_JSON_Value * iv = gtext_json_parse("1", 1, &po, &perr);
+	ASSERT_NE(iv, nullptr);
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	GTEXT_JSON_Schema * sc = gtext_json_schema_compile(sv, &serr);
+	ASSERT_NE(sc, nullptr) << "compiling a self-reference should terminate";
+	GTEXT_JSON_Error verr;
+	memset(&verr, 0, sizeof(verr));
+	EXPECT_EQ(gtext_json_schema_validate(sc, iv, &verr), GTEXT_JSON_E_DEPTH);
+	gtext_json_error_free(&verr);
+	gtext_json_schema_free(sc);
+	gtext_json_error_free(&serr);
+	gtext_json_free(iv);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaKeywords, BooleanSchemas) {
+	// A boolean is a schema wherever a schema is allowed.
+	EXPECT_TRUE(schema_accepts("{\"properties\":{\"a\":true}}", "{\"a\":1}"));
+	EXPECT_FALSE(schema_accepts("{\"properties\":{\"a\":false}}", "{\"a\":1}"));
+	// "false" only bites when the property is present.
+	EXPECT_TRUE(schema_accepts("{\"properties\":{\"a\":false}}", "{\"b\":1}"));
+	EXPECT_TRUE(schema_accepts("true", "{\"anything\":1}"));
+	EXPECT_FALSE(schema_accepts("false", "1"));
+}
+
+TEST(JsonSchemaKeywords, ObjectApplicators) {
+	EXPECT_FALSE(schema_accepts(
+	    "{\"properties\":{\"a\":{}},\"additionalProperties\":false}",
+	    "{\"a\":1,\"b\":2}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"properties\":{\"a\":{}},\"additionalProperties\":false}",
+	    "{\"a\":1}"));
+	// A schema, not just false: it applies to the unnamed properties only.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"properties\":{\"a\":{\"type\":\"string\"}},"
+	    "\"additionalProperties\":{\"type\":\"integer\"}}",
+	    "{\"a\":\"s\",\"b\":1}"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"properties\":{\"a\":{\"type\":\"string\"}},"
+	    "\"additionalProperties\":{\"type\":\"integer\"}}",
+	    "{\"a\":\"s\",\"b\":\"t\"}"));
+
+	EXPECT_FALSE(
+	    schema_accepts("{\"propertyNames\":{\"minLength\":2}}", "{\"a\":1}"));
+	EXPECT_TRUE(
+	    schema_accepts("{\"propertyNames\":{\"minLength\":2}}", "{\"ab\":1}"));
+
+	EXPECT_FALSE(schema_accepts(
+	    "{\"dependentSchemas\":{\"a\":{\"required\":[\"b\"]}}}", "{\"a\":1}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"dependentSchemas\":{\"a\":{\"required\":[\"b\"]}}}",
+	    "{\"a\":1,\"b\":2}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"dependentSchemas\":{\"a\":{\"required\":[\"b\"]}}}", "{\"c\":1}"));
+}
+
+TEST(JsonSchemaKeywords, ArrayApplicators) {
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"integer\"},{\"type\":\"string\"}]}",
+	    "[1,\"a\"]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"integer\"},{\"type\":\"string\"}]}",
+	    "[1,2]"));
+	// A short array simply has fewer positions to check.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"integer\"},{\"type\":\"string\"}]}",
+	    "[1]"));
+
+	// draft-07 spelled the positional form `items: [...]`.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"items\":[{\"type\":\"integer\"},{\"type\":\"string\"}]}", "[1,2]"));
+	// and `items` with a single schema still applies to every element.
+	EXPECT_FALSE(
+	    schema_accepts("{\"items\":{\"type\":\"integer\"}}", "[1,\"a\"]"));
+
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"integer\"}],\"additionalItems\":false}",
+	    "[1,2]"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"integer\"}],\"additionalItems\":false}",
+	    "[1]"));
+
+	EXPECT_TRUE(
+	    schema_accepts("{\"contains\":{\"type\":\"string\"}}", "[1,\"a\"]"));
+	EXPECT_FALSE(schema_accepts("{\"contains\":{\"type\":\"string\"}}", "[1,2]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"minContains\":2}", "[\"a\",1]"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"minContains\":2}",
+	    "[\"a\",\"b\"]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"maxContains\":1}",
+	    "[\"a\",\"b\"]"));
+	// minContains of 0 is the one case where contains asserts nothing.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"minContains\":0}", "[1]"));
+}
+
+TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {
+	// `dependencies` is the union of what 2020-12 split in two, so each entry
+	// is compiled into whichever of the pair it means.
+	EXPECT_FALSE(
+	    schema_accepts("{\"dependencies\":{\"a\":[\"b\"]}}", "{\"a\":1}"));
+	EXPECT_TRUE(
+	    schema_accepts("{\"dependencies\":{\"a\":[\"b\"]}}", "{\"a\":1,\"b\":2}"));
+	EXPECT_TRUE(
+	    schema_accepts("{\"dependencies\":{\"a\":[\"b\"]}}", "{\"c\":1}"));
+
+	EXPECT_FALSE(schema_accepts(
+	    "{\"dependencies\":{\"a\":{\"required\":[\"b\"]}}}", "{\"a\":1}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"dependencies\":{\"a\":{\"required\":[\"b\"]}}}", "{\"a\":1,\"b\":2}"));
+
+	// Both forms in one schema.
+	const char * mixed =
+	    "{\"dependencies\":{\"a\":[\"b\"],\"c\":{\"required\":[\"d\"]}}}";
+	EXPECT_TRUE(schema_accepts(mixed, "{\"a\":1,\"b\":2}"));
+	EXPECT_FALSE(schema_accepts(mixed, "{\"c\":1}"));
+	EXPECT_TRUE(schema_accepts(mixed, "{\"c\":1,\"d\":2}"));
 }

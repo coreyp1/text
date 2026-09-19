@@ -15,6 +15,7 @@
 #include "json_internal.h"
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_dom.h>
+#include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_schema.h>
 
 static void json_schema_node_free(json_schema_node * node) {
@@ -65,6 +66,29 @@ static void json_schema_node_free(json_schema_node * node) {
   json_schema_node_free(node->if_schema);
   json_schema_node_free(node->then_schema);
   json_schema_node_free(node->else_schema);
+
+  /* ref_target is deliberately not freed here: it is owned by the schema's
+   * registry, because a recursive or shared reference would otherwise be
+   * freed once per referring node. */
+
+  if (node->prefix_items) {
+    for (size_t i = 0; i < node->prefix_items_count; i++) {
+      json_schema_node_free(node->prefix_items[i]);
+    }
+    free(node->prefix_items);
+  }
+  json_schema_node_free(node->additional_items);
+  json_schema_node_free(node->contains_schema);
+  json_schema_node_free(node->additional_properties);
+  json_schema_node_free(node->property_names);
+
+  if (node->dep_schemas) {
+    for (size_t i = 0; i < node->dep_schemas_count; i++) {
+      free(node->dep_schemas[i].key);
+      json_schema_node_free(node->dep_schemas[i].schema);
+    }
+    free(node->dep_schemas);
+  }
 
   // Free dependentRequired
   if (node->dep_required) {
@@ -173,9 +197,7 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
  */
 static const char * const json_schema_unsupported_keywords[] = {
     /* Applicators. */
-    "$ref", "$recursiveRef", "$dynamicRef", "additionalItems", "prefixItems",
-    "contains", "minContains", "maxContains", "additionalProperties",
-    "patternProperties", "propertyNames", "dependentSchemas", "dependencies",
+    "$recursiveRef", "$dynamicRef", "patternProperties",
     "unevaluatedItems", "unevaluatedProperties",
     /* Assertions. */
     "pattern", "format", "contentEncoding", "contentMediaType",
@@ -215,15 +237,142 @@ static GTEXT_JSON_Status json_schema_reject_keyword(
   return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
 }
 
+/*
+ * State threaded through compilation.
+ *
+ * `schema` is here so that a `$ref` can reach the registry and the cloned
+ * document; `depth` bounds a schema that nests subschemas without bound, which
+ * a `$ref` cycle cannot cause but a deeply literal document can.
+ */
+typedef struct {
+  json_context * ctx;
+  const GTEXT_JSON_Schema_Options * opts;
+  GTEXT_JSON_Schema * schema;
+  int depth;
+} json_schema_compile_ctx;
+
+#define JSON_SCHEMA_MAX_COMPILE_DEPTH 256
+#define JSON_SCHEMA_MAX_VALIDATE_DEPTH 256
+
 /* Forward declaration: the applicator helpers below compile subschemas. */
 static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
-    const GTEXT_JSON_Value * schema_doc, json_context * ctx,
-    const GTEXT_JSON_Schema_Options * opts, GTEXT_JSON_Error * err);
+    const GTEXT_JSON_Value * schema_doc, json_schema_compile_ctx * cc,
+    GTEXT_JSON_Error * err);
+
+
+/*
+ * Resolve a `$ref` to a compiled node, compiling the target on first use.
+ *
+ * Only same-document JSON Pointer fragments are supported: "#" for the root
+ * and "#/..." for a pointer into it. An external URI, or a "#name" anchor,
+ * is refused rather than quietly ignored - a schema whose reference does not
+ * resolve constrains nothing, which is the failure this whole engine is meant
+ * not to have.
+ *
+ * The entry is registered before the target's children compile, so a schema
+ * that refers to itself terminates. Targets are owned by the registry, so one
+ * reached from several places is compiled once and freed once.
+ */
+static GTEXT_JSON_Status json_schema_resolve_ref(json_schema_node ** out,
+    const char * ref, size_t ref_len, json_schema_compile_ctx * cc,
+    GTEXT_JSON_Error * err) {
+  if (ref_len == 0 || ref[0] != '#') {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+          .message = "Only same-document $ref (\"#\" or \"#/...\") is "
+                     "supported"};
+    }
+    return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+  }
+  /* "#" alone is the root; otherwise the fragment must be a JSON Pointer,
+   * which always starts with '/'. "#name" is an $anchor, which needs anchor
+   * collection this engine does not do. */
+  const char * ptr = ref + 1;
+  size_t ptr_len = ref_len - 1;
+  if (ptr_len != 0 && ptr[0] != '/') {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+          .message = "$ref to a named anchor is not supported"};
+    }
+    return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+  }
+
+  GTEXT_JSON_Schema * schema = cc->schema;
+  for (size_t i = 0; i < schema->refs_count; i++) {
+    if (strlen(schema->refs[i].pointer) == ptr_len
+        && memcmp(schema->refs[i].pointer, ptr, ptr_len) == 0) {
+      *out = schema->refs[i].node;
+      return GTEXT_JSON_OK;
+    }
+  }
+
+  const GTEXT_JSON_Value * target =
+      ptr_len == 0 ? schema->doc : gtext_json_pointer_get(schema->doc, ptr, ptr_len);
+  if (!target) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+          .message = "$ref does not resolve to anything in this document"};
+    }
+    return GTEXT_JSON_E_SCHEMA;
+  }
+
+  if (schema->refs_count == schema->refs_capacity) {
+    size_t cap = schema->refs_capacity ? schema->refs_capacity * 2 : 8;
+    if (cap > SIZE_MAX / sizeof(json_schema_ref_entry)) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){
+            .code = GTEXT_JSON_E_OOM, .message = "Too many $ref targets"};
+      }
+      return GTEXT_JSON_E_OOM;
+    }
+    json_schema_ref_entry * grown = (json_schema_ref_entry *)realloc(
+        schema->refs, cap * sizeof(json_schema_ref_entry));
+    if (!grown) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+            .message = "Out of memory growing the $ref registry"};
+      }
+      return GTEXT_JSON_E_OOM;
+    }
+    schema->refs = grown;
+    schema->refs_capacity = cap;
+  }
+
+  json_schema_node * node =
+      (json_schema_node *)calloc(1, sizeof(json_schema_node));
+  char * key = (char *)malloc(ptr_len + 1);
+  if (!node || !key) {
+    free(node);
+    free(key);
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory allocating a $ref target"};
+    }
+    return GTEXT_JSON_E_OOM;
+  }
+  memcpy(key, ptr, ptr_len);
+  key[ptr_len] = '\0';
+
+  /* Registered before compiling, so a self-reference finds this entry rather
+   * than recursing forever. */
+  schema->refs[schema->refs_count].pointer = key;
+  schema->refs[schema->refs_count].node = node;
+  schema->refs_count++;
+
+  GTEXT_JSON_Status status = json_schema_compile_node(node, target, cc, err);
+  if (status != GTEXT_JSON_OK) {
+    /* The entry stays in the registry so it is freed with the schema; the
+     * compile as a whole is about to fail. */
+    return status;
+  }
+  *out = node;
+  return GTEXT_JSON_OK;
+}
 
 /* Compile one subschema into a freshly allocated node. */
 static GTEXT_JSON_Status json_schema_compile_sub(json_schema_node ** out,
-    const GTEXT_JSON_Value * doc, json_context * ctx,
-    const GTEXT_JSON_Schema_Options * opts, GTEXT_JSON_Error * err) {
+    const GTEXT_JSON_Value * doc, json_schema_compile_ctx * cc,
+    GTEXT_JSON_Error * err) {
   json_schema_node * sub =
       (json_schema_node *)calloc(1, sizeof(json_schema_node));
   if (!sub) {
@@ -233,7 +382,7 @@ static GTEXT_JSON_Status json_schema_compile_sub(json_schema_node ** out,
     }
     return GTEXT_JSON_E_OOM;
   }
-  GTEXT_JSON_Status status = json_schema_compile_node(sub, doc, ctx, opts, err);
+  GTEXT_JSON_Status status = json_schema_compile_node(sub, doc, cc, err);
   if (status != GTEXT_JSON_OK) {
     json_schema_node_free(sub);
     return status;
@@ -245,8 +394,8 @@ static GTEXT_JSON_Status json_schema_compile_sub(json_schema_node ** out,
 /* Compile an array of subschemas, as allOf, anyOf and oneOf all take. */
 static GTEXT_JSON_Status json_schema_compile_sub_list(
     json_schema_node *** out_list, size_t * out_count, const char * keyword,
-    const GTEXT_JSON_Value * value, json_context * ctx,
-    const GTEXT_JSON_Schema_Options * opts, GTEXT_JSON_Error * err) {
+    const GTEXT_JSON_Value * value, json_schema_compile_ctx * cc,
+    GTEXT_JSON_Error * err) {
   if (value->type != GTEXT_JSON_ARRAY) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
@@ -284,7 +433,7 @@ static GTEXT_JSON_Status json_schema_compile_sub_list(
   for (size_t i = 0; i < n; i++) {
     const GTEXT_JSON_Value * elem = gtext_json_array_get(value, i);
     GTEXT_JSON_Status status =
-        json_schema_compile_sub(&list[i], elem, ctx, opts, err);
+        json_schema_compile_sub(&list[i], elem, cc, err);
     if (status != GTEXT_JSON_OK) {
       for (size_t j = 0; j < i; j++) {
         json_schema_node_free(list[j]);
@@ -299,8 +448,32 @@ static GTEXT_JSON_Status json_schema_compile_sub_list(
 }
 
 static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
-    const GTEXT_JSON_Value * schema_doc, json_context * ctx,
-    const GTEXT_JSON_Schema_Options * opts, GTEXT_JSON_Error * err) {
+    const GTEXT_JSON_Value * schema_doc, json_schema_compile_ctx * cc,
+    GTEXT_JSON_Error * err) {
+  if (cc->depth >= JSON_SCHEMA_MAX_COMPILE_DEPTH) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_DEPTH,
+          .message = "Schema nests deeper than the compiler allows"};
+    }
+    return GTEXT_JSON_E_DEPTH;
+  }
+
+  /* A boolean is a schema: true accepts everything, false rejects
+   * everything.  "additionalProperties": false is the common case. */
+  if (schema_doc->type == GTEXT_JSON_BOOL) {
+    bool b = false;
+    if (gtext_json_get_bool(schema_doc, &b) != GTEXT_JSON_OK) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+            .message = "Invalid boolean schema"};
+      }
+      return GTEXT_JSON_E_INVALID;
+    }
+    node->is_bool_schema = 1;
+    node->bool_schema_value = b ? 1 : 0;
+    return GTEXT_JSON_OK;
+  }
+
   if (schema_doc->type != GTEXT_JSON_OBJECT) {
     if (err) {
       *err = (GTEXT_JSON_Error){
@@ -403,7 +576,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
           }
 
           GTEXT_JSON_Status status =
-              json_schema_compile_node(prop->schema, prop_schema, ctx, opts, err);
+              json_schema_compile_node(prop->schema, prop_schema, cc, err);
           if (status != GTEXT_JSON_OK) {
             free(prop->key);
             free(prop->schema);
@@ -494,6 +667,18 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       }
     }
     else if (json_matches(key, key_len, "items")) {
+      /* draft-07 spells the positional form `items: [ ... ]`, which 2020-12
+       * renamed to prefixItems.  Both compile to prefix_items, so a schema
+       * written either way validates the same. */
+      if (value->type == GTEXT_JSON_ARRAY) {
+        GTEXT_JSON_Status status =
+            json_schema_compile_sub_list(&node->prefix_items,
+                &node->prefix_items_count, "items", value, cc, err);
+        if (status != GTEXT_JSON_OK) {
+          return status;
+        }
+        continue;
+      }
       // Compile items schema recursively
       node->items_schema =
           (json_schema_node *)calloc(1, sizeof(json_schema_node));
@@ -506,7 +691,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       }
 
       GTEXT_JSON_Status status =
-          json_schema_compile_node(node->items_schema, value, ctx, opts, err);
+          json_schema_compile_node(node->items_schema, value, cc, err);
       if (status != GTEXT_JSON_OK) {
         free(node->items_schema);
         node->items_schema = NULL;
@@ -563,7 +748,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
           }
 
           // Clone value into context
-          GTEXT_JSON_Value * cloned = json_value_clone(enum_val, ctx);
+          GTEXT_JSON_Value * cloned = json_value_clone(enum_val, cc->ctx);
           if (!cloned) {
             if (err) {
               *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
@@ -579,7 +764,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     }
     else if (json_matches(key, key_len, "const")) {
       // Clone const value into context
-      node->const_value = json_value_clone(value, ctx);
+      node->const_value = json_value_clone(value, cc->ctx);
       if (!node->const_value) {
         if (err) {
           *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
@@ -750,6 +935,254 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       node->has_max_items = 1;
       node->max_items = (size_t)max_items_val;
     }
+    // --- $ref ---------------------------------------------------------
+    else if (json_matches(key, key_len, "$ref")) {
+      if (value->type != GTEXT_JSON_STRING) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){
+              .code = GTEXT_JSON_E_INVALID, .message = "$ref must be a string"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      const char * rs = NULL;
+      size_t rl = 0;
+      if (gtext_json_get_string(value, &rs, &rl) != GTEXT_JSON_OK) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){
+              .code = GTEXT_JSON_E_INVALID, .message = "Invalid $ref value"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      cc->depth++;
+      GTEXT_JSON_Status status =
+          json_schema_resolve_ref(&node->ref_target, rs, rl, cc, err);
+      cc->depth--;
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    // --- positional array schemas -------------------------------------
+    else if (json_matches(key, key_len, "prefixItems")) {
+      GTEXT_JSON_Status status =
+          json_schema_compile_sub_list(&node->prefix_items,
+              &node->prefix_items_count, "prefixItems", value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    else if (json_matches(key, key_len, "additionalItems")) {
+      GTEXT_JSON_Status status = json_schema_compile_sub(
+          &node->additional_items, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    // --- contains -----------------------------------------------------
+    else if (json_matches(key, key_len, "contains")) {
+      GTEXT_JSON_Status status =
+          json_schema_compile_sub(&node->contains_schema, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    else if (json_matches(key, key_len, "minContains")
+        || json_matches(key, key_len, "maxContains")) {
+      double d = 0.0;
+      if (value->type != GTEXT_JSON_NUMBER
+          || gtext_json_get_double(value, &d) != GTEXT_JSON_OK || d < 0
+          || d > (double)SIZE_MAX) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "minContains/maxContains must be a non-negative "
+                         "integer"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      if (json_matches(key, key_len, "minContains")) {
+        node->has_min_contains = 1;
+        node->min_contains = (size_t)d;
+      }
+      else {
+        node->has_max_contains = 1;
+        node->max_contains = (size_t)d;
+      }
+    }
+    // --- object applicators -------------------------------------------
+    else if (json_matches(key, key_len, "additionalProperties")) {
+      GTEXT_JSON_Status status = json_schema_compile_sub(
+          &node->additional_properties, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    else if (json_matches(key, key_len, "propertyNames")) {
+      GTEXT_JSON_Status status =
+          json_schema_compile_sub(&node->property_names, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    else if (json_matches(key, key_len, "dependencies")) {
+      /* draft-07's `dependencies` is the union of what 2020-12 split into
+       * dependentRequired and dependentSchemas: each value is either an array
+       * of property names or a schema.  Rather than a third structure, each
+       * entry is compiled into whichever of the two it means. */
+      if (value->type != GTEXT_JSON_OBJECT) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "dependencies must be an object"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      size_t n = gtext_json_object_size(value);
+      for (size_t i = 0; i < n; i++) {
+        size_t dk_len = 0;
+        const char * dk = gtext_json_object_key(value, i, &dk_len);
+        const GTEXT_JSON_Value * dv = gtext_json_object_value(value, i);
+        if (!dv) {
+          continue;
+        }
+        if (dv->type == GTEXT_JSON_ARRAY) {
+          size_t rn = gtext_json_array_size(dv);
+          json_schema_dep_required * grown =
+              (json_schema_dep_required *)realloc(node->dep_required,
+                  (node->dep_required_count + 1)
+                      * sizeof(json_schema_dep_required));
+          if (!grown) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory allocating dependencies"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          node->dep_required = grown;
+          json_schema_dep_required * entry =
+              &node->dep_required[node->dep_required_count];
+          memset(entry, 0, sizeof(*entry));
+          entry->key = (char *)malloc(dk_len + 1);
+          if (!entry->key) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory allocating dependencies key"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          memcpy(entry->key, dk, dk_len);
+          entry->key[dk_len] = '\0';
+          node->dep_required_count++;
+          if (rn > 0) {
+            entry->required = (char **)calloc(rn, sizeof(char *));
+            if (!entry->required) {
+              if (err) {
+                *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                    .message = "Out of memory allocating dependencies list"};
+              }
+              return GTEXT_JSON_E_OOM;
+            }
+          }
+          for (size_t j = 0; j < rn; j++) {
+            const GTEXT_JSON_Value * name = gtext_json_array_get(dv, j);
+            const char * ns = NULL;
+            size_t nl = 0;
+            if (!name || name->type != GTEXT_JSON_STRING
+                || gtext_json_get_string(name, &ns, &nl) != GTEXT_JSON_OK) {
+              if (err) {
+                *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+                    .message = "dependencies names must be strings"};
+              }
+              return GTEXT_JSON_E_INVALID;
+            }
+            entry->required[j] = (char *)malloc(nl + 1);
+            if (!entry->required[j]) {
+              if (err) {
+                *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                    .message = "Out of memory allocating dependencies name"};
+              }
+              return GTEXT_JSON_E_OOM;
+            }
+            memcpy(entry->required[j], ns ? ns : "", nl);
+            entry->required[j][nl] = '\0';
+            entry->required_count = j + 1;
+          }
+        }
+        else {
+          json_schema_dep_schema * grown =
+              (json_schema_dep_schema *)realloc(node->dep_schemas,
+                  (node->dep_schemas_count + 1)
+                      * sizeof(json_schema_dep_schema));
+          if (!grown) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory allocating dependencies"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          node->dep_schemas = grown;
+          json_schema_dep_schema * entry =
+              &node->dep_schemas[node->dep_schemas_count];
+          memset(entry, 0, sizeof(*entry));
+          entry->key = (char *)malloc(dk_len + 1);
+          if (!entry->key) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory allocating dependencies key"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          memcpy(entry->key, dk, dk_len);
+          entry->key[dk_len] = '\0';
+          node->dep_schemas_count++;
+          GTEXT_JSON_Status status =
+              json_schema_compile_sub(&entry->schema, dv, cc, err);
+          if (status != GTEXT_JSON_OK) {
+            return status;
+          }
+        }
+      }
+    }
+    else if (json_matches(key, key_len, "dependentSchemas")) {
+      if (value->type != GTEXT_JSON_OBJECT) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "dependentSchemas must be an object"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      size_t n = gtext_json_object_size(value);
+      if (n > 0) {
+        node->dep_schemas = (json_schema_dep_schema *)calloc(
+            n, sizeof(json_schema_dep_schema));
+        if (!node->dep_schemas) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                .message = "Out of memory allocating dependentSchemas"};
+          }
+          return GTEXT_JSON_E_OOM;
+        }
+      }
+      for (size_t i = 0; i < n; i++) {
+        size_t dk_len = 0;
+        const char * dk = gtext_json_object_key(value, i, &dk_len);
+        const GTEXT_JSON_Value * sub = gtext_json_object_value(value, i);
+        json_schema_dep_schema * entry = &node->dep_schemas[i];
+        entry->key = (char *)malloc(dk_len + 1);
+        if (!entry->key) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                .message = "Out of memory allocating dependentSchemas key"};
+          }
+          return GTEXT_JSON_E_OOM;
+        }
+        memcpy(entry->key, dk, dk_len);
+        entry->key[dk_len] = '\0';
+        node->dep_schemas_count = i + 1;
+        GTEXT_JSON_Status status =
+            json_schema_compile_sub(&entry->schema, sub, cc, err);
+        if (status != GTEXT_JSON_OK) {
+          return status;
+        }
+      }
+    }
     // --- numeric assertions -------------------------------------------
     else if (json_matches(key, key_len, "exclusiveMinimum")
         || json_matches(key, key_len, "exclusiveMaximum")
@@ -836,49 +1269,49 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     // --- boolean applicators ------------------------------------------
     else if (json_matches(key, key_len, "allOf")) {
       GTEXT_JSON_Status status = json_schema_compile_sub_list(
-          &node->all_of, &node->all_of_count, "allOf", value, ctx, opts, err);
+          &node->all_of, &node->all_of_count, "allOf", value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "anyOf")) {
       GTEXT_JSON_Status status = json_schema_compile_sub_list(
-          &node->any_of, &node->any_of_count, "anyOf", value, ctx, opts, err);
+          &node->any_of, &node->any_of_count, "anyOf", value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "oneOf")) {
       GTEXT_JSON_Status status = json_schema_compile_sub_list(
-          &node->one_of, &node->one_of_count, "oneOf", value, ctx, opts, err);
+          &node->one_of, &node->one_of_count, "oneOf", value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "not")) {
       GTEXT_JSON_Status status =
-          json_schema_compile_sub(&node->not_schema, value, ctx, opts, err);
+          json_schema_compile_sub(&node->not_schema, value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "if")) {
       GTEXT_JSON_Status status =
-          json_schema_compile_sub(&node->if_schema, value, ctx, opts, err);
+          json_schema_compile_sub(&node->if_schema, value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "then")) {
       GTEXT_JSON_Status status =
-          json_schema_compile_sub(&node->then_schema, value, ctx, opts, err);
+          json_schema_compile_sub(&node->then_schema, value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
     else if (json_matches(key, key_len, "else")) {
       GTEXT_JSON_Status status =
-          json_schema_compile_sub(&node->else_schema, value, ctx, opts, err);
+          json_schema_compile_sub(&node->else_schema, value, cc, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
@@ -971,7 +1404,7 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
         }
       }
     }
-    else if (!opts->allow_unsupported_keywords &&
+    else if (!cc->opts->allow_unsupported_keywords &&
              json_schema_keyword_in(
                  json_schema_unsupported_keywords, key, key_len)) {
       return json_schema_reject_keyword(key, key_len, err);
@@ -991,15 +1424,61 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
 }
 
 
+static GTEXT_JSON_Status json_schema_validate_depth(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, GTEXT_JSON_Error * err);
+
+/*
+ * Kept so the existing call sites read the same.  Every recursive call goes
+ * through the depth-carrying form: a schema like {"$ref":"#"} consumes no
+ * instance as it recurses, so instance depth is not a bound.
+ */
 static GTEXT_JSON_Status json_schema_validate_node(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     GTEXT_JSON_Error * err) {
+  return json_schema_validate_depth(node, instance, 0, err);
+}
+
+static GTEXT_JSON_Status json_schema_validate_depth(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, GTEXT_JSON_Error * err) {
+  if (depth >= JSON_SCHEMA_MAX_VALIDATE_DEPTH) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_DEPTH,
+          .message = "Schema validation nested too deeply"};
+    }
+    return GTEXT_JSON_E_DEPTH;
+  }
+
   if (!node || !instance) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
           .message = "Invalid arguments to schema validation"};
     }
     return GTEXT_JSON_E_INVALID;
+  }
+
+  // A boolean schema settles it outright.
+  if (node->is_bool_schema) {
+    if (node->bool_schema_value) {
+      return GTEXT_JSON_OK;
+    }
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+          .message = "Schema is false, so nothing is valid against it"};
+    }
+    return GTEXT_JSON_E_SCHEMA;
+  }
+
+  // $ref applies the referenced schema.  In 2020-12 a $ref sits alongside
+  // other keywords and all of them apply, which is what happens here: the
+  // reference is checked and then the rest of this node continues.
+  if (node->ref_target) {
+    GTEXT_JSON_Status status = json_schema_validate_depth(
+        node->ref_target, instance, depth + 1, err);
+    if (status != GTEXT_JSON_OK) {
+      return status;
+    }
   }
 
   // Applicators run before the local assertions.  They can reject an instance
@@ -1013,7 +1492,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
     for (size_t i = 0; i < node->all_of_count; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_node(node->all_of[i], instance, &sub)
+      if (json_schema_validate_depth(node->all_of[i], instance, depth + 1, &sub)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&sub);
         if (err) {
@@ -1031,7 +1510,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
     for (size_t i = 0; i < node->any_of_count && !matched; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_node(node->any_of[i], instance, &sub)
+      if (json_schema_validate_depth(node->any_of[i], instance, depth + 1, &sub)
           == GTEXT_JSON_OK) {
         matched = 1;
       }
@@ -1051,7 +1530,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
     for (size_t i = 0; i < node->one_of_count; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_node(node->one_of[i], instance, &sub)
+      if (json_schema_validate_depth(node->one_of[i], instance, depth + 1, &sub)
           == GTEXT_JSON_OK) {
         matches++;
       }
@@ -1075,7 +1554,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
     GTEXT_JSON_Error sub;
     memset(&sub, 0, sizeof(sub));
     GTEXT_JSON_Status inner =
-        json_schema_validate_node(node->not_schema, instance, &sub);
+        json_schema_validate_depth(node->not_schema, instance, depth + 1, &sub);
     gtext_json_error_free(&sub);
     if (inner == GTEXT_JSON_OK) {
       if (err) {
@@ -1091,7 +1570,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
   if (node->if_schema) {
     GTEXT_JSON_Error sub;
     memset(&sub, 0, sizeof(sub));
-    int cond = json_schema_validate_node(node->if_schema, instance, &sub)
+    int cond = json_schema_validate_depth(node->if_schema, instance, depth + 1, &sub)
         == GTEXT_JSON_OK;
     gtext_json_error_free(&sub);
     const json_schema_node * branch =
@@ -1099,7 +1578,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
     if (branch) {
       GTEXT_JSON_Error berr;
       memset(&berr, 0, sizeof(berr));
-      if (json_schema_validate_node(branch, instance, &berr)
+      if (json_schema_validate_depth(branch, instance, depth + 1, &berr)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&berr);
         if (err) {
@@ -1304,6 +1783,70 @@ static GTEXT_JSON_Status json_schema_validate_node(
       }
     }
 
+    // prefixItems constrains by position; anything past the last of them is
+    // additional_items' business.  draft-07's `items: [...]` compiles to the
+    // same place, so both spellings behave alike.
+    for (size_t i = 0; i < node->prefix_items_count && i < arr_size; i++) {
+      const GTEXT_JSON_Value * item = gtext_json_array_get(instance, i);
+      if (!item) {
+        continue;
+      }
+      GTEXT_JSON_Status status = json_schema_validate_depth(
+          node->prefix_items[i], item, depth + 1, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    if (node->additional_items && arr_size > node->prefix_items_count) {
+      for (size_t i = node->prefix_items_count; i < arr_size; i++) {
+        const GTEXT_JSON_Value * item = gtext_json_array_get(instance, i);
+        if (!item) {
+          continue;
+        }
+        GTEXT_JSON_Status status = json_schema_validate_depth(
+            node->additional_items, item, depth + 1, err);
+        if (status != GTEXT_JSON_OK) {
+          return status;
+        }
+      }
+    }
+
+    // contains: at least one item must match, unless minContains says
+    // otherwise.  minContains of 0 makes an empty array valid, which is the
+    // one case where "contains" asserts nothing.
+    if (node->contains_schema) {
+      size_t matches = 0;
+      for (size_t i = 0; i < arr_size; i++) {
+        const GTEXT_JSON_Value * item = gtext_json_array_get(instance, i);
+        if (!item) {
+          continue;
+        }
+        GTEXT_JSON_Error sub;
+        memset(&sub, 0, sizeof(sub));
+        if (json_schema_validate_depth(
+                node->contains_schema, item, depth + 1, &sub)
+            == GTEXT_JSON_OK) {
+          matches++;
+        }
+        gtext_json_error_free(&sub);
+      }
+      size_t need = node->has_min_contains ? node->min_contains : 1;
+      if (matches < need) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "Array does not contain enough matching items"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
+      }
+      if (node->has_max_contains && matches > node->max_contains) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "Array contains more matching items than maxContains"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
+      }
+    }
+
     // Validate items if schema is provided
     if (node->items_schema) {
       for (size_t i = 0; i < arr_size; i++) {
@@ -1313,7 +1856,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
         }
 
         GTEXT_JSON_Status status =
-            json_schema_validate_node(node->items_schema, item, err);
+            json_schema_validate_depth(node->items_schema, item, depth + 1, err);
         if (status != GTEXT_JSON_OK) {
           return status;
         }
@@ -1376,6 +1919,86 @@ static GTEXT_JSON_Status json_schema_validate_node(
       }
     }
 
+    // propertyNames applies to each key, as a string instance.  The key is
+    // wrapped in a temporary value so the same node machinery can check it.
+    if (node->property_names) {
+      size_t count = gtext_json_object_size(instance);
+      for (size_t i = 0; i < count; i++) {
+        size_t klen = 0;
+        const char * kname = gtext_json_object_key(instance, i, &klen);
+        if (!kname) {
+          continue;
+        }
+        GTEXT_JSON_Value * key_val = gtext_json_new_string(kname, klen);
+        if (!key_val) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                .message = "Out of memory checking propertyNames"};
+          }
+          return GTEXT_JSON_E_OOM;
+        }
+        GTEXT_JSON_Status status = json_schema_validate_depth(
+            node->property_names, key_val, depth + 1, err);
+        gtext_json_free(key_val);
+        if (status != GTEXT_JSON_OK) {
+          if (err && err->code == GTEXT_JSON_E_SCHEMA) {
+            err->message = "A property name does not match propertyNames";
+          }
+          return status;
+        }
+      }
+    }
+
+    // additionalProperties applies to every property `properties` did not
+    // name.  patternProperties would also exempt a property, and is not
+    // implemented, which is why a schema using it is still refused outright
+    // rather than validated with this keyword alone.
+    if (node->additional_properties) {
+      size_t count = gtext_json_object_size(instance);
+      for (size_t i = 0; i < count; i++) {
+        size_t klen = 0;
+        const char * kname = gtext_json_object_key(instance, i, &klen);
+        if (!kname) {
+          continue;
+        }
+        int named = 0;
+        for (size_t p = 0; p < node->properties_count && !named; p++) {
+          if (node->properties[p].key_len == klen
+              && memcmp(node->properties[p].key, kname, klen) == 0) {
+            named = 1;
+          }
+        }
+        if (named) {
+          continue;
+        }
+        const GTEXT_JSON_Value * pv = gtext_json_object_value(instance, i);
+        if (!pv) {
+          continue;
+        }
+        GTEXT_JSON_Status status = json_schema_validate_depth(
+            node->additional_properties, pv, depth + 1, err);
+        if (status != GTEXT_JSON_OK) {
+          if (err && err->code == GTEXT_JSON_E_SCHEMA) {
+            err->message = "A property is not allowed by additionalProperties";
+          }
+          return status;
+        }
+      }
+    }
+
+    // dependentSchemas: a property's presence applies a whole schema.
+    for (size_t i = 0; i < node->dep_schemas_count; i++) {
+      const json_schema_dep_schema * dep = &node->dep_schemas[i];
+      if (!gtext_json_object_get(instance, dep->key, strlen(dep->key))) {
+        continue;
+      }
+      GTEXT_JSON_Status status =
+          json_schema_validate_depth(dep->schema, instance, depth + 1, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+
     // Validate properties
     if (node->properties_count > 0) {
       for (size_t i = 0; i < node->properties_count; i++) {
@@ -1386,7 +2009,7 @@ static GTEXT_JSON_Status json_schema_validate_node(
         if (prop_val) {
           // Property exists, validate it
           GTEXT_JSON_Status status =
-              json_schema_validate_node(prop->schema, prop_val, err);
+              json_schema_validate_depth(prop->schema, prop_val, depth + 1, err);
           if (status != GTEXT_JSON_OK) {
             return status;
           }
@@ -1430,10 +2053,14 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
     return NULL;
   }
 
-  if (schema_doc->type != GTEXT_JSON_OBJECT) {
+  /* A boolean is a schema too - "true" accepts everything and "false"
+   * accepts nothing - and that is as true at the root as it is for a
+   * subschema. */
+  if (schema_doc->type != GTEXT_JSON_OBJECT
+      && schema_doc->type != GTEXT_JSON_BOOL) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
-          .message = "Schema document must be an object"};
+          .message = "Schema document must be an object or a boolean"};
     }
     return NULL;
   }
@@ -1472,13 +2099,29 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
     return NULL;
   }
 
-  // Compile schema
-  GTEXT_JSON_Status status =
-      json_schema_compile_node(schema->root, schema_doc, schema->ctx, opts, err);
-  if (status != GTEXT_JSON_OK) {
+  /* The document is cloned so that $ref can be resolved against it after the
+   * caller frees theirs.  A schema with no $ref pays for this too; keeping
+   * two code paths, one of which only some schemas exercise, is the more
+   * expensive choice in the end. */
+  schema->doc = gtext_json_clone(schema_doc);
+  if (!schema->doc) {
     json_schema_node_free(schema->root);
     json_context_free(schema->ctx);
     free(schema);
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory cloning the schema document"};
+    }
+    return NULL;
+  }
+
+  // Compile schema
+  json_schema_compile_ctx cc = {
+      .ctx = schema->ctx, .opts = opts, .schema = schema, .depth = 0};
+  GTEXT_JSON_Status status =
+      json_schema_compile_node(schema->root, schema->doc, &cc, err);
+  if (status != GTEXT_JSON_OK) {
+    gtext_json_schema_free(schema);
     return NULL;
   }
 
@@ -1491,6 +2134,18 @@ GTEXT_API void gtext_json_schema_free(GTEXT_JSON_Schema * schema) {
   }
 
   json_schema_node_free(schema->root);
+
+  /* The registry owns every $ref target, so they are freed here rather than
+   * by the nodes that refer to them. */
+  if (schema->refs) {
+    for (size_t i = 0; i < schema->refs_count; i++) {
+      free(schema->refs[i].pointer);
+      json_schema_node_free(schema->refs[i].node);
+    }
+    free(schema->refs);
+  }
+
+  gtext_json_free(schema->doc);
   json_context_free(schema->ctx);
   free(schema);
 }

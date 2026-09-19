@@ -46,17 +46,31 @@
  *   matching branches is a failure
  * - if/then/else: "if" selects rather than asserts; an absent branch is no
  *   constraint
+ * - $ref, with $defs and definitions: same-document JSON Pointer references
+ *   ("#" and "#/..."). Recursive references work; targets are compiled once
+ *   and shared. A reference that does not resolve, an external URI and a
+ *   named anchor are all refused at compile time
+ * - prefixItems and additionalItems, with draft-07's array-valued "items"
+ *   compiling to the same thing
+ * - contains, minContains, maxContains
+ * - additionalProperties, propertyNames
+ * - dependentSchemas, and draft-07's "dependencies" in either of its forms
+ * - Boolean schemas: "true" accepts everything and "false" nothing, anywhere
+ *   a schema is allowed, the root included
  *
  * Unsupported standard keywords (rejected at compile time):
- * - Applicators: $ref, $recursiveRef, $dynamicRef, additionalItems,
- *   prefixItems, contains, minContains, maxContains, additionalProperties,
- *   patternProperties, propertyNames, dependentSchemas, dependencies,
- *   unevaluatedItems, unevaluatedProperties
- * - Assertions: pattern, format, contentEncoding, contentMediaType,
- *   contentSchema
+ * - pattern, patternProperties - these need a regular-expression engine,
+ *   which is a dependency decision rather than an implementation detail
+ * - unevaluatedItems, unevaluatedProperties - these need annotation results
+ *   to be collected across applicators, which nothing here does yet, and
+ *   they depend on patternProperties to be correct anyway
+ * - $recursiveRef, $dynamicRef - the 2019-09 and 2020-12 dynamic-scope
+ *   references
+ * - format, contentEncoding, contentMediaType, contentSchema
  *
- * pattern and patternProperties need a regular-expression engine, which is a
- * dependency decision rather than an implementation detail.
+ * Note on $ref depth: a schema that refers to itself without consuming any
+ * instance, such as {"$ref":"#"}, compiles successfully and fails validation
+ * with GTEXT_JSON_E_DEPTH rather than recursing without bound.
  *
  * The schema engine is designed to be modular and optional at compile time.
  *
@@ -119,7 +133,8 @@ GTEXT_API GTEXT_JSON_Schema_Options gtext_json_schema_options_default(void);
  * the document can be freed after compilation.
  *
  * @param schema_doc JSON value representing the schema document (must not be
- * NULL, must be GTEXT_JSON_OBJECT)
+ *   NULL; an object, or a boolean, which is a schema accepting everything or
+ *   nothing)
  * @param err Error output structure (can be NULL if error details not needed)
  * @return Compiled schema on success, NULL on failure (check err for details)
  */

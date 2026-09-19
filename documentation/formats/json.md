@@ -21,8 +21,9 @@ cases that were checked are listed under
   2013.
 - **JSON Merge Patch:** [RFC 7386](https://www.rfc-editor.org/rfc/rfc7386),
   October 2014.
-- **JSON Schema:** a core subset that **names no draft**, and that now refuses
-  any schema it cannot fully enforce - see [Deviations](#json-deviations).
+- **JSON Schema:** still **names no draft**, but now covers most of
+  draft-07 and 2020-12 including `$ref`, and refuses any schema it cannot
+  fully enforce - see [Deviations](#json-deviations).
 - **JSONC:** no specification exists. The extensions are opt-in and named
   individually below; where the dialect is ambiguous this page states what the
   parser does, and that decision is the specification as far as this library
@@ -244,14 +245,19 @@ page means "compliant as far as the cases below reach".
   is not citeable. Naming the draft, and listing the keywords omitted from it,
   is a documentation fix; the alternative reading - that this is a
   JSON-Schema-shaped validator of its own - would need saying out loud.
-- **Schema keywords absent:** `$ref` and `$defs`, `allOf`/`anyOf`/`oneOf`/
-  `not`, `additionalProperties`, `patternProperties`, `propertyNames`,
-  `dependentRequired`, `pattern`, `format`, `uniqueItems`, `contains`,
-  `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, and per-position
-  `prefixItems`. `$ref` is the significant one: without it schemas cannot be
-  factored or recursive. Since the strict check described under
-  [Deviations](#json-deviations), a schema using any of them is refused
-  rather than silently under-enforced.
+- **Schema keywords absent:** `pattern` and `patternProperties`, which need a
+  regular-expression engine; `unevaluatedItems` and `unevaluatedProperties`,
+  which need annotation results collected across applicators and depend on
+  `patternProperties` besides; `$recursiveRef` and `$dynamicRef`; `format`;
+  and the `content*` family. A schema using any of them is refused rather
+  than silently under-enforced - see [Deviations](#json-deviations).
+
+  Everything else is implemented, `$ref` included. It was the significant
+  gap, because without it a schema can be neither factored nor recursive.
+  Same-document JSON Pointer references resolve (`#` and `#/...`); an
+  external URI, a named anchor and a pointer that resolves to nothing are all
+  refused at compile time, since a reference that does not resolve constrains
+  nothing.
 - **No JSONPath**, listed as future work on the
   \ref json_module "JSON module page".
 - **`normalize_unicode` is not implemented, and now says so.** NFC

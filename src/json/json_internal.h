@@ -838,9 +838,33 @@ typedef struct {
 } json_schema_dep_required;
 
 /**
+ * @brief One entry of a `dependentSchemas` map
+ */
+typedef struct {
+  char * key;                       ///< Property whose presence applies it
+  struct json_schema_node * schema; ///< Schema the object must then satisfy
+} json_schema_dep_schema;
+
+/**
  * @brief Compiled schema node
  */
 typedef struct json_schema_node {
+  /**
+   * A boolean schema: `true` accepts everything, `false` rejects everything.
+   * JSON Schema allows one anywhere a schema is allowed, and
+   * `"additionalProperties": false` is the common case. When this is set the
+   * rest of the node is unused.
+   */
+  int is_bool_schema;
+  int bool_schema_value;
+
+  /**
+   * Target of `$ref`, or NULL. Borrowed, never owned: ref targets live in the
+   * schema's registry so that a recursive or shared reference is compiled once
+   * and freed once.
+   */
+  struct json_schema_node * ref_target;
+
   // Type validation
   unsigned int type_flags; ///< Bitmask of allowed types (0 = any type)
 
@@ -917,6 +941,30 @@ typedef struct json_schema_node {
   struct json_schema_node * if_schema;
   struct json_schema_node * then_schema;
   struct json_schema_node * else_schema;
+
+  // Positional array schemas: 2020-12 spells this prefixItems, draft-07
+  // spells it `items` with an array value. Both compile to this.
+  struct json_schema_node ** prefix_items;
+  size_t prefix_items_count;
+  /// Applies to items beyond prefix_items. 2020-12 spells it `items`,
+  /// draft-07 `additionalItems`.
+  struct json_schema_node * additional_items;
+
+  // contains / minContains / maxContains
+  struct json_schema_node * contains_schema;
+  int has_min_contains;
+  size_t min_contains;
+  int has_max_contains;
+  size_t max_contains;
+
+  /// Applies to properties that `properties` did not name.
+  struct json_schema_node * additional_properties;
+  /// Applies to each property name, as a string instance.
+  struct json_schema_node * property_names;
+
+  // dependentSchemas
+  json_schema_dep_schema * dep_schemas;
+  size_t dep_schemas_count;
 } json_schema_node;
 
 /**
@@ -938,9 +986,33 @@ typedef enum {
 /**
  * @brief Compiled schema structure
  */
+/**
+ * @brief One resolved `$ref` target
+ */
+typedef struct {
+  char * pointer;          ///< JSON Pointer it was reached by, without the '#'
+  json_schema_node * node; ///< Compiled schema, owned by the registry
+} json_schema_ref_entry;
+
 struct GTEXT_JSON_Schema {
   json_schema_node * root; ///< Root schema node
   json_context * ctx;      ///< Context for cloned enum/const values
+
+  /**
+   * The schema document, cloned so that `$ref` can be resolved against it
+   * after the caller has freed theirs.
+   */
+  GTEXT_JSON_Value * doc;
+
+  /**
+   * Compiled `$ref` targets, keyed by pointer. Entries are registered before
+   * their children compile, so a schema that refers to itself terminates;
+   * they are owned here rather than by the referring node, so a target
+   * reached from two places is compiled once and freed once.
+   */
+  json_schema_ref_entry * refs;
+  size_t refs_count;
+  size_t refs_capacity;
 };
 
 #ifdef __cplusplus
