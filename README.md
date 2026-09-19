@@ -158,14 +158,25 @@ run against this parser, so conformance to 1.2.2 is unmeasured rather than
 partial.
 
 Comparison against PyYAML keeps finding defects here, so treat this module as
-the least settled of the three. It has so far found and fixed the silent
-truncation of plain scalars containing ` - `, ` , ` or ` # `; tags being
-dropped from block-style collections; and a mapping key with no value being
-dropped rather than made null, which shifted every later pair. Still open, and
-listed with reproductions on [the YAML page](@ref format_yaml): block scalars
-lose their trailing newline, a block sequence does not close on a dedent back
-to its parent key, and multi-line and flow plain scalars containing spaces are
-unsupported.
+the least settled of the three. Nine are fixed so far, and what they have in
+common is worth stating plainly: most did not fail on valid input, they
+quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
+were truncated. Tags were dropped from block-style collections. A mapping key
+with no value was dropped rather than made null, shifting every later pair. A
+block sequence at its parent key's own column never closed, so the next key
+became one of its entries. A key indented deeper than its mapping was nested
+as a mapping standing where a key belongs. Block scalars lost the line break
+clip chomping keeps, folded blank lines and more-indented lines wrongly, and
+ignored the indentation indicator. Plain scalars did not continue onto the
+lines below them, so a continuation became a key of its own. And a plain
+scalar inside `[` `]` or `{` `}` ended at its first space, so `[a b, c]` came
+out as three entries rather than two.
+
+A 121-document comparison now backs this, of which 114 agree. The seven that
+do not are listed with reproductions on [the YAML page](@ref format_yaml):
+two are features not implemented - a flow plain scalar folding across a line
+break, and a single-pair mapping written directly in a flow sequence - and
+five are malformed documents accepted rather than refused.
 
 ## Macros and Utilities
 

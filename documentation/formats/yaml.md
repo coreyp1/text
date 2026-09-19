@@ -156,8 +156,11 @@ semantically equal to the input, not textually equal.
 | Comment round-trip | opt-in retention | not preserved on write by default |
 | Scalar style round-trip | no | |
 | Plain scalars containing `-`, `,`, `?`, `#` | yes, since the §7.3.3 fix | `: ` and ` #` still end the scalar |
-| Multi-line plain scalars | no | use a quoted or block scalar |
-| Flow plain scalars with spaces | no | `[a - b]` does not parse |
+| Multi-line plain scalars | yes, in block context | folded to spaces; blank lines give breaks |
+| Multi-line plain scalars in flow | no | `[a` then an indented `b]` does not fold |
+| Flow plain scalars with spaces | yes | `[a - b, c]` is two entries |
+| Block scalar chomping and folding | yes | clip, strip and keep; indentation indicator honoured |
+| Single-pair mappings in flow (`[a: 1]`) | no | write `[{a: 1}]` |
 
 @anchor yaml-deviations
 ## Deviations
@@ -240,16 +243,65 @@ scalar's text without knowing whether it was quoted, so an empty one resolves
 to the empty *string*, which would make `a:` indistinguishable from `a: ''` -
 and those are different values. `a: ''` still gives a string.
 
-Checked against PyYAML over 38 documents; 36 agree, and the two that do not
-are the unrelated defects recorded below.
+Checked against PyYAML over 38 documents; 36 agreed, and the two that did not
+are fixed below.
 
-**Open: a block scalar loses its trailing newline.**
+Those 38 have since grown into a 121-document comparison covering block
+scalars, block structure and plain scalars, of which 114 now agree. The seven
+that do not are each listed as still open on this page: one is a flow plain
+scalar that does not fold across a line break, one a single-pair mapping in
+flow, and the other five are malformed documents accepted rather than
+refused.
 
-`a: |` followed by an indented `block` gives `"block"` where YAML's default
-clip chomping keeps the final line break, `"block\n"`. The same applies to
-`>`. Both are wrong by one newline, which round-trips visibly.
+**Fixed: block scalars keep the line breaks 8.1 gives them.**
 
-**Open: a block sequence does not close on a dedent back to its parent key.**
+The reported fault was that clip chomping, the default, dropped the final
+line break: `a: |` over an indented `block` gave `"block"` rather than
+`"block\n"`. Comparing the whole of §8.1 against PyYAML rather than that one
+case found five more, and only 11 of 29 inputs agreed:
+
+| input | gave | should give |
+| --- | --- | --- |
+| `a: \|` over `block` | `"block"` | `"block\n"` |
+| the same with two blank lines after | `"block\n\n"` | `"block\n"` |
+| `a: >` over `one`, blank, `two` | `"one\n\ntwo"` | `"one\ntwo\n"` |
+| `a: >` over `one`, then a deeper `deep` | `"one   deep"` | `"one\n  deep\n"` |
+| `a: \|2` over `   text` | `"text"` | `" text\n"` |
+| `a: \|` over a blank line then `text` | `"text"` | `"\ntext\n"` |
+
+Clip removed one break where it should strip every trailing one and restore
+a single break. Folding counted a blank line twice, once for the line before
+it and once for the blank itself. Lines indented past the block keep their
+breaks - that is what lets a listing sit inside a `>` scalar without
+collapsing onto one line - and they were being folded like any other. The
+indentation indicator was parsed and then ignored. And the header consumed a
+newline after the one that ends it, which swallowed the block's first line
+whenever that line was blank.
+
+Indentation now comes from the first non-empty line, as §8.1.1.1 says, rather
+than from the smallest indentation anywhere in the block. That also decides
+where the block ends, so `a: |` no longer reaches past its own content to
+swallow a sibling key. A tab beyond the block's indentation is content and is
+kept; only a tab standing in for the indentation itself is refused.
+
+The indentation indicator counts from the parent node, which the scanner has
+no node stack to consult. It reads the parent's indentation as the column of
+the first non-space character on the header's own line - the key, the `-` or
+the `?` that owns the scalar, or the indicator itself at the root. That
+agrees with PyYAML on every nesting tested, including sequence entries and
+explicit keys.
+
+Three existing tests asserted the missing break, one of them in the suite
+named for chomping; they agreed with the implementation rather than with
+YAML, which is why none of this was caught. The table in
+`tests/yaml/test-yaml-block-scalars.cpp` is generated from PyYAML's output
+for each input rather than transcribed from the spec, and every row in it
+fails if any one of these fixes is undone.
+
+**Fixed: a block sequence closes when the line after it has left it.**
+
+YAML lets a block sequence sit at the same column as the key that owns it,
+and that spelling is the common one:
 
 ```yaml
 a:
@@ -257,10 +309,29 @@ a:
 b: 2
 ```
 
-gives `{a: [1, {b: 2}]}` rather than `{a: [1], b: 2}`: the `b: 2` at the
-parent's indentation is swallowed into the sequence instead of ending it.
-Both of these predate the missing-value fix above and were found by the same
-comparison against PyYAML.
+This gave `{a: [1, {b: 2}]}` rather than `{a: [1], b: 2}` - the key swallowed
+and its value buried a level down. The dedent rule closed a block collection
+only when the next line was indented strictly less, so a sequence written
+this way never closed at all. Indenting the sequence, the form that is easier
+to read and rarer in practice, worked the whole time, which is why this
+survived.
+
+A block sequence at exactly the next line's indentation has ended too, unless
+that line begins another entry. A block mapping at the same indentation is
+never closed: that is the mapping the new key belongs to.
+
+**Fixed: a key indented deeper than its mapping is refused.**
+
+```yaml
+a: 1
+  b: 2
+```
+
+gave `{a: 1, {b: 2}: null}` - a mapping standing where a key should be - for
+input PyYAML refuses outright. A key indented past its mapping starts a
+nested mapping only when a key above is still waiting for a value to put it
+under; with none, there was nothing for it to belong to and it was attached
+anyway.
 
 **Fixed: plain scalars are no longer truncated at an embedded indicator.**
 
@@ -306,14 +377,65 @@ followed by a space does end a plain scalar, and PyYAML raises a
 rest. It is the one remaining case in that family, and it is a malformed
 document either way.
 
-**Still open: a block plain scalar does not continue onto the next line.**
-`key: a\n  b` is `a b` to PyYAML and `a` here. Multi-line plain scalars
-(§7.3.3's `ns-plain-multi-line`) are not implemented; quote or use a block
-scalar.
+**Fixed: a block plain scalar continues onto the lines below it.**
 
-**Still open: flow plain scalars cannot contain spaces.** `key: [a - b, c]`
-is two entries to PyYAML and does not parse here. Block context gained
-multi-word plain scalars; flow context has not.
+§7.3.3's `ns-plain-multi-line` was not implemented, so `key: a` over an
+indented `b` kept only `a` and made the continuation a key of its own. It did
+not fail - it rearranged the document:
+
+| input | gave | should give |
+| --- | --- | --- |
+| `key: a`<br>`  b` | `{key: a, b: null}` | `{key: "a b"}` |
+| `key: a`<br>`  b`<br>`other: 1` | `{key: a, b: other, 1: null}` | `{key: "a b", other: 1}` |
+| `a:`<br>`  b: x`<br>`    y`<br>`  c: 1` | `{a: {b: x, y: c, 1: null}}` | `{a: {b: "x y", c: 1}}` |
+
+The second row is the shape of the damage: an integer ends up standing as a
+key. A break folds to a space and a run of blank lines gives one break each,
+as flow folding does elsewhere.
+
+A continuation line has to be indented past the node the scalar belongs to,
+which the scanner has no node stack to look up. It tracks the indentation
+opened by the most recent `:`, `-` or `?`: for `:` the column its key began
+at, since `- x: 1` puts the key at column 2 while the line starts at 0, and
+for the others the indicator's own column. A document marker or a comment
+line never continues a scalar, and a new document resets the tracking.
+
+A key cannot appear on a continuation line, and the parser refuses one
+through its existing rule that a key must share a line with its `:`.
+
+**Fixed: a flow plain scalar may contain spaces.**
+
+`ns-plain-char` does not exclude white space, and flow context adds only
+`c-flow-indicator` to what ends a scalar. Ending one at its first space did
+not merely refuse `[a - b]`, as this page previously recorded - it silently
+split valid documents:
+
+| input | gave | should give |
+| --- | --- | --- |
+| `key: [a b, c]` | three entries | `["a b", "c"]` |
+| `key: {k: v w, j: x}` | `{k: v, w: j, x: null}` | `{k: "v w", j: "x"}` |
+| `key: [1 2, 3]` | `[1, 2, 3]` | `["1 2", 3]` |
+| `key: [a - b, c]` | failed to parse | `["a - b", "c"]` |
+
+Trailing white space is not part of the scalar, and a `:` ends one only where
+it separates a key from a value - followed by white space, a flow indicator
+or the end - so `[a:b, c]` holds `a:b`.
+
+Two things follow from this that are worth stating, because they read as
+regressions and are not. `{a:1}` is a mapping whose single key is the string
+`a:1`, not `{a: 1}`: a plain key in flow context needs the space after its
+colon, and JSON's spelling does not carry over. And an entry that reaches a
+comma with no `:` is a key whose value is null, so `{a, b}` is two entries
+rather than one pair. Both match PyYAML. Three tests were written in JSON's
+spelling and counted the nodes they expected from it; their inputs now say
+what they meant.
+
+**Still open: a flow plain scalar does not fold across a line break.**
+`key: [a` over an indented `b]` is `["a b"]` to PyYAML and two entries here.
+Block context gained this; flow context has not.
+
+**Still open: a single-pair mapping in a flow sequence.** `[a: 1]` is
+`[{a: 1}]` to PyYAML and does not parse here; write `[{a: 1}]`.
 
 **`!!timestamp`, `!!set`, `!!omap` and `!!pairs` are honored at all**, which
 1.2 does not require, since they are 1.1 repository types. Parsers that
@@ -322,8 +444,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 61 test files under `tests/yaml/`, carrying 442 of the suite's
-1125 test cases across 66 binaries, all passing. They cover the scalar styles,
+**Tests.** 64 test files under `tests/yaml/`, carrying 484 of the suite's
+1296 test cases across 72 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,

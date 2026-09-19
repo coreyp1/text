@@ -37,7 +37,7 @@ has never been run against this parser, so conformance to 1.2.2 is not
 partial - it is unknown outside the cases the tests below cover. There are no
 benchmarks.
 
-**Verified:** the suite runs 1125 tests across 66 binaries with zero
+**Verified:** the suite runs 1296 tests across 72 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
 that has found two scanner hangs, a use-after-free and several leaks.
 
@@ -792,8 +792,8 @@ jobs:
 
 ## 13. Testing
 
-The YAML module is covered by 61 test files, part of a suite that runs
-1125 tests across 66 binaries with zero failures. They cover:
+The YAML module is covered by 64 test files, part of a suite that runs
+1296 tests across 72 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -934,4 +934,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 442 YAML test cases, of 1125 across the suite, all passing
+**Test count:** 484 YAML test cases, of 1296 across the suite, all passing
