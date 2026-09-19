@@ -10107,6 +10107,170 @@ TEST(JsonErrorFree, IsIdempotentAndNullSafe) {
 	gtext_json_error_free(&err); // twice must be safe
 }
 
+
+
+// ---------------------------------------------------------------------------
+// The streaming writer's nesting stack, past its initial capacity
+//
+// GTEXT_JSON_Writer keeps a stack entry per open array or object, allocated
+// at JSON_WRITER_DEFAULT_STACK_CAPACITY (32) and doubled from there.
+// tools/coverage.sh reported writer_ensure_stack()'s growth path as never
+// executed, so nothing had ever nested the streaming writer past depth 32.
+//
+// The stack records, per level, whether the container is an array or an
+// object and whether anything has been written into it yet - which is what
+// decides where commas go. A realloc that loses or misplaces those entries
+// produces malformed JSON rather than a crash, so the check here is that the
+// output parses back to a tree of the depth that was written.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Write `depth` nested arrays with a single number at the bottom, and return
+// the serialized result.
+std::string write_nested_arrays(size_t depth) {
+	GTEXT_JSON_Sink sink;
+	EXPECT_EQ(gtext_json_sink_buffer(&sink), GTEXT_JSON_OK);
+
+	GTEXT_JSON_Writer * w = gtext_json_writer_new(sink, nullptr);
+	EXPECT_NE(w, nullptr);
+	if (!w) {
+		gtext_json_sink_buffer_free(&sink);
+		return "";
+	}
+
+	for (size_t i = 0; i < depth; ++i) {
+		EXPECT_EQ(gtext_json_writer_array_begin(w), GTEXT_JSON_OK)
+		    << "opening level " << i;
+	}
+	EXPECT_EQ(gtext_json_writer_number_i64(w, 42), GTEXT_JSON_OK);
+	for (size_t i = 0; i < depth; ++i) {
+		EXPECT_EQ(gtext_json_writer_array_end(w), GTEXT_JSON_OK)
+		    << "closing level " << i;
+	}
+
+	std::string out(
+	    gtext_json_sink_buffer_data(&sink), gtext_json_sink_buffer_size(&sink));
+	gtext_json_writer_free(w);
+	gtext_json_sink_buffer_free(&sink);
+	return out;
+}
+
+// Count how many arrays deep a parsed document goes.
+size_t array_depth(const GTEXT_JSON_Value * v) {
+	size_t d = 0;
+	while (v && gtext_json_typeof(v) == GTEXT_JSON_ARRAY
+	    && gtext_json_array_size(v) == 1) {
+		++d;
+		v = gtext_json_array_get(v, 0);
+	}
+	return d;
+}
+
+} // namespace
+
+TEST(JsonWriterStackGrowth, NestingPastTheInitialCapacity) {
+	// 32 is the initial capacity, so these straddle it and the doublings after.
+	for (size_t depth : {1u, 31u, 32u, 33u, 64u, 65u, 200u}) {
+		SCOPED_TRACE("depth=" + std::to_string(depth));
+
+		const std::string out = write_nested_arrays(depth);
+		ASSERT_FALSE(out.empty());
+
+		// Structurally: depth '[' then 42 then depth ']'.
+		EXPECT_EQ(out, std::string(depth, '[') + "42" + std::string(depth, ']'));
+
+		// And it parses back to the same depth.  max_depth has to be raised
+		// for the deeper cases, which is the parser's own limit rather than
+		// the writer's.
+		GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+		po.max_depth = depth + 16;
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * v =
+		    gtext_json_parse(out.data(), out.size(), &po, &err);
+		ASSERT_NE(v, nullptr) << (err.message ? err.message : "did not parse");
+		EXPECT_EQ(array_depth(v), depth);
+
+		gtext_json_free(v);
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(JsonWriterStackGrowth, MixedContainersKeepTheirCommas) {
+	// The stack entry records whether a container has had anything written
+	// into it, which is what suppresses the leading comma.  If growth loses
+	// that flag the output gains or drops a comma at the boundary - valid
+	// looking, but wrong - so this alternates object and array across the
+	// growth point and checks the exact bytes.
+	GTEXT_JSON_Sink sink;
+	ASSERT_EQ(gtext_json_sink_buffer(&sink), GTEXT_JSON_OK);
+	GTEXT_JSON_Writer * w = gtext_json_writer_new(sink, nullptr);
+	ASSERT_NE(w, nullptr);
+
+	const size_t levels = 40; // past the initial 32
+	std::string expected;
+	for (size_t i = 0; i < levels; ++i) {
+		if (i % 2 == 0) {
+			ASSERT_EQ(gtext_json_writer_object_begin(w), GTEXT_JSON_OK) << i;
+			ASSERT_EQ(gtext_json_writer_key(w, "k", 1), GTEXT_JSON_OK) << i;
+			expected += "{\"k\":";
+		}
+		else {
+			ASSERT_EQ(gtext_json_writer_array_begin(w), GTEXT_JSON_OK) << i;
+			expected += "[";
+		}
+	}
+	ASSERT_EQ(gtext_json_writer_number_i64(w, 7), GTEXT_JSON_OK);
+	expected += "7";
+	for (size_t i = levels; i-- > 0;) {
+		if (i % 2 == 0) {
+			ASSERT_EQ(gtext_json_writer_object_end(w), GTEXT_JSON_OK) << i;
+			expected += "}";
+		}
+		else {
+			ASSERT_EQ(gtext_json_writer_array_end(w), GTEXT_JSON_OK) << i;
+			expected += "]";
+		}
+	}
+
+	const std::string out(
+	    gtext_json_sink_buffer_data(&sink), gtext_json_sink_buffer_size(&sink));
+	EXPECT_EQ(out, expected);
+
+	gtext_json_writer_free(w);
+	gtext_json_sink_buffer_free(&sink);
+}
+
+TEST(JsonWriterStackGrowth, SiblingsAcrossTheGrowthPointAreCommaSeparated) {
+	// Many siblings in one deep container, so the "has written something"
+	// flag is exercised repeatedly at a level that only exists after growth.
+	GTEXT_JSON_Sink sink;
+	ASSERT_EQ(gtext_json_sink_buffer(&sink), GTEXT_JSON_OK);
+	GTEXT_JSON_Writer * w = gtext_json_writer_new(sink, nullptr);
+	ASSERT_NE(w, nullptr);
+
+	const size_t depth = 40;
+	for (size_t i = 0; i < depth; ++i) {
+		ASSERT_EQ(gtext_json_writer_array_begin(w), GTEXT_JSON_OK);
+	}
+	for (int i = 0; i < 5; ++i) {
+		ASSERT_EQ(gtext_json_writer_number_i64(w, i), GTEXT_JSON_OK);
+	}
+	for (size_t i = 0; i < depth; ++i) {
+		ASSERT_EQ(gtext_json_writer_array_end(w), GTEXT_JSON_OK);
+	}
+
+	const std::string out(
+	    gtext_json_sink_buffer_data(&sink), gtext_json_sink_buffer_size(&sink));
+	const std::string expected =
+	    std::string(depth, '[') + "0,1,2,3,4" + std::string(depth, ']');
+	EXPECT_EQ(out, expected);
+
+	gtext_json_writer_free(w);
+	gtext_json_sink_buffer_free(&sink);
+}
+
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

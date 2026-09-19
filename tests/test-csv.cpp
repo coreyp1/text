@@ -13433,6 +13433,160 @@ TEST(CsvTrailingNewline, OutputRoundTripsWithAndWithoutIt) {
 	}
 }
 
+
+
+// ---------------------------------------------------------------------------
+// The header index, past its initial capacity
+//
+// csv_table.c keeps index_to_entry, an array mapping column index to header
+// entry, so that looking a column up by index is O(1).  It starts at 16
+// entries and doubles.  tools/coverage.sh reported the whole of that growth
+// path as never executed, which means no test in this suite had a table with
+// headers and more than sixteen columns.
+//
+// That is precisely the shape the script's own warning describes: a structure
+// whose reallocation path no test reaches is untested rather than working, and
+// one that miscopies on growth corrupts lookups rather than crashing. Sixteen
+// columns is not a lot for a spreadsheet export.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::vector<std::string> wide_header_names(size_t count) {
+	std::vector<std::string> names;
+	names.reserve(count);
+	for (size_t i = 0; i < count; ++i) {
+		names.push_back("col" + std::to_string(i));
+	}
+	return names;
+}
+
+GTEXT_CSV_Table * make_wide_table(const std::vector<std::string> & names) {
+	std::vector<const char *> ptrs;
+	std::vector<size_t> lens;
+	for (const std::string & n : names) {
+		ptrs.push_back(n.data());
+		lens.push_back(n.size());
+	}
+	return gtext_csv_new_table_with_headers(
+	    ptrs.data(), lens.data(), ptrs.size());
+}
+
+// Every name must resolve to its own index, and to no other.
+void expect_index_consistent(
+    const GTEXT_CSV_Table * t, const std::vector<std::string> & names) {
+	for (size_t i = 0; i < names.size(); ++i) {
+		size_t idx = SIZE_MAX;
+		ASSERT_EQ(gtext_csv_header_index(t, names[i].c_str(), &idx),
+		    GTEXT_CSV_OK)
+		    << "\"" << names[i] << "\" did not resolve";
+		EXPECT_EQ(idx, i) << "\"" << names[i] << "\" resolved to the wrong column";
+	}
+}
+
+} // namespace
+
+TEST(CsvHeaderIndexGrowth, LookupSurvivesEachDoubling) {
+	// 16 is the initial capacity, so these straddle it and the doublings after
+	// it.  A growth step that copies the wrong length, or fails to zero the
+	// new tail, shows up as a name resolving to the wrong column here.
+	for (size_t count : {1u, 15u, 16u, 17u, 32u, 33u, 64u, 100u}) {
+		SCOPED_TRACE("columns=" + std::to_string(count));
+		const std::vector<std::string> names = wide_header_names(count);
+		GTEXT_CSV_Table * t = make_wide_table(names);
+		ASSERT_NE(t, nullptr);
+		expect_index_consistent(t, names);
+		gtext_csv_free_table(t);
+	}
+}
+
+TEST(CsvHeaderIndexGrowth, AppendingColumnsPastTheInitialCapacity) {
+	// Growth driven one column at a time rather than all at once, so the array
+	// is reallocated with live contents rather than being sized correctly from
+	// the start.
+	std::vector<std::string> names = wide_header_names(4);
+	GTEXT_CSV_Table * t = make_wide_table(names);
+	ASSERT_NE(t, nullptr);
+
+	for (size_t i = 4; i < 70; ++i) {
+		const std::string name = "col" + std::to_string(i);
+		ASSERT_EQ(gtext_csv_column_append(t, name.c_str(), name.size()),
+		    GTEXT_CSV_OK)
+		    << "appending column " << i;
+		names.push_back(name);
+
+		// Check the whole index after every append, not just at the end: a
+		// bad copy is easiest to localize on the step that caused it.
+		expect_index_consistent(t, names);
+	}
+
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvHeaderIndexGrowth, InsertingInTheMiddleAfterGrowth) {
+	// Insertion shifts every index above it, so the reverse map has to be
+	// rewritten rather than appended to.
+	std::vector<std::string> names = wide_header_names(40);
+	GTEXT_CSV_Table * t = make_wide_table(names);
+	ASSERT_NE(t, nullptr);
+	expect_index_consistent(t, names);
+
+	const char * inserted = "inserted";
+	ASSERT_EQ(gtext_csv_column_insert(t, 20, inserted, strlen(inserted)),
+	    GTEXT_CSV_OK);
+	names.insert(names.begin() + 20, inserted);
+
+	expect_index_consistent(t, names);
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvHeaderIndexGrowth, RemovingAfterGrowth) {
+	std::vector<std::string> names = wide_header_names(40);
+	GTEXT_CSV_Table * t = make_wide_table(names);
+	ASSERT_NE(t, nullptr);
+
+	ASSERT_EQ(gtext_csv_column_remove(t, 5), GTEXT_CSV_OK);
+	const std::string removed = names[5];
+	names.erase(names.begin() + 5);
+
+	expect_index_consistent(t, names);
+
+	// The removed name must no longer resolve at all.
+	size_t idx = SIZE_MAX;
+	EXPECT_NE(gtext_csv_header_index(t, removed.c_str(), &idx), GTEXT_CSV_OK)
+	    << "\"" << removed << "\" still resolves after removal";
+
+	gtext_csv_free_table(t);
+}
+
+TEST(CsvHeaderIndexGrowth, ParsedWideDocumentResolvesEveryColumn) {
+	// The same property through the parser rather than the builder, which is
+	// how a caller actually gets a wide table.
+	const std::vector<std::string> names = wide_header_names(50);
+	std::string doc;
+	for (size_t i = 0; i < names.size(); ++i) {
+		doc += (i ? "," : "") + names[i];
+	}
+	doc += "\n";
+	for (size_t i = 0; i < names.size(); ++i) {
+		doc += (i ? "," : "") + std::to_string(i);
+	}
+	doc += "\n";
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+	ASSERT_NE(t, nullptr) << (err.message ? err.message : "parse failed");
+
+	ASSERT_EQ(gtext_csv_set_header_row(t, true), GTEXT_CSV_OK);
+	expect_index_consistent(t, names);
+
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
