@@ -1065,6 +1065,11 @@ FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
 FUZZ_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
+# The fuzzers link cutil like everything else, so they need the same rpath the
+# test binaries get from LDFLAGS; FUZZ_BIN_FLAGS does not include LDFLAGS.
+ifdef PREFIX
+FUZZ_RPATH := -Wl,-rpath,$(LIB_INSTALL_PATH)/$(SUITE)
+endif
 FUZZ_DIR := $(BUILD_DIR)/fuzz
 FUZZ_OBJ_DIR := $(FUZZ_DIR)/objects
 FUZZ_APP_DIR := $(FUZZ_DIR)/apps
@@ -1098,7 +1103,7 @@ $$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.cpp $$(FUZZ_OBJECTS)
 	@mkdir -p $$(@D) $$(FUZZ_CORPUS)
 	@printf "\n### Building $1 ###\n"
 	$$(FUZZ_CXX) $$(FUZZ_BIN_FLAGS) -std=c++20 -w $$(INCLUDE) \
-		-o $$@ $$< $$(FUZZ_OBJECTS)
+		-o $$@ $$< $$(FUZZ_OBJECTS) $$(CUTIL_LIBS) $$(FUZZ_RPATH)
 
 fuzz-run-$2: ## Run the $2 fuzzer for $$(FUZZ_TIME) seconds
 fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
