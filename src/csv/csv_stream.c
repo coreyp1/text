@@ -588,9 +588,27 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
     return status;
   }
 
-  // Check for unterminated quote
+  // Check for unterminated quote.
+  //
+  // CSV_STREAM_STATE_QUOTE_IN_QUOTED is deliberately not in this list.  That
+  // state means a quote was seen inside a quoted field and the parser is
+  // waiting for the next character to say which quote it was: another quote
+  // makes it a doubled escape, anything else makes it the closing quote.  When
+  // the input ends there is no next character, so it was the closing quote and
+  // the field is complete.
+  //
+  // Treating it as unterminated rejected every document whose last field is
+  // quoted and which has no trailing newline - `"a"`, `a,"b"`, `"a","b"` -
+  // while the same documents with a newline parsed fine, and unquoted last
+  // fields parsed fine without one.  RFC 4180 section 2 rule 2 says the last
+  // record may or may not have an ending line break, and a quoted final field
+  // is ordinary in exported data, so this rejected a large class of real
+  // files.
+  //
+  // CSV_STREAM_STATE_QUOTED_FIELD really is unterminated: no closing quote was
+  // seen at all.  So is ESCAPE_IN_QUOTED, which is a backslash with nothing
+  // after it.
   if (stream->state == CSV_STREAM_STATE_QUOTED_FIELD ||
-      stream->state == CSV_STREAM_STATE_QUOTE_IN_QUOTED ||
       stream->state == CSV_STREAM_STATE_ESCAPE_IN_QUOTED) {
     GTEXT_CSV_Status status = csv_stream_set_error(
         stream, GTEXT_CSV_E_UNTERMINATED_QUOTE, "Unterminated quoted field");
@@ -604,8 +622,12 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
   if (stream->in_record) {
     // Emit current field if any (only if we're actually in a field, not just at
     // start)
+    // QUOTE_IN_QUOTED is a completed quoted field, as above.  The closing
+    // quote was never appended to the field data and the content was buffered
+    // up to it, so what is held is already the field's value.
     if (stream->state == CSV_STREAM_STATE_UNQUOTED_FIELD ||
-        stream->state == CSV_STREAM_STATE_QUOTED_FIELD) {
+        stream->state == CSV_STREAM_STATE_QUOTED_FIELD ||
+        stream->state == CSV_STREAM_STATE_QUOTE_IN_QUOTED) {
       // Ensure field.data is correct for buffered fields
       if (stream->field.is_buffered) {
         stream->field.data = stream->field.buffer;

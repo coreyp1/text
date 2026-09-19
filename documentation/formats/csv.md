@@ -42,6 +42,8 @@ by default because refusing them would reject most CSV in existence:
   defaults to `true`, `accept_crlf` to `true`. Turning `accept_lf` off gives
   the letter of the RFC.
 - **The last record need not end in a line break**, which §2 already permits.
+  This held only for an unquoted final field until recently; see
+  [Deviations](#csv-deviations).
 
 **Bare CR is *not* accepted by default.** `accept_cr` defaults to `false`, so
 a classic Mac-style file fails with `GTEXT_CSV_E_INVALID` and the message
@@ -200,6 +202,29 @@ one whole feed, one byte at a time - and comparing:
 The first is the one to know about: feeding consecutive slices of a single
 long-lived array hides it completely, because the stale pointer stays valid by
 accident. Every real caller reads into one buffer and refills it.
+
+**Fixed: a quoted final field no longer needs a trailing newline.**
+
+`"a"`, `a,"b"` and `"a","b"` were all rejected with "Unterminated quoted
+field". The same documents with a trailing newline parsed, and an unquoted
+final field parsed without one, so the page's claim that the last record need
+not end in a line break was true only for part of the grammar. RFC 4180 §2
+rule 2 permits the omission and rule 5 permits any field to be quoted, so
+these are ordinary documents - and a file exported without a trailing newline
+whose last column contains a comma is a common shape.
+
+The parser holds a quote seen inside a quoted field in an undecided state,
+because the next character says whether it closed the field or began a doubled
+`""` escape. End of input was treated as leaving that state unresolved, when in
+fact it resolves it: there is no next character, so the quote was the closing
+one. A field with no closing quote at all is still an error, and so is a
+backslash escape with nothing after it.
+
+The differential fuzzer could not have found this. It compares the table
+parser against the streaming parser, and both reach the same
+`gtext_csv_stream_finish()`, so they agreed with each other on the wrong
+answer. Every case here was cross-checked against Python's `csv` module
+instead, and is pinned in `tests/test-rfc-conformance.cpp`.
 
 **Fixed: a trailing delimiter no longer loses its field.** RFC 4180 §2 says
 only a line break ends a record, so `a,` is two fields and the second is

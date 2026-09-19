@@ -15,9 +15,11 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
+#include <ghoti.io/text/csv.h>
 #include <ghoti.io/text/json.h>
 
 namespace {
@@ -458,6 +460,238 @@ TEST(Rfc6901Section4, RejectsMalformedPointers) {
 
 	gtext_json_free(doc);
 	gtext_json_error_free(&err);
+}
+
+// ---------------------------------------------------------------------------
+// RFC 4180, section 2 - Common Format and MIME Type for CSV Files
+//
+// documentation/formats/csv.md says of the section 2 grammar: "All of it, and
+// it is the default dialect."  These are its seven numbered rules and the
+// examples given alongside them, so that the claim is checked rather than
+// asserted.
+//
+// RFC 4180 is Informational and describes the format "as it is used", so the
+// library deliberately differs from it in places - bare LF line endings, for
+// one - and those differences are recorded on the format page.  What is tested
+// here is only what the RFC actually requires.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+using Rows = std::vector<std::vector<std::string>>;
+
+Rows csv_rows_of(const std::string & src, const GTEXT_CSV_Parse_Options * opts) {
+	Rows rows;
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src.data(), src.size(), opts, &err);
+	if (!t) {
+		gtext_csv_error_free(&err);
+		return rows;
+	}
+	const size_t row_count = gtext_csv_row_count(t);
+	for (size_t r = 0; r < row_count; ++r) {
+		std::vector<std::string> row;
+		const size_t cols = gtext_csv_col_count(t, r);
+		for (size_t c = 0; c < cols; ++c) {
+			size_t len = 0;
+			const char * f = gtext_csv_field(t, r, c, &len);
+			row.push_back(f ? std::string(f, len) : std::string());
+		}
+		rows.push_back(row);
+	}
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+	return rows;
+}
+
+struct CsvCase {
+	const char * rule; ///< the RFC 4180 section 2 rule being checked
+	const char * input;
+	Rows expected;
+};
+
+void run_csv_case(const CsvCase & c) {
+	SCOPED_TRACE(std::string(c.rule) + ": " + c.input);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	EXPECT_EQ(csv_rows_of(c.input, &opts), c.expected);
+}
+
+} // namespace
+
+TEST(Rfc4180Section2, GrammarRules) {
+	const CsvCase cases[] = {
+	    // 1. "Each record is located on a separate line, delimited by a line
+	    //     break (CRLF)."  The RFC's own example.
+	    {"2.1 records delimited by CRLF", "aaa,bbb,ccc\r\nzzz,yyy,xxx\r\n",
+	        {{"aaa", "bbb", "ccc"}, {"zzz", "yyy", "xxx"}}},
+
+	    // 2. "The last record in the file may or may not have an ending line
+	    //     break."
+	    {"2.2 last record without a line break", "aaa,bbb,ccc\r\nzzz,yyy,xxx",
+	        {{"aaa", "bbb", "ccc"}, {"zzz", "yyy", "xxx"}}},
+
+	    // 4. "Within the header and each record, there may be one or more
+	    //     fields, separated by commas."
+	    {"2.4 fields separated by commas", "aaa,bbb,ccc",
+	        {{"aaa", "bbb", "ccc"}}},
+
+	    // 4, continued: "The last field in the record must not be followed by
+	    //     a comma."  A trailing comma therefore introduces a final empty
+	    //     field rather than being ignored.
+	    {"2.4 a trailing comma is an empty field", "aaa,bbb,",
+	        {{"aaa", "bbb", ""}}},
+
+	    // 5. "Each field may or may not be enclosed in double quotes."
+	    {"2.5 quoted fields", "\"aaa\",\"bbb\",\"ccc\"\r\n",
+	        {{"aaa", "bbb", "ccc"}}},
+	    {"2.5 a mixture of quoted and bare fields", "\"aaa\",bbb,\"ccc\"\r\n",
+	        {{"aaa", "bbb", "ccc"}}},
+
+	    // 6. "Fields containing line breaks (CRLF), double quotes, and commas
+	    //     should be enclosed in double-quotes."  The RFC's example.
+	    {"2.6 a quoted field containing CRLF",
+	        "\"aaa\",\"b\r\nbb\",\"ccc\"\r\nzzz,yyy,xxx",
+	        {{"aaa", "b\r\nbb", "ccc"}, {"zzz", "yyy", "xxx"}}},
+	    {"2.6 a quoted field containing a comma", "\"a,a\",bbb",
+	        {{"a,a", "bbb"}}},
+
+	    // 7. "If double-quotes are used to enclose fields, then a double-quote
+	    //     appearing inside a field must be escaped by preceding it with
+	    //     another double quote."  The RFC's example.
+	    {"2.7 a doubled quote inside a quoted field",
+	        "\"aaa\",\"b\"\"bb\",\"ccc\"", {{"aaa", "b\"bb", "ccc"}}},
+	    {"2.7 a field that is only an escaped quote", "\"\"\"\",b",
+	        {{"\"", "b"}}},
+
+	    // Empty fields, which the grammar allows anywhere.
+	    {"2.4 empty fields throughout", ",,", {{"", "", ""}}},
+	    {"2.5 an empty quoted field", "\"\",\"\"", {{"", ""}}},
+
+	    // Spaces are ordinary characters: the grammar's TEXTDATA includes
+	    // %x20, so they are part of the field and not trimmed.
+	    {"2 spaces are part of the field", " aaa , bbb ",
+	        {{" aaa ", " bbb "}}},
+	};
+
+	for (const CsvCase & c : cases) {
+		run_csv_case(c);
+	}
+}
+
+TEST(Rfc4180Section2, HeaderLineIsOptionalAndOptIn) {
+	// 3. "The first record in the file may be a header record containing
+	//     names...  The presence or absence of the header line should be
+	//     indicated via the optional 'header' parameter."  It is a parameter
+	//     rather than something to detect, so the default must not guess.
+	const char * src = "name,age\r\nalice,30\r\n";
+
+	GTEXT_CSV_Parse_Options no_header = gtext_csv_parse_options_default();
+	Rows plain = csv_rows_of(src, &no_header);
+	ASSERT_EQ(plain.size(), 2u) << "without the header parameter the first "
+	                               "record is data like any other";
+	EXPECT_EQ(plain[0][0], "name");
+}
+
+TEST(Rfc4180Section2, WriterOutputParsesBackUnchanged) {
+	// Rule 6 is a writer obligation: a field containing a comma, a quote or a
+	// line break has to come back out enclosed.  The check that matters is
+	// that the writer's output re-reads as the same values.
+	const std::vector<std::string> fields = {
+	    "plain",
+	    "has,comma",
+	    "has\"quote",
+	    "has\r\nbreak",
+	    "",
+	    " leading and trailing ",
+	};
+
+	GTEXT_CSV_Table * table = gtext_csv_new_table();
+	ASSERT_NE(table, nullptr);
+	std::vector<const char *> ptrs;
+	std::vector<size_t> lens;
+	for (const std::string & f : fields) {
+		ptrs.push_back(f.data());
+		lens.push_back(f.size());
+	}
+	ASSERT_EQ(gtext_csv_row_append(table, ptrs.data(), lens.data(),
+	              ptrs.size(), nullptr),
+	    GTEXT_CSV_OK);
+
+	GTEXT_CSV_Sink sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	ASSERT_EQ(gtext_csv_write_table(&sink, nullptr, table), GTEXT_CSV_OK);
+	const std::string out(
+	    gtext_csv_sink_buffer_data(&sink), gtext_csv_sink_buffer_size(&sink));
+	gtext_csv_sink_buffer_free(&sink);
+	gtext_csv_free_table(table);
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	Rows back = csv_rows_of(out, &opts);
+	ASSERT_EQ(back.size(), 1u) << "output was: " << out;
+	EXPECT_EQ(back[0], fields) << "output was: " << out;
+}
+
+TEST(Rfc4180Section2, AQuotedFinalFieldNeedsNoTrailingNewline) {
+	// Rule 2 - "The last record in the file may or may not have an ending line
+	// break" - combined with rule 5, which lets any field be quoted.  Every
+	// document below was rejected as "Unterminated quoted field" until the
+	// parser stopped treating a pending quote at end of input as unterminated.
+	//
+	// The pairs are the same document with and without the trailing newline;
+	// they must parse identically.  Each was cross-checked against Python's
+	// csv module, which agrees with the expectations here.
+	struct Pair {
+		const char * without_newline;
+		Rows expected;
+	};
+	const Pair pairs[] = {
+	    {"\"a\"", {{"a"}}},
+	    {"a,\"b\"", {{"a", "b"}}},
+	    {"\"a\",\"b\"", {{"a", "b"}}},
+	    {"\"\",\"\"", {{"", ""}}},
+	    {"\"aaa\",\"b\"\"bb\",\"ccc\"", {{"aaa", "b\"bb", "ccc"}}},
+	    {"\"a\"\"b\"", {{"a\"b"}}},
+	    {"x\r\n\"a\"", {{"x"}, {"a"}}},
+	};
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	for (const Pair & p : pairs) {
+		SCOPED_TRACE(p.without_newline);
+		EXPECT_EQ(csv_rows_of(p.without_newline, &opts), p.expected);
+
+		const std::string with_newline = std::string(p.without_newline) + "\r\n";
+		EXPECT_EQ(csv_rows_of(with_newline, &opts), p.expected)
+		    << "the trailing newline changed the result";
+	}
+}
+
+TEST(Rfc4180Section2, AnUnterminatedQuoteIsStillAnError) {
+	// The other side of the same change.  A quoted field with no closing quote
+	// at all must still be refused, or the fix above would turn a malformed
+	// document into a silently truncated one.
+	const char * bad[] = {
+	    "\"abc",          // never closed
+	    "a,\"abc",        // never closed, second field
+	    "\"abc\n",        // newline inside an unclosed field
+	    "\"a\"\"b",       // the doubled quote is an escape, so still open
+	    "a,\"b\"\"",      // same
+	};
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	for (const char * src : bad) {
+		SCOPED_TRACE(src);
+		GTEXT_CSV_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table * t =
+		    gtext_csv_parse_table(src, std::strlen(src), &opts, &err);
+		EXPECT_EQ(t, nullptr) << "accepted an unterminated quoted field";
+		if (t) {
+			gtext_csv_free_table(t);
+		}
+		gtext_csv_error_free(&err);
+	}
 }
 
 int main(int argc, char ** argv) {
