@@ -13587,6 +13587,127 @@ TEST(CsvHeaderIndexGrowth, ParsedWideDocumentResolvesEveryColumn) {
 	gtext_csv_error_free(&err);
 }
 
+
+
+// ---------------------------------------------------------------------------
+// max_field_bytes at the bulk-scan boundary
+//
+// The unquoted-field scanner looks ahead for the next special character and
+// appends everything before it in one go.  When that run is longer than the
+// field has capacity left, it is clamped to the remaining capacity and the
+// limit is reported on the next pass.  tools/coverage.sh listed that clamp
+// among the lines no test executes, so the limit had only ever been reached
+// one character at a time.
+//
+// The comments around it record why it is careful: the subtraction used to be
+// done blind, so a field already at the limit wrapped to a huge capacity and
+// the bulk append asked the allocator for it - the fuzzer reached a 12 GiB
+// malloc from a few hundred bytes of input.
+// ---------------------------------------------------------------------------
+
+TEST(CsvMaxFieldBytes, BoundaryInOneChunk) {
+	// A single long unquoted field, so the scanner takes the bulk path rather
+	// than one character at a time.
+	for (size_t limit : {1u, 2u, 16u, 100u}) {
+		SCOPED_TRACE("max_field_bytes=" + std::to_string(limit));
+
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		opts.max_field_bytes = limit;
+
+		{
+			// Exactly the limit must be accepted.
+			const std::string doc(limit, 'x');
+			GTEXT_CSV_Error err;
+			std::memset(&err, 0, sizeof(err));
+			GTEXT_CSV_Table * t =
+			    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+			EXPECT_NE(t, nullptr)
+			    << limit << " bytes should fit in a limit of " << limit << ": "
+			    << (err.message ? err.message : "");
+			if (t) {
+				size_t len = 0;
+				const char * f = gtext_csv_field(t, 0, 0, &len);
+				ASSERT_NE(f, nullptr);
+				EXPECT_EQ(len, limit);
+				gtext_csv_free_table(t);
+			}
+			gtext_csv_error_free(&err);
+		}
+		{
+			// One more must not, and must say why rather than truncating.
+			const std::string doc(limit + 1, 'x');
+			GTEXT_CSV_Error err;
+			std::memset(&err, 0, sizeof(err));
+			GTEXT_CSV_Table * t =
+			    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+			EXPECT_EQ(t, nullptr) << (limit + 1) << " bytes should exceed "
+			                      << limit;
+			EXPECT_EQ(err.code, GTEXT_CSV_E_LIMIT);
+			if (t) {
+				gtext_csv_free_table(t);
+			}
+			gtext_csv_error_free(&err);
+		}
+	}
+}
+
+TEST(CsvMaxFieldBytes, LongRunClampedRatherThanOverAppended) {
+	// The run ahead is much longer than the capacity left, which is the case
+	// the clamp exists for.  A clamp that let the bulk append run past the
+	// limit would either over-allocate or silently keep bytes it should have
+	// refused.
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_field_bytes = 8;
+
+	const std::string doc(4096, 'y'); // 512x the limit, no special characters
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+
+	EXPECT_EQ(t, nullptr);
+	EXPECT_EQ(err.code, GTEXT_CSV_E_LIMIT);
+	if (t) {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvMaxFieldBytes, StreamingParserAgreesAcrossChunkSizes) {
+	// The streaming parser must reach the same verdict however the field is
+	// split, including splits that land inside the clamped run.
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_field_bytes = 10;
+
+	auto cb = [](const GTEXT_CSV_Event *, void *) -> GTEXT_CSV_Status {
+		return GTEXT_CSV_OK;
+	};
+
+	for (size_t chunk : {1u, 3u, 7u, 64u}) {
+		SCOPED_TRACE("chunk=" + std::to_string(chunk));
+		const std::string doc(200, 'z');
+
+		GTEXT_CSV_Stream * s = gtext_csv_stream_new(&opts, cb, nullptr);
+		ASSERT_NE(s, nullptr);
+
+		GTEXT_CSV_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Status st = GTEXT_CSV_OK;
+		for (size_t i = 0; i < doc.size() && st == GTEXT_CSV_OK; i += chunk) {
+			const size_t n = std::min<size_t>(chunk, doc.size() - i);
+			st = gtext_csv_stream_feed(s, doc.data() + i, n, &err);
+		}
+		if (st == GTEXT_CSV_OK) {
+			st = gtext_csv_stream_finish(s, &err);
+		}
+
+		EXPECT_EQ(st, GTEXT_CSV_E_LIMIT) << "chunk size changed the verdict";
+
+		gtext_csv_stream_free(s);
+		gtext_csv_error_free(&err);
+	}
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

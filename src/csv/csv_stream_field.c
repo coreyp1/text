@@ -421,37 +421,30 @@ GTEXT_CSV_Status csv_stream_unescape_field_with_unescape(
   // Ensure field buffer is large enough for output (worst case: same size)
   size_t needed_size = input_len;
 
-  // If input is in field buffer and we need to grow, we must copy the data
-  // first
+  // The input cannot be the field buffer and also be longer than it.
+  //
+  // csv_field_buffer_append() grows the buffer before copying into it, so
+  // buffer_used <= buffer_size always holds; and both callers of
+  // csv_stream_unescape_field() pass buffer_used as input_len whenever
+  // input_data is field.buffer.  So needed_size, which is input_len, cannot
+  // exceed buffer_size on this path.
+  //
+  // This used to be a copy-to-temporary, grow, copy-back recovery.  It could
+  // not run - a probe in that branch fired on no test in the CSV suite and on
+  // none of 703,184 differential fuzzer inputs across every dialect option -
+  // and it was three of the growth lines tools/coverage.sh reports as
+  // unexecuted, which is a list worth keeping actionable.
+  //
+  // The guard stays, because the invariant it rests on is maintained in
+  // another file and a future change could break it.  Failing is the right
+  // response to that rather than recovering: if the two disagree, the buffer
+  // is inconsistent and reading input_len bytes out of it would run past the
+  // end.
   if (input_is_field_buffer && stream->field.buffer_size < needed_size) {
-    // Safety: clamp input_len to actual valid data in buffer
-    size_t copy_len = input_len;
-    if (copy_len > stream->field.buffer_used) {
-      copy_len = stream->field.buffer_used;
-    }
-    // Save the current data before reallocation
-    char * temp_buffer = malloc(copy_len);
-    if (!temp_buffer) {
-      return GTEXT_CSV_E_OOM;
-    }
-    memcpy(temp_buffer, stream->field.buffer, copy_len);
-
-    // Now grow the buffer
-    GTEXT_CSV_Status status =
-        csv_field_buffer_grow(&stream->field, needed_size);
-    if (status != GTEXT_CSV_OK) {
-      free(temp_buffer);
-      return status;
-    }
-
-    // Restore the data
-    memcpy(stream->field.buffer, temp_buffer, copy_len);
-    free(temp_buffer);
-    actual_input = stream->field.buffer; // Update pointer after reallocation
-    // Update buffer_used to reflect the copied data
-    stream->field.buffer_used = copy_len;
+    return GTEXT_CSV_E_INVALID;
   }
-  else if (!input_is_field_buffer) {
+
+  if (!input_is_field_buffer) {
     // Input is not in field buffer - safe to grow
     GTEXT_CSV_Status status =
         csv_field_buffer_grow(&stream->field, needed_size);
