@@ -464,19 +464,31 @@ TEST_EXECUTABLES += $(APP_DIR)/testHeaders$(EXE_EXTENSION)
 # now.
 
 # Pattern rule for JSON example executables
-$(APP_DIR)/examples/json/%$(EXE_EXTENSION): examples/json/%.c $(APP_DIR)/$(TARGET)
+# Links the archive, so it depends on the archive: naming only the shared
+# library left nothing in the chain that builds the archive, so a clean tree
+# could not build the examples at all.
+$(APP_DIR)/examples/json/%$(EXE_EXTENSION): examples/json/%.c \
+		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
 
 # Pattern rule for CSV example executables
-$(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c $(APP_DIR)/$(TARGET)
+# Links the archive, so it depends on the archive: naming only the shared
+# library left nothing in the chain that builds the archive, so a clean tree
+# could not build the examples at all.
+$(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c \
+		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
 
 # Pattern rule for YAML example executables
-$(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c $(APP_DIR)/$(TARGET)
+# Links the archive, so it depends on the archive: naming only the shared
+# library left nothing in the chain that builds the archive, so a clean tree
+# could not build the examples at all.
+$(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c \
+		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
