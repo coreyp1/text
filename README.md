@@ -83,7 +83,8 @@ untrusted input.
 
 **Limits** are enforced by every parser - nesting depth, total input size,
 and per-format limits on string length, element counts, row and column
-counts. Each has a documented default rather than being unbounded.
+counts. Each has a documented default rather than being unbounded, and each
+is tested at its boundary against a document that should exceed it.
 
 **Errors** come back as a status code plus a struct carrying byte offset,
 line and column, and optionally a context snippet with a caret. Snippets are
@@ -112,9 +113,12 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1125 tests across 66 binaries with zero failures, clean
+The test suite runs 1188 tests across 68 binaries with zero failures, clean
 under valgrind and under ASan/UBSan. Three libFuzzer harnesses cover the three
-parsers; `tests/fuzz/README.md` records what they have found.
+parsers; `tests/fuzz/README.md` records what they have found. All of it runs
+in CI on every push and pull request, along with the symbol, allocator and
+header gates - until recently none of it did, and `make test` exited 0 even
+with a failing suite.
 
 **JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
 Exact number round-tripping through lexeme preservation. No external
