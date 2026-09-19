@@ -3,6 +3,7 @@
 #include <ghoti.io/text/json.h>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <limits>
@@ -10269,6 +10270,698 @@ TEST(JsonWriterStackGrowth, SiblingsAcrossTheGrowthPointAreCommaSeparated) {
 
 	gtext_json_writer_free(w);
 	gtext_json_sink_buffer_free(&sink);
+}
+
+// ===========================================================================
+// The regular-expression seam: `pattern` and `patternProperties`
+// ===========================================================================
+//
+// This library has no regular-expression engine and is not going to grow one.
+// The two keywords that need one arrive through a vtable the caller fills in,
+// and what follows tests the *seam* - that the provider is asked the right
+// question, that its three answers are each turned into the right outcome,
+// and that every handle it produces is handed back exactly once.
+//
+// The provider below is a deliberately small matcher: literals, `.`, a
+// character class with ranges and negation, the quantifiers `*`, `+` and `?`,
+// and the anchors `^` and `$`. It is not ECMA-262 and does not try to be.
+// Proving an engine against ECMA-262 is the regex library's job, and it does
+// it against Node; proving that a schema asks the engine the right question
+// is this one's.
+
+namespace {
+
+struct ToyRegex {
+	std::string source;
+	bool anchored_start = false;
+	bool anchored_end = false;
+	std::string body; // source without the anchors
+};
+
+/**
+ * Counts and knobs, so a test can see what the schema engine did rather than
+ * infer it. `starve` names a pattern whose search reports that it could not
+ * finish - the third answer, which a schema must not round to either of the
+ * other two.
+ */
+struct ToyProvider {
+	int compiles = 0; // calls to compile_fn, successful or not
+	int handles = 0;  // handles it actually produced
+	int frees = 0;
+	int searches = 0;
+	std::string starve;
+	std::vector<std::string> searched;
+};
+
+bool toy_class_match(const std::string & body, size_t & i, unsigned char c) {
+	// body[i] is the '['. Advances i past the ']'.
+	size_t j = i + 1;
+	bool negate = false;
+	if (j < body.size() && body[j] == '^') {
+		negate = true;
+		j++;
+	}
+	bool hit = false;
+	for (; j < body.size() && body[j] != ']'; j++) {
+		unsigned char lo = (unsigned char)body[j];
+		if (j + 2 < body.size() && body[j + 1] == '-' && body[j + 2] != ']') {
+			unsigned char hi = (unsigned char)body[j + 2];
+			if (c >= lo && c <= hi) {
+				hit = true;
+			}
+			j += 2;
+		}
+		else if (c == lo) {
+			hit = true;
+		}
+	}
+	i = (j < body.size()) ? j + 1 : j;
+	return negate ? !hit : hit;
+}
+
+size_t toy_atom_end(const std::string & body, size_t i) {
+	if (body[i] != '[') {
+		return i + 1;
+	}
+	size_t j = i + 1;
+	if (j < body.size() && body[j] == '^') {
+		j++;
+	}
+	for (; j < body.size() && body[j] != ']'; j++) {
+		if (j + 2 < body.size() && body[j + 1] == '-' && body[j + 2] != ']') {
+			j += 2;
+		}
+	}
+	return (j < body.size()) ? j + 1 : j;
+}
+
+bool toy_atom_match(const std::string & body, size_t i, unsigned char c) {
+	if (body[i] == '.') {
+		return true;
+	}
+	if (body[i] == '[') {
+		size_t k = i;
+		return toy_class_match(body, k, c);
+	}
+	return (unsigned char)body[i] == c;
+}
+
+bool toy_match_here(const ToyRegex & re, const std::string & body, size_t pi,
+    const std::string & subject, size_t si);
+
+bool toy_match_quantified(const ToyRegex & re, const std::string & body,
+    size_t pi, size_t next, char quant, const std::string & subject,
+    size_t si) {
+	size_t least = (quant == '+') ? 1 : 0;
+	size_t most = (quant == '?') ? 1 : subject.size() - si;
+	size_t n = 0;
+	while (n < most && si + n < subject.size()
+	    && toy_atom_match(body, pi, (unsigned char)subject[si + n])) {
+		n++;
+	}
+	// Greedy, then give back one at a time, which is what a backtracking
+	// matcher does and is enough for the patterns these tests use.
+	for (;;) {
+		if (n >= least
+		    && toy_match_here(re, body, next + 1, subject, si + n)) {
+			return true;
+		}
+		if (n == 0) {
+			return false;
+		}
+		n--;
+	}
+}
+
+bool toy_match_here(const ToyRegex & re, const std::string & body, size_t pi,
+    const std::string & subject, size_t si) {
+	if (pi >= body.size()) {
+		return !re.anchored_end || si == subject.size();
+	}
+	size_t next = toy_atom_end(body, pi);
+	if (next < body.size()
+	    && (body[next] == '*' || body[next] == '+' || body[next] == '?')) {
+		return toy_match_quantified(
+		    re, body, pi, next, body[next], subject, si);
+	}
+	if (si < subject.size()
+	    && toy_atom_match(body, pi, (unsigned char)subject[si])) {
+		return toy_match_here(re, body, next, subject, si + 1);
+	}
+	return false;
+}
+
+int toy_compile(void * ctx, const char * pattern, size_t pattern_len,
+    void ** out_regex, char * message, size_t message_capacity,
+    size_t * out_offset) {
+	ToyProvider * provider = (ToyProvider *)ctx;
+	provider->compiles++;
+
+	std::string source(pattern, pattern_len);
+
+	// A refusal about the pattern as a whole rather than about a position in
+	// it, which is the shape a policy refusal takes: "this needs an engine
+	// whose worst case is exponential" is not about byte 4.
+	if (source == "refuse-me") {
+		snprintf(message, message_capacity, "no offset for this one");
+		*out_offset = (size_t)-1;
+		return 1;
+	}
+
+	// Two refusals, so that a failing compile has something to report: a
+	// quantifier with nothing to repeat, and an unterminated class.
+	for (size_t i = 0; i < source.size(); i++) {
+		if ((source[i] == '*' || source[i] == '+' || source[i] == '?')
+		    && (i == 0 || source[i - 1] == '^')) {
+			snprintf(message, message_capacity, "nothing to repeat");
+			*out_offset = i;
+			return 1;
+		}
+		if (source[i] == '[' && source.find(']', i) == std::string::npos) {
+			snprintf(message, message_capacity, "unterminated character class");
+			*out_offset = i;
+			return 1;
+		}
+	}
+
+	ToyRegex * re = new ToyRegex();
+	provider->handles++;
+	re->source = source;
+	std::string body = source;
+	if (!body.empty() && body[0] == '^') {
+		re->anchored_start = true;
+		body.erase(0, 1);
+	}
+	if (!body.empty() && body.back() == '$') {
+		re->anchored_end = true;
+		body.pop_back();
+	}
+	re->body = body;
+	*out_regex = re;
+	return 0;
+}
+
+int toy_search(
+    void * ctx, void * regex, const char * subject, size_t subject_len) {
+	ToyProvider * provider = (ToyProvider *)ctx;
+	ToyRegex * re = (ToyRegex *)regex;
+	provider->searches++;
+	provider->searched.push_back(std::string(subject, subject_len));
+
+	if (!provider->starve.empty() && re->source == provider->starve) {
+		return -1;
+	}
+
+	std::string text(subject, subject_len);
+	// Unanchored: every starting position, which is what JSON Schema asks
+	// for. A provider that returned only the match at 0 would pass a
+	// surprising number of test suites and be wrong.
+	size_t last = re->anchored_start ? 0 : text.size();
+	for (size_t start = 0; start <= last; start++) {
+		if (toy_match_here(*re, re->body, 0, text, start)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void toy_free(void * ctx, void * regex) {
+	ToyProvider * provider = (ToyProvider *)ctx;
+	provider->frees++;
+	delete (ToyRegex *)regex;
+}
+
+GTEXT_JSON_Regex_Provider toy_vtable(ToyProvider * provider) {
+	GTEXT_JSON_Regex_Provider v;
+	v.ctx = provider;
+	v.compile_fn = toy_compile;
+	v.search_fn = toy_search;
+	v.free_fn = toy_free;
+	return v;
+}
+
+/** Parse a schema document; the caller frees it. */
+GTEXT_JSON_Value * parse_doc(const char * text) {
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	return gtext_json_parse(text, strlen(text), &po, &perr);
+}
+
+} // namespace
+
+TEST(JsonSchemaRegexSeam, ToyProviderMatchesTheWayTheTestsAssume) {
+	// The fixture is code too. If it anchored, or could not do a class, the
+	// tests below would pass for the wrong reason.
+	ToyProvider provider;
+	struct Case {
+		const char * pattern;
+		const char * subject;
+		int expected;
+	};
+	const Case cases[] = {
+	    {"a", "xax", 1},
+	    {"^a", "xax", 0},
+	    {"^a", "ax", 1},
+	    {"^a+$", "aaa", 1},
+	    {"^a+$", "aab", 0},
+	    {"[0-9]+", "abc123", 1},
+	    {"[0-9]+", "abc", 0},
+	    {"^[^0-9]+$", "abc", 1},
+	    {"^[^0-9]+$", "ab1", 0},
+	    {"^a.c$", "abc", 1},
+	    {"^ab?c$", "ac", 1},
+	    {"", "anything", 1},
+	};
+	for (const auto & c : cases) {
+		void * re = nullptr;
+		char message[128];
+		message[0] = '\0';
+		size_t offset = (size_t)-1;
+		ASSERT_EQ(toy_compile(&provider, c.pattern, strlen(c.pattern), &re,
+		              message, sizeof(message), &offset),
+		    0)
+		    << c.pattern << ": " << message;
+		EXPECT_EQ(toy_search(&provider, re, c.subject, strlen(c.subject)),
+		    c.expected)
+		    << c.pattern << " against " << c.subject;
+		toy_free(&provider, re);
+	}
+	EXPECT_EQ(provider.handles, provider.frees);
+}
+
+TEST(JsonSchemaRegexSeam, PatternConstrainsStringsAndNothingElse) {
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"^a+$\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	ASSERT_NE(schema, nullptr) << (err.message ? err.message : "");
+	EXPECT_EQ(provider.compiles, 1);
+
+	GTEXT_JSON_Value * ok = parse_doc("\"aaa\"");
+	GTEXT_JSON_Value * bad = parse_doc("\"aab\"");
+	// A non-string instance is not constrained by `pattern` at all, which is
+	// not the same as being constrained and passing: the provider must not
+	// even be asked.
+	GTEXT_JSON_Value * number = parse_doc("42");
+	ASSERT_NE(ok, nullptr);
+	ASSERT_NE(bad, nullptr);
+	ASSERT_NE(number, nullptr);
+
+	EXPECT_EQ(gtext_json_schema_validate(schema, ok, nullptr), GTEXT_JSON_OK);
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, bad, nullptr), GTEXT_JSON_E_SCHEMA);
+	int before = provider.searches;
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, number, nullptr), GTEXT_JSON_OK);
+	EXPECT_EQ(provider.searches, before);
+
+	gtext_json_free(ok);
+	gtext_json_free(bad);
+	gtext_json_free(number);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	EXPECT_EQ(provider.frees, provider.handles);
+}
+
+TEST(JsonSchemaRegexSeam, PatternSearchesRatherThanAnchors) {
+	// JSON Schema core section 6.4: the expression need only match somewhere
+	// in the string. A validator that anchored would reject every one of
+	// these, and would look correct on a test suite written with `^`.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"b\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	const char * matching[] = {"\"b\"", "\"ab\"", "\"ba\"", "\"aba\""};
+	for (const char * text : matching) {
+		GTEXT_JSON_Value * v = parse_doc(text);
+		ASSERT_NE(v, nullptr);
+		EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_OK)
+		    << text;
+		gtext_json_free(v);
+	}
+	GTEXT_JSON_Value * miss = parse_doc("\"aaa\"");
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, miss, nullptr), GTEXT_JSON_E_SCHEMA);
+	gtext_json_free(miss);
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaRegexSeam, PatternPropertiesAppliesEveryMatchingSchema) {
+	// A property name can match more than one expression, and then all of
+	// their schemas apply. An implementation that stopped at the first match
+	// would accept {"a_x": "text"} below.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc(
+	    "{\"patternProperties\":{"
+	    "\"^a\":{\"type\":\"number\"},"
+	    "\"x$\":{\"minimum\":10}}}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	ASSERT_NE(schema, nullptr) << (err.message ? err.message : "");
+	EXPECT_EQ(provider.compiles, 2);
+
+	struct Case {
+		const char * instance;
+		GTEXT_JSON_Status expected;
+	};
+	const Case cases[] = {
+	    // Matches both: a number, and at least ten.
+	    {"{\"a_x\":11}", GTEXT_JSON_OK},
+	    // Matches both; fails the second.
+	    {"{\"a_x\":1}", GTEXT_JSON_E_SCHEMA},
+	    // Matches both; fails the first.
+	    {"{\"a_x\":\"text\"}", GTEXT_JSON_E_SCHEMA},
+	    // Matches only `^a`.
+	    {"{\"ab\":1}", GTEXT_JSON_OK},
+	    {"{\"ab\":\"text\"}", GTEXT_JSON_E_SCHEMA},
+	    // Matches neither, and nothing else constrains it.
+	    {"{\"zz\":\"text\"}", GTEXT_JSON_OK},
+	};
+	for (const auto & c : cases) {
+		GTEXT_JSON_Value * v = parse_doc(c.instance);
+		ASSERT_NE(v, nullptr) << c.instance;
+		EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), c.expected)
+		    << c.instance;
+		gtext_json_free(v);
+	}
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	EXPECT_EQ(provider.frees, provider.handles);
+}
+
+TEST(JsonSchemaRegexSeam, PatternPropertiesExemptsAPropertyFromAdditional) {
+	// The interaction that is easy to get wrong, and was wrong here until
+	// `patternProperties` existed: additionalProperties applies to the
+	// properties that neither `properties` named *nor* any pattern matched.
+	// The comment in the validator said so while only half of it was true.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc(
+	    "{\"properties\":{\"named\":{}},"
+	    "\"patternProperties\":{\"^x\":{\"type\":\"number\"}},"
+	    "\"additionalProperties\":false}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	struct Case {
+		const char * instance;
+		GTEXT_JSON_Status expected;
+	};
+	const Case cases[] = {
+	    {"{\"named\":\"anything\"}", GTEXT_JSON_OK},
+	    {"{\"xy\":1}", GTEXT_JSON_OK},
+	    // Matched by the pattern, so additionalProperties does not see it -
+	    // but the pattern's own schema still does.
+	    {"{\"xy\":\"text\"}", GTEXT_JSON_E_SCHEMA},
+	    // Neither named nor matched: false rejects it.
+	    {"{\"other\":1}", GTEXT_JSON_E_SCHEMA},
+	};
+	for (const auto & c : cases) {
+		GTEXT_JSON_Value * v = parse_doc(c.instance);
+		ASSERT_NE(v, nullptr) << c.instance;
+		EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), c.expected)
+		    << c.instance;
+		gtext_json_free(v);
+	}
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaRegexSeam, WithoutAProviderBothKeywordsAreStillRefused) {
+	// The default is unchanged, and deliberately so: a `pattern` that is read
+	// and ignored makes a schema that looks like it constrains its data not
+	// do so, with nothing to tell the caller.
+	const char * schemas[] = {
+	    "{\"pattern\":\"^a+$\"}",
+	    "{\"patternProperties\":{\"^a\":{}}}",
+	};
+	const char * keywords[] = {"pattern", "patternProperties"};
+	for (size_t i = 0; i < 2; i++) {
+		GTEXT_JSON_Value * doc = parse_doc(schemas[i]);
+		ASSERT_NE(doc, nullptr);
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * schema = gtext_json_schema_compile(doc, &err);
+		EXPECT_EQ(schema, nullptr);
+		EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+		ASSERT_NE(err.context_snippet, nullptr);
+		EXPECT_STREQ(err.context_snippet, keywords[i]);
+		gtext_json_error_free(&err);
+		gtext_json_free(doc);
+	}
+}
+
+TEST(JsonSchemaRegexSeam, TheLenientOptInStillIgnoresThem) {
+	ToyProvider provider;
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.allow_unsupported_keywords = true;
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"^a+$\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+	GTEXT_JSON_Value * v = parse_doc("\"zzz\"");
+	EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_OK);
+	EXPECT_EQ(provider.compiles, 0);
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaRegexSeam, ARefusedPatternCarriesTheProvidersOwnWords) {
+	// "nothing to repeat at offset 1" tells a schema author what to change;
+	// "invalid schema" does not. The message is the provider's, because only
+	// the provider knows its own grammar.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	struct Case {
+		const char * schema;
+		const char * message;
+		size_t offset;
+	};
+	const Case cases[] = {
+	    {"{\"pattern\":\"^+a\"}", "nothing to repeat", 1},
+	    {"{\"pattern\":\"[abc\"}", "unterminated character class", 0},
+	    // The second key fails, so the first key's handle is already
+	    // outstanding when compilation gives up.
+	    {"{\"patternProperties\":{\"^a\":{},\"^+b\":{}}}",
+	        "nothing to repeat", 1},
+	    // A refusal with no position stays positionless. Folding it to 0
+	    // would point at a character that is not the problem.
+	    {"{\"pattern\":\"refuse-me\"}", "no offset for this one",
+	        (size_t)-1},
+	};
+	for (const auto & c : cases) {
+		GTEXT_JSON_Value * doc = parse_doc(c.schema);
+		ASSERT_NE(doc, nullptr) << c.schema;
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * schema =
+		    gtext_json_schema_compile_with_options(doc, &opts, &err);
+		EXPECT_EQ(schema, nullptr) << c.schema;
+		EXPECT_EQ(err.code, GTEXT_JSON_E_INVALID) << c.schema;
+		ASSERT_NE(err.context_snippet, nullptr) << c.schema;
+		EXPECT_STREQ(err.context_snippet, c.message);
+		EXPECT_EQ(err.offset, c.offset) << c.schema;
+		gtext_json_error_free(&err);
+		gtext_json_free(doc);
+	}
+	// Nothing was leaked on the way out: the handle compiled before the
+	// failing one in the patternProperties case still has to be released,
+	// which means the failure path frees a half-built node's patterns.
+	EXPECT_EQ(provider.handles, 1);
+	EXPECT_EQ(provider.frees, provider.handles);
+}
+
+TEST(JsonSchemaRegexSeam, ASearchThatCannotFinishIsAThirdAnswer) {
+	// The point of the negative return. A pattern that spends its budget has
+	// not said the instance is invalid, and reporting that as "no match"
+	// would turn a denial-of-service defence into a wrong validation result.
+	ToyProvider provider;
+	provider.starve = "^a+$";
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"^a+$\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	GTEXT_JSON_Value * v = parse_doc("\"aaa\"");
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Status status = gtext_json_schema_validate(schema, v, &err);
+	EXPECT_EQ(status, GTEXT_JSON_E_LIMIT);
+	EXPECT_NE(status, GTEXT_JSON_OK);
+	EXPECT_NE(status, GTEXT_JSON_E_SCHEMA);
+	EXPECT_NE(err.message, nullptr);
+
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaRegexSeam, ASearchThatCannotFinishStopsPatternProperties) {
+	// The same third answer, reached through the property-name loop, where it
+	// would otherwise be swallowed as "this pattern did not match, so
+	// additionalProperties applies".
+	ToyProvider provider;
+	provider.starve = "^a";
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc(
+	    "{\"patternProperties\":{\"^a\":{}},\"additionalProperties\":false}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	GTEXT_JSON_Value * v = parse_doc("{\"abc\":1}");
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_E_LIMIT);
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaRegexSeam, EveryCompiledHandleIsReleasedOnce) {
+	// Patterns are compiled in nested subschemas, behind `$ref`, and in both
+	// keywords at once. Each is freed when the schema is, and none twice -
+	// which the counters catch and Valgrind confirms.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc(
+	    "{\"$defs\":{\"code\":{\"pattern\":\"^[0-9]+$\"}},"
+	    "\"properties\":{"
+	    "\"id\":{\"$ref\":\"#/$defs/code\"},"
+	    "\"alt\":{\"$ref\":\"#/$defs/code\"},"
+	    "\"tags\":{\"items\":{\"pattern\":\"^t\"}}},"
+	    "\"patternProperties\":{\"^x\":{\"pattern\":\"y\"}}}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	ASSERT_NE(schema, nullptr) << (err.message ? err.message : "");
+	// Four: the shared $ref target compiled once, the items pattern, the
+	// patternProperties key, and the pattern inside its schema.
+	EXPECT_EQ(provider.compiles, 4);
+
+	GTEXT_JSON_Value * good =
+	    parse_doc("{\"id\":\"12\",\"alt\":\"7\",\"tags\":[\"tag\"],"
+	              "\"xq\":\"yes\"}");
+	ASSERT_NE(good, nullptr);
+	EXPECT_EQ(gtext_json_schema_validate(schema, good, nullptr), GTEXT_JSON_OK);
+	GTEXT_JSON_Value * bad = parse_doc("{\"id\":\"ab\"}");
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, bad, nullptr), GTEXT_JSON_E_SCHEMA);
+	gtext_json_free(good);
+	gtext_json_free(bad);
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	EXPECT_EQ(provider.frees, 4);
+}
+
+TEST(JsonSchemaRegexSeam, AnIncompleteProviderIsRefusedAtOnce) {
+	// A half-filled vtable is a bug in the adapter, and it is a different
+	// thing from having no provider at all: the second refuses every
+	// `pattern`, the first would be a null call somewhere much later.
+	ToyProvider provider;
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"a\"}");
+	ASSERT_NE(doc, nullptr);
+
+	for (int missing = 0; missing < 3; missing++) {
+		GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+		if (missing == 0) {
+			vtable.compile_fn = nullptr;
+		}
+		else if (missing == 1) {
+			vtable.search_fn = nullptr;
+		}
+		else {
+			vtable.free_fn = nullptr;
+		}
+		GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+		opts.regex = &vtable;
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		EXPECT_EQ(
+		    gtext_json_schema_compile_with_options(doc, &opts, &err), nullptr)
+		    << "missing function " << missing;
+		EXPECT_EQ(err.code, GTEXT_JSON_E_INVALID);
+		gtext_json_error_free(&err);
+	}
+	gtext_json_free(doc);
+	EXPECT_EQ(provider.compiles, 0);
+}
+
+TEST(JsonSchemaRegexSeam, TheProviderSeesTheBytesItWasPromised) {
+	// The subject is the string's own bytes, UTF-8, with the length given -
+	// not a copy through a NUL-terminated API, which would truncate an
+	// instance containing a NUL and silently validate the prefix.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+
+	GTEXT_JSON_Value * doc = parse_doc("{\"pattern\":\"b\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	GTEXT_JSON_Value * v = parse_doc("\"a\\u0000b\"");
+	ASSERT_NE(v, nullptr);
+	EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_OK);
+	ASSERT_EQ(provider.searched.size(), 1u);
+	EXPECT_EQ(provider.searched[0].size(), 3u);
+	EXPECT_EQ(provider.searched[0], std::string("a\0b", 3));
+
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
 }
 
 int main(int argc, char * * argv) {

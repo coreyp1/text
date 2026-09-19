@@ -58,12 +58,16 @@
  * - Boolean schemas: "true" accepts everything and "false" nothing, anywhere
  *   a schema is allowed, the root included
  *
+ * - pattern, patternProperties: only when the caller supplies a
+ *   regular-expression provider through GTEXT_JSON_Schema_Options. Without
+ *   one they remain in the unsupported list below, because this library has
+ *   no regular-expression engine of its own and inventing a half one would
+ *   be the silent-mis-validation failure the strict check exists to prevent
+ *
  * Unsupported standard keywords (rejected at compile time):
- * - pattern, patternProperties - these need a regular-expression engine,
- *   which is a dependency decision rather than an implementation detail
+ * - pattern, patternProperties, when no provider was supplied
  * - unevaluatedItems, unevaluatedProperties - these need annotation results
- *   to be collected across applicators, which nothing here does yet, and
- *   they depend on patternProperties to be correct anyway
+ *   to be collected across applicators, which nothing here does yet
  * - $recursiveRef, $dynamicRef - the 2019-09 and 2020-12 dynamic-scope
  *   references
  * - format, contentEncoding, contentMediaType, contentSchema
@@ -99,6 +103,85 @@ extern "C" {
 typedef struct GTEXT_JSON_Schema GTEXT_JSON_Schema;
 
 /**
+ * @brief A regular-expression engine, supplied by the caller.
+ *
+ * JSON Schema's `pattern` and `patternProperties` are regular expressions,
+ * and this library has no engine. Rather than acquire a dependency on one -
+ * which every caller would then pay for, including the many who never write a
+ * `pattern` - the engine arrives through this vtable, and the two keywords
+ * are enforced when one is present and refused when it is not.
+ *
+ * Three obligations, and each is somewhere a validator can quietly get it
+ * wrong:
+ *
+ * - **The dialect is ECMA-262 with the `u` flag.** JSON Schema core section
+ *   6.4 says so. A schema author writing `\d` means ECMA-262's `\d`, which
+ *   is ASCII, and not Python's or .NET's, which are not.
+ * - **The match is a search, not an anchored match.** The pattern need only
+ *   match *somewhere* in the string, so a provider that anchors rejects
+ *   instances the specification accepts. This is the single most common
+ *   mistake in the wild.
+ * - **Both strings are UTF-8 and may contain a NUL.** Lengths are given;
+ *   neither is terminated for you.
+ *
+ * `ctx` is passed to every call, so one implementation can serve several
+ * independent configurations. Everything reachable from it must outlive every
+ * compiled schema that used it: compiled patterns are freed when the schema
+ * is, which is after the caller has stopped thinking about the provider.
+ */
+typedef struct {
+  /**
+   * User-defined, passed to each call.
+   */
+  void * ctx;
+
+  /**
+   * Compile one pattern. Return 0 on success, having stored an opaque handle
+   * in `*out_regex`; return non-zero on failure.
+   *
+   * On failure, write a description into `message` - at most
+   * `message_capacity` bytes including the terminator, never more - and store
+   * the byte offset within the pattern at which it went wrong in
+   * `*out_offset`. Both are copied out before the call returns, so neither
+   * needs to outlive it: the message reaches the caller in
+   * GTEXT_JSON_Error::context_snippet and the offset in
+   * GTEXT_JSON_Error::offset.
+   *
+   * A refusal that has no position - "this pattern needs an engine whose
+   * worst case is exponential" is about the whole of it - stores `(size_t)-1`
+   * for the offset, and the caller sees `(size_t)-1` rather than 0, so that
+   * nothing points at a character that is not the problem.
+   *
+   * `pattern` is UTF-8 of `pattern_len` bytes and is not NUL-terminated.
+   */
+  int (*compile_fn)(void * ctx, const char * pattern, size_t pattern_len,
+      void ** out_regex, char * message, size_t message_capacity,
+      size_t * out_offset);
+
+  /**
+   * Search `subject` for `regex`. Return a positive value if it matches
+   * anywhere, 0 if it does not, and a **negative** value if the search could
+   * not be completed - a step or memory limit reached, an allocation failed.
+   *
+   * The negative case exists because it is a third answer and not a second
+   * one. A pattern that exhausts its budget has not told you the instance is
+   * invalid; reporting that as "no match" turns a denial-of-service defence
+   * into a wrong validation result. It surfaces as GTEXT_JSON_E_LIMIT, which
+   * is neither GTEXT_JSON_OK nor GTEXT_JSON_E_SCHEMA.
+   *
+   * `subject` is UTF-8 of `subject_len` bytes and is not NUL-terminated.
+   */
+  int (*search_fn)(
+      void * ctx, void * regex, const char * subject, size_t subject_len);
+
+  /**
+   * Release a handle `compile_fn` produced. Called once per handle, when the
+   * compiled schema is freed. Never called with NULL.
+   */
+  void (*free_fn)(void * ctx, void * regex);
+} GTEXT_JSON_Regex_Provider;
+
+/**
  * @brief Options controlling schema compilation
  */
 typedef struct {
@@ -113,12 +196,28 @@ typedef struct {
    * ignored keywords are known to be decorative.
    */
   bool allow_unsupported_keywords;
+
+  /**
+   * The regular-expression engine `pattern` and `patternProperties` are
+   * enforced with, or NULL for none.
+   *
+   * With a provider, both keywords are compiled at schema-compile time and
+   * checked at validation time. Without one, both are refused at compile time
+   * the way any other unenforceable keyword is - unless
+   * allow_unsupported_keywords is set, which ignores them along with the rest.
+   *
+   * The pointer is borrowed, and so is everything reachable from its `ctx`.
+   * Both must outlive every schema compiled with them, because the compiled
+   * patterns are released when the schema is freed.
+   */
+  const GTEXT_JSON_Regex_Provider * regex;
 } GTEXT_JSON_Schema_Options;
 
 /**
  * @brief Get the default schema compilation options
  *
- * @return Options with allow_unsupported_keywords set to false.
+ * @return Options with allow_unsupported_keywords set to false and no
+ *   regular-expression provider.
  */
 GTEXT_API GTEXT_JSON_Schema_Options gtext_json_schema_options_default(void);
 
@@ -153,7 +252,12 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile(
  * @param err Error output structure (can be NULL if error details not needed).
  *   When a schema is refused for using an unsupported keyword, the code is
  *   GTEXT_JSON_E_SCHEMA_UNSUPPORTED and context_snippet holds the keyword
- *   name; free it with gtext_json_error_free().
+ *   name. When a `pattern` or `patternProperties` regular expression fails to
+ *   compile, the code is GTEXT_JSON_E_INVALID - a malformed pattern is a
+ *   malformed schema, the same fault as `"properties": 3` - context_snippet
+ *   holds the provider's own message, and `offset` the byte offset it
+ *   reported within the pattern, or `(size_t)-1` if it reported none. Either
+ *   way, free it with gtext_json_error_free().
  * @return Compiled schema on success, NULL on failure
  */
 GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(

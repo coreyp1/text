@@ -100,8 +100,14 @@ size limit applies before the file is in memory; writes are atomic, going to a
 temporary file beside the destination and replacing it only once complete.
 
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and a
-core subset of JSON Schema. YAML implements anchors and aliases, merge keys,
-multi-document streams, tag resolution and conversion to JSON.
+core subset of JSON Schema. The schema engine refuses a schema whose keywords
+it cannot enforce rather than ignoring them, since a schema that looks like it
+constrains its data and does not is the worse failure. Two of those keywords -
+`pattern` and `patternProperties` - are regular expressions, and this library
+has no engine; they are enforced when the caller supplies one through
+`GTEXT_JSON_Schema_Options`, which is three function pointers, and refused when
+they do not. YAML implements anchors and aliases, merge keys, multi-document
+streams, tag resolution and conversion to JSON.
 
 ## Documentation
 
@@ -113,8 +119,10 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1273 tests across 69 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 74.0% line coverage. Three libFuzzer
+The test suite runs 2,058 tests across 71 binaries with zero failures, clean
+under valgrind and under ASan/UBSan, at 74.2% line coverage. (The figure here
+read "1273 tests across 69 binaries" for long enough that it was wrong by
+several hundred; it is now measured from `make test` rather than remembered.) Three libFuzzer
 harnesses cover the three parsers; `tests/fuzz/README.md` records what they
 have found. All of it runs in CI on every push and pull request, along with a
 coverage floor and the symbol, allocator and header gates - until recently

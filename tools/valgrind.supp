@@ -8,8 +8,31 @@
 # so `make test-valgrind` and `make test-valgrind-quiet` could not have
 # succeeded for anyone, on any machine, in that time.
 #
-# The set is deliberately empty. Nothing in this library needs suppressing
-# today, and an empty file is a valid suppression set, so the flag now names
-# something real. Add an entry here only for a leak that is demonstrably not
-# ours - one in libc, the dynamic loader, or Google Test - and say in a comment
-# which, and why it cannot be fixed on our side.
+# The set was deliberately empty when this file was introduced. It has one
+# entry now, below. Add another only for a leak that is demonstrably not ours -
+# one in libc, the dynamic loader, or Google Test - or for a diagnostic that a
+# test provokes on purpose and cannot provoke any other way, and say in a
+# comment which, and why it cannot be fixed on our side.
+
+# Memcheck calls a realloc size with the top bit set "fishy", on the reading
+# that it is probably a negative number that was converted. Four tests in
+# tests/test-json.cpp - the JsonBufferGrow overflow cases - ask
+# json_buffer_grow_unified() for exactly such a size on purpose: the growth
+# arithmetic overflows, the function falls back to the caller's `needed`, and
+# the point of the test is that realloc then *fails* and the buffer and its
+# capacity are left alone. The size has to be near SIZE_MAX for the multiply
+# to overflow at all, so there is no version of these tests that exercises the
+# path without tripping this check.
+#
+# This is not a leak and not somebody else's code, which the policy above did
+# not anticipate. It is an intentional argument to an allocator that is
+# expected to refuse it. Without this entry `make test-valgrind` has been red
+# since the growth tests landed, and a gate that is always red is a gate
+# nobody reads.
+{
+   json_buffer_grow_unified asks realloc for a size it expects to be refused
+   Memcheck:FishyValue
+   realloc(size)
+   fun:realloc
+   fun:json_buffer_grow_unified
+}

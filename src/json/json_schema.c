@@ -104,6 +104,28 @@ static void json_schema_node_free(json_schema_node * node) {
     free(node->dep_required);
   }
 
+  /* The provider's compiled patterns. `regex_provider` is set on a node only
+   * when one of them was compiled, so a schema compiled without a provider
+   * frees nothing here and needs no branch anywhere else. */
+  if (node->regex_provider) {
+    if (node->pattern_regex) {
+      node->regex_provider->free_fn(
+          node->regex_provider->ctx, node->pattern_regex);
+    }
+    for (size_t i = 0; i < node->pattern_properties_count; i++) {
+      if (node->pattern_properties[i].regex) {
+        node->regex_provider->free_fn(
+            node->regex_provider->ctx, node->pattern_properties[i].regex);
+      }
+    }
+  }
+  if (node->pattern_properties) {
+    for (size_t i = 0; i < node->pattern_properties_count; i++) {
+      json_schema_node_free(node->pattern_properties[i].schema);
+    }
+    free(node->pattern_properties);
+  }
+
   // Free enum values (values are in context, just free array)
   free(node->enum_values);
 
@@ -197,12 +219,20 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
  */
 static const char * const json_schema_unsupported_keywords[] = {
     /* Applicators. */
-    "$recursiveRef", "$dynamicRef", "patternProperties",
-    "unevaluatedItems", "unevaluatedProperties",
+    "$recursiveRef", "$dynamicRef", "unevaluatedItems",
+    "unevaluatedProperties",
     /* Assertions. */
-    "pattern", "format", "contentEncoding", "contentMediaType",
-    "contentSchema",
-    NULL};
+    "format", "contentEncoding", "contentMediaType", "contentSchema", NULL};
+
+/*
+ * `pattern` and `patternProperties` are deliberately not in that list.
+ * Whether they can be enforced is not a property of this library: it depends
+ * on whether the caller supplied a regular-expression engine.  They are
+ * handled by name in json_schema_compile_node(), which refuses them through
+ * json_schema_reject_keyword() - the same error, so a caller cannot tell the
+ * two kinds of refusal apart and does not need to - when no provider is
+ * present, and compiles them when one is.
+ */
 
 static int json_schema_keyword_in(
     const char * const * list, const char * key, size_t key_len) {
@@ -258,6 +288,94 @@ typedef struct {
 static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     const GTEXT_JSON_Value * schema_doc, json_schema_compile_ctx * cc,
     GTEXT_JSON_Error * err);
+
+
+/*
+ * How much of a provider's compile diagnostic is kept.
+ *
+ * A fixed buffer rather than a returned pointer, so that ownership is not a
+ * question: the provider writes into memory it does not own and does not free,
+ * and this function copies what it needs before returning.  The one thing a
+ * provider must not do is assume more room than it was given.
+ */
+#define JSON_SCHEMA_REGEX_MESSAGE_MAX 256
+
+/*
+ * Report a `pattern` or `patternProperties` regular expression the provider
+ * refused.
+ *
+ * The provider's own message is what a schema author needs - "nothing to
+ * repeat at offset 1" says more than "invalid pattern" ever can - but
+ * GTEXT_JSON_Error::message is a static string by contract, so the message
+ * travels in context_snippet, the way json_schema_reject_keyword() sends the
+ * keyword name.  The offset the provider reported goes in `offset`: the
+ * pattern is the input being compiled here, so a byte offset into it is
+ * exactly what that field means.
+ *
+ * `(size_t)-1` is passed through rather than folded to 0.  Some refusals have
+ * no position - "this pattern needs an engine whose worst case is
+ * exponential" is about the whole of it - and reporting those as "at byte 0"
+ * would point at a character that is not the problem.
+ */
+static GTEXT_JSON_Status json_schema_reject_regex(
+    const char * message, size_t offset, GTEXT_JSON_Error * err) {
+  if (err) {
+    *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+        .message = "Schema pattern is not a valid regular expression",
+        .offset = offset};
+    size_t len = strlen(message);
+    char * copy = (char *)malloc(len + 1);
+    if (copy) {
+      memcpy(copy, message, len + 1);
+      err->context_snippet = copy;
+      err->context_snippet_len = len;
+      err->caret_offset = 0;
+    }
+  }
+  return GTEXT_JSON_E_INVALID;
+}
+
+/*
+ * Compile one regular expression through the caller's provider.
+ *
+ * The caller has already established that a provider exists.  `doc` is the
+ * schema value the pattern came from, and its bytes outlive this call: the
+ * schema owns the cloned document, and the provider is given a pointer and a
+ * length rather than a C string, as the vtable's documentation says.
+ */
+static GTEXT_JSON_Status json_schema_compile_regex(const GTEXT_JSON_Value * doc,
+    json_schema_compile_ctx * cc, void ** out_regex, GTEXT_JSON_Error * err) {
+  const char * text = NULL;
+  size_t text_len = 0;
+  if (gtext_json_typeof(doc) != GTEXT_JSON_STRING
+      || gtext_json_get_string(doc, &text, &text_len) != GTEXT_JSON_OK) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "A schema pattern must be a string"};
+    }
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  char message[JSON_SCHEMA_REGEX_MESSAGE_MAX];
+  message[0] = '\0';
+  size_t offset = (size_t)-1;
+  void * regex = NULL;
+  const GTEXT_JSON_Regex_Provider * provider = &cc->schema->regex_provider;
+  int rc = provider->compile_fn(provider->ctx, text ? text : "", text_len,
+      &regex, message, sizeof(message), &offset);
+  /* A provider is not trusted to have written a terminator. */
+  message[sizeof(message) - 1] = '\0';
+
+  if (rc != 0 || !regex) {
+    return json_schema_reject_regex(
+        message[0] ? message
+                   : "the regular-expression engine refused this pattern",
+        offset, err);
+  }
+
+  *out_regex = regex;
+  return GTEXT_JSON_OK;
+}
 
 
 /*
@@ -1007,6 +1125,99 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
         node->max_contains = (size_t)d;
       }
     }
+    // --- the two regular-expression keywords ---------------------------
+    // Both are enforced when the caller supplied an engine and refused when
+    // they did not.  The refusal is the same one any unenforceable keyword
+    // gets, and for the same reason: a `pattern` that is read and ignored
+    // makes a schema that looks like it constrains its data not do so, with
+    // nothing to tell the caller.
+    else if (json_matches(key, key_len, "pattern")) {
+      if (!cc->schema->has_regex_provider) {
+        if (!cc->opts->allow_unsupported_keywords) {
+          return json_schema_reject_keyword(key, key_len, err);
+        }
+      }
+      else {
+        GTEXT_JSON_Status status =
+            json_schema_compile_regex(value, cc, &node->pattern_regex, err);
+        if (status != GTEXT_JSON_OK) {
+          return status;
+        }
+        node->regex_provider = &cc->schema->regex_provider;
+      }
+    }
+    else if (json_matches(key, key_len, "patternProperties")) {
+      if (!cc->schema->has_regex_provider) {
+        if (!cc->opts->allow_unsupported_keywords) {
+          return json_schema_reject_keyword(key, key_len, err);
+        }
+      }
+      else {
+        if (value->type != GTEXT_JSON_OBJECT) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+                .message = "patternProperties must be an object"};
+          }
+          return GTEXT_JSON_E_INVALID;
+        }
+        size_t n = gtext_json_object_size(value);
+        if (n > 0) {
+          if (n > SIZE_MAX / sizeof(json_schema_pattern_property)) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "patternProperties list too large"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          node->pattern_properties = (json_schema_pattern_property *)calloc(
+              n, sizeof(json_schema_pattern_property));
+          if (!node->pattern_properties) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory allocating patternProperties"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          /* The provider is recorded before the first pattern is compiled,
+           * so that a failure part way through still frees the handles the
+           * earlier iterations produced. */
+          node->regex_provider = &cc->schema->regex_provider;
+          for (size_t j = 0; j < n; j++) {
+            size_t pat_len = 0;
+            const char * pat = gtext_json_object_key(value, j, &pat_len);
+            json_schema_pattern_property * entry =
+                &node->pattern_properties[j];
+            /* Counted before anything in the entry can fail, so that
+             * json_schema_node_free() sees an entry it must clean up. */
+            node->pattern_properties_count = j + 1;
+
+            char message[JSON_SCHEMA_REGEX_MESSAGE_MAX];
+            message[0] = '\0';
+            size_t offset = (size_t)-1;
+            const GTEXT_JSON_Regex_Provider * provider =
+                &cc->schema->regex_provider;
+            int rc = provider->compile_fn(provider->ctx, pat ? pat : "",
+                pat_len, &entry->regex, message, sizeof(message), &offset);
+            message[sizeof(message) - 1] = '\0';
+            if (rc != 0 || !entry->regex) {
+              entry->regex = NULL;
+              return json_schema_reject_regex(
+                  message[0] ? message
+                             : "the regular-expression engine refused this "
+                               "pattern",
+                  offset, err);
+            }
+
+            const GTEXT_JSON_Value * sub = gtext_json_object_value(value, j);
+            GTEXT_JSON_Status status =
+                json_schema_compile_sub(&entry->schema, sub, cc, err);
+            if (status != GTEXT_JSON_OK) {
+              return status;
+            }
+          }
+        }
+      }
+    }
     // --- object applicators -------------------------------------------
     else if (json_matches(key, key_len, "additionalProperties")) {
       GTEXT_JSON_Status status = json_schema_compile_sub(
@@ -1424,6 +1635,34 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
 }
 
 
+/*
+ * Run one compiled pattern over one string.
+ *
+ * Three outcomes, not two.  A provider that could not finish - a step budget
+ * spent on a pattern whose worst case is exponential, an allocation refused -
+ * has not said the instance is invalid, and recording that as "no match" would
+ * turn a denial-of-service defence into a wrong answer.  It becomes
+ * GTEXT_JSON_E_LIMIT, which is neither OK nor E_SCHEMA, and the caller can
+ * tell the two apart.
+ */
+static GTEXT_JSON_Status json_schema_regex_search(
+    const json_schema_node * node, void * regex, const char * subject,
+    size_t subject_len, int * out_matched, GTEXT_JSON_Error * err) {
+  const GTEXT_JSON_Regex_Provider * provider = node->regex_provider;
+  int rc = provider->search_fn(
+      provider->ctx, regex, subject ? subject : "", subject_len);
+  if (rc < 0) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_LIMIT,
+          .message = "The regular-expression engine could not finish this "
+                     "search; the instance is neither valid nor invalid"};
+    }
+    return GTEXT_JSON_E_LIMIT;
+  }
+  *out_matched = rc > 0;
+  return GTEXT_JSON_OK;
+}
+
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     int depth, GTEXT_JSON_Error * err);
@@ -1742,6 +1981,28 @@ static GTEXT_JSON_Status json_schema_validate_depth(
       }
       return GTEXT_JSON_E_SCHEMA;
     }
+
+    /* `pattern` searches: the expression need only match somewhere in the
+     * string (JSON Schema core section 6.4), so a validator that anchored
+     * would reject instances the specification accepts.  The anchoring is the
+     * provider's obligation; nothing here can check it, which is why the
+     * vtable's documentation says it twice. */
+    if (node->pattern_regex) {
+      int matched = 0;
+      GTEXT_JSON_Status status = json_schema_regex_search(node,
+          node->pattern_regex, instance->as.string.data, str_len, &matched,
+          err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+      if (!matched) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "String does not match pattern"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
+      }
+    }
     break;
   }
 
@@ -1949,11 +2210,19 @@ static GTEXT_JSON_Status json_schema_validate_depth(
       }
     }
 
-    // additionalProperties applies to every property `properties` did not
-    // name.  patternProperties would also exempt a property, and is not
-    // implemented, which is why a schema using it is still refused outright
-    // rather than validated with this keyword alone.
-    if (node->additional_properties) {
+    /* patternProperties and additionalProperties, in one pass over the
+     * instance's properties.
+     *
+     * They are here together because the second is defined in terms of the
+     * first: additionalProperties applies to every property that neither
+     * `properties` named nor any `patternProperties` expression matched.
+     * Two passes would mean running each regular expression over each
+     * property name twice, and - the reason that matters - would mean two
+     * places that have to agree on what "matched" means.
+     *
+     * A property can match several patterns, and then every one of their
+     * schemas applies. */
+    if (node->pattern_properties_count > 0 || node->additional_properties) {
       size_t count = gtext_json_object_size(instance);
       for (size_t i = 0; i < count; i++) {
         size_t klen = 0;
@@ -1961,18 +2230,44 @@ static GTEXT_JSON_Status json_schema_validate_depth(
         if (!kname) {
           continue;
         }
-        int named = 0;
-        for (size_t p = 0; p < node->properties_count && !named; p++) {
-          if (node->properties[p].key_len == klen
-              && memcmp(node->properties[p].key, kname, klen) == 0) {
-            named = 1;
-          }
-        }
-        if (named) {
-          continue;
-        }
         const GTEXT_JSON_Value * pv = gtext_json_object_value(instance, i);
         if (!pv) {
+          continue;
+        }
+
+        int covered = 0;
+        for (size_t p = 0; p < node->properties_count && !covered; p++) {
+          if (node->properties[p].key_len == klen
+              && memcmp(node->properties[p].key, kname, klen) == 0) {
+            covered = 1;
+          }
+        }
+
+        for (size_t p = 0; p < node->pattern_properties_count; p++) {
+          const json_schema_pattern_property * entry =
+              &node->pattern_properties[p];
+          int matched = 0;
+          GTEXT_JSON_Status status = json_schema_regex_search(
+              node, entry->regex, kname, klen, &matched, err);
+          if (status != GTEXT_JSON_OK) {
+            return status;
+          }
+          if (!matched) {
+            continue;
+          }
+          covered = 1;
+          status = json_schema_validate_depth(entry->schema, pv, depth + 1,
+              err);
+          if (status != GTEXT_JSON_OK) {
+            if (err && err->code == GTEXT_JSON_E_SCHEMA) {
+              err->message =
+                  "A property does not satisfy its patternProperties schema";
+            }
+            return status;
+          }
+        }
+
+        if (covered || !node->additional_properties) {
           continue;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
@@ -2031,6 +2326,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
 GTEXT_API GTEXT_JSON_Schema_Options gtext_json_schema_options_default(void) {
   GTEXT_JSON_Schema_Options opts;
   opts.allow_unsupported_keywords = false;
+  opts.regex = NULL;
   return opts;
 }
 
@@ -2061,6 +2357,22 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
           .message = "Schema document must be an object or a boolean"};
+    }
+    return NULL;
+  }
+
+  /* A provider missing one of its three functions is a caller error, not a
+   * schema that has no regular-expression support: the difference matters,
+   * because the second silently refuses every `pattern` and the first is a
+   * bug in the adapter that would otherwise surface as a null call much
+   * later. */
+  if (opts->regex
+      && (!opts->regex->compile_fn || !opts->regex->search_fn
+          || !opts->regex->free_fn)) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "A regular-expression provider must supply compile_fn, "
+                     "search_fn and free_fn"};
     }
     return NULL;
   }
@@ -2113,6 +2425,15 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
           .message = "Out of memory cloning the schema document"};
     }
     return NULL;
+  }
+
+  /* The provider is copied rather than pointed at: the options structure is
+   * the caller's automatic variable as often as not, and the compiled
+   * patterns outlive the call that made them.  What `ctx` points at is still
+   * the caller's to keep alive, and the header says so. */
+  if (opts->regex) {
+    schema->regex_provider = *opts->regex;
+    schema->has_regex_provider = 1;
   }
 
   // Compile schema

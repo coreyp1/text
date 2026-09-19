@@ -343,15 +343,31 @@ The following features are planned for future releases:
 
 ### 17.1 Additional JSON Schema Keywords
 
-The following JSON Schema features are not currently implemented but are planned:
+This list had gone stale: most of what it called planned has been
+implemented, and a list of gaps that names things which are not gaps is worse
+than no list, because it is read as current. What remains unimplemented is:
 
-- **Composition keywords**: `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else` for conditional and combined schemas
-- **Reference and definitions**: `$ref`, `$id`, `$anchor`, `$defs`, `$schema` for schema reuse and versioning
-- **Advanced object validation**: `additionalProperties`, `patternProperties`, `propertyNames`, `dependencies`, `dependentRequired`, `dependentSchemas`
-- **Advanced array validation**: `additionalItems`, `items` as array (tuple validation), `contains`, `minContains`, `maxContains`, `uniqueItems`
-- **String pattern matching**: `pattern` (regular expressions), `format`, `contentEncoding`, `contentMediaType`
-- **Additional numeric constraints**: `multipleOf`, `exclusiveMinimum`, `exclusiveMaximum`
-- **Advanced features**: `unevaluatedProperties`, `unevaluatedItems`, `$vocabulary`, `$recursiveRef`, `$recursiveAnchor`
+- **Annotation-collecting applicators**: `unevaluatedProperties` and
+  `unevaluatedItems`, which need annotation results carried across
+  applicators - a different shape of evaluation from anything here now
+- **Dynamic references**: `$recursiveRef`, `$recursiveAnchor`, `$dynamicRef`,
+  and `$anchor` as a reference target. Same-document JSON Pointer `$ref`
+  works; a named anchor is refused
+- **Vocabularies**: `$vocabulary` is ignored, along with `$schema`, since only
+  one dialect is implemented
+- **`format`, and the `content*` family**: `format` is an annotation in
+  2020-12 unless a vocabulary makes it an assertion, and `contentEncoding`,
+  `contentMediaType` and `contentSchema` need the payload decoded
+
+A schema using any of those is refused at compile time rather than validated
+with the keyword ignored.
+
+`pattern` and `patternProperties` are implemented, but only against a
+regular-expression engine the caller supplies through
+`GTEXT_JSON_Schema_Options::regex`; this library has none of its own. Without
+a provider they are refused like the keywords above. See
+[the JSON format page](../formats/json.md) for the contract a provider has to
+meet.
 
 ### 17.2 JSONPath Support
 

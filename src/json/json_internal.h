@@ -16,6 +16,7 @@
 
 #include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/json/json_core.h>
+#include <ghoti.io/text/json/json_schema.h>
 #include <ghoti.io/text/json/json_writer.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -846,6 +847,16 @@ typedef struct {
 } json_schema_dep_schema;
 
 /**
+ * One `patternProperties` entry: a regular expression and the schema every
+ * property whose name matches it must satisfy. Several entries can apply to
+ * the same property, and then all of them do.
+ */
+typedef struct {
+  void * regex;                     ///< The provider's compiled handle; owned
+  struct json_schema_node * schema; ///< What a matching property must satisfy
+} json_schema_pattern_property;
+
+/**
  * @brief Compiled schema node
  */
 typedef struct json_schema_node {
@@ -965,6 +976,30 @@ typedef struct json_schema_node {
   // dependentSchemas
   json_schema_dep_schema * dep_schemas;
   size_t dep_schemas_count;
+
+  /**
+   * The provider the two regular-expression keywords were compiled with, or
+   * NULL if this node has none. Borrowed from the schema, which holds the
+   * copy; it is kept per node so that json_schema_node_free() can release the
+   * handles below without threading the schema through every recursive call.
+   */
+  const GTEXT_JSON_Regex_Provider * regex_provider;
+
+  /**
+   * `pattern`: the compiled handle, owned.
+   *
+   * The pattern *text* is not kept. It was, briefly, "so that an error could
+   * name it" - and nothing ever did, because a compile failure already
+   * carries the provider's message and an offset into the pattern, and a
+   * match failure would have to allocate on a path that allocates nothing
+   * today. A field kept for a use that does not exist is a field that will be
+   * wrong by the time one does.
+   */
+  void * pattern_regex;
+
+  /// `patternProperties`, in document order.
+  json_schema_pattern_property * pattern_properties;
+  size_t pattern_properties_count;
 } json_schema_node;
 
 /**
@@ -1013,6 +1048,15 @@ struct GTEXT_JSON_Schema {
   json_schema_ref_entry * refs;
   size_t refs_count;
   size_t refs_capacity;
+
+  /**
+   * The caller's regular-expression provider, copied at compile time, and
+   * whether there was one. Nodes point at this copy rather than at the
+   * caller's options structure, which they are not promised outlives them.
+   * What the copy's `ctx` points at is still the caller's to keep alive.
+   */
+  GTEXT_JSON_Regex_Provider regex_provider;
+  int has_regex_provider;
 };
 
 #ifdef __cplusplus

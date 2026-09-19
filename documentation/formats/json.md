@@ -212,6 +212,12 @@ because ignoring it is both correct and harmless:
 | `$id`, `$anchor`, `$vocabulary` | name a base URI nothing resolves against |
 | vendor extensions, newer-draft keywords | JSON Schema requires ignoring them |
 
+Most of that set has since been implemented and left the list.
+`pattern` and `patternProperties` are the two whose membership is conditional:
+they are refused only when the caller supplied no regular-expression provider,
+because whether they can be enforced is a property of the caller's
+configuration rather than of this library.
+
 The check applies to subschemas as well as the root, since both go through the
 same recursive compile.
 
@@ -263,12 +269,29 @@ page means "compliant as far as the cases below reach".
   is not citeable. Naming the draft, and listing the keywords omitted from it,
   is a documentation fix; the alternative reading - that this is a
   JSON-Schema-shaped validator of its own - would need saying out loud.
-- **Schema keywords absent:** `pattern` and `patternProperties`, which need a
-  regular-expression engine; `unevaluatedItems` and `unevaluatedProperties`,
-  which need annotation results collected across applicators and depend on
-  `patternProperties` besides; `$recursiveRef` and `$dynamicRef`; `format`;
-  and the `content*` family. A schema using any of them is refused rather
-  than silently under-enforced - see [Deviations](#json-deviations).
+- **`pattern` and `patternProperties` need an engine the caller supplies.**
+  Both are implemented, against a regular-expression provider passed in
+  `GTEXT_JSON_Schema_Options` - three function pointers and a context pointer.
+  With a provider they are compiled at schema-compile time and enforced at
+  validation time; without one they are refused the way any unenforceable
+  keyword is.
+
+  The vtable exists so that this library does not acquire a
+  regular-expression dependency that every caller pays for, including the many
+  who never write a `pattern`, and so that the one caller who does write one
+  gets the dialect their schema means. That dialect is ECMA-262 with the `u`
+  flag, the match is a *search* rather than an anchored match, and both
+  strings are UTF-8 with lengths given - the three obligations the header
+  states, and the three places a validator quietly gets this wrong.
+  `search_fn` has a third answer besides yes and no: a search that could not
+  finish becomes `GTEXT_JSON_E_LIMIT`, because a pattern that spent its budget
+  has not said the instance is invalid, and recording that as "no match" turns
+  a denial-of-service defence into a wrong validation result.
+- **Schema keywords absent:** `unevaluatedItems` and `unevaluatedProperties`,
+  which need annotation results collected across applicators;
+  `$recursiveRef` and `$dynamicRef`; `format`; and the `content*` family. A
+  schema using any of them is refused rather than silently under-enforced -
+  see [Deviations](#json-deviations).
 
   Everything else is implemented, `$ref` included. It was the significant
   gap, because without it a schema can be neither factored nor recursive.
