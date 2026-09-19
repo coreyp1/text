@@ -705,11 +705,22 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 	@printf "\n############################\n"
 	@printf "### Running All Tests    ###\n"
 	@printf "############################\n\n"
-	@for test_exe in $(TEST_EXECUTABLES); do \
+# The `|| true` that used to end this line meant `make test` exited 0 with a
+# failing suite.  Only the three named runs above could fail the build; the
+# other sixty-four were decorative - their failures printed and were discarded.
+# Every claim resting on "the suite is green" rested on this loop.
+	@failed=""; \
+	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\n### Running $$test_name ###\n"; \
-		LD_LIBRARY_PATH="$(APP_DIR)" $$test_exe --gtest_brief=1 || true; \
-	done
+		if ! LD_LIBRARY_PATH="$(APP_DIR)" $$test_exe --gtest_brief=1; then \
+			failed="$$failed $$test_name"; \
+		fi; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf "\033[0;31m\n### Failing suites:%s ###\033[0m\n" "$$failed" >&2; \
+		exit 1; \
+	fi
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
@@ -750,15 +761,24 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 test-valgrind: ## Run all tests under valgrind (Linux only)
 test-valgrind: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 ifeq ($(OS_NAME), Linux)
-	@for test_exe in $(TEST_EXECUTABLES); do \
+# VALGRIND_FLAGS carries --error-exitcode=1, so valgrind already reports a
+# memory error as a non-zero status.  This loop simply did not look at it.
+	@failed=""; \
+	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n"; \
 		printf "############################\n"; \
 		printf "### Running %s tests under Valgrind ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_LIBRARY_PATH="$(APP_DIR)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1; \
-	done
+		if ! LD_LIBRARY_PATH="$(APP_DIR)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1; then \
+			failed="$$failed $$test_name"; \
+		fi; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf "\033[0;31m\n### Suites failing under valgrind:%s ###\033[0m\n" "$$failed" >&2; \
+		exit 1; \
+	fi
 else
 	@printf "\033[0;31m\n"
 	@printf "Valgrind is only available on Linux\n"
