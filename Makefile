@@ -270,6 +270,12 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 
 # Single shell: discover test sources and compute executable name for each (path|name per line).
 # test.cpp -> testText; test-yaml-*.cpp -> testYaml*. Avoids hundreds of $(call test-name) / CreateProcess.
+# The gates `make test` runs alongside the tests.  A coverage build clears
+# this: --coverage links the gcov runtime, which exports mangle_path, and
+# check-symbols is right to reject that in a shipping build but it is not a
+# defect in an instrumented one.
+TEST_GATES ?= check-symbols check-allocators
+
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
 	else echo "$$f|$$(basename "$$f" .cpp | sed 's/test-/test/g; s/test_/test/g; s/-\([a-z]\)/\U\1/g; s/_\([a-z]\)/\U\1/g; s/^test\([a-z]\)/test\U\1/')"; fi; done)
@@ -674,7 +680,7 @@ else
 endif
 
 test: ## Make and run the Unit tests
-test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) check-symbols check-allocators
+test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 	@printf "\033[0;30;43m\n"
 	@printf "############################\n"
 	@printf "### Running Text tests   ###\n"
@@ -1131,7 +1137,11 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 # and leaving the tree cleaned would break any sibling project that links
 # this one. The cost is one extra build; coverage is not run often.
 	@$(MAKE) --no-print-directory clean > /dev/null
-	@$(MAKE) --no-print-directory test \
+# TEST_GATES is cleared because --coverage links the gcov runtime, which
+# exports mangle_path.  check-symbols is right to reject that in a shipping
+# build, but it is not a defect in an instrumented one, and it made this
+# target fail before it ever produced a report.
+	@$(MAKE) --no-print-directory test TEST_GATES= \
 		EXTRA_CFLAGS="--coverage -O0" \
 		EXTRA_LDFLAGS="--coverage" > /dev/null
 	@tools/coverage.sh $(OBJ_DIR)
