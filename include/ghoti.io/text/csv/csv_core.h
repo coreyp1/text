@@ -178,8 +178,15 @@ typedef struct {
   bool quote_empty_fields; ///< Quote empty fields (default true)
   bool quote_if_needed;    ///< Quote fields containing delimiter/quote/newline
                            ///< (default true)
-  bool always_escape_quotes; ///< Always escape quotes (default: depends on
-                             ///< escape mode)
+  bool always_escape_quotes; ///< Escape the quote character when it appears in
+                             ///< a field that is not being quoted (default
+                             ///< true).  RFC 4180 gives such a quote no special
+                             ///< meaning, so clearing this emits it verbatim.
+                             ///< Quotes inside quoted fields are always
+                             ///< escaped regardless, since leaving one
+                             ///< unescaped would end the field early.  No
+                             ///< effect when the dialect's escape mode is
+                             ///< GTEXT_CSV_ESCAPE_NONE.
   bool trailing_newline;     ///< Add trailing newline at end (default false)
   bool trim_trailing_empty_fields; ///< Trim trailing empty fields from rows
                                    ///< (default false)

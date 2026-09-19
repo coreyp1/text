@@ -13093,6 +13093,92 @@ TEST(CsvErrorContextOptions, ZeroRadiusMeansLibraryDefault) {
 	EXPECT_EQ(z.snippet, f.snippet);
 }
 
+
+
+// ---------------------------------------------------------------------------
+// always_escape_quotes
+//
+// Set to true by gtext_csv_write_options_default() and read by nothing.  The
+// writer escaped a quote appearing in an unquoted field unconditionally, under
+// a comment saying "for now, we'll escape them anyway".
+//
+// It is only observable with quote_if_needed cleared, because with the default
+// dialect a field containing the quote character is quoted, and a quote inside
+// a quoted field must always be escaped or the field ends early.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string csv_write_one_field(
+    const char * field, const GTEXT_CSV_Write_Options & opts) {
+	GTEXT_CSV_Table * table = gtext_csv_new_table();
+	EXPECT_NE(table, nullptr);
+	const char * row[] = {field};
+	EXPECT_EQ(gtext_csv_row_append(table, row, nullptr, 1, nullptr),
+	    GTEXT_CSV_OK);
+
+	GTEXT_CSV_Sink sink;
+	EXPECT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	EXPECT_EQ(gtext_csv_write_table(&sink, &opts, table), GTEXT_CSV_OK);
+
+	std::string out(
+	    gtext_csv_sink_buffer_data(&sink), gtext_csv_sink_buffer_size(&sink));
+
+	gtext_csv_sink_buffer_free(&sink);
+	gtext_csv_free_table(table);
+	return out;
+}
+
+} // namespace
+
+TEST(CsvAlwaysEscapeQuotes, DefaultEscapesQuotesInUnquotedFields) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	ASSERT_TRUE(opts.always_escape_quotes);
+	opts.quote_if_needed = false; // do not add surrounding quotes
+
+	// a"b -> a""b, with no surrounding quotes added.
+	std::string out = csv_write_one_field("a\"b", opts);
+	EXPECT_NE(out.find("a\"\"b"), std::string::npos) << "output was: " << out;
+}
+
+TEST(CsvAlwaysEscapeQuotes, ClearingEmitsTheQuoteVerbatim) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.always_escape_quotes = false;
+	opts.quote_if_needed = false;
+
+	// RFC 4180 gives a quote inside an unquoted field no special meaning.
+	std::string out = csv_write_one_field("a\"b", opts);
+	EXPECT_NE(out.find("a\"b"), std::string::npos) << "output was: " << out;
+	EXPECT_EQ(out.find("a\"\"b"), std::string::npos)
+	    << "quote was still escaped: " << out;
+}
+
+TEST(CsvAlwaysEscapeQuotes, QuotedFieldsAlwaysEscapeRegardless) {
+	// With quoting in play the option must not apply: an unescaped quote
+	// inside a quoted field would terminate it early and produce output that
+	// does not parse back to the same value.
+	for (bool always : {true, false}) {
+		GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+		opts.always_escape_quotes = always;
+		opts.quote_if_needed = true; // default: a quote forces quoting
+
+		std::string out = csv_write_one_field("a\"b", opts);
+		EXPECT_NE(out.find("\"a\"\"b\""), std::string::npos)
+		    << "always_escape_quotes=" << always << " output was: " << out;
+
+		// And it round-trips.
+		GTEXT_CSV_Table * back =
+		    gtext_csv_parse_table(out.data(), out.size(), nullptr, nullptr);
+		ASSERT_NE(back, nullptr);
+		size_t len = 0;
+		const char * v = gtext_csv_field(back, 0, 0, &len);
+		ASSERT_NE(v, nullptr);
+		EXPECT_EQ(std::string(v, len), "a\"b")
+		    << "always_escape_quotes=" << always;
+		gtext_csv_free_table(back);
+	}
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

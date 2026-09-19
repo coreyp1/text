@@ -539,11 +539,17 @@ GTEXT_INTERNAL_API GTEXT_CSV_Status csv_write_field(const GTEXT_CSV_Sink * sink,
     return sink->write(sink->user, &quote_char, 1);
   }
   else {
-    // Field doesn't need quoting but may need escaping (for unquoted quotes)
-    // This is an edge case - if allow_unquoted_quotes is true, we might
-    // have quotes in unquoted fields. For now, we'll escape them anyway
-    // if escape mode is not NONE.
-    if (escape_mode != GTEXT_CSV_ESCAPE_NONE && field_len > 0 && field_data) {
+    // The field is not being quoted, but it may still contain the quote
+    // character.  RFC 4180 gives a quote inside an unquoted field no special
+    // meaning, so escaping it is a choice rather than a requirement - which is
+    // what always_escape_quotes selects.  It defaults to true, which is what
+    // this code did unconditionally while the option was read by nothing.
+    //
+    // A quote inside a *quoted* field is not affected: leaving that one
+    // unescaped would terminate the field early and produce malformed output,
+    // so the quoted path above always escapes.
+    if (opts->always_escape_quotes && escape_mode != GTEXT_CSV_ESCAPE_NONE &&
+        field_len > 0 && field_data) {
       size_t escaped_len = csv_field_escaped_length(
           field_data, field_len, escape_mode, quote_char);
 
