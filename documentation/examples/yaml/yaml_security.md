@@ -202,6 +202,27 @@ Prevents exponential expansion attacks (billion laughs):
 - Moderate: 100,000 nodes
 - Permissive: 1,000,000 nodes
 
+**Where it applies.** Parsing a document with aliases is cheap whatever this
+is set to: alias nodes are stored as references, so the DOM stays linear in
+the size of the input and a nominally 10^10-node document parses in
+milliseconds. The expansion only happens when something materializes the
+tree, which is where the limit is spent:
+
+- `gtext_yaml_to_json_with_options()` with `allow_resolved_aliases` set
+  counts every node it visits against this limit and fails with
+  `GTEXT_YAML_E_LIMIT`. Without `allow_resolved_aliases` it refuses alias
+  nodes outright, which is the default.
+- The resolver API (`gtext_yaml_resolver_compute_expansion()`) computes the
+  expanded size and reports `GTEXT_YAML_E_LIMIT` before expanding anything.
+- The DOM parser additionally caps the number of alias nodes in a document,
+  which is a different quantity: a bomb has few alias references and a large
+  expansion, so that cap alone does not stop one.
+
+Until recently the conversion consulted none of this and allocated until
+`malloc()` failed, returning `GTEXT_YAML_E_OOM`. If you are relying on this
+limit, check that you get `GTEXT_YAML_E_LIMIT` rather than
+`GTEXT_YAML_E_OOM`: the second means something is expanding without a budget.
+
 ### 4. Zero Means Default
 
 Setting any limit to `0` uses the library default:

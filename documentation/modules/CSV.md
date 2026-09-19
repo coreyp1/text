@@ -116,8 +116,8 @@ All limits use `0` to indicate library defaults:
 
 ### 4.4 Error Context
 
-- **`enable_context_snippet`**: Generate context snippet for errors — **Default: `true`**
-- **`context_radius_bytes`**: Bytes before/after error in snippet — **Default: `40`**
+- **`enable_context_snippet`**: Generate context snippet for errors — **Default: `true`**. When false no snippet is allocated and `GTEXT_CSV_Error::context_snippet` stays `NULL`.
+- **`context_radius_bytes`**: Bytes before and after the error position to include in the snippet — **Default: `40`**, and `0` means the library default, as it does for the other size limits here.
 
 ---
 
@@ -130,7 +130,7 @@ The library provides extensive configuration options for output formatting:
 - **`quote_all_fields`**: Quote all fields — **Default: `false`**
 - **`quote_empty_fields`**: Quote empty fields — **Default: `true`**
 - **`quote_if_needed`**: Quote fields containing delimiter/quote/newline — **Default: `true`**
-- **`always_escape_quotes`**: Always escape quotes (default behavior depends on escape mode) — **Default: `true`**
+- **`always_escape_quotes`**: Escape the quote character when it appears in a field that is *not* being quoted — **Default: `true`**. RFC 4180 gives such a quote no special meaning, so clearing this emits it verbatim. Quotes inside quoted fields are always escaped regardless, since leaving one unescaped would end the field early. No effect when the dialect's escape mode is `GTEXT_CSV_ESCAPE_NONE`. Only observable with `quote_if_needed` cleared, because otherwise a field containing a quote is quoted.
 
 ### 5.2 Formatting
 
