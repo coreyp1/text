@@ -125,6 +125,36 @@ jobs:
         working-directory: text
         run: make test-valgrind-quiet PREFIX="$PREFIX"
 
+  coverage:
+    name: Coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: text
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtest-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Ghoti-io/CUtil
+          path: cutil
+
+      - name: Build and install cutil
+        working-directory: cutil
+        run: |
+          make -j"$(nproc)" PREFIX="$PREFIX"
+          make install PREFIX="$PREFIX"
+
+      # The floor exists so that coverage can only be argued upward. Raise it
+      # when the number rises; do not lower it to make a branch pass.
+      - name: Line coverage
+        working-directory: text
+        run: make coverage COVERAGE_MIN=COVERAGE_FLOOR_PLACEHOLDER PREFIX="$PREFIX"
+
   fuzz:
     name: Fuzzers (smoke)
     runs-on: ubuntu-latest

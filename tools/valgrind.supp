@@ -1,0 +1,15 @@
+# Valgrind suppressions for ghoti.io-text.
+#
+# VALGRIND_FLAGS in the Makefile has passed --suppressions=tools/valgrind.supp
+# since the file was introduced, and this file has never existed in the
+# repository: `tools` was listed in .gitignore, so nothing under it was ever
+# committed. Valgrind treats a missing suppressions file as fatal - it prints
+# "FATAL: can't open suppressions file" and exits 1 before running anything -
+# so `make test-valgrind` and `make test-valgrind-quiet` could not have
+# succeeded for anyone, on any machine, in that time.
+#
+# The set is deliberately empty. Nothing in this library needs suppressing
+# today, and an empty file is a valid suppression set, so the flag now names
+# something real. Add an entry here only for a leak that is demonstrably not
+# ours - one in libc, the dynamic loader, or Google Test - and say in a comment
+# which, and why it cannot be fixed on our side.

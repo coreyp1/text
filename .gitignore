@@ -10,7 +10,12 @@ example.output.*
 # Task documents
 tasks
 
-tools
+# tools/ is NOT ignored. It was, with no comment saying why, and the effect was
+# that tools/coverage.sh and tools/valgrind.supp were never committed - so
+# `make coverage` did not exist for anyone who cloned this repository, and
+# `make test-valgrind` died on a missing suppressions file before running a
+# single test. Build products belong in build/; scripts the Makefile invokes
+# belong in the repository.
 
 # Fuzzer crash/leak artifacts (reproducers are promoted to tests instead)
 crash-*

@@ -1238,9 +1238,17 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 	@$(MAKE) --no-print-directory test TEST_GATES= \
 		EXTRA_CFLAGS="--coverage -O0" \
 		EXTRA_LDFLAGS="--coverage" > /dev/null
-	@tools/coverage.sh $(OBJ_DIR)
-	@$(MAKE) --no-print-directory clean > /dev/null
-	@$(MAKE) --no-print-directory all > /dev/null
+# COVERAGE_MIN, when set, makes the report fail below that percentage.  CI
+# passes one so that coverage can only be argued upward; a local run without it
+# just prints the numbers.
+#
+# The status is held until after the rebuild rather than being allowed to stop
+# the recipe, because leaving the instrumented objects in the tree is exactly
+# what the cleanup above exists to prevent - a later `make` would link them.
+	@COVERAGE_MIN=$(COVERAGE_MIN) tools/coverage.sh $(OBJ_DIR); status=$$?; \
+	$(MAKE) --no-print-directory clean > /dev/null; \
+	$(MAKE) --no-print-directory all > /dev/null; \
+	exit $$status
 
 help: ## Display this help
 	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' Makefile | sort | sed 's/\([^:]*\):.*## \(.*\)/\1:\2/' | awk -F: '{printf "%-15s %s\n", $$1, $$2}' | sed "s/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g"
