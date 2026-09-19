@@ -34,6 +34,8 @@ struct GTEXT_YAML_Scanner {
   int finished;           /* whether finish() was called */
   int indent_ws;          /* 1 if still in indentation whitespace on this line */
   int line_indent;        /* column of the first non-space on this line, 0-based */
+  int node_indent;        /* indentation of the block node being built, -1 at the root */
+  int last_scalar_col;    /* 0-based column the last scalar token started at */
   int suppress_lf;        /* 1 if previous char was CR and LF should not advance line */
 
   int encoding_determined;
@@ -460,6 +462,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->pending_error = GTEXT_YAML_OK;
   s->pending_error_message = NULL;
   s->context_depth = 0; /* Start in block context */
+  s->node_indent = -1;  /* nothing open yet: the document root */
+  s->last_scalar_col = 0;
   s->last_indicator = 0;
   return s;
 }
@@ -988,6 +992,7 @@ block_scalar_collected:
 
   gtext_yaml_dynbuf_free(&scalar);
 
+    s->last_scalar_col = col - 1; /* col is 1-based */
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (style == '>')
       ? GTEXT_YAML_SCALAR_STYLE_FOLDED
@@ -1025,6 +1030,9 @@ block_scalar_collected:
           scanner_consume(s);
           scanner_consume(s);
           
+          /* A new document starts at the root again, with no block node
+             open for a plain scalar to be measured against. */
+          s->node_indent = -1;
           tok->type = (c == '-') ? GTEXT_YAML_TOKEN_DOCUMENT_START : GTEXT_YAML_TOKEN_DOCUMENT_END;
           tok->offset = off;
           tok->line = line;
@@ -1051,7 +1059,28 @@ block_scalar_collected:
       scanner_pop_context(s);
     }
     
+    const bool opens_block_node = (c == ':' || c == '-' || c == '?')
+      && scanner_current_context(s) == YAML_CONTEXT_BLOCK;
+
     scanner_consume(s);
+
+    /* ":" and "-" open a block node whose indentation is that of the line
+       they appear on.  A plain scalar continues onto later lines only while
+       they are indented past it (7.3.3's ns-plain-multi-line).  This is read
+       after the consume, not before: an indicator that is itself the first
+       non-space character of its line only sets line_indent as it is taken,
+       and reading it earlier gave the previous line's indentation. */
+    if (opens_block_node) {
+      /* A ":" belongs to the node its key began, which is not the start of
+         the line when the mapping is a sequence entry: in "- x: 1" the key
+         sits at column 2 while the line begins at 0.  A "-" belongs where it
+         stands, which nested sequences likewise put past the line's start. */
+      s->node_indent = (c == ':') ? s->last_scalar_col : (col - 1);
+      /* "?" opens an explicit key, whose value arrives on a later line at the
+         same column ("? a" over ": 1").  Without this the key's scalar folded
+         across that break and swallowed its own ":". */
+    }
+
     tok->type = GTEXT_YAML_TOKEN_INDICATOR;
     tok->u.c = (char)c;
     tok->offset = off;
@@ -1254,6 +1283,7 @@ block_scalar_collected:
     if (slen) { memcpy(out, scalar.data, slen); }
     gtext_yaml_dynbuf_free(&scalar);
 
+    s->last_scalar_col = col - 1; /* col is 1-based */
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (quote == '\'')
       ? GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED
@@ -1292,8 +1322,82 @@ block_scalar_collected:
     /* Context-aware whitespace handling */
     if (ctx == YAML_CONTEXT_BLOCK && !require_space_delimiter) {
       /* In block context, plain scalars can contain spaces and tabs,
-         but end at newlines or when followed by structural indicators */
-      if (c == '\r' || c == '\n') break;
+         and continue onto following lines indented past the node they belong
+         to (7.3.3 ns-plain-multi-line).  A single break folds to a space; a
+         run of blank lines gives one line break each, as flow folding does. */
+      if (c == '\r' || c == '\n') {
+        size_t probe = look;
+        size_t breaks = 0;
+        size_t continue_at = 0;
+        bool continues = false;
+        bool need_more = false;
+
+        for (;;) {
+          if (s->cursor + probe >= s->input.len) { need_more = true; break; }
+          char bc = s->input.data[s->cursor + probe];
+          if (bc == '\r') {
+            probe++;
+            if (s->cursor + probe < s->input.len
+                && s->input.data[s->cursor + probe] == '\n') {
+              probe++;
+            } else if (s->cursor + probe >= s->input.len) {
+              need_more = true;
+              break;
+            }
+          } else if (bc == '\n') {
+            probe++;
+          } else {
+            break;
+          }
+          breaks++;
+
+          size_t sp = 0;
+          while (s->cursor + probe + sp < s->input.len
+                 && s->input.data[s->cursor + probe + sp] == ' ') {
+            sp++;
+          }
+          if (s->cursor + probe + sp >= s->input.len) { need_more = true; break; }
+          char nc = s->input.data[s->cursor + probe + sp];
+          if (nc == '\n' || nc == '\r') { probe += sp; continue; } /* blank */
+          if ((int)sp <= s->node_indent) break;   /* dedent ends the scalar */
+          if (nc == '#') break;                   /* a comment, not content */
+          /* "---" and "..." open and close documents wherever they stand, so
+             a scalar never folds across one. */
+          if ((nc == '-' || nc == '.') && s->cursor + probe + sp + 2 < s->input.len
+              && s->input.data[s->cursor + probe + sp + 1] == nc
+              && s->input.data[s->cursor + probe + sp + 2] == nc) {
+            const size_t after = s->cursor + probe + sp + 3;
+            if (after >= s->input.len || s->input.data[after] == ' '
+                || s->input.data[after] == '\t' || s->input.data[after] == '\n'
+                || s->input.data[after] == '\r') {
+              break;
+            }
+          }
+          continues = true;
+          continue_at = probe + sp;
+          break;
+        }
+
+        /* Without the rest of the input there is no telling whether the
+           scalar goes on, and this scanner cannot rewind to ask again. */
+        if (need_more && !s->finished) {
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_INCOMPLETE;
+        }
+        if (!continues || scalar.len == 0) break;
+
+        const size_t folded = (breaks == 1) ? 1 : (breaks - 1);
+        const char fold_ch = (breaks == 1) ? ' ' : '\n';
+        for (size_t i = 0; i < folded; i++) {
+          if (!gtext_yaml_dynbuf_append(&scalar, &fold_ch, 1)) {
+            gtext_yaml_dynbuf_free(&scalar);
+            if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; }
+            return GTEXT_YAML_E_OOM;
+          }
+        }
+        look = continue_at;
+        continue;
+      }
       
       /* Handle spaces: look ahead to determine if this is a separator or part of value */
       if (c == ' ' || c == '\t') {
@@ -1311,8 +1415,16 @@ block_scalar_collected:
           next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
         }
         
-        /* Break at end of input or end of line. */
-        if (next_c == -1 || next_c == '\r' || next_c == '\n') break;
+        /* Break at the end of input. */
+        if (next_c == -1) break;
+        /* White space before a line break is separation rather than content.
+           Step over it so the break itself decides whether the scalar goes on
+           to the next line. */
+        if (next_c == '\r' || next_c == '\n') {
+          if (scalar.len == 0) break;
+          look += ws_len;
+          continue;
+        }
 
         /* " #" starts a comment (7.3.3): a '#' only does so when it follows
            whitespace, which is exactly the case being looked at here. */
@@ -1362,6 +1474,10 @@ block_scalar_collected:
           next_c = (unsigned char)s->input.data[s->cursor + look + 1];
         }
         if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c ==  '\n') {
+          /* A key on a continuation line is refused by the parser, which
+             already rejects a key that is not on the same line as its ':'.
+             A check here as well was tried and removed: no input reached it
+             that the parser did not catch first, with a better message. */
           break;
         }
       }
@@ -1386,17 +1502,92 @@ block_scalar_collected:
         if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') break;
         if (c == '|' || c == '>' || c == '%') break;
       }
-    } else {
-      /* In flow context, and for anchor/alias names, a plain scalar is
-         space-delimited. */
+    } else if (require_space_delimiter) {
+      /* An anchor, alias or tag name really is space-delimited: 5.3 does not
+         allow white space in one. */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
+      if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break;
+      if (c == ':') break;
+      if (scalar.len == 0 && is_indicator_char(c)) {
+        if (!(s->last_indicator == '!' && c == '!')) break;
+      }
+    } else {
+      /* Flow context.  A plain scalar here may contain white space just as it
+         may in block context - 7.3.3's ns-plain-char does not exclude it, and
+         only c-flow-indicator is added to what ends the scalar.  Treating a
+         space as a delimiter did not merely refuse "[a - b]": it silently
+         split valid documents, so "[a b, c]" came out as three entries rather
+         than two and "{k: v w, j: x}" was scrambled outright. */
+      if (c == '\r' || c == '\n') break;
+
+      if (c == ' ' || c == '\t') {
+        /* Look past the run of white space to see whether the scalar goes on.
+           Trailing white space is not part of it, so it is only appended once
+           something after it turns out to be content. */
+        size_t ws_len = 1;
+        while (s->cursor + look + ws_len < s->input.len) {
+          int peek_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
+          if (peek_c != ' ' && peek_c != '\t') break;
+          ws_len++;
+        }
+        int next_c = -1;
+        if (s->cursor + look + ws_len < s->input.len) {
+          next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
+        }
+
+        if (next_c == -1 || next_c == '\r' || next_c == '\n') break;
+        if (next_c == '#') break; /* " #" opens a comment */
+        if (next_c == ',' || next_c == '[' || next_c == ']'
+            || next_c == '{' || next_c == '}') {
+          break;
+        }
+        if (next_c == ':') {
+          int after_colon = -1;
+          if (s->cursor + look + ws_len + 1 < s->input.len) {
+            after_colon =
+                (unsigned char)s->input.data[s->cursor + look + ws_len + 1];
+          }
+          if (after_colon == -1 || after_colon == ' ' || after_colon == '\t'
+              || after_colon == '\r' || after_colon == '\n'
+              || after_colon == ',' || after_colon == '[' || after_colon == ']'
+              || after_colon == '{' || after_colon == '}') {
+            break;
+          }
+        }
+
+        if (scalar.len == 0) break; /* leading white space is separation */
+
+        for (size_t i = 0; i < ws_len; i++) {
+          char wch = (char)s->input.data[s->cursor + look + i];
+          if (!gtext_yaml_dynbuf_append(&scalar, &wch, 1)) {
+            gtext_yaml_dynbuf_free(&scalar);
+            if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; }
+            return GTEXT_YAML_E_OOM;
+          }
+        }
+        look += ws_len;
+        continue;
+      }
 
       /* The flow indicators always end the scalar: without them the
          collection could never be closed. */
       if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break;
 
-      /* ':' separates a key from its value here regardless of what follows. */
-      if (c == ':') break;
+      /* A ':' ends the scalar only where it separates a key from a value -
+         followed by white space, a flow indicator or the end.  Elsewhere it
+         is content, so "[a:b, c]" holds "a:b". */
+      if (c == ':') {
+        int next_c = -1;
+        if (s->cursor + look + 1 < s->input.len) {
+          next_c = (unsigned char)s->input.data[s->cursor + look + 1];
+        }
+        if (next_c == -1 || next_c == ' ' || next_c == '\t'
+            || next_c == '\r' || next_c == '\n'
+            || next_c == ',' || next_c == '[' || next_c == ']'
+            || next_c == '{' || next_c == '}') {
+          break;
+        }
+      }
 
       /* The rest are indicators only where a node may begin (5.3).  Mid-scalar
          they are content, so "[a-b, c]" holds "a-b" rather than ending the
@@ -1472,6 +1663,7 @@ block_scalar_collected:
   }
   /* after consume (quiet) */
 
+  s->last_scalar_col = col - 1; /* col is 1-based */
   tok->type = GTEXT_YAML_TOKEN_SCALAR;
   tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   s->token_payload = out;

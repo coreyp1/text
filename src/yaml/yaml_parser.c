@@ -2566,8 +2566,31 @@ static GTEXT_YAML_Status parse_callback(
 					
 				case ',':
 					/* Item separator - handle mapping state flip */
-					if (p->stack.depth > 0 && p->stack.states[p->stack.depth - 1] == STATE_MAPPING_VALUE) {
-						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+					if (p->stack.depth > 0) {
+						const size_t sep_top = p->stack.depth - 1;
+						const bool in_flow_map = !p->stack.is_block[sep_top] &&
+							(p->stack.states[sep_top] == STATE_MAPPING_KEY ||
+							 p->stack.states[sep_top] == STATE_MAPPING_VALUE);
+						/* An entry that reached the comma without a ':' is a key
+						 * whose value is null, the same rule a block mapping
+						 * follows.  Children are held as alternating key, value
+						 * pairs, so an odd count means the entry just closed has
+						 * no value yet.  Without this, "{a, b}" paired the two
+						 * keys with each other. */
+						if (in_flow_map && (p->temp.count % 2) == 1) {
+							if (!mapping_supply_null_value(p)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_OOM;
+									p->error->message =
+										"Out of memory completing flow mapping entry";
+								}
+								return GTEXT_YAML_E_OOM;
+							}
+						}
+						if (p->stack.states[sep_top] == STATE_MAPPING_VALUE) {
+							p->stack.states[sep_top] = STATE_MAPPING_KEY;
+						}
 					}
 					break;
 					

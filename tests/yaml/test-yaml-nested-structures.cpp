@@ -74,7 +74,12 @@ TEST(YamlNested, SimpleNestedSequence) {
 // Test: Nested mappings {a:{b:{c:1}}}
 //
 TEST(YamlNested, NestedMappings) {
-  const char *input = "{a:{b:{c:1}}}";
+  /* A plain key in flow context needs the space after its colon: YAML
+     reads "{c:1}" as the single scalar "c:1", not as a pair. These
+     inputs were written in JSON's spelling, so they nested one scalar
+     where the counts below expect two. The nesting they exist to cover
+     is unchanged. */
+  const char *input = "{a: {b: {c: 1}}}";
   reset_counts();
   
   GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, counting_cb, NULL);
@@ -100,7 +105,12 @@ TEST(YamlNested, NestedMappings) {
 // Test: Mixed nesting {a:[1,{b:2}]}
 //
 TEST(YamlNested, MixedNesting) {
-  const char *input = "{a:[1,{b:2}]}";
+  /* A plain key in flow context needs the space after its colon: YAML
+     reads "{c:1}" as the single scalar "c:1", not as a pair. These
+     inputs were written in JSON's spelling, so they nested one scalar
+     where the counts below expect two. The nesting they exist to cover
+     is unchanged. */
+  const char *input = "{a: [1, {b: 2}]}";
   reset_counts();
   
   GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, counting_cb, NULL);
@@ -218,7 +228,12 @@ TEST(YamlNested, EmptyNestedStructures) {
 // Test: Complex real-world-like structure
 //
 TEST(YamlNested, ComplexStructure) {
-  const char *input = "{users:[{name:alice,age:30},{name:bob,age:25}],count:2}";
+  /* A plain key in flow context needs the space after its colon: YAML
+     reads "{c:1}" as the single scalar "c:1", not as a pair. These
+     inputs were written in JSON's spelling, so they nested one scalar
+     where the counts below expect two. The nesting they exist to cover
+     is unchanged. */
+  const char *input = "{users: [{name: alice, age: 30}, {name: bob, age: 25}], count: 2}";
   reset_counts();
   
   GTEXT_YAML_Stream *s = gtext_yaml_stream_new(NULL, counting_cb, NULL);

@@ -16,9 +16,17 @@
 #include <gtest/gtest.h>
 #include <ghoti.io/text/yaml.h>
 
-/* Test simple scalar anchor and alias */
+/* Test simple scalar anchor and alias.
+ *
+ * This used to read "&anchor value" and "*anchor" on two bare lines and
+ * expect the root to be the alias. Those two lines are one plain scalar -
+ * PyYAML reads them as "value *anchor" - so the root could never be an
+ * alias; it only looked like two nodes while multi-line plain scalars went
+ * unsupported. An alias cannot be a document's root and also refer to an
+ * anchor in that same document, so the mapping below is the shape that
+ * actually tests what this was written to test. */
 TEST(YamlDomAnchors, SimpleScalarAnchor) {
-	const char *yaml = "&anchor value\n*anchor";
+	const char *yaml = "a: &anchor value\nb: *anchor\n";
 	GTEXT_YAML_Error err;
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
 	
@@ -27,12 +35,28 @@ TEST(YamlDomAnchors, SimpleScalarAnchor) {
 	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
 	ASSERT_NE(root, nullptr);
 	
-	/* Root should be an alias that resolves to the anchored scalar */
-	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_ALIAS);
-	const GTEXT_YAML_Node *target = gtext_yaml_alias_target(root);
+	/* "b" should be an alias that resolves to the anchored scalar */
+	const GTEXT_YAML_Node *b = gtext_yaml_mapping_get(root, "b");
+	ASSERT_NE(b, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(b), GTEXT_YAML_ALIAS);
+	const GTEXT_YAML_Node *target = gtext_yaml_alias_target(b);
 	ASSERT_NE(target, nullptr);
 	EXPECT_EQ(gtext_yaml_node_type(target), GTEXT_YAML_STRING);
+	EXPECT_STREQ(gtext_yaml_node_as_string(target), "value");
 	
+	gtext_yaml_free(doc);
+}
+
+/* The two bare lines the case above used to carry are one plain scalar. */
+TEST(YamlDomAnchors, AnchorThenAliasOnTheNextLineIsOneScalar) {
+	const char *yaml = "&anchor value\n*anchor";
+	GTEXT_YAML_Error err;
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
+	ASSERT_NE(doc, nullptr) << "Parse failed: " << (err.message ? err.message : "unknown error");
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_STRING);
+	EXPECT_STREQ(gtext_yaml_node_as_string(root), "value *anchor");
 	gtext_yaml_free(doc);
 }
 
