@@ -1489,18 +1489,52 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	return GTEXT_YAML_OK;
 }
 
-static GTEXT_YAML_Status close_block_contexts(parser_state *p, int new_indent) {
+/**
+ * @brief Close the block collections a line at @p new_indent has left.
+ *
+ * A collection indented further than the new line has ended.  A block
+ * sequence at exactly the new line's indentation has ended too, because YAML
+ * lets a sequence sit at the same column as the key that owns it:
+ *
+ *     a:
+ *     - 1
+ *     b: 2
+ *
+ * Here "b" is a key of the mapping that owns "a", not a third entry of the
+ * sequence.  Only another entry keeps that sequence open, so @p starts_entry
+ * says whether this line begins with a "-" at that column.  A block *mapping*
+ * at the same indentation is never closed: that is the mapping the new key
+ * belongs to.
+ */
+static GTEXT_YAML_Status close_block_contexts_for(
+	parser_state *p,
+	int new_indent,
+	bool starts_entry
+) {
 	if (!p) return GTEXT_YAML_E_INVALID;
 
 	while (p->stack.depth > 0) {
 		if (!stack_top_is_block(p)) break;
-		if (new_indent >= stack_top_indent(p)) break;
-		
+		const int top_indent = stack_top_indent(p);
+		if (new_indent < top_indent) {
+			/* left the collection entirely */
+		} else if (new_indent == top_indent && !starts_entry &&
+			p->stack.states[p->stack.depth - 1] == STATE_SEQUENCE) {
+			/* a sequence at the owning key's own column, and this is not
+			   another entry of it */
+		} else {
+			break;
+		}
+
 		GTEXT_YAML_Status status = finalize_top_collection(p);
 		if (status != GTEXT_YAML_OK) return status;
 	}
 
 	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status close_block_contexts(parser_state *p, int new_indent) {
+	return close_block_contexts_for(p, new_indent, false);
 }
 
 /**
@@ -1519,7 +1553,10 @@ static GTEXT_YAML_Status parse_callback(
 	GTEXT_YAML_Event_Type type = event->type;
 
 	if (event->line >= 0 && event->line != p->last_event_line) {
-		GTEXT_YAML_Status close_status = close_block_contexts(p, event->col);
+		const bool starts_entry = (type == GTEXT_YAML_EVENT_INDICATOR
+			&& event->data.indicator == '-');
+		GTEXT_YAML_Status close_status =
+			close_block_contexts_for(p, event->col, starts_entry);
 		if (close_status != GTEXT_YAML_OK) return close_status;
 		p->last_event_line = event->line;
 	}
@@ -2383,6 +2420,26 @@ static GTEXT_YAML_Status parse_callback(
 						return GTEXT_YAML_E_INVALID;
 					}
 					node_get_source_location(key_node, &source_offset, &source_line, &source_col);
+
+					/* A key indented further than its mapping starts a nested
+					 * mapping only when there is a key above still waiting for
+					 * a value to put it under.  A mapping's children are held
+					 * as alternating key, value pairs, so with the key just
+					 * detached an even count means every key already has one
+					 * and this key belongs to nothing.  That used to nest
+					 * regardless, which put a mapping where a key should be:
+					 * "a: 1" followed by an indented "b: 2" parsed as
+					 * {"a": 1, {"b": 2}: null} rather than being refused. */
+					if (in_block_mapping && key_indent > p->stack.indents[top] &&
+						(p->temp.count % 2) == 0) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Mapping key indented deeper than its mapping";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
 
 					if (!stack_push(
 						p,
