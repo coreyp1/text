@@ -113,12 +113,19 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1188 tests across 68 binaries with zero failures, clean
-under valgrind and under ASan/UBSan. Three libFuzzer harnesses cover the three
-parsers; `tests/fuzz/README.md` records what they have found. All of it runs
-in CI on every push and pull request, along with the symbol, allocator and
-header gates - until recently none of it did, and `make test` exited 0 even
-with a failing suite.
+The test suite runs 1236 tests across 69 binaries with zero failures, clean
+under valgrind and under ASan/UBSan, at 73.8% line coverage. Three libFuzzer
+harnesses cover the three parsers; `tests/fuzz/README.md` records what they
+have found. All of it runs in CI on every push and pull request, along with a
+coverage floor and the symbol, allocator and header gates - until recently
+none of it did, and `make test` exited 0 even with a failing suite.
+
+`tests/test-rfc-conformance.cpp` holds the worked examples from RFC 6901,
+RFC 6902, RFC 7386 and RFC 4180 §2, transcribed from the specifications rather
+than from this implementation. Writing them down found four divergences that
+the existing tests agreed with. No external corpus - JSONTestSuite,
+csv-spectrum, yaml-test-suite - is wired up yet, so conformance beyond those
+tables is unmeasured.
 
 **JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
 Exact number round-tripping through lexeme preservation. No external

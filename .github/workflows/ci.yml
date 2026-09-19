@@ -153,7 +153,7 @@ jobs:
       # when the number rises; do not lower it to make a branch pass.
       - name: Line coverage
         working-directory: text
-        run: make coverage COVERAGE_MIN=COVERAGE_FLOOR_PLACEHOLDER PREFIX="$PREFIX"
+        run: make coverage COVERAGE_MIN=73 PREFIX="$PREFIX"
 
   fuzz:
     name: Fuzzers (smoke)
