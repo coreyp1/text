@@ -33,6 +33,7 @@ struct GTEXT_YAML_Scanner {
   int col;
   int finished;           /* whether finish() was called */
   int indent_ws;          /* 1 if still in indentation whitespace on this line */
+  int line_indent;        /* column of the first non-space on this line, 0-based */
   int suppress_lf;        /* 1 if previous char was CR and LF should not advance line */
 
   int encoding_determined;
@@ -100,10 +101,14 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
     return '\n';
   }
   s->suppress_lf = 0;
-  s->col++;
   if (s->indent_ws && c != ' ') {
     s->indent_ws = 0;
+    /* col is 1-based and has not advanced past this character yet, so the
+       count of spaces that preceded it on this line is col - 1. A block
+       scalar reads this as its parent node's indentation. */
+    s->line_indent = s->col - 1;
   }
+  s->col++;
   /* When we've consumed enough that we can free the earlier prefix, do so. */
   if (s->cursor > 1024 && s->cursor * 2 > s->input.len) {
     /* drop consumed prefix */
@@ -702,6 +707,11 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     int style = c; /* '|' literal, '>' folded */
     /* consume the indicator */
     scanner_consume(s);
+    /* The indentation of the line the header sits on. An indentation
+       indicator counts from the parent node, and the parent node begins at
+       the first non-space character of this line - the key, the "-" or the
+       "?" that owns the scalar, or the indicator itself at the root. */
+    size_t parent_indent = (size_t)s->line_indent;
     /* optional chomping/indent indicator: ([+-])?(\d+)?
        capture values so we can implement chomping behavior and explicit indent. */
     int ch = scanner_peek(s);
@@ -722,6 +732,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       if (val > 0) explicit_indent = val;
     }
     /* consume the rest of the line (possible comments) up to newline */
+    int header_break = 0;
     while (1) {
       int p = scanner_peek(s);
       if (p == -1) {
@@ -735,193 +746,240 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         break;
       }
       scanner_consume(s);
-      if (p == '\n' || p == '\r') break;
+      if (p == '\n' || p == '\r') { header_break = p; break; }
     }
-    if (scanner_peek(s) == '\n') {
+    /* Only a CR needs its LF skipped. Consuming a newline unconditionally here
+       swallowed the block's first line whenever that line was empty, so
+       "a: |" followed by a blank line lost the break the blank stands for. */
+    if (header_break == '\r' && scanner_peek(s) == '\n') {
       scanner_consume(s);
     }
 
-  /* Collect following indented lines as scalar. If explicit_indent > 0, use that
-     as the indentation requirement for content lines; otherwise collect any
-     indented lines and compute min indent from non-blank lines later. */
+  /* Collect the block scalar's lines verbatim, with their breaks normalised
+     to LF. Indentation is stripped and the breaks folded afterwards. */
     GTEXT_YAML_DynBuf scalar;
     if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
 
-    for (;;) {
-      /* Peek using a local position so we only consume from the real cursor
-         after we've confirmed the line is complete. */
-      if (s->cursor >= s->input.len) {
-        /* if we have already collected some lines, accept them; otherwise ask for more */
-        if (scalar.len == 0 && !s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
-        break;
-      }
-      size_t pos = s->cursor;
-      size_t indent_pos = pos;
-      while (indent_pos < s->input.len) {
-        char ch = s->input.data[indent_pos];
-        if (ch == ' ') {
-          indent_pos++;
+    /* YAML 1.2.2 8.1.1.1. With an indentation indicator the block's
+       indentation is the parent node's plus the indicator. With none it is
+       the indentation of the first non-empty line. An empty line may be
+       indented less than the block; a non-empty line indented less ends it. */
+    size_t block_indent = 0;
+    if (explicit_indent > 0) {
+      block_indent = parent_indent + explicit_indent;
+    } else {
+      size_t scan = s->cursor;
+      bool detected = false;
+      while (scan < s->input.len) {
+        size_t sp = scan;
+        while (sp < s->input.len && s->input.data[sp] == ' ') sp++;
+        if (sp >= s->input.len) break;
+        char pc = s->input.data[sp];
+        if (pc == '\n' || pc == '\r') { /* empty line: carries no indentation */
+          scan = sp + 1;
+          if (pc == '\r' && scan < s->input.len && s->input.data[scan] == '\n') scan++;
           continue;
         }
-        if (ch == '\t') {
-          gtext_yaml_dynbuf_free(&scalar);
-          return scanner_tab_indent_error(s, err, indent_pos - s->cursor);
-        }
+        block_indent = sp - scan;
+        detected = true;
         break;
       }
-      int first = (unsigned char)s->input.data[pos];
-      if (explicit_indent > 0) {
-        size_t colcount = 0;
-        size_t pp = pos;
-        while (pp < s->input.len && (s->input.data[pp] == ' ' || s->input.data[pp] == '\t')) { colcount++; pp++; }
-        if (colcount < explicit_indent) break;
-      } else {
-        if (first != ' ' && first != '\t' && first != '\n' && first != '\r') break;
-      }
-
-      /* Scan forward to the end of this line into pos2 while collecting
-         bytes into a temporary buffer; only commit consumption if we saw
-         a terminating newline (i.e., the line is complete). */
-      size_t pos2 = pos;
-      int saw_nl = 0;
-      while (pos2 < s->input.len) {
-        int cc = (unsigned char)s->input.data[pos2++];
-        if (cc == '\r') {
-          char nl = '\n';
-          if (!gtext_yaml_dynbuf_append(&scalar, &nl, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-          if (pos2 < s->input.len && s->input.data[pos2] == '\n') {
-            pos2++;
-          }
-          saw_nl = 1;
-          break;
-        }
-        char chch = (char)cc;
-        if (!gtext_yaml_dynbuf_append(&scalar, &chch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-        if (cc == '\n') { saw_nl = 1; break; }
-      }
-      if (!saw_nl) {
-        /* we reached buffer end without newline; if not finished, ask for more data */
+      if (!detected) {
         if (!s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
-        /* if finished and no newline, still accept the remaining bytes */
-      }
-
-      /* Commit consumption up to pos2.
-         Bounded by the input as well: scanner_consume() cannot advance past
-         the end, so a pos2 beyond it would spin here forever rather than
-         stop. Same shape as the block scalar header loop above. */
-      while (s->cursor < pos2 && s->cursor < s->input.len) {
-        int cc = scanner_consume(s);
-        (void)cc;
+        block_indent = 0;
+      } else if (block_indent <= parent_indent) {
+        /* The content of a block scalar is indented further than the node
+           that owns it. A first non-empty line at or left of the parent means
+           this scalar is empty and that line belongs to what follows, so set
+           a requirement no line can meet. */
+        block_indent = (size_t)-1;
       }
     }
 
-    /* Post-process collected lines:
-       - compute minimum indentation from non-blank lines and remove it
-       - apply folding if style == '>' (convert line breaks to spaces except between paragraph breaks)
-       - apply chomping: already consumed chomping indicator but we recorded none; handle default clip: remove single trailing newline
-       Tabs in indentation are rejected; tabs in content are preserved.
-    */
-    size_t in_len = scalar.len;
-    char *in_buf = scalar.data; /* owned by dynbuf */
+    /* This scanner consumes destructively and cannot rewind, so asking for
+       more input after a line has been taken would discard that line. Only a
+       block that has yielded nothing yet can be deferred; past that point the
+       lines already in hand are accepted. */
+#define GTEXT_YAML_BLOCK_NEED_MORE() \
+      do { \
+        if (scalar.len == 0) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; } \
+        goto block_scalar_collected; \
+      } while (0)
 
-    /* Quick path: empty collected content -> empty scalar */
+    for (;;) {
+      if (s->cursor >= s->input.len) {
+        if (!s->finished) GTEXT_YAML_BLOCK_NEED_MORE();
+        break;
+      }
+      /* Measure the line before taking any of it: it is only consumed once
+         it is known to belong to the block and to be complete. */
+      size_t sp = s->cursor;
+      size_t spaces = 0;
+      while (sp < s->input.len && s->input.data[sp] == ' ') { sp++; spaces++; }
+      if (sp >= s->input.len && !s->finished) GTEXT_YAML_BLOCK_NEED_MORE();
+      bool line_empty = (sp >= s->input.len)
+        || s->input.data[sp] == '\n' || s->input.data[sp] == '\r';
+      if (!line_empty && spaces < block_indent) {
+        /* A tab where the block's indentation should be is a tab used for
+           indentation. Past that column a tab is ordinary content. */
+        if (s->input.data[sp] == '\t') {
+          gtext_yaml_dynbuf_free(&scalar);
+          return scanner_tab_indent_error(s, err, spaces);
+        }
+        break; /* dedent ends the block scalar */
+      }
+
+      size_t take = 0;
+      size_t scan = s->cursor;
+      bool saw_break = false;
+      while (scan < s->input.len) {
+        char cc = s->input.data[scan];
+        if (cc == '\n') { take = scan + 1 - s->cursor; saw_break = true; break; }
+        if (cc == '\r') {
+          take = scan + 1 - s->cursor;
+          if (scan + 1 < s->input.len) {
+            if (s->input.data[scan + 1] == '\n') take++;
+          } else if (!s->finished) {
+            GTEXT_YAML_BLOCK_NEED_MORE();
+          }
+          saw_break = true;
+          break;
+        }
+        scan++;
+      }
+      if (!saw_break) {
+        if (!s->finished) GTEXT_YAML_BLOCK_NEED_MORE();
+        take = s->input.len - s->cursor;
+      }
+
+      size_t content_bytes = take;
+      if (saw_break) {
+        content_bytes = take - 1;
+        if (content_bytes > 0 && s->input.data[s->cursor + content_bytes - 1] == '\r') {
+          content_bytes--;
+        }
+      }
+      if (content_bytes > 0
+          && !gtext_yaml_dynbuf_append(&scalar, s->input.data + s->cursor, content_bytes)) {
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_OOM;
+      }
+      if (saw_break) {
+        char nl = '\n';
+        if (!gtext_yaml_dynbuf_append(&scalar, &nl, 1)) {
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_OOM;
+        }
+      }
+      /* Consume a counted number of bytes rather than up to an absolute
+         position: scanner_consume() may compact the buffer and reset the
+         cursor, which would make any position recorded above meaningless. */
+      for (size_t i = 0; i < take; i++) (void)scanner_consume(s);
+    }
+
+block_scalar_collected:
+#undef GTEXT_YAML_BLOCK_NEED_MORE
+    ; /* C17 requires a statement after a label */
+
+    /* Apply 8.1.2 (literal) or 8.1.3 (folded) to the interior breaks, then
+       8.1.1.2 chomping to the trailing ones. */
     char *out = NULL;
     size_t out_len = 0;
-    if (in_len == 0) {
-      /* malloc(0) may legally return NULL; request 1 byte so the NULL check
-         below only ever signals a genuine allocation failure. */
-      out = (char *)malloc(1);
-      if (!out) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-      out_len = 0;
-    } else {
-      /* Split into lines and compute min indent */
-  size_t min_indent = (size_t)-1;
-      size_t line_start = 0;
-      int any_non_blank = 0;
-      while (line_start < in_len) {
-        /* find line end */
-        size_t j = line_start;
-        while (j < in_len && in_buf[j] != '\n') j++;
-        /* compute indent for this line */
-        size_t k = line_start;
-        while (k < j && (in_buf[k] == ' ' || in_buf[k] == '\t')) k++;
-        if (k < j) {
-          /* non-blank line */
-          any_non_blank = 1;
-          size_t indent = k - line_start;
-          if (indent < min_indent) min_indent = indent;
-        }
-        /* advance to next line */
-        line_start = (j < in_len) ? (j + 1) : j;
-      }
-      if (!any_non_blank) min_indent = 0;
-      if (min_indent == (size_t)-1) min_indent = 0;
+    {
+      const size_t in_len = scalar.len;
+      const char *in_buf = scalar.data;
 
-      /* Build output in dynbuf-like temporary allocation: conservative upper bound = in_len */
-      char *tmp = (char *)malloc(in_len + 1);
-      if (!tmp) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+      size_t line_count = 0;
+      for (size_t i = 0; i < in_len; i++) {
+        if (in_buf[i] == '\n') line_count++;
+      }
+      if (in_len > 0 && in_buf[in_len - 1] != '\n') line_count++;
+
+      size_t *starts = NULL;
+      size_t *lens = NULL;
+      if (line_count > 0) {
+        starts = (size_t *)malloc(line_count * sizeof *starts);
+        lens = (size_t *)malloc(line_count * sizeof *lens);
+        if (!starts || !lens) {
+          free(starts); free(lens);
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_OOM;
+        }
+      }
+
+      size_t pos = 0;
+      for (size_t li = 0; li < line_count; li++) {
+        size_t end = pos;
+        while (end < in_len && in_buf[end] != '\n') end++;
+        size_t skip = 0;
+        while (skip < block_indent && pos + skip < end && in_buf[pos + skip] == ' ') skip++;
+        starts[li] = pos + skip;
+        lens[li] = end - (pos + skip);
+        pos = (end < in_len) ? end + 1 : end;
+      }
+
+      size_t last_content = (size_t)-1;
+      for (size_t li = 0; li < line_count; li++) {
+        if (lens[li] > 0) last_content = li;
+      }
+
+      /* Content, one separator per line, and the trailing breaks. */
+      char *tmp = (char *)malloc(in_len + 4 * line_count + 8);
+      if (!tmp) {
+        free(starts); free(lens);
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_OOM;
+      }
       size_t out_pos = 0;
 
-      /* Folding state: when style == '>' we replace single newlines with spaces
-         except when there is a blank line (preserve as newline). Implement minimal rule. */
-  line_start = 0;
-      while (line_start < in_len) {
-        size_t j = line_start;
-        while (j < in_len && in_buf[j] != '\n') j++;
-        /* strip min_indent from start of line */
-        size_t content_start = line_start + min_indent;
-        if (content_start > j) content_start = j; /* line shorter than indent -> becomes blank */
-        size_t content_len = j - content_start;
-        int is_blank = (content_len == 0);
+      if (last_content != (size_t)-1) {
+        size_t li = 0;
+        /* Leading empty lines each stand for one break in both styles. */
+        while (li <= last_content && lens[li] == 0) { tmp[out_pos++] = '\n'; li++; }
+        for (; li <= last_content; li++) {
+          memcpy(tmp + out_pos, in_buf + starts[li], lens[li]);
+          out_pos += lens[li];
+          if (li == last_content) break;
+          if (style != '>') { tmp[out_pos++] = '\n'; continue; }
 
-        /* copy content */
-        if (content_len > 0) {
-          memcpy(tmp + out_pos, in_buf + content_start, content_len);
-          out_pos += content_len;
-        }
-
-        /* decide how to handle line break */
-        if (j < in_len && in_buf[j] == '\n') {
-          /* there is a line break */
-          /* lookahead to see if next line is blank */
-          size_t next_start = j + 1;
-          size_t next_j = next_start;
-          while (next_j < in_len && in_buf[next_j] != '\n') next_j++;
-          size_t next_k = next_start;
-          while (next_k < next_j && (in_buf[next_k] == ' ' || in_buf[next_k] == '\t')) next_k++;
-          int next_blank = (next_k >= next_j);
-
-          if (style == '>') {
-            if (is_blank) {
-              /* blank line -> emit single newline */
-              tmp[out_pos++] = '\n';
-            } else {
-              /* non-blank line: fold to space unless next line is blank */
-              if (next_blank) tmp[out_pos++] = '\n'; else tmp[out_pos++] = ' ';
-            }
-          } else {
-            /* literal style '|' keep newline */
+          /* Folding: a run of empty lines yields one break each rather than
+             a space, and a break next to a more-indented line is kept. */
+          size_t blanks = 0;
+          size_t nxt = li + 1;
+          while (nxt <= last_content && lens[nxt] == 0) { blanks++; nxt++; }
+          const bool cur_more = in_buf[starts[li]] == ' ' || in_buf[starts[li]] == '\t';
+          const bool nxt_more = nxt <= last_content
+            && (in_buf[starts[nxt]] == ' ' || in_buf[starts[nxt]] == '\t');
+          if (blanks > 0) {
+            if (cur_more) tmp[out_pos++] = '\n';
+            for (size_t b = 0; b < blanks; b++) tmp[out_pos++] = '\n';
+          } else if (cur_more || nxt_more) {
             tmp[out_pos++] = '\n';
+          } else {
+            tmp[out_pos++] = ' ';
           }
+          li = nxt - 1; /* the loop's own increment moves to nxt */
         }
-
-        line_start = (j < in_len) ? (j + 1) : j;
       }
 
-      /* Chomping: implement according to captured chomping indicator.
-         chomping == 1 -> keep all trailing newlines
-         chomping == -1 -> strip all trailing newlines
-         chomping == 0 -> clip (remove a single trailing newline if present) */
-      if (chomping == 1) {
-        /* keep: do nothing */
-      } else if (chomping == -1) {
-        while (out_pos > 0 && tmp[out_pos - 1] == '\n') out_pos--;
-      } else {
-        if (out_pos > 0 && tmp[out_pos - 1] == '\n') out_pos--;
+      /* The final line break plus any trailing empty lines. With no content
+         at all there is no final break, only the empty lines themselves. */
+      size_t trailing = (last_content != (size_t)-1)
+        ? 1 + (line_count - 1 - last_content)
+        : line_count;
+      if (chomping == -1) {
+        trailing = 0; /* strip */
+      } else if (chomping == 0) {
+        trailing = (last_content != (size_t)-1) ? 1 : 0; /* clip */
       }
+      for (size_t i = 0; i < trailing; i++) tmp[out_pos++] = '\n';
 
-      /* allocate final output */
-      out = (char *)malloc(out_pos);
+      free(starts);
+      free(lens);
+
+      /* malloc(0) may legally return NULL; ask for a byte so the check below
+         only ever signals a genuine allocation failure. */
+      out = (char *)malloc(out_pos ? out_pos : 1);
       if (!out) { free(tmp); gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
       if (out_pos) memcpy(out, tmp, out_pos);
       out_len = out_pos;

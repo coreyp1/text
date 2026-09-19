@@ -34,8 +34,12 @@ TEST(YamlBlockChomp, ChompingModes) {
     EXPECT_EQ(st, GTEXT_YAML_OK);
     gtext_yaml_stream_free(s);
     ASSERT_NE(last_scalar, nullptr);
-    EXPECT_EQ(last_len, 3);
-    EXPECT_STREQ(last_scalar, "a\nb");
+    /* Clip, the default, keeps the final line break and drops only the
+       trailing empty lines. This asserted "a\nb" while the scanner dropped
+       that break, so the test agreed with the defect it should have caught;
+       PyYAML gives "a\nb\n" for the same input. */
+    EXPECT_EQ(last_len, 4);
+    EXPECT_STREQ(last_scalar, "a\nb\n");
 
     const char *in2 = "|+\n  a\n  b\n\n";
     s = gtext_yaml_stream_new(NULL, capture_cb, NULL);

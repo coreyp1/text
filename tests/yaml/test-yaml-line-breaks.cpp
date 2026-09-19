@@ -22,7 +22,11 @@ TEST(YamlLineBreaks, BlockScalarCrLfNormalized) {
 	ASSERT_NE(root, nullptr);
 	const GTEXT_YAML_Node *value = gtext_yaml_mapping_get(root, "key");
 	ASSERT_NE(value, nullptr);
-	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1\nline2");
+	/* Clip keeps the final line break; this expected it dropped, which is
+	   what the scanner used to do. PyYAML gives "line1\nline2\n" here,
+	   under CRLF and lone CR alike. The quoted-scalar case below is a
+	   different rule and keeps its expectation. */
+	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1\nline2\n");
 
 	gtext_yaml_free(doc);
 }
@@ -39,7 +43,11 @@ TEST(YamlLineBreaks, BlockScalarCrNormalized) {
 	ASSERT_NE(root, nullptr);
 	const GTEXT_YAML_Node *value = gtext_yaml_mapping_get(root, "key");
 	ASSERT_NE(value, nullptr);
-	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1\nline2");
+	/* Clip keeps the final line break; this expected it dropped, which is
+	   what the scanner used to do. PyYAML gives "line1\nline2\n" here,
+	   under CRLF and lone CR alike. The quoted-scalar case below is a
+	   different rule and keeps its expectation. */
+	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1\nline2\n");
 
 	gtext_yaml_free(doc);
 }
