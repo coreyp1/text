@@ -200,13 +200,67 @@ Every case is pinned in `YamlTagPlacement` in
 `tests/yaml/test-yaml-standard-tags.cpp`, with the expectations taken from
 PyYAML's composer on the same input.
 
-**Open: `? ` explicit keys are rejected in a block mapping.**
+**Fixed: a mapping key with no value no longer shifts the rest of the mapping.**
 
-`!!set\n? a\n? b` fails with "Explicit key already pending", so the block
-spelling of a `!!set` cannot be parsed at all. The flow spelling,
-`!!set {a: ~, b: ~}`, works. This is a separate defect in the handling of the
-`?` indicator rather than anything to do with tags, and is untouched by the
-fix above.
+A mapping's children are collected as a flat alternating key, value, key,
+value list, and the pairs are formed by halving it. A key whose value was
+absent left that list one short, so the halving dropped the last key and
+paired every later key with the wrong value:
+
+| input | gave | should give |
+| --- | --- | --- |
+| `a:` | `{}` | `{a: null}` |
+| `a:`<br>`b: 1` | `{a: b}`, discarding the `1` | `{a: null, b: 1}` |
+| `{a}` | `{}` | `{a: null}` |
+| `? a` | `{}` | `{a: null}` |
+| `? a`<br>`? b` | *Explicit key already pending* | `{a: null, b: null}` |
+
+The second row is the one that mattered: a missing value did not fail, it
+silently shifted the rest of the mapping by one. A key with an empty value is
+ordinary in configuration files. The last row is why the block spelling of a
+`!!set` could not be parsed at all while the flow spelling could.
+
+YAML says an absent value is null, so one is now supplied - when a scalar
+appears at the key's own column while a value is still expected, when a second
+`?` shows the previous key never got a `:`, and for a trailing key at the end
+of a mapping.
+
+Indentation decides, not absence alone. Content indented past the key is the
+key's value, and a block sequence may sit at its key's own column and still be
+that value, so the rule applies only to a scalar at the key's column and never
+to `-`:
+
+```yaml
+x:          # {x: {y: 1}}      a:          # {a: [1]}
+  y: 1                         - 1
+```
+
+The supplied value is `~` rather than an empty scalar. The resolver reads a
+scalar's text without knowing whether it was quoted, so an empty one resolves
+to the empty *string*, which would make `a:` indistinguishable from `a: ''` -
+and those are different values. `a: ''` still gives a string.
+
+Checked against PyYAML over 38 documents; 36 agree, and the two that do not
+are the unrelated defects recorded below.
+
+**Open: a block scalar loses its trailing newline.**
+
+`a: |` followed by an indented `block` gives `"block"` where YAML's default
+clip chomping keeps the final line break, `"block\n"`. The same applies to
+`>`. Both are wrong by one newline, which round-trips visibly.
+
+**Open: a block sequence does not close on a dedent back to its parent key.**
+
+```yaml
+a:
+- 1
+b: 2
+```
+
+gives `{a: [1, {b: 2}]}` rather than `{a: [1], b: 2}`: the `b: 2` at the
+parent's indentation is swallowed into the sequence instead of ending it.
+Both of these predate the missing-value fix above and were found by the same
+comparison against PyYAML.
 
 **Fixed: plain scalars are no longer truncated at an embedded indicator.**
 

@@ -1140,6 +1140,68 @@ static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
 	return true;
 }
 
+/**
+ * @brief Give a mapping key that has no value an explicit null one.
+ *
+ * A mapping's children are collected as a flat alternating key, value, key,
+ * value list, and the pairs are formed by halving that list.  A key whose
+ * value is absent therefore did not produce an empty value - it left the list
+ * one short, so the halving dropped the last key and, worse, paired every
+ * later key with the wrong value:
+ *
+ *     a:          gave {}              rather than {a: null}
+ *     a:          gave {a: b}, losing  rather than {a: null, b: 1}
+ *     b: 1          the 1
+ *     ? a         gave {}              rather than {a: null}
+ *     ? a         was a parse error    rather than {a: null, b: null}
+ *     ? b
+ *
+ * YAML says an absent value is null, so the fix is to supply one.
+ *
+ * The supplied node is "~", the plain null scalar, rather than an empty one.
+ * The resolver reads a scalar's text and does not look at whether it was
+ * quoted, so an empty scalar resolves to the empty *string* - which would
+ * make "a:" indistinguishable from "a: ''", and those are different values.
+ * "~" resolves to GTEXT_YAML_NULL through the ordinary path and needs no tag,
+ * so the result is exactly what writing "a: ~" by hand produces.
+ */
+static bool mapping_supply_null_value(parser_state *p) {
+	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "~", 1, NULL, NULL);
+	if (!empty) {
+		return false;
+	}
+	return temp_add(p, empty);
+}
+
+/**
+ * @brief True when a node starting at @p col is a sibling key rather than the
+ *        value of the key already waiting for one.
+ *
+ * Indentation decides it.  Content indented past the key belongs to the key:
+ *
+ *     x:            {x: {y: 1}}
+ *       y: 1
+ *
+ * Content at the key's own column is the next key, so the previous one had no
+ * value:
+ *
+ *     a:            {a: null, b: 1}
+ *     b: 1
+ *
+ * Only scalars are asked about.  A block sequence may sit at its key's own
+ * column and still be that key's value - "a:" then "- 1" is {a: [1]} - so the
+ * '-' indicator must not be treated this way.
+ */
+static bool block_value_is_missing(parser_state *p, int col) {
+	if (p->stack.depth == 0) return false;
+	size_t top = p->stack.depth - 1;
+	if (p->stack.states[top] != STATE_MAPPING_VALUE) return false;
+	if (!p->stack.is_block[top]) return false;
+	if (p->stack.indents[top] < 0) return false;
+	return col <= p->stack.indents[top];
+}
+
+
 static int line_key_col_from_offset(const parser_state *p, size_t offset) {
 	const char *buffer = NULL;
 	size_t length = 0;
@@ -1292,12 +1354,22 @@ static GTEXT_YAML_Status capture_explicit_key(
 		return GTEXT_YAML_E_INVALID;
 	}
 
+	/* An explicit key creates its mapping in the '?' handler rather than at a
+	 * ':', and arrives here rather than through the ordinary scalar path, so
+	 * an own-line tag before it needs adopting here too.  Only the first key:
+	 * a later one cannot retag a mapping that already exists. */
+	const bool first_key = (p->temp.count == 0);
+
 	if (!temp_add(p, node)) {
 		if (p->error) {
 			p->error->code = GTEXT_YAML_E_OOM;
 			p->error->message = "Out of memory adding explicit key";
 		}
 		return GTEXT_YAML_E_OOM;
+	}
+
+	if (first_key) {
+		adopt_own_line_tag(p, node);
 	}
 
 	p->explicit_key_pending = false;
@@ -1345,6 +1417,12 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 			node->as.sequence.children[i] = p->temp.items[i];
 		}
 	} else {
+		/* A trailing key with no value, by the same rule: "a:" at the end of a
+		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
+		 * as it was before, which is the old behavior rather than a new one. */
+		if ((p->temp.count % 2) != 0) {
+			(void)mapping_supply_null_value(p);
+		}
 		size_t pair_count = p->temp.count / 2;
 		node = yaml_node_new_mapping(p->ctx, pair_count, tag, anchor);
 		if (!node) {
@@ -1625,6 +1703,22 @@ static GTEXT_YAML_Status parse_callback(
 				p->last_scalar_in_root = true;
 				p->last_scalar_in_temp = false;
 			} else {
+				/* A scalar at the key's own column, while a value is still
+				 * expected, is the next key rather than that value.  Supply
+				 * the null the absent value stands for, before this scalar
+				 * takes its place in the alternating list. */
+				if (block_value_is_missing(p, event->col)) {
+					if (!mapping_supply_null_value(p)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_OOM;
+							p->error->message = "Out of memory completing mapping value";
+						}
+						return GTEXT_YAML_E_OOM;
+					}
+					p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+				}
+
 				/* Before the add, so that "was this the first item?" is still
 				 * answerable. */
 				const bool first_in_level = (p->temp.count == 0);
@@ -1822,7 +1916,13 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Create mapping node with collected key-value pairs */
 			/* temp.items should have [key0, val0, key1, val1, ...] */
-			size_t pair_count = p->temp.count / 2;
+			/* A trailing key with no value, by the same rule: "a:" at the end of a
+		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
+		 * as it was before, which is the old behavior rather than a new one. */
+		if ((p->temp.count % 2) != 0) {
+			(void)mapping_supply_null_value(p);
+		}
+		size_t pair_count = p->temp.count / 2;
 			
 			GTEXT_YAML_Node *node = yaml_node_new_mapping(
 				p->ctx,
@@ -2139,7 +2239,13 @@ static GTEXT_YAML_Status parse_callback(
 					);
 					
 					/* temp.count should be even (key-value pairs) */
-					size_t pair_count = p->temp.count / 2;
+					/* A trailing key with no value, by the same rule: "a:" at the end of a
+		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
+		 * as it was before, which is the old behavior rather than a new one. */
+		if ((p->temp.count % 2) != 0) {
+			(void)mapping_supply_null_value(p);
+		}
+		size_t pair_count = p->temp.count / 2;
 					GTEXT_YAML_Node *node = yaml_node_new_mapping(
 						p->ctx, pair_count, tag, anchor
 					);
@@ -2327,12 +2433,32 @@ static GTEXT_YAML_Status parse_callback(
 					int indent = event->col;
 					size_t top = 0;
 
-					if (p->explicit_key_pending || p->explicit_key_active) {
+					if (p->explicit_key_pending) {
+						/* A '?' with no key between it and the last one. */
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
 							p->error->message = "Explicit key already pending";
 						}
 						return GTEXT_YAML_E_INVALID;
+					}
+
+					/* A second '?' means the key before it never got a ':', so
+					 * its value is null.  This used to be refused outright,
+					 * which made "? a" followed by "? b" - and so the block
+					 * spelling of !!set - unparseable. */
+					if (p->explicit_key_active) {
+						if (!mapping_supply_null_value(p)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory completing explicit key";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->explicit_key_active = false;
+						if (p->stack.depth > 0) {
+							p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+						}
 					}
 
 					if (p->stack.depth > 0) {
