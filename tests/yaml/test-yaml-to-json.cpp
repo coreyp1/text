@@ -12,6 +12,7 @@
 #include <ghoti.io/text/macros.h>
 #include <string.h>
 #include <stdio.h>
+#include <string>
 
 static bool json_converter_called = false;
 
@@ -708,4 +709,156 @@ TEST(YamlToJson, LargeIntPolicy) {
 	gtext_json_free(json_val);
 	gtext_yaml_error_free(&err);
 	gtext_yaml_free(yaml_doc);
+}
+
+// ---------------------------------------------------------------------------
+// Alias expansion budget
+//
+// Resolving aliases turns a DAG into a tree, so a document linear in its input
+// can convert to one exponential in it - the classic YAML alias bomb.  The
+// conversion had a cycle check, but a bomb is not cyclic: every path through
+// it is distinct, so it passed the check and then allocated until malloc()
+// failed.  A 430-byte document exhausted all available memory and came back
+// GTEXT_YAML_E_OOM; the time it took scaled with how much memory the process
+// was allowed, which is the signature of no budget at all.
+//
+// The library had the right accounting in the resolver, and a test for it
+// (YamlAliasExponential.DFSLimit), but that test drives ResolverState
+// directly.  The path a caller actually takes - gtext_yaml_parse() followed by
+// gtext_yaml_to_json_with_options() - never consulted it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// levels=8 is nominally 10^9 nodes from a few hundred bytes of input.
+std::string yaml_alias_bomb(int levels) {
+	std::string s = "l0: &l0 [x,x,x,x,x,x,x,x,x,x]\n";
+	for (int i = 1; i <= levels; ++i) {
+		s += "l" + std::to_string(i) + ": &l" + std::to_string(i) + " [";
+		for (int j = 0; j < 10; ++j) {
+			s += (j ? "," : "");
+			s += "*l" + std::to_string(i - 1);
+		}
+		s += "]\n";
+	}
+	return s;
+}
+
+} // namespace
+
+TEST(YamlToJsonAliasBudget, BombIsRejectedByLimitNotByOom) {
+	std::string src = yaml_alias_bomb(8);
+
+	GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+
+	// Parsing is cheap: aliases are stored by reference, so the DOM stays
+	// linear in the input.  The blowup is entirely in the conversion.
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src.data(), src.size(), &popts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+
+	GTEXT_YAML_To_JSON_Options jopts = gtext_yaml_to_json_options_default();
+	jopts.allow_resolved_aliases = true;
+
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Status st =
+	    gtext_yaml_to_json_with_options(doc, &out, &jopts, &err);
+
+	// The distinction that matters: a configured limit refused it, rather
+	// than the allocator failing after the process had taken every page it
+	// could get.
+	EXPECT_EQ(st, GTEXT_YAML_E_LIMIT);
+	EXPECT_NE(st, GTEXT_YAML_E_OOM);
+	EXPECT_EQ(out, nullptr);
+
+	if (out) {
+		gtext_json_free(out);
+	}
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlToJsonAliasBudget, OrdinaryAliasesStillConvert) {
+	// The budget must not refuse documents that simply use aliases.
+	const char * src =
+	    "defaults: &d\n"
+	    "  timeout: 30\n"
+	    "  retries: 3\n"
+	    "service_a: *d\n"
+	    "service_b: *d\n";
+
+	GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src, strlen(src), &popts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+
+	GTEXT_YAML_To_JSON_Options jopts = gtext_yaml_to_json_options_default();
+	jopts.allow_resolved_aliases = true;
+
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Status st =
+	    gtext_yaml_to_json_with_options(doc, &out, &jopts, &err);
+
+	EXPECT_EQ(st, GTEXT_YAML_OK) << (err.message ? err.message : "");
+	EXPECT_NE(out, nullptr);
+
+	if (out) {
+		gtext_json_free(out);
+	}
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(doc);
+}
+
+TEST(YamlToJsonAliasBudget, LimitIsTakenFromTheParseOptions) {
+	// A caller who raises max_alias_expansion gets more room; one who lowers
+	// it gets less.  This is what ties the conversion to the documented knob.
+	const std::string src = yaml_alias_bomb(3);
+
+	struct Case {
+		size_t limit;
+		bool expect_ok;
+	};
+	// levels=3 expands to roughly 10^4 nodes.
+	const Case cases[] = {{100, false}, {1000000, true}};
+
+	for (const Case & c : cases) {
+		GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+		popts.max_alias_expansion = c.limit;
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document * doc =
+		    gtext_yaml_parse(src.data(), src.size(), &popts, &err);
+		ASSERT_NE(doc, nullptr)
+		    << "limit=" << c.limit << ": "
+		    << (err.message ? err.message : "parse failed");
+
+		GTEXT_YAML_To_JSON_Options jopts =
+		    gtext_yaml_to_json_options_default();
+		jopts.allow_resolved_aliases = true;
+
+		GTEXT_JSON_Value * out = nullptr;
+		GTEXT_YAML_Status st =
+		    gtext_yaml_to_json_with_options(doc, &out, &jopts, &err);
+
+		if (c.expect_ok) {
+			EXPECT_EQ(st, GTEXT_YAML_OK)
+			    << "limit=" << c.limit << " should have been enough";
+		}
+		else {
+			EXPECT_EQ(st, GTEXT_YAML_E_LIMIT)
+			    << "limit=" << c.limit << " should have been too small";
+		}
+
+		if (out) {
+			gtext_json_free(out);
+		}
+		gtext_yaml_error_free(&err);
+		gtext_yaml_free(doc);
+	}
 }

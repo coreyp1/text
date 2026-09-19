@@ -23,6 +23,8 @@
 #include <ghoti.io/text/yaml/yaml_dom.h>
 #include <ghoti.io/text/yaml/yaml_stream.h>
 
+#include "yaml_internal.h"
+
 #define GTEXT_YAML_JSON_MAX_SAFE_INT 9007199254740991LL
 #define GTEXT_YAML_JSON_MIN_SAFE_INT (-9007199254740991LL)
 
@@ -31,6 +33,19 @@ typedef struct {
 	const GTEXT_YAML_Node **stack;
 	size_t stack_len;
 	size_t stack_cap;
+	/* Budget for the number of YAML nodes this conversion may visit.
+	 *
+	 * Resolving aliases turns a DAG into a tree, so a document whose size is
+	 * linear in the input can convert to one that is exponential in it.  The
+	 * stack check above catches a cycle, but the classic alias bomb is not
+	 * cyclic - every path through it is distinct - so it passed the cycle
+	 * check and then allocated until malloc() failed.
+	 *
+	 * Taken from the document's max_alias_expansion, which is documented as
+	 * the total alias-expanded node limit and was not consulted here.  0
+	 * means unlimited. */
+	size_t nodes_visited;
+	size_t max_nodes;
 } yaml_to_json_context;
 
 static bool yaml_tag_is_json_compatible(const char *tag)
@@ -259,6 +274,15 @@ static GTEXT_YAML_Status convert_node(
 			out_err->message = "convert_node: invalid arguments";
 		}
 		return GTEXT_YAML_E_INVALID;
+	}
+
+	ctx->nodes_visited++;
+	if (ctx->max_nodes > 0 && ctx->nodes_visited > ctx->max_nodes) {
+		if (out_err) {
+			out_err->code = GTEXT_YAML_E_LIMIT;
+			out_err->message = "cannot convert: alias expansion limit exceeded";
+		}
+		return GTEXT_YAML_E_LIMIT;
 	}
 
 	if (yaml_to_json_stack_contains(ctx, yaml_node)) {
@@ -744,6 +768,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_options(
 	}
 
 	ctx.options = options ? *options : gtext_yaml_to_json_options_default();
+	/* The document keeps the options it was parsed with. */
+	ctx.max_nodes = yaml_doc->options.max_alias_expansion;
 
 	if (gtext_yaml_document_has_merge_keys(yaml_doc) && !ctx.options.allow_merge_keys) {
 		if (out_err) {
