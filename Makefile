@@ -921,6 +921,12 @@ ifeq ($(OS_NAME), Linux)
 	@printf "### Running tests with ASan + UBSan    ###\n"
 	@printf "###########################################\n"
 	@printf "\033[0m\n"
+# allocator_may_return_null=1 makes an oversized request return NULL instead of
+# aborting the process.  Without it ASan treats "too big to allocate" as a fatal
+# error, which makes every out-of-memory path in this library untestable under
+# the sanitizer - the buffer growth tests ask for SIZE_MAX-sized capacities on
+# purpose, to reach the overflow branches, and expect the documented
+# GTEXT_*_E_OOM back.  Leak detection and every other check are unaffected.
 	@for test_exe in $(ASAN_TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n"; \
@@ -928,7 +934,7 @@ ifeq ($(OS_NAME), Linux)
 		printf "### Running %s tests (ASan+UBSan) ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
+		LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
 	done
 	@printf "\033[0;32m\n"
 	@printf "###########################################\n"
@@ -953,7 +959,7 @@ ifeq ($(OS_NAME), Linux)
 	printf "\033[1;33m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
 	for test_exe in $(ASAN_TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
-		output=$$(LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
+		output=$$(LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
 		exit_code=$$?; \
 		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
 		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
