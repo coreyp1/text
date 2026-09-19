@@ -402,3 +402,158 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ---------------------------------------------------------------------------
+// The writer's nesting stack, past its initial capacity
+//
+// GTEXT_YAML_Writer keeps one stack entry per open sequence or mapping,
+// allocated at YAML_WRITER_DEFAULT_STACK_CAPACITY (32) and doubled from there.
+// tools/coverage.sh reported writer_stack_grow() as never executed, so nothing
+// had ever nested the streaming writer past depth 32.
+//
+// Each entry carries the kind of container and how far it is indented, which
+// is what the emitter uses to lay out everything inside it. A realloc that
+// loses those entries produces YAML that is misindented rather than absent -
+// still parseable, and wrong - so the check is that the output reads back as
+// the structure that was written.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Write `depth` nested sequences with one scalar at the bottom.
+std::string write_nested_sequences(size_t depth) {
+  std::vector<GTEXT_YAML_Event> events;
+  GTEXT_YAML_Event ev;
+  memset(&ev, 0, sizeof(ev));
+
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
+  events.push_back(ev);
+
+  for (size_t i = 0; i < depth; ++i) {
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GTEXT_YAML_EVENT_SEQUENCE_START;
+    events.push_back(ev);
+  }
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_SCALAR;
+  ev.data.scalar.ptr = "deep";
+  ev.data.scalar.len = 4;
+  events.push_back(ev);
+
+  for (size_t i = 0; i < depth; ++i) {
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GTEXT_YAML_EVENT_SEQUENCE_END;
+    events.push_back(ev);
+  }
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
+  events.push_back(ev);
+
+  return write_events(events, nullptr);
+}
+
+// How many sequences deep a parsed document goes, following the first element.
+size_t yaml_sequence_depth(const GTEXT_YAML_Node *n) {
+  size_t d = 0;
+  while (n && gtext_yaml_node_type(n) == GTEXT_YAML_SEQUENCE
+      && gtext_yaml_sequence_length(n) == 1) {
+    ++d;
+    n = gtext_yaml_sequence_get(n, 0);
+  }
+  return d;
+}
+
+} // namespace
+
+TEST(YamlStreamWriter, NestingPastTheInitialStackCapacity) {
+  // 32 is the initial capacity, so these straddle it and the doublings after.
+  for (size_t depth : {size_t(1), size_t(31), size_t(32), size_t(33),
+           size_t(64), size_t(65), size_t(120)}) {
+    SCOPED_TRACE("depth=" + std::to_string(depth));
+
+    const std::string out = write_nested_sequences(depth);
+    ASSERT_FALSE(out.empty());
+
+    GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
+    po.max_depth = depth + 16; // the parser's limit, not the writer's
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+
+    GTEXT_YAML_Document *doc =
+        gtext_yaml_parse(out.data(), out.size(), &po, &err);
+    ASSERT_NE(doc, nullptr)
+        << "writer output did not parse: " << (err.message ? err.message : "")
+        << "\n---\n" << out;
+
+    EXPECT_EQ(yaml_sequence_depth(gtext_yaml_document_root(doc)), depth)
+        << "round-tripped to a different depth:\n" << out;
+
+    gtext_yaml_free(doc);
+    gtext_yaml_error_free(&err);
+  }
+}
+
+TEST(YamlStreamWriter, SiblingsAtADepthThatOnlyExistsAfterGrowth) {
+  // Several entries in the innermost sequence, so the stack entry for a level
+  // above the initial capacity is read repeatedly rather than just written
+  // once.
+  const size_t depth = 40;
+  std::vector<GTEXT_YAML_Event> events;
+  GTEXT_YAML_Event ev;
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
+  events.push_back(ev);
+
+  for (size_t i = 0; i < depth; ++i) {
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GTEXT_YAML_EVENT_SEQUENCE_START;
+    events.push_back(ev);
+  }
+
+  static const char *const values[] = {"a", "b", "c"};
+  for (const char *v : values) {
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GTEXT_YAML_EVENT_SCALAR;
+    ev.data.scalar.ptr = v;
+    ev.data.scalar.len = 1;
+    events.push_back(ev);
+  }
+
+  for (size_t i = 0; i < depth; ++i) {
+    memset(&ev, 0, sizeof(ev));
+    ev.type = GTEXT_YAML_EVENT_SEQUENCE_END;
+    events.push_back(ev);
+  }
+
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
+  events.push_back(ev);
+
+  const std::string out = write_events(events, nullptr);
+  ASSERT_FALSE(out.empty());
+
+  GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
+  po.max_depth = depth + 16;
+  GTEXT_YAML_Error err;
+  memset(&err, 0, sizeof(err));
+
+  GTEXT_YAML_Document *doc = gtext_yaml_parse(out.data(), out.size(), &po, &err);
+  ASSERT_NE(doc, nullptr)
+      << (err.message ? err.message : "") << "\n---\n" << out;
+
+  // Walk down to the innermost sequence and check all three survived.
+  const GTEXT_YAML_Node *n = gtext_yaml_document_root(doc);
+  for (size_t i = 0; i < depth - 1 && n; ++i) {
+    ASSERT_EQ(gtext_yaml_node_type(n), GTEXT_YAML_SEQUENCE) << "level " << i;
+    n = gtext_yaml_sequence_get(n, 0);
+  }
+  ASSERT_NE(n, nullptr);
+  EXPECT_EQ(gtext_yaml_node_type(n), GTEXT_YAML_SEQUENCE);
+  EXPECT_EQ(gtext_yaml_sequence_length(n), 3u) << "innermost sequence:\n" << out;
+
+  gtext_yaml_free(doc);
+  gtext_yaml_error_free(&err);
+}
