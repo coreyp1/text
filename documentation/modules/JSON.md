@@ -122,7 +122,6 @@ All limits use `0` to indicate library defaults:
 - **`parse_int64`**: Detect and parse exact int64 representation — **Default: `true`**
 - **`parse_uint64`**: Detect and parse exact uint64 representation — **Default: `true`**
 - **`parse_double`**: Derive double representation when representable — **Default: `true`**
-- **`allow_big_decimal`**: Store decimal as string-backed arbitrary precision — **Default: `false`**
 
 Numbers can be accessed in multiple representations simultaneously, allowing you to choose the most appropriate form for your use case.
 
@@ -153,7 +152,6 @@ The library provides extensive configuration options for output formatting:
 
 - **`sort_object_keys`**: Sort object keys for stable, deterministic output — **Default: `false`**
 - **`canonical_numbers`**: Normalize numeric lexemes (use with care) — **Default: `false`**
-- **`canonical_strings`**: Normalize string escapes — **Default: `false`**
 
 ### 5.4 Floating-Point Formatting
 

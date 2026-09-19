@@ -184,8 +184,7 @@ typedef struct {
       preserve_number_lexeme; ///< Preserve original number token for round-trip
   bool parse_int64;           ///< Detect and parse exact int64 representation
   bool parse_uint64;          ///< Detect and parse exact uint64 representation
-  bool parse_double;      ///< Derive double representation when representable
-  bool allow_big_decimal; ///< Store decimal as string-backed big-decimal
+  bool parse_double; ///< Derive double representation when representable
 } GTEXT_JSON_Parse_Options;
 
 /**
@@ -227,7 +226,6 @@ typedef struct {
   // Canonical / deterministic
   bool sort_object_keys;  ///< Sort object keys for stable output
   bool canonical_numbers; ///< Normalize numeric lexemes (use with care)
-  bool canonical_strings; ///< Normalize string escapes
 
   // Extensions
   bool allow_nonfinite_numbers; ///< Emit NaN/Infinity if node contains it

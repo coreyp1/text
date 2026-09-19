@@ -39,7 +39,6 @@ GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   opts.parse_int64 = true;            // detect int64
   opts.parse_uint64 = true;           // detect uint64
   opts.parse_double = true;           // derive double
-  opts.allow_big_decimal = false;     // off by default
 
   return opts;
 }
@@ -67,7 +66,6 @@ GTEXT_API GTEXT_JSON_Write_Options gtext_json_write_options_default(void) {
   // Canonical / deterministic
   opts.sort_object_keys = false;  // preserve insertion order
   opts.canonical_numbers = false; // preserve original lexeme
-  opts.canonical_strings = false; // preserve original escapes
 
   // Extensions
   opts.allow_nonfinite_numbers = false; // don't emit nonfinite by default

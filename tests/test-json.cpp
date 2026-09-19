@@ -86,7 +86,6 @@ TEST(ParseOptions, Default) {
     EXPECT_EQ(opts.parse_int64, 1);
     EXPECT_EQ(opts.parse_uint64, 1);
     EXPECT_EQ(opts.parse_double, 1);
-    EXPECT_EQ(opts.allow_big_decimal, 0);
 }
 
 /**
@@ -108,7 +107,6 @@ TEST(WriteOptions, Default) {
     // Canonical / deterministic
     EXPECT_EQ(opts.sort_object_keys, 0);    // preserve insertion order
     EXPECT_EQ(opts.canonical_numbers, 0);   // preserve original lexeme
-    EXPECT_EQ(opts.canonical_strings, 0);    // preserve original escapes
 
     // Extensions
     EXPECT_EQ(opts.allow_nonfinite_numbers, 0);

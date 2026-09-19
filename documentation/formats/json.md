@@ -50,7 +50,11 @@ complete exponent. Beyond the grammar, the parser keeps more than a `double`:
   representations.
 - `parse_double` (default on) derives a `double` when the value is
   representable.
-- `allow_big_decimal` (default off) keeps a string-backed decimal.
+
+A number too large or too precise for any of those is still kept exactly, as
+its lexeme, and read back with `gtext_json_get_number_lexeme()`. That is the
+string-backed arbitrary-precision decimal, and it is on by default; there is
+no separate option for it.
 
 An integer too large for `int64_t` or `uint64_t` is **not** an error. It
 parses, the lexeme is preserved, and the integer accessors simply do not
@@ -113,7 +117,9 @@ Pretty-printing, indent width, newline string, spacing around `:` and `,`,
 and inline thresholds for short arrays and objects are all configurable.
 For a stable byte-for-byte output across runs, `sort_object_keys` orders
 names, `escape_unicode` forces `\uXXXX` for non-ASCII, and `canonical_numbers`
-and `canonical_strings` normalize lexemes and escapes.
+normalizes numeric lexemes. String escapes are always normalized: the DOM
+stores decoded strings, so the writer re-escapes canonically and the input's
+original escape spellings are not retained.
 
 `allow_nonfinite_numbers` must be set for the writer to emit `NaN` or
 `Infinity`, and doing so produces output that is not JSON. Without it a
