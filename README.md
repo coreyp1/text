@@ -113,8 +113,8 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1236 tests across 69 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 73.8% line coverage. Three libFuzzer
+The test suite runs 1248 tests across 69 binaries with zero failures, clean
+under valgrind and under ASan/UBSan, at 74.0% line coverage. Three libFuzzer
 harnesses cover the three parsers; `tests/fuzz/README.md` records what they
 have found. All of it runs in CI on every push and pull request, along with a
 coverage floor and the symbol, allocator and header gates - until recently
