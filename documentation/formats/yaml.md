@@ -162,29 +162,51 @@ semantically equal to the input, not textually equal.
 @anchor yaml-deviations
 ## Deviations
 
-**Open: a tag on a block-style collection is dropped.**
+**Fixed: a tag on a block-style collection is no longer dropped.**
 
-`!!omap [{a: 1}]` keeps its tag; `!!omap` followed by a block sequence does
-not. The scanner attaches the tag to the *next scalar* instead of to the
-collection it introduces - for `!!omap\na: 1` the streaming events are
-`DOCUMENT_START`, then `SCALAR tag=!!omap value="a"` - so by the time the DOM
-exists the mapping is untagged and `gtext_yaml_node_tag()` returns `NULL`.
-This affects standard and application tags alike, at the document root and
-nested, for both block sequences and block mappings. Flow collections and
-scalars are unaffected.
+`!!omap [{a: 1}]` kept its tag; `!!omap` followed by a block sequence did not.
+A tag applies to the node that follows it, and the scanner can only attach a
+pending tag to the next *scalar*, because in block context nothing yet says
+whether the node starting there is that scalar or a collection whose first key
+or item it is. So the tag stayed on the key or the first item and the
+collection came out untagged - standard and application tags alike, at the
+document root and nested, for block sequences and block mappings.
 
-It has consequences beyond the tag itself. `gtext_yaml_to_json()` refuses
-`!!set`, `!!omap` and `!!pairs` so that a YAML-specific collection cannot
-silently become a JSON array; with the tag gone that refusal does not happen,
-and `!!omap\n- a: 1` converts to `[{"a":1}]` without complaint. Custom tag
-handlers registered through `enable_custom_tags` will not fire for a block
-collection either. Block style is the common style in real YAML, so this is
-the usual case rather than a corner.
+It mattered beyond the tag itself. `gtext_yaml_to_json()` refuses `!!set`,
+`!!omap` and `!!pairs` so that a YAML-specific collection cannot silently
+become a JSON array; with the tag gone that refusal did not happen, and
+`!!omap\n- a: 1` converted to `[{"a":1}]` without complaint. Block style is
+the common style in real YAML, so this was the usual case rather than a
+corner.
 
-The correct expectation is written down as
-`YamlToJsonRefusals.DISABLED_BlockStyleCollectionsKeepTheirTag` in
-`tests/yaml/test-yaml-to-json.cpp`; remove the `DISABLED_` prefix when the
-parser is fixed.
+Two shapes decide it, and they differ in nothing but a line break:
+
+```yaml
+!custom a: 1     # tags the key
+```
+
+```yaml
+!custom
+a: 1             # tags the mapping
+```
+
+Both produce the same events, so no rule over the event stream alone can tell
+them apart. `GTEXT_YAML_Event` therefore carries `tag_line`, the line the tag
+was written on, and the parser moves an own-line tag onto the collection it
+turns out to begin. Same-line tags never move, so a tagged key or a tagged
+scalar behaves exactly as before.
+
+Every case is pinned in `YamlTagPlacement` in
+`tests/yaml/test-yaml-standard-tags.cpp`, with the expectations taken from
+PyYAML's composer on the same input.
+
+**Open: `? ` explicit keys are rejected in a block mapping.**
+
+`!!set\n? a\n? b` fails with "Explicit key already pending", so the block
+spelling of a `!!set` cannot be parsed at all. The flow spelling,
+`!!set {a: ~, b: ~}`, works. This is a separate defect in the handling of the
+`?` indicator rather than anything to do with tags, and is untouched by the
+fix above.
 
 **Fixed: plain scalars are no longer truncated at an embedded indicator.**
 

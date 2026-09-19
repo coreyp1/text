@@ -78,6 +78,7 @@ struct GTEXT_YAML_Stream {
   ResolverState *resolver;
   char *pending_anchor;  /* Anchor name to attach to next node (malloc'd, NULL if none) */
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
+  int pending_tag_line; /* 1-based line pending_tag was written on */
   bool pending_alias; /* True if alias indicator seen and name is pending */
   bool sync_mode; /* If true, call scanner_finish after each feed */
   bool document_started; /* True if we've emitted DOCUMENT_START */
@@ -130,6 +131,7 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
   if (s->pending_tag) {
     free(s->pending_tag);
     s->pending_tag = NULL;
+    s->pending_tag_line = 0;
   }
 
   return GTEXT_YAML_OK;
@@ -359,6 +361,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           : GTEXT_YAML_EVENT_MAPPING_START;
         start_ev.anchor = s->pending_anchor;  /* Attach pending anchor if any */
         start_ev.tag = s->pending_tag;
+        start_ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
         start_ev.offset = tok.offset;
         start_ev.line = tok.line;
         start_ev.col = tok.col;
@@ -376,6 +379,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         if (s->pending_tag) {
           free(s->pending_tag);
           s->pending_tag = NULL;
+          s->pending_tag_line = 0;
         }
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
@@ -454,6 +458,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
 
         if (s->pending_tag) free(s->pending_tag);
         s->pending_tag = strdup(buf);
+        /* tok is the '!' that introduced the tag. */
+        s->pending_tag_line = tok.line;
         continue;
       } else if (tok.u.c == '*') {
         /* Process alias immediately; if name incomplete, defer to next feed */
@@ -504,6 +510,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
       /* Attach pending anchor if any */
       ev.anchor = s->pending_anchor;
       ev.tag = s->pending_tag;
+      ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
@@ -518,6 +525,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
       if (s->pending_tag) {
         free(s->pending_tag);
         s->pending_tag = NULL;
+        s->pending_tag_line = 0;
       }
       continue;
     }
@@ -634,6 +642,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         if (s->pending_tag) {
           free(s->pending_tag);
           s->pending_tag = NULL;
+          s->pending_tag_line = 0;
         }
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
@@ -760,6 +769,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
       if (s->pending_tag) {
         free(s->pending_tag);
         s->pending_tag = NULL;
+        s->pending_tag_line = 0;
       }
       continue;
     }

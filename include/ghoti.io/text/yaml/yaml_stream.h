@@ -87,6 +87,15 @@ typedef struct {
 	} data;
 	const char * anchor;  /* Anchor name for this node (NULL if none) */
 	const char * tag;     /* Explicit tag for this node (NULL if none) */
+	/* 1-based line the tag was written on, or 0 when there is no tag.
+	 *
+	 * A tag applies to the node that follows it, and in block context the
+	 * parser cannot tell which node that is until it has seen what comes
+	 * next.  "!custom a: 1" tags the key; "!custom" then "a: 1" on the next
+	 * line tags the mapping.  The two produce the same events and differ
+	 * only in where the tag was written, so the position has to travel with
+	 * it. */
+	int tag_line;
 	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style (SCALAR events) */
 	size_t offset;
 	int line;

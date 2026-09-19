@@ -101,6 +101,12 @@ typedef struct {
 	int last_scalar_col;                /* Last scalar event column */
 	int last_scalar_key_col;            /* Last scalar key start column */
 	GTEXT_YAML_Node *last_scalar_node;  /* Last scalar node seen */
+	/* True when the last scalar's tag was written on an earlier line than the
+	 * scalar itself.  A tag applies to the node that follows it, and in block
+	 * context that node may turn out to be the collection this scalar begins
+	 * rather than the scalar: "!custom" then "a: 1" tags the mapping, while
+	 * "!custom a: 1" tags the key.  The events are otherwise identical. */
+	bool last_scalar_tag_own_line;
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
@@ -193,6 +199,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_col = -1;
 	p->last_scalar_key_col = -1;
 	p->last_scalar_node = NULL;
+	p->last_scalar_tag_own_line = false;
 	p->pending_leading_comment = NULL;
 	p->last_emitted_node = NULL;
 	p->last_emitted_line = -1;
@@ -1189,6 +1196,44 @@ static int stack_top_indent(const parser_state *p) {
 	return p->stack.indents[p->stack.depth - 1];
 }
 
+
+/**
+ * @brief Move an own-line tag from a scalar onto the collection it begins.
+ *
+ * A tag applies to the node that follows it.  The scanner can only attach a
+ * pending tag to the next scalar, because in block context nothing yet says
+ * whether the node starting there is that scalar or a collection whose first
+ * key or item it is.  Once the parser has decided, this puts the tag where it
+ * belongs.
+ *
+ * Only own-line tags move.  "!custom a: 1" tags the key and "!custom" on its
+ * own line then "a: 1" tags the mapping; the two differ in nothing but where
+ * the tag was written, which is why GTEXT_YAML_Event carries tag_line.
+ *
+ * The collection's tag lives in the stack entry until the node is created at
+ * its end, which is the same slot a flow collection's tag arrives in.
+ */
+static void adopt_own_line_tag(parser_state *p, GTEXT_YAML_Node *node) {
+	if (!p || !node || !p->last_scalar_tag_own_line) return;
+	if (p->stack.depth == 0) return;
+	/* The DOM has no single scalar type: NULL through STRING are the scalar
+	 * kinds, and SEQUENCE onwards are collections and aliases. */
+	if (node->type >= GTEXT_YAML_SEQUENCE) return;
+
+	const char *tag = node->as.scalar.tag;
+	if (!tag) return;
+
+	size_t top = p->stack.depth - 1;
+	if (p->stack.temps[top].tag) return; /* the collection already has one */
+
+	char *moved = strdup(tag);
+	if (!moved) return; /* leaving the tag on the scalar beats losing it */
+
+	p->stack.temps[top].tag = moved;
+	node->as.scalar.tag = NULL;
+	p->last_scalar_tag_own_line = false;
+}
+
 static void maybe_finish_block_mapping_value(parser_state *p) {
 	if (!p || p->stack.depth == 0) return;
 	if (!p->stack.is_block[p->stack.depth - 1]) return;
@@ -1544,6 +1589,11 @@ static GTEXT_YAML_Status parse_callback(
 			node_set_source_location(node, event->offset, event->line, event->col);
 			node->as.scalar.scalar_style = event->scalar_style;
 
+			/* Set for every scalar, so a scalar without one clears whatever the
+			 * previous scalar left behind. */
+			p->last_scalar_tag_own_line = (event->tag != NULL
+				&& event->tag_line > 0 && event->tag_line < event->line);
+
 			parser_attach_leading_comment(p, node);
 			
 			/* Register anchor if present */
@@ -1575,6 +1625,10 @@ static GTEXT_YAML_Status parse_callback(
 				p->last_scalar_in_root = true;
 				p->last_scalar_in_temp = false;
 			} else {
+				/* Before the add, so that "was this the first item?" is still
+				 * answerable. */
+				const bool first_in_level = (p->temp.count == 0);
+
 				if (!temp_add(p, node)) {
 					p->failed = true;
 					if (p->error) {
@@ -1582,6 +1636,16 @@ static GTEXT_YAML_Status parse_callback(
 						p->error->message = "Out of memory adding child node";
 					}
 					return GTEXT_YAML_E_OOM;
+				}
+
+				/* An own-line tag before a block sequence reaches the parser on
+				 * the sequence's first item, because the '-' that opens the
+				 * sequence carries no node of its own.  It belongs to the
+				 * sequence. */
+				if (first_in_level
+					&& p->stack.states[p->stack.depth - 1] == STATE_SEQUENCE
+					&& p->stack.is_block[p->stack.depth - 1]) {
+					adopt_own_line_tag(p, node);
 				}
 
 				p->last_scalar_in_root = false;
@@ -2233,6 +2297,13 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+
+					/* An own-line tag before a block mapping reaches the parser
+					 * on the mapping's first key, because the key is the first
+					 * node the scanner has to attach it to.  It belongs to the
+					 * mapping.  Done after the push, so the mapping's stack
+					 * entry is the one on top. */
+					adopt_own_line_tag(p, key_node);
 
 					if (!temp_add(p, key_node)) {
 						p->failed = true;

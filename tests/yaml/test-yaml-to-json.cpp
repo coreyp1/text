@@ -1048,9 +1048,8 @@ TEST(YamlToJsonRefusals, YamlSpecificCollectionsAreRefused) {
 	// !!set, !!omap and !!pairs have no JSON spelling.  Converting them to
 	// something plausible would lose the distinction silently.
 	//
-	// Flow style only.  In block style the parser drops the tag before the
-	// DOM is built, so the conversion never sees it and does not refuse - see
-	// DISABLED_BlockStyleCollectionsKeepTheirTag below.
+	// Both styles now, since block-style tags survive; the block spellings are
+	// in BlockStyleCollectionsKeepTheirTag below.
 	const char * docs[] = {
 	    "!!set {a: ~, b: ~}",
 	    "!!omap [{a: 1}, {b: 2}]",
@@ -1163,23 +1162,15 @@ TEST(YamlToJsonEmpty, EmptyDocumentBecomesNull) {
 	gtext_yaml_free(d);
 }
 
-// Disabled, not deleted: this is the correct expectation for a bug that is
-// still open, so it is written down where it will be found rather than left
-// as a note somewhere.  Remove the DISABLED_ prefix when the parser is fixed.
+// A tag on a block-style collection used to be dropped: the scanner attached
+// it to the next scalar, so for "!!omap\na: 1" the mapping came out untagged
+// and gtext_yaml_node_tag() returned NULL.  The refusal below is the reason it
+// mattered - with the tag gone, "!!omap\n- a: 1" converted to [{"a":1}]
+// without complaint, and block style is the common style in real YAML.
 //
-// A tag on a block-style collection is dropped.  The scanner emits it as the
-// tag of the *next scalar* instead - for "!!omap\na: 1" the streaming events
-// are DOCUMENT_START, then SCALAR tag=!!omap value="a" - so by the time the
-// DOM exists the mapping is untagged and gtext_yaml_node_tag() returns NULL.
-// Flow style is unaffected; so are tags on scalars.
-//
-// It matters beyond cosmetics.  Block style is the common style in real YAML,
-// and gtext_yaml_to_json() refuses !!set, !!omap and !!pairs precisely so that
-// a YAML-specific collection cannot silently become a JSON array.  With the
-// tag gone that refusal does not happen: "!!omap\n- a: 1" converts to
-// [{"a":1}] without complaint.  Custom tag handlers registered through
-// enable_custom_tags will not fire for a block collection either.
-TEST(YamlToJsonRefusals, DISABLED_BlockStyleCollectionsKeepTheirTag) {
+// The tag now goes to the collection.  This test was written disabled while
+// the bug was open and is enabled now that it is not.
+TEST(YamlToJsonRefusals, BlockStyleCollectionsKeepTheirTag) {
 	const char * docs[] = {
 	    "!!omap\n- a: 1\n- b: 2\n",
 	    "!!pairs\n- a: 1\n- a: 2\n",
