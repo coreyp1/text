@@ -456,23 +456,30 @@ TEST_EXECUTABLES += $(APP_DIR)/testHeaders$(EXE_EXTENSION)
 # Examples
 ####################################################################
 
+# $(TEXTLIBRARY) comes before $(LDFLAGS), as it does in the test rule.  These
+# three rules had them the other way round, so -lghoti.io-cutil-0 was offered
+# to the linker before the archive that references it and every example failed
+# to link with an undefined reference to gcu_allocator_default.  Nothing
+# noticed because `make examples` is not part of `make test`; it is a CI step
+# now.
+
 # Pattern rule for JSON example executables
 $(APP_DIR)/examples/json/%$(EXE_EXTENSION): examples/json/%.c $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
 
 # Pattern rule for CSV example executables
 $(APP_DIR)/examples/csv/%$(EXE_EXTENSION): examples/csv/%.c $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
 
 # Pattern rule for YAML example executables
 $(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(TEXTLIBRARY)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(TEXTLIBRARY) $(LDFLAGS)
 
 ####################################################################
 # Sanitizer Builds (ASan + UBSan)
