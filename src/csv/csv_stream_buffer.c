@@ -72,10 +72,9 @@ GTEXT_CSV_Status csv_field_buffer_grow(csv_field_buffer * fb, size_t needed) {
       // Large buffer: double the size
       // Check for overflow before multiplication
       if (fb->buffer_size > SIZE_MAX / CSV_BUFFER_GROWTH_MULTIPLIER) {
-        // Cannot double without overflow - use needed size if possible
-        if (needed > SIZE_MAX) {
-          return GTEXT_CSV_E_OOM;
-        }
+        // Cannot double without overflowing; ask for exactly what is needed.
+        // A `needed > SIZE_MAX` guard used to sit here, which is always false
+        // for a size_t, so it was a line no test could execute.
         new_size = needed;
       }
       else {
@@ -302,12 +301,6 @@ GTEXT_CSV_Status csv_stream_ensure_field_buffered(GTEXT_CSV_Stream * stream,
   }
 
   return GTEXT_CSV_OK;
-}
-
-// Grow field buffer (wrapper for field buffer structure)
-GTEXT_CSV_Status csv_stream_grow_field_buffer(
-    GTEXT_CSV_Stream * stream, size_t needed) {
-  return csv_field_buffer_grow(&stream->field, needed);
 }
 
 // Append to field buffer (wrapper for field buffer structure)

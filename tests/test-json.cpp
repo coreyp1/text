@@ -9700,6 +9700,413 @@ TEST(JsonMaxTotalBytes, StreamingParserAgrees) {
 	gtext_json_error_free(&err);
 }
 
+// ---------------------------------------------------------------------------
+// json_buffer_grow_unified
+//
+// Fifteen of the seventy-three growth and resize lines that no test executed
+// were in this one function.  tools/coverage.sh reports those separately for a
+// reason: a reallocation path no test reaches is untested, not working, and a
+// buffer that miscomputes its new capacity corrupts the heap rather than
+// failing visibly.
+//
+// The overflow branches cannot be reached through the public API - they need a
+// capacity near SIZE_MAX - so they are driven directly here.  The function
+// leaves *buffer untouched when it fails, so declaring a large capacity over a
+// small allocation is safe: the realloc fails and the original pointer is
+// still ours to free.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct GrowBuffer {
+	char * data = nullptr;
+	size_t capacity = 0;
+
+	~GrowBuffer() {
+		free(data);
+	}
+};
+
+} // namespace
+
+TEST(JsonBufferGrow, RejectsNullArguments) {
+	size_t cap = 0;
+	char * buf = nullptr;
+	EXPECT_EQ(json_buffer_grow_unified(nullptr, &cap, 10,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_E_INVALID);
+	EXPECT_EQ(json_buffer_grow_unified(&buf, nullptr, 10,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_E_INVALID);
+}
+
+TEST(JsonBufferGrow, AlreadyLargeEnoughIsANoOp) {
+	GrowBuffer b;
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 100,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	char * before = b.data;
+	size_t cap_before = b.capacity;
+
+	// needed <= capacity must not reallocate.
+	EXPECT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, cap_before,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.data, before);
+	EXPECT_EQ(b.capacity, cap_before);
+}
+
+TEST(JsonBufferGrow, InitialAllocationUsesTheLargerOfNeededAndInitial) {
+	{
+		// Default initial size is 64.
+		GrowBuffer b;
+		ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 10,
+		              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+		    GTEXT_JSON_OK);
+		EXPECT_EQ(b.capacity, 64u);
+		EXPECT_NE(b.data, nullptr);
+	}
+	{
+		GrowBuffer b;
+		ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 5000,
+		              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+		    GTEXT_JSON_OK);
+		EXPECT_EQ(b.capacity, 5000u);
+	}
+	{
+		// An explicit initial size is honored.
+		GrowBuffer b;
+		ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 3,
+		              JSON_BUFFER_GROWTH_SIMPLE, 256, 0, 0, 0, 0),
+		    GTEXT_JSON_OK);
+		EXPECT_EQ(b.capacity, 256u);
+	}
+}
+
+TEST(JsonBufferGrow, SimpleStrategyDoubles) {
+	GrowBuffer b;
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 64,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	ASSERT_EQ(b.capacity, 64u);
+
+	// One byte more than capacity doubles rather than growing by one.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 65,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 128u);
+
+	// When doubling is still not enough, the needed size is used.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 1000,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 1000u);
+}
+
+TEST(JsonBufferGrow, SimpleStrategyHonorsAnExplicitMultiplier) {
+	GrowBuffer b;
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 100,
+	              JSON_BUFFER_GROWTH_SIMPLE, 100, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	ASSERT_EQ(b.capacity, 100u);
+
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 101,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 3, 0, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 300u);
+}
+
+TEST(JsonBufferGrow, HybridGrowsSmallBuffersByAFixedIncrement) {
+	GrowBuffer b;
+	// Below small_threshold, so the fixed increment applies.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 100,
+	              JSON_BUFFER_GROWTH_HYBRID, 100, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	ASSERT_EQ(b.capacity, 100u);
+
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 101,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 164u) << "small buffers grow by the increment, not by doubling";
+
+	// When the increment is not enough, the needed size wins.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 900,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 900u);
+}
+
+TEST(JsonBufferGrow, HybridDoublesLargeBuffers) {
+	GrowBuffer b;
+	// At or above small_threshold, so doubling applies.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 2048,
+	              JSON_BUFFER_GROWTH_HYBRID, 2048, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	ASSERT_EQ(b.capacity, 2048u);
+
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 2049,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 4096u) << "large buffers double, not grow by the increment";
+
+	// When doubling is not enough, the needed size wins.
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 100000,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, 1024, 2, 64, 0),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 100000u);
+}
+
+TEST(JsonBufferGrow, HeadroomIsAddedAfterGrowth) {
+	GrowBuffer b;
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 100,
+	              JSON_BUFFER_GROWTH_SIMPLE, 100, 0, 0, 0, 0),
+	    GTEXT_JSON_OK);
+	ASSERT_EQ(b.capacity, 100u);
+
+	ASSERT_EQ(json_buffer_grow_unified(&b.data, &b.capacity, 101,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 2, 0, 32),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(b.capacity, 232u) << "doubled to 200, plus 32 headroom";
+}
+
+// The remaining cases drive the overflow arithmetic, which needs capacities
+// that cannot be allocated.  The realloc at the end of the function fails, so
+// each returns GTEXT_JSON_E_OOM; what is being checked is that the function
+// reaches that point deliberately rather than by computing a capacity smaller
+// than the caller asked for, which is the shape that corrupts a heap.
+
+TEST(JsonBufferGrow, HybridSmallIncrementOverflowFallsBackToNeeded) {
+	char * fake = (char *)malloc(16);
+	ASSERT_NE(fake, nullptr);
+	// A capacity below small_threshold, positioned so that adding the fixed
+	// increment overflows.
+	size_t cap = SIZE_MAX - 8;
+	size_t threshold = SIZE_MAX; // keep the "small buffer" branch selected
+
+	EXPECT_EQ(json_buffer_grow_unified(&fake, &cap, SIZE_MAX - 4,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, threshold, 2, 64, 0),
+	    GTEXT_JSON_E_OOM);
+	// The buffer and capacity are left alone on failure.
+	EXPECT_EQ(cap, SIZE_MAX - 8u);
+	free(fake);
+}
+
+TEST(JsonBufferGrow, HybridLargeMultiplyOverflowFallsBackToNeeded) {
+	char * fake = (char *)malloc(16);
+	ASSERT_NE(fake, nullptr);
+	// At or above the threshold, and large enough that doubling overflows.
+	size_t cap = (SIZE_MAX / 2) + 2;
+
+	EXPECT_EQ(json_buffer_grow_unified(&fake, &cap, SIZE_MAX - 4,
+	              JSON_BUFFER_GROWTH_HYBRID, 0, 1024, 2, 64, 0),
+	    GTEXT_JSON_E_OOM);
+	EXPECT_EQ(cap, (SIZE_MAX / 2) + 2u);
+	free(fake);
+}
+
+TEST(JsonBufferGrow, SimpleMultiplyOverflowFallsBackToNeeded) {
+	char * fake = (char *)malloc(16);
+	ASSERT_NE(fake, nullptr);
+	size_t cap = (SIZE_MAX / 2) + 2;
+
+	EXPECT_EQ(json_buffer_grow_unified(&fake, &cap, SIZE_MAX - 4,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 2, 0, 0),
+	    GTEXT_JSON_E_OOM);
+	EXPECT_EQ(cap, (SIZE_MAX / 2) + 2u);
+	free(fake);
+}
+
+TEST(JsonBufferGrow, HeadroomOverflowDoesNotShrinkBelowNeeded) {
+	char * fake = (char *)malloc(16);
+	ASSERT_NE(fake, nullptr);
+	size_t cap = 64;
+
+	// Growth reaches a capacity that cannot take the headroom without
+	// overflowing.  The function must keep the un-headroomed capacity rather
+	// than wrapping, and that capacity must still cover `needed`.
+	EXPECT_EQ(json_buffer_grow_unified(&fake, &cap, SIZE_MAX - 4,
+	              JSON_BUFFER_GROWTH_SIMPLE, 0, 0, 2, 0, SIZE_MAX / 2),
+	    GTEXT_JSON_E_OOM);
+	EXPECT_EQ(cap, 64u);
+	free(fake);
+}
+
+TEST(JsonBufferGrow, OverflowHelpersAgreeWithTheirContracts) {
+	// These three decide every branch above, so they are worth pinning
+	// directly rather than only through their callers.
+	EXPECT_TRUE(json_check_add_overflow(SIZE_MAX, 1));
+	EXPECT_TRUE(json_check_add_overflow(SIZE_MAX - 1, 2));
+	EXPECT_FALSE(json_check_add_overflow(SIZE_MAX - 1, 1));
+	EXPECT_FALSE(json_check_add_overflow(0, 0));
+
+	EXPECT_TRUE(json_check_mul_overflow(SIZE_MAX, 2));
+	EXPECT_TRUE(json_check_mul_overflow((SIZE_MAX / 2) + 1, 2));
+	EXPECT_FALSE(json_check_mul_overflow(SIZE_MAX / 2, 2));
+	EXPECT_FALSE(json_check_mul_overflow(SIZE_MAX, 0))
+	    << "multiplying by zero cannot overflow";
+	EXPECT_FALSE(json_check_mul_overflow(0, SIZE_MAX));
+
+	EXPECT_TRUE(json_check_sub_underflow(0, 1));
+	EXPECT_FALSE(json_check_sub_underflow(1, 1));
+	EXPECT_FALSE(json_check_sub_underflow(SIZE_MAX, 0));
+}
+
+// ---------------------------------------------------------------------------
+// json_error.c
+//
+// At 47% the least-covered file in the JSON module.  Both functions here feed
+// user-facing error text, and both are reached from the parser along only a
+// couple of paths, so most of what they can say had never been said.
+// ---------------------------------------------------------------------------
+
+TEST(JsonTokenDescription, EveryTokenHasItsOwnDescription) {
+	// The parser names the token it wanted and the token it found, so a case
+	// that falls through to "unknown token" is a message a user cannot act on.
+	const struct {
+		int token;
+		const char * expected;
+	} cases[] = {
+	    {JSON_TOKEN_EOF, "end of input"},
+	    {JSON_TOKEN_ERROR, "error"},
+	    {JSON_TOKEN_LBRACE, "opening brace '{'"},
+	    {JSON_TOKEN_RBRACE, "closing brace '}'"},
+	    {JSON_TOKEN_LBRACKET, "opening bracket '['"},
+	    {JSON_TOKEN_RBRACKET, "closing bracket ']'"},
+	    {JSON_TOKEN_COLON, "colon ':'"},
+	    {JSON_TOKEN_COMMA, "comma ','"},
+	    {JSON_TOKEN_NULL, "null"},
+	    {JSON_TOKEN_TRUE, "true"},
+	    {JSON_TOKEN_FALSE, "false"},
+	    {JSON_TOKEN_STRING, "string"},
+	    {JSON_TOKEN_NUMBER, "number"},
+	    {JSON_TOKEN_NAN, "NaN"},
+	    {JSON_TOKEN_INFINITY, "Infinity"},
+	    {JSON_TOKEN_NEG_INFINITY, "-Infinity"},
+	};
+
+	for (const auto & c : cases) {
+		const char * got = json_token_type_description(c.token);
+		ASSERT_NE(got, nullptr);
+		EXPECT_STREQ(got, c.expected) << "token " << c.token;
+	}
+
+	// An unmapped value must still produce something printable rather than
+	// falling off the end of the switch.
+	EXPECT_STREQ(json_token_type_description(-1), "unknown token");
+	EXPECT_STREQ(json_token_type_description(9999), "unknown token");
+}
+
+TEST(JsonErrorSnippet, RejectsNullArguments) {
+	char * snippet = nullptr;
+	size_t len = 0;
+	size_t caret = 0;
+	const char * input = "hello";
+
+	EXPECT_NE(json_error_generate_context_snippet(
+	              nullptr, 5, 0, 10, 10, &snippet, &len, &caret),
+	    GTEXT_JSON_OK);
+	EXPECT_NE(json_error_generate_context_snippet(
+	              input, 5, 0, 10, 10, nullptr, &len, &caret),
+	    GTEXT_JSON_OK);
+	EXPECT_NE(json_error_generate_context_snippet(
+	              input, 5, 0, 10, 10, &snippet, nullptr, &caret),
+	    GTEXT_JSON_OK);
+	EXPECT_NE(json_error_generate_context_snippet(
+	              input, 5, 0, 10, 10, &snippet, &len, nullptr),
+	    GTEXT_JSON_OK);
+}
+
+TEST(JsonErrorSnippet, CaretPointsAtTheErrorOffset) {
+	const char * input = "0123456789abcdefghij";
+	const size_t input_len = strlen(input);
+
+	struct Case {
+		size_t offset;
+		size_t radius;
+	};
+	const Case cases[] = {
+	    {0, 5},          // at the very start: nothing before it
+	    {input_len, 5},  // one past the end: nothing after it
+	    {10, 5},         // comfortably inside
+	    {10, 1000},      // radius larger than the whole input
+	    {2, 3},          // window clipped at the start
+	    {input_len - 1, 3},
+	};
+
+	for (const Case & c : cases) {
+		SCOPED_TRACE("offset=" + std::to_string(c.offset) + " radius="
+		    + std::to_string(c.radius));
+
+		char * snippet = nullptr;
+		size_t len = 0;
+		size_t caret = 0;
+		GTEXT_JSON_Status st = json_error_generate_context_snippet(
+		    input, input_len, c.offset, c.radius, c.radius, &snippet, &len,
+		    &caret);
+		ASSERT_EQ(st, GTEXT_JSON_OK);
+		ASSERT_NE(snippet, nullptr);
+
+		// The caret must index into the snippet, and the snippet must be a
+		// substring of the input at the position the caret claims.
+		EXPECT_LE(caret, len);
+		ASSERT_LE(len, input_len);
+		const char * found = strstr(input, std::string(snippet, len).c_str());
+		EXPECT_NE(found, nullptr) << "snippet is not a substring of the input";
+		if (found) {
+			EXPECT_EQ(static_cast<size_t>(found - input) + caret, c.offset)
+			    << "caret does not land on the error offset";
+		}
+
+		free(snippet);
+	}
+}
+
+TEST(JsonErrorSnippet, EmptyInputProducesNoSnippet) {
+	char * snippet = nullptr;
+	size_t len = 0;
+	size_t caret = 0;
+	json_error_generate_context_snippet("", 0, 0, 10, 10, &snippet, &len, &caret);
+	EXPECT_EQ(snippet, nullptr);
+	EXPECT_EQ(len, 0u);
+	free(snippet);
+}
+
+TEST(JsonErrorSnippet, OffsetBeyondInputIsClampedNotRead) {
+	// A caller that reports an offset past the end must not make this read out
+	// of bounds.  Under ASan a regression here fails loudly.
+	const char * input = "abc";
+	char * snippet = nullptr;
+	size_t len = 0;
+	size_t caret = 0;
+	json_error_generate_context_snippet(
+	    input, 3, 1000, 10, 10, &snippet, &len, &caret);
+	if (snippet) {
+		EXPECT_LE(len, 3u);
+		free(snippet);
+	}
+}
+
+TEST(JsonErrorFree, IsIdempotentAndNullSafe) {
+	gtext_json_error_free(nullptr);
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	gtext_json_error_free(&err); // nothing allocated
+	EXPECT_EQ(err.context_snippet, nullptr);
+
+	// Now with a real snippet from a real parse failure.
+	const char * bad = "{\"a\": }";
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	GTEXT_JSON_Value * v = gtext_json_parse(bad, strlen(bad), &opts, &err);
+	EXPECT_EQ(v, nullptr);
+	if (v) {
+		gtext_json_free(v);
+	}
+	gtext_json_error_free(&err);
+	EXPECT_EQ(err.context_snippet, nullptr);
+	gtext_json_error_free(&err); // twice must be safe
+}
+
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

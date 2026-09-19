@@ -348,19 +348,6 @@ GTEXT_CSV_Status csv_stream_ensure_field_buffered(GTEXT_CSV_Stream * stream,
     const char * process_input, size_t process_len, size_t current_offset);
 
 /**
- * @brief Grow the stream's field buffer
- *
- * Grows the field buffer to accommodate at least the needed size.
- * Uses hybrid growth strategy.
- *
- * @param stream Stream parser (must not be NULL)
- * @param needed Minimum size needed in bytes
- * @return GTEXT_CSV_OK on success, error code on failure
- */
-GTEXT_CSV_Status csv_stream_grow_field_buffer(
-    GTEXT_CSV_Stream * stream, size_t needed);
-
-/**
  * @brief Append data to the stream's field buffer
  *
  * Appends data to the current field buffer, growing it if necessary.

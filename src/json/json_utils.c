@@ -146,10 +146,11 @@ GTEXT_JSON_Status json_buffer_grow_unified(char ** buffer, size_t * capacity,
     if (*capacity < small_threshold) {
       // Small buffer: grow by fixed increment
       if (json_check_add_overflow(*capacity, fixed_increment)) {
-        // Cannot add increment without overflow - use needed size if possible
-        if (needed > SIZE_MAX) {
-          return GTEXT_JSON_E_OOM;
-        }
+        // Cannot add the increment without overflowing; ask for exactly what
+        // is needed instead.  A `needed > SIZE_MAX` guard used to sit here,
+        // which is always false for a size_t and so was two lines that no
+        // test could ever execute.  The final overflow check below, and the
+        // realloc itself, are what actually refuse an impossible size.
         new_capacity = needed;
       }
       else {
@@ -163,10 +164,8 @@ GTEXT_JSON_Status json_buffer_grow_unified(char ** buffer, size_t * capacity,
       // Large buffer: use exponential growth
       // Check for overflow before multiplication
       if (json_check_mul_overflow(*capacity, growth_multiplier)) {
-        // Cannot multiply without overflow - use needed size if possible
-        if (needed > SIZE_MAX) {
-          return GTEXT_JSON_E_OOM;
-        }
+        // Cannot multiply without overflowing; ask for exactly what is
+        // needed.  See the note on the hybrid small-buffer branch above.
         new_capacity = needed;
       }
       else {

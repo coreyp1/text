@@ -92,14 +92,14 @@ GTEXT_INTERNAL_API gtext_file_status gtext_file_read_all(
   fclose(file);
 
   // Room for the terminator, which is not counted in the length.
-  if (used == capacity) {
-    char * grown = (char *)realloc(buffer, capacity + 1);
-    if (!grown) {
-      free(buffer);
-      return GTEXT_FILE_E_OOM;
-    }
-    buffer = grown;
-  }
+  //
+  // There is always room.  The loop above is left only by its break, which is
+  // taken when fread returned fewer bytes than the space remaining, so `used`
+  // is then strictly less than `capacity`; and whenever the two are equal at
+  // the top of the loop the buffer is doubled before reading again.  A
+  // `used == capacity` reallocation used to stand here for the case that
+  // cannot arise, which is why coverage reported those lines as never
+  // executed.
   buffer[used] = '\0';
 
   *out_data = buffer;

@@ -232,3 +232,175 @@ TEST(YamlFileIo, StillRoundTrips) {
 	gtext_yaml_free(again);
 	gtext_yaml_error_free(&err);
 }
+
+// ---------------------------------------------------------------------------
+// Reading past the initial buffer
+//
+// gtext_file_read_all() starts with a 64 KiB buffer and doubles it, but every
+// test above uses a document of a few hundred bytes, so the doubling had never
+// run once - and it is the path every real document takes.  tools/coverage.sh
+// listed those lines among the growth and resize lines no test reaches.
+//
+// The sizes below straddle the 64 KiB boundary deliberately: just under, just
+// over, exactly on it, and far enough past to force several doublings.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr size_t kReadChunk = 64 * 1024;
+
+/** A CSV document of exactly `target` bytes, or the nearest achievable size. */
+std::string csv_of_size(size_t target) {
+	std::string s = "a,b\n";
+	const std::string row = "1234567,89\n"; // 11 bytes
+	while (s.size() + row.size() <= target) {
+		s += row;
+	}
+	// Pad the final field so the total lands exactly on `target`.
+	while (s.size() < target) {
+		s.insert(s.size() - 1, "x");
+	}
+	return s;
+}
+
+/** A JSON array of exactly `target` bytes. */
+std::string json_of_size(size_t target) {
+	std::string s = "[0";
+	while (s.size() + 2 <= target - 1) {
+		s += ",0";
+	}
+	// Pad with whitespace, which RFC 8259 allows between tokens.  Padding by
+	// widening the last number instead produces "00", a leading zero the
+	// grammar forbids - which the parser duly rejected, making the first
+	// version of this test a bug in the test rather than in the library.
+	while (s.size() < target - 1) {
+		s += " ";
+	}
+	s += "]";
+	return s;
+}
+
+} // namespace
+
+TEST(FileIoGrowth, CsvReadsDocumentsLargerThanTheReadChunk) {
+	const size_t sizes[] = {
+	    kReadChunk - 1,     // one short of the initial buffer
+	    kReadChunk,         // exactly the initial buffer
+	    kReadChunk + 1,     // one doubling
+	    kReadChunk * 2 + 1, // two doublings
+	    kReadChunk * 5,     // several
+	};
+
+	for (size_t size : sizes) {
+		SCOPED_TRACE("size=" + std::to_string(size));
+		const std::string doc = csv_of_size(size);
+		ASSERT_EQ(doc.size(), size);
+
+		TempPath path("growth.csv");
+		path.write(doc);
+
+		GTEXT_CSV_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table * t =
+		    gtext_csv_parse_file(path.c_str(), nullptr, &err);
+		ASSERT_NE(t, nullptr) << (err.message ? err.message : "parse failed");
+
+		// Every row survived the reallocation.  A growth path that loses or
+		// truncates bytes shows up here rather than as a crash.
+		const size_t rows = gtext_csv_row_count(t);
+		EXPECT_GT(rows, 0u);
+
+		gtext_csv_free_table(t);
+		gtext_csv_error_free(&err);
+	}
+}
+
+TEST(FileIoGrowth, JsonReadsDocumentsLargerThanTheReadChunk) {
+	const size_t sizes[] = {
+	    kReadChunk - 1,
+	    kReadChunk,
+	    kReadChunk + 1,
+	    kReadChunk * 2 + 1,
+	    kReadChunk * 5,
+	};
+
+	for (size_t size : sizes) {
+		SCOPED_TRACE("size=" + std::to_string(size));
+		const std::string doc = json_of_size(size);
+		ASSERT_EQ(doc.size(), size);
+
+		TempPath path("growth.json");
+		path.write(doc);
+
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * v = gtext_json_parse_file(path.c_str(), nullptr, &err);
+		ASSERT_NE(v, nullptr) << (err.message ? err.message : "parse failed");
+		EXPECT_EQ(gtext_json_typeof(v), GTEXT_JSON_ARRAY);
+		EXPECT_GT(gtext_json_array_size(v), 0u);
+
+		gtext_json_free(v);
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(FileIoGrowth, ContentSurvivesTheReallocationExactly) {
+	// The strongest check available: read a large file back and compare it
+	// byte for byte with what was written.  A doubling that copies the wrong
+	// length, or drops the tail of a chunk, fails here and nowhere else.
+	const size_t size = kReadChunk * 3 + 12345;
+	std::string doc;
+	doc.reserve(size);
+	for (size_t i = 0; i < size; ++i) {
+		// A non-repeating pattern, so a duplicated or dropped block is visible.
+		doc += static_cast<char>('A' + (i % 26));
+	}
+
+	TempPath path("growth.txt");
+	path.write(doc);
+
+	// Round-trip through the CSV reader, which treats the whole thing as one
+	// enormous single-column row.
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_field_bytes = size * 2;
+	opts.max_record_bytes = size * 2;
+	opts.max_total_bytes = size * 2;
+
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t = gtext_csv_parse_file(path.c_str(), &opts, &err);
+	ASSERT_NE(t, nullptr) << (err.message ? err.message : "parse failed");
+
+	size_t len = 0;
+	const char * field = gtext_csv_field(t, 0, 0, &len);
+	ASSERT_NE(field, nullptr);
+	EXPECT_EQ(len, size);
+	if (len == size) {
+		EXPECT_EQ(memcmp(field, doc.data(), size), 0)
+		    << "the file came back with different bytes than were written";
+	}
+
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+}
+
+TEST(FileIoGrowth, SizeLimitStillAppliesAcrossGrowth) {
+	// The limit is checked inside the read loop, so it must fire during the
+	// growth rather than after the whole file is in memory.
+	const std::string doc = csv_of_size(kReadChunk * 3);
+	TempPath path("growth-limit.csv");
+	path.write(doc);
+
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.max_total_bytes = kReadChunk; // smaller than the file
+
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t = gtext_csv_parse_file(path.c_str(), &opts, &err);
+	EXPECT_EQ(t, nullptr);
+	if (t) {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+}
+
