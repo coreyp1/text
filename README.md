@@ -113,7 +113,7 @@ multi-document streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1248 tests across 69 binaries with zero failures, clean
+The test suite runs 1273 tests across 69 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.0% line coverage. Three libFuzzer
 harnesses cover the three parsers; `tests/fuzz/README.md` records what they
 have found. All of it runs in CI on every push and pull request, along with a
@@ -146,10 +146,17 @@ anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. The YAML test suite has never been
 run against this parser, so conformance to 1.2.2 is unmeasured rather than
-partial; a differential comparison against PyYAML found and fixed the silent
-truncation of plain scalars containing ` - `, ` , ` or ` # `. Multi-line and
-flow plain scalars containing spaces are still unsupported. See
-[the YAML page](@ref format_yaml).
+partial.
+
+Comparison against PyYAML keeps finding defects here, so treat this module as
+the least settled of the three. It has so far found and fixed the silent
+truncation of plain scalars containing ` - `, ` , ` or ` # `; tags being
+dropped from block-style collections; and a mapping key with no value being
+dropped rather than made null, which shifted every later pair. Still open, and
+listed with reproductions on [the YAML page](@ref format_yaml): block scalars
+lose their trailing newline, a block sequence does not close on a dedent back
+to its parent key, and multi-line and flow plain scalars containing spaces are
+unsupported.
 
 ## Macros and Utilities
 
