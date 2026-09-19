@@ -1040,14 +1040,28 @@ static GTEXT_JSON_Status json_patch_move(GTEXT_JSON_Value * root,
     return GTEXT_JSON_E_OOM;
   }
 
-  // Add to target location
-  status = json_patch_add(root, path, path_len, cloned_value, err);
+  // RFC 6902 section 4.4: move is "functionally identical to a 'remove'
+  // operation on the 'from' location, followed immediately by an 'add'
+  // operation at the target location with the value that was just removed".
+  //
+  // This used to add first and remove second.  The order is unobservable when
+  // the two locations are in different containers, which is what every
+  // existing test did, and decides the answer when they are in the same
+  // array, because the removal shifts the indices the add is measured
+  // against.  Appendix A.7 is exactly that case: moving /foo/1 to /foo/3 in
+  // ["all","grass","cows","eat"] must give ["all","cows","eat","grass"], and
+  // adding first gave ["all","cows","grass","eat"].
+  //
+  // The value is cloned above, before either step, so the removal freeing the
+  // source does not matter.  target_ctx is the document's arena and stays
+  // valid across the removal even though target_parent may not; json_patch_add
+  // locates the parent again for itself.
+  status = json_patch_remove(root, from, from_len, err);
   if (status != GTEXT_JSON_OK) {
     return status;
   }
 
-  // Remove from source location
-  return json_patch_remove(root, from, from_len, err);
+  return json_patch_add(root, path, path_len, cloned_value, err);
 }
 
 // Implement copy operation
@@ -1781,10 +1795,36 @@ static GTEXT_JSON_Status json_merge_patch_recursive(GTEXT_JSON_Value * target,
       }
     }
     else {
-      // Key doesn't exist - add it (clone patch_value into target's context)
+      // Key doesn't exist.
       json_context * target_ctx = target->ctx;
-      GTEXT_JSON_Value * cloned_value =
-          json_value_clone(patch_value, target_ctx);
+      GTEXT_JSON_Value * cloned_value = NULL;
+
+      if (patch_value->type == GTEXT_JSON_OBJECT) {
+        // RFC 7386 section 2 defines the absent case as MergePatch with a
+        // target that "is not an Object", which the algorithm replaces with
+        // an empty Object before walking the patch's members.  Walking them
+        // is what discards the nulls: a null member removes a name from the
+        // target, and an empty target has no such name, so the member
+        // contributes nothing rather than being stored.
+        //
+        // Cloning the patch subtree verbatim, which is what this did, keeps
+        // those nulls.  The last row of the specification's test table is
+        // this case: {} merged with {"a":{"bb":{"ccc":null}}} is
+        // {"a":{"bb":{}}}, not the patch itself.
+        cloned_value =
+            json_value_new_with_existing_context(GTEXT_JSON_OBJECT, target_ctx);
+        if (cloned_value) {
+          GTEXT_JSON_Status sub =
+              json_merge_patch_recursive(cloned_value, patch_value, err);
+          if (sub != GTEXT_JSON_OK) {
+            return sub;
+          }
+        }
+      }
+      else {
+        cloned_value = json_value_clone(patch_value, target_ctx);
+      }
+
       if (!cloned_value) {
         if (err) {
           *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,

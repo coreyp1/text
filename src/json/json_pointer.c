@@ -106,56 +106,54 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
     return NULL;
   }
 
-  // Empty pointer refers to root
-  if (len == 0) {
-    return root;
-  }
-
-  // Pointer must start with '/'
-  if (ptr[0] != '/') {
-    return NULL;
-  }
-
-  // Current value being traversed
+  // RFC 6901 section 3:  json-pointer = *( "/" reference-token )
+  //
+  // The token count is therefore the count of '/' characters, and a token may
+  // be empty - "/" is a pointer to the member named "", not a pointer to the
+  // root.  This loop is shaped after that rule: consume a '/', then take
+  // everything up to the next unescaped '/' as one token, empty or not.
+  //
+  // It used to start after the leading '/' and run `while (pos < len)`, so
+  // "/" processed no tokens at all and returned the root, and the branch for
+  // an empty token skipped it with the comment "refers to empty string key"
+  // without ever performing that lookup.  Both are section 5's fourth
+  // example, which evaluates "/" against a document with a "" member.
   GTEXT_JSON_Value * current = root;
+  size_t pos = 0;
 
-  // Parse reference tokens separated by '/'
-  // Note: We must only split on unescaped '/' characters (not '~1')
-  // We scan the pointer and build tokens, handling escape sequences
-  size_t pos = 1; // Skip leading '/'
   while (pos < len) {
-    // Find the end of the current reference token
-    // Scan forward, but treat '~1' as an escaped '/' (don't split on it)
+    if (ptr[pos] != '/') {
+      // A non-empty pointer must begin with '/', and every token after the
+      // first is reached by consuming one.
+      return NULL;
+    }
+    pos++;
+
+    // Find the end of this reference token.  '~1' is an escaped '/' and does
+    // not separate tokens.
     size_t token_start = pos;
     size_t token_end = pos;
 
     while (token_end < len) {
       if (ptr[token_end] == '~') {
-        // Check if this is an escape sequence
-        if (token_end + 1 < len) {
-          if (ptr[token_end + 1] == '0' || ptr[token_end + 1] == '1') {
-            // Valid escape sequence, skip both characters
-            // Check for integer overflow before incrementing
-            if (token_end > SIZE_MAX - 2) {
-              return NULL; // Overflow
-            }
-            token_end += 2;
-            continue;
+        if (token_end + 1 < len
+            && (ptr[token_end + 1] == '0' || ptr[token_end + 1] == '1')) {
+          if (token_end > SIZE_MAX - 2) {
+            return NULL; // Overflow
           }
+          token_end += 2;
+          continue;
         }
-        // Not a valid escape, treat '~' as regular character
-        // Check for integer overflow before incrementing
+        // Not a valid escape; json_pointer_decode_token rejects it below.
         if (token_end == SIZE_MAX) {
           return NULL; // Overflow
         }
         token_end++;
       }
       else if (ptr[token_end] == '/') {
-        // Found an unescaped '/', this is the token separator
-        break;
+        break; // Unescaped '/' separates tokens.
       }
       else {
-        // Check for integer overflow before incrementing
         if (token_end == SIZE_MAX) {
           return NULL; // Overflow
         }
@@ -165,31 +163,13 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
 
     size_t token_len = token_end - token_start;
 
-    // Verify bounds: ensure token_start + token_len doesn't exceed len
-    // This ensures ptr + token_start is within valid range
-    // Note: token_start < len from loop condition, but check defensively
-    // Check for underflow in subtraction (defensive)
+    // Verify bounds defensively.
     if (token_len > len || token_start > len - token_len) {
-      return NULL; // Invalid bounds
+      return NULL;
     }
 
-    // Empty token (e.g., "//" or trailing "/")
-    if (token_len == 0) {
-      // Empty reference token is valid (refers to empty string key)
-      // Continue to next token
-      pos = token_end;
-      if (pos < len && ptr[pos] == '/') {
-        pos++; // Skip '/'
-      }
-      else {
-        break;
-      }
-      continue;
-    }
-
-    // Decode the reference token (handle escape sequences)
-    // Allocate a buffer large enough (worst case: same size as input)
-    // Check for integer overflow in allocation size
+    // Decode the token.  An empty token decodes to the empty string and is
+    // looked up like any other member name.
     if (token_len > SIZE_MAX - 1) {
       return NULL; // Token too large
     }
@@ -198,7 +178,7 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
       return NULL;
     }
 
-    size_t decoded_len;
+    size_t decoded_len = 0;
     GTEXT_JSON_Status status = json_pointer_decode_token(
         ptr + token_start, token_len, decoded, token_len + 1, &decoded_len);
 
@@ -207,37 +187,29 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
       return NULL;
     }
 
-    // Ensure null termination (defensive, though text_json_object_get uses
-    // length)
     decoded[decoded_len] = '\0';
 
-    // Determine if this is an array index or object key
-    size_t array_idx;
+    size_t array_idx = 0;
     int is_array_index =
         json_pointer_parse_index(decoded, decoded_len, &array_idx);
 
     if (is_array_index) {
-      // Try as array index
       if (current->type != GTEXT_JSON_ARRAY) {
         free(decoded);
         return NULL;
       }
-
       if (array_idx >= current->as.array.count) {
         free(decoded);
         return NULL;
       }
-
       current = current->as.array.elems[array_idx];
     }
     else {
-      // Try as object key
       if (current->type != GTEXT_JSON_OBJECT) {
         free(decoded);
         return NULL;
       }
 
-      // Search for the key in the object
       const GTEXT_JSON_Value * found = gtext_json_object_get(
           (const GTEXT_JSON_Value *)current, decoded, decoded_len);
 
@@ -246,22 +218,13 @@ static GTEXT_JSON_Value * json_pointer_evaluate(
         return NULL;
       }
 
-      // Cast away const for mutable access if needed
-      // This is safe because we're traversing a DOM tree that we own
+      // Cast away const: the caller owns this tree, and the const entry point
+      // re-applies const to the result.
       current = (GTEXT_JSON_Value *)found;
     }
 
     free(decoded);
-
-    // Move to next token
     pos = token_end;
-    if (pos < len && ptr[pos] == '/') {
-      pos++; // Skip '/'
-    }
-    else {
-      // End of pointer string, we're done
-      break;
-    }
   }
 
   return current;

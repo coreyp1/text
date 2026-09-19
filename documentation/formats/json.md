@@ -89,6 +89,18 @@ and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,
 `move`, `copy` and `test`, applied atomically so that a failing operation
 leaves the document unchanged; and RFC 7386 recursive merge.
 
+The worked examples in RFC 6901 section 5, RFC 6902 Appendix A and the RFC
+7386 Appendix A test table are all in the suite, in
+`tests/test-rfc-conformance.cpp`. That is the only conformance corpus this
+library has; the JSON syntax itself is still checked only against tests
+written here rather than against JSONTestSuite. Writing the three appendix
+tables down found three divergences that the existing tests, all written
+against the implementation, agreed with: `"/"` resolved to the root rather
+than to the member named `""`, `move` applied its `add` before its `remove`
+so that moving within one array used unshifted indices, and a merge patch
+adding a new object member stored its `null` members instead of dropping
+them.
+
 **Schema.** A core subset: `type` (including arrays of types), `properties`,
 `required`, `items`, `enum`, `const`, `minimum`, `maximum`, `minLength`,
 `maxLength`, `minItems`, `maxItems`. Schemas compile once and validate many
