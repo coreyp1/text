@@ -3,23 +3,16 @@
  *
  * Allocator abstraction for the Ghoti.io Text library.
  *
- * This is the same four-function vtable that `cutil` defines as
- * `GCU_Allocator` and that the compress, image and model libraries use under
- * local names. `text` declares its own copy rather than including cutil's,
- * because `text` has no cutil dependency and CONVENTIONS.md records that as
- * deliberate - it is the one library in the suite that builds standalone.
+ * This is cutil's @ref GCU_Allocator under a local name, the same arrangement
+ * the compress, image and model libraries use. One definition across the suite
+ * means an allocator written for any of them works with all of them, rather
+ * than needing a near-identical copy per library.
  *
- * The copy is not a fork. `GTEXT_Allocator` has the same members in the same
- * order with the same semantics, so it is layout-compatible with
- * `GCU_Allocator` and a program using both libraries can hand the same
- * allocator to each:
- *
- *     const GCU_Allocator * mine = my_arena_allocator();
- *     gtext_json_parse_with_allocator(
- *         src, len, &opts, (const GTEXT_Allocator *)mine, &err);
- *
- * If `text` ever takes a cutil dependency, this becomes
- * `typedef GCU_Allocator GTEXT_Allocator;` and no caller has to change.
+ * `text` declared its own copy for a while, on the reading that
+ * CONVENTIONS.md's "standalone by design" meant no dependency on cutil. That
+ * was a misreading: a dependency inside the suite is fine so long as the graph
+ * stays a DAG, and cutil is its root. The copy is gone and this is a typedef,
+ * so a caller who was already using `GTEXT_Allocator` needs no change.
  *
  * Copyright 2026 by Corey Pennycuff
  */
@@ -27,6 +20,7 @@
 #ifndef GHOTI_IO_GTEXT_ALLOCATOR_H
 #define GHOTI_IO_GTEXT_ALLOCATOR_H
 
+#include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include <stddef.h>
 
@@ -35,34 +29,23 @@ extern "C" {
 #endif
 
 /**
- * @brief A caller-supplied memory management strategy.
+ * @brief Allocator interface used by the library.
  *
- * All four function pointers must be provided. Each receives the `ctx`
- * pointer from this struct as its first argument, so one implementation can
- * serve many independent pools.
+ * All four function pointers must be provided. Each receives the `ctx` pointer
+ * from the struct as its first argument, so one implementation can serve many
+ * independent pools.
  *
- * The semantics match the C standard library equivalents, with two additions
- * that callers rely on:
- *
- * - `calloc_fn` must treat overflow of `nitems * size` as an allocation
- *   failure and return NULL rather than allocating a truncated block.
- * - A zero-size request should return a usable non-NULL pointer rather than
- *   NULL, so that NULL always means failure.
- *
- * The default allocator does both. A custom one is expected to as well,
- * because the library checks for NULL and nothing else.
+ * Two requirements beyond the C library equivalents, which callers rely on:
+ * `calloc_fn` must treat overflow of `nitems * size` as an allocation failure
+ * and return NULL rather than allocating a truncated block, and a zero-size
+ * request should return a usable non-NULL pointer, so that NULL always means
+ * failure.
  *
  * A NULL `GTEXT_Allocator *` anywhere in this library means "use
  * gtext_allocator_default()", so every function taking one may be called
  * without one.
  */
-typedef struct GTEXT_Allocator {
-  void * ctx; ///< User-defined, passed to each call.
-  void * (*malloc_fn)(void * ctx, size_t size);                ///< malloc().
-  void * (*calloc_fn)(void * ctx, size_t nitems, size_t size); ///< calloc().
-  void * (*realloc_fn)(void * ctx, void * ptr, size_t size);   ///< realloc().
-  void (*free_fn)(void * ctx, void * ptr);                     ///< free().
-} GTEXT_Allocator;
+typedef GCU_Allocator GTEXT_Allocator;
 
 /**
  * @brief Get the default, stdlib-backed allocator.

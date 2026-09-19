@@ -37,15 +37,27 @@ int main(void) {
 
 ## Dependencies
 
-None beyond libc. Google Test is required only to build the test suite, and
-clang only to build the fuzzers.
+[ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
+vtable the suite shares, resolved through pkg-config. Nothing else beyond
+libc. Google Test is required only to build the test suite, and clang only to
+build the fuzzers.
 
 ## Building
+
+If cutil is installed where pkg-config can find it:
 
 ```bash
 make
 make test
 sudo make install
+```
+
+Otherwise build the suite into a local prefix from the parent folder, which
+installs cutil first, and point this build at the same prefix:
+
+```bash
+./bootstrap.sh
+make -C text test PREFIX="$PWD/.local"
 ```
 
 `make help` lists every target. `make docs` builds the Doxygen manual into

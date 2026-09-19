@@ -195,6 +195,25 @@ endif
 # The standard include directories for the project.
 INCLUDE := -I include/ -I $(GEN_DIR)/
 
+# ghoti.io-cutil, for GCU_Allocator.  text used to declare its own copy of that
+# vtable because CONVENTIONS.md described the library as standalone; that was a
+# misreading - a dependency inside the suite is fine as long as the graph stays
+# a DAG, and cutil is its root. compress, image and model all take the same
+# dependency for the same type, and one definition is what lets an allocator
+# written for any of them work with all of them.
+CUTIL_PC ?= ghoti.io-cutil$(BRANCH)
+CUTIL_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
+CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs $(CUTIL_PC) 2>/dev/null)
+ifeq ($(strip $(CUTIL_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+endif
+endif
+INCLUDE += $(CUTIL_CFLAGS)
+# A link dependency, not just a header one: gtext_allocator_default() returns
+# cutil's default allocator rather than reimplementing it.
+LDFLAGS += $(CUTIL_LIBS)
+
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
 
@@ -915,6 +934,9 @@ clean: ## Remove all contents of the build directories.
 # system location, which is what an ordinary `sudo make install` uses.
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 
+# Dependencies a consumer of this library needs on its own include path.
+PC_REQUIRES := $(CUTIL_PC)
+
 # Where this project's own .pc file is installed. Defaults to the directory
 # pkg-config is already being told to search, but separate from it so a
 # staged install can write somewhere else without also redirecting lookups.
@@ -966,7 +988,7 @@ endif
 	fi
 	# Installing the pkg-config files.
 	@mkdir -p $(PKGCONFIG_INSTALL_PATH)
-	@cat pkgconfig/$(SUITE)-$(PROJECT).pc | sed 's/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g; s/(VERSION)/$(VERSION)/g; s|(PC_LIB_DIR)|$(PC_LIB_DIR)|g; s|(PC_INCLUDE_DIR)|$(PC_INCLUDE_DIR)|g' > $(PKGCONFIG_INSTALL_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).pc
+	@cat pkgconfig/$(SUITE)-$(PROJECT).pc | sed 's/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g; s/(VERSION)/$(VERSION)/g; s|(PC_LIB_DIR)|$(PC_LIB_DIR)|g; s|(PC_INCLUDE_DIR)|$(PC_INCLUDE_DIR)|g; s|(REQUIRES)|$(PC_REQUIRES)|g' > $(PKGCONFIG_INSTALL_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).pc
 ifeq ($(OS_NAME), Linux)
 	# Running ldconfig.
 	@if [ -n "$(LDCONF_INSTALL_PATH)" ]; then ldconfig >> /dev/null 2>&1; fi

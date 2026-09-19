@@ -3,9 +3,10 @@
 # Extending the allocator to CSV and YAML
 
 `GTEXT_JSON_Parse_Options::allocator` routes a whole JSON parse through a
-caller-supplied `GTEXT_Allocator`. CSV and YAML still allocate with the C
-library. This page records what the remaining work is, because it was started,
-measured, and deliberately not finished by halves.
+caller-supplied `GTEXT_Allocator`, which is cutil's `GCU_Allocator` under a
+local name. CSV and YAML still allocate with the C library. This page records
+what the remaining work is, because it was started, measured, and deliberately
+not finished by halves.
 
 ## Why it is not done yet
 

@@ -187,14 +187,14 @@ calls `malloc`, `calloc`, `realloc` or `free` directly, so the coverage claim
 is enforced rather than promised. Still open: the JSON writer, streaming
 parser, Pointer, Patch and Schema, and all of CSV and YAML.
 
-`GTEXT_Allocator` deliberately matches cutil's `GCU_Allocator` member for
-member, which is what `image`, `model` and `compress` use under local names.
-`text` declares its own rather than including cutil's because CONVENTIONS.md
-records `text` as the one library with no cutil dependency; the structs are
-layout-compatible, so a program using both can cast between them, and if
-`text` ever does take that dependency the declaration becomes a typedef with
-no change for callers. **That fork is worth a decision** - sharing the type
-outright would match the rest of the suite.
+`GTEXT_Allocator` **is** cutil's `GCU_Allocator`, under a local name, which is
+what `image`, `model` and `compress` do. For a while `text` declared its own
+copy instead, because CONVENTIONS.md's "standalone by design" was read as
+forbidding a cutil dependency; that was a misreading - a dependency inside the
+suite is fine while the graph stays a DAG, and cutil is its root. The copy is
+gone, `gtext_allocator_default()` returns `gcu_allocator_default()` rather than
+reimplementing it, and no cast is needed to pass one library's allocator to
+another.
 
 As found: none of the three formats let a caller supply an allocator. There is no
 `malloc`/`free` pair, no opaque user pointer, and no arena handle in any public
