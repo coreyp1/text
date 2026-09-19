@@ -12789,3 +12789,83 @@ TEST(CsvStreamUtf8, ReportsTheOffendingOffsetAndRespectsTheOption) {
 	auto rows = csv_stream_chunked(doc, 1, &off, &ok);
 	EXPECT_TRUE(ok) << "validate_utf8 = false should accept the bytes";
 }
+
+// allow_unquoted_newlines was recorded as an incoherent option: the two
+// parsers disagreed under it and the table parser disagreed with itself.
+// Its meaning, recovered from the commit that first implemented it, is the
+// one the per-character path always used:
+//
+//   a CR or LF that this dialect does NOT accept as a line terminator is
+//   field content rather than an error.
+//
+// Which bytes are terminators is what accept_lf, accept_crlf and accept_cr
+// decide; the option never overrides them. The bulk scanner had taken it to
+// mean that a recognized terminator becomes content too, which cannot be
+// right - no record could ever end.
+TEST(CsvUnquotedNewlines, AppliesOnlyToBytesTheDialectDoesNotTerminateOn) {
+	// accept_cr is false by default, so a bare CR is not a terminator.
+	GTEXT_CSV_Parse_Options off = gtext_csv_parse_options_default();
+	GTEXT_CSV_Error err;
+	memset(&err, 0, sizeof(err));
+	const std::string bare_cr = "a,b\rc";
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(bare_cr.data(), bare_cr.size(), &off, &err);
+	EXPECT_EQ(t, nullptr) << "a bare CR should be refused by default";
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	on.dialect.allow_unquoted_newlines = true;
+	bool ok = false;
+	auto kept = csv_dom_rows(bare_cr, &on, &ok);
+	ASSERT_TRUE(ok) << "with the option the bare CR becomes content";
+	ASSERT_EQ(kept.size(), 1u);
+	EXPECT_EQ(kept[0][1], "b\rc");
+
+	// Turning the same byte into a terminator makes the option irrelevant.
+	GTEXT_CSV_Parse_Options cr = gtext_csv_parse_options_default();
+	cr.dialect.accept_cr = true;
+	cr.dialect.allow_unquoted_newlines = true;
+	auto split = csv_dom_rows(bare_cr, &cr, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(split.size(), 2u) << "accept_cr decides, not the option";
+
+	// A recognized terminator still ends the record with the option set.
+	// This is the case the bulk scanner used to get wrong: it kept the
+	// trailing CRLF as field content.
+	auto trailing = csv_dom_rows("aB\r\n", &on, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(trailing.size(), 1u);
+	EXPECT_EQ(trailing[0][0], "aB") << "CRLF is a terminator; it is not content";
+
+	auto both = csv_dom_rows("a\r\nB\r\n", &on, &ok);
+	ASSERT_TRUE(ok);
+	EXPECT_EQ(both.size(), 2u);
+}
+
+TEST(CsvUnquotedNewlines, TableAndStreamAgreeAtEveryChunkSize) {
+	GTEXT_CSV_Parse_Options on = gtext_csv_parse_options_default();
+	on.dialect.allow_unquoted_newlines = true;
+
+	const std::string docs[] = {
+	    "aB\r\n",        // trailing terminator
+	    "a\r\nB\r\n",    // two records
+	    "a,b\rc",        // bare CR as content
+	    "a\nb",          // LF is a terminator by default
+	    "a,b\r\nc,d",    // terminator mid-document
+	    "x\ry\rz",       // several bare CRs as content
+	    "a\r\r\nb",      // a bare CR immediately before a CRLF
+	};
+
+	for (const auto & doc : docs) {
+		bool ok = false;
+		auto expected = csv_dom_rows(doc, &on, &ok);
+		ASSERT_TRUE(ok) << doc;
+		for (size_t chunk = 1; chunk <= 5; chunk++) {
+			bool sok = false;
+			auto got = csv_stream_chunked(doc, chunk, &on, &sok);
+			ASSERT_TRUE(sok) << "chunk=" << chunk << " doc=" << doc;
+			EXPECT_EQ(got, expected) << "chunk=" << chunk << " doc=" << doc;
+		}
+	}
+}

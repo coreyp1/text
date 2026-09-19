@@ -239,18 +239,25 @@ size_t csv_stream_scan_unquoted_field_ahead(GTEXT_CSV_Stream * stream,
       // Note: We ignore overflow errors here since this is just scanning ahead
       // The actual newline handling will check for overflow
       if (nl != CSV_NEWLINE_NONE) {
-        // Found a complete newline sequence
-        if (!allow_unquoted_newlines) {
-          // Newlines not allowed - this ends the field
-          *found_special = true;
-          *special_char = c;
-          *special_pos = pos;
-          return pos - start_offset;
-        }
-        // Newlines allowed - this is just part of the field content
-        // Advance past the newline sequence and continue scanning
-        pos += (nl == CSV_NEWLINE_CRLF ? 2 : 1);
-        continue;
+        // A complete newline sequence ends the field, whatever
+        // allow_unquoted_newlines says.
+        //
+        // This branch used to consume the terminator as field content when
+        // the option was set, which is a different meaning from the one the
+        // per-character path implements and is not a coherent one: if a
+        // recognized terminator never ends a record, no record can end, and
+        // the same document parsed here and there gave different answers.
+        // "aB\r\n" kept the trailing CRLF as content while "a\r\nB\r\n"
+        // split on both.
+        //
+        // The option means what the per-character path has always taken it to
+        // mean: a CR or LF that this dialect does *not* accept as a line
+        // terminator is field content rather than an error. Which bytes are
+        // terminators is what accept_lf, accept_crlf and accept_cr decide.
+        *found_special = true;
+        *special_char = c;
+        *special_pos = pos;
+        return pos - start_offset;
       }
       // Not a complete newline sequence (e.g., standalone CR when dialect
       // expects CRLF) If newlines not allowed, this is an error

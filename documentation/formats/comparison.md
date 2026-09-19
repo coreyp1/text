@@ -332,8 +332,8 @@ suite*, not in the parser, and it is now closed:
 - Type inference, which is deliberate and correctly documented as such.
 - Conversion to JSON.
 - RFC 7111 fragments, deliberately out of scope.
-- `validate_utf8` in the streaming parser, and a coherent
-  `allow_unquoted_newlines`, both already recorded on the CSV page.
+- ~~`validate_utf8` in the streaming parser~~ and ~~a coherent
+  `allow_unquoted_newlines`~~ - both done; see the \ref format_csv "CSV page".
 
 ### YAML
 

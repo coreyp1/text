@@ -164,17 +164,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   // every record, header included.  That is the two APIs' contracts differing,
   // not the parsers disagreeing.
   //
-  // allow_unquoted_newlines is excluded for a different reason: the two
-  // parsers genuinely disagree under it, and the table parser disagrees with
-  // itself - "aB\r\n" keeps the trailing CRLF as field content while
-  // "a\r\nB\r\n" treats both as record separators.  The bulk scanner honors
-  // the option and the per-character path does not, so the answer depends on
-  // where a chunk happens to start.  That is a real defect, recorded on the
-  // CSV format page; it is fenced off here so the harness keeps finding other
-  // things instead of stopping on this one every run.
+  // allow_unquoted_newlines used to be excluded here as well, because the two
+  // parsers disagreed under it and the table parser disagreed with itself.
+  // The bulk scanner treated the option as "a recognized terminator is field
+  // content too", which is not a coherent meaning; it now agrees with the
+  // per-character path, and the option is compared like any other.
   if (table && sstatus == GTEXT_CSV_OK && !cap.overflowed
-      && !opts.dialect.treat_first_row_as_header
-      && !opts.dialect.allow_unquoted_newlines) {
+      && !opts.dialect.treat_first_row_as_header) {
     // A trailing empty record is reported by one and not the other; compare
     // only what both describe.
     while (!cap.rows.empty() && cap.rows.size() > dom_rows.size()

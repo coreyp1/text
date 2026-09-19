@@ -238,13 +238,46 @@ turning `p\\q` into `pq`. Decoding now happens in exactly one place, and the
 quoted-field handler buffers the field as soon as it sees a backslash so that
 place is always reached.
 
-**Open: `allow_unquoted_newlines` is not coherent.** With it set, the table
-parser keeps a trailing CRLF as field content but treats a CRLF in the middle
-of the document as a record separator, and the streaming parser disagrees with
-both depending on where a chunk starts - the bulk scanner honors the option
-and the per-character path does not. The option is off by default. Deciding
-what it should mean is a prerequisite to fixing it, so it is recorded here
-rather than guessed at, and the fuzzer's differential check excludes it.
+**Fixed: `allow_unquoted_newlines` now has one meaning.** It was recorded here
+as incoherent - the table parser kept a trailing CRLF as field content while
+treating a CRLF mid-document as a record separator, and the streaming parser
+disagreed with both depending on where a chunk began.
+
+The meaning was recovered from the commit that first implemented it, where the
+check sits *after* the branch that ends a record on a complete newline
+sequence:
+
+> A CR or LF that this dialect does **not** accept as a line terminator is
+> field content rather than an error.
+
+Which bytes are terminators is what `accept_lf`, `accept_crlf` and `accept_cr`
+decide. The option never overrides them; it only says what to do with a CR or
+LF that is left over.
+
+The per-character path had always implemented that. The bulk scanner
+`csv_stream_scan_unquoted_field_ahead()` had taken the option to mean that a
+recognized terminator becomes content too, which cannot be right - if a
+terminator never ends a record, no record can end - and that is what produced
+the self-contradiction. It now returns on a complete newline sequence
+regardless of the option.
+
+With `accept_cr` false, which is the default:
+
+| Input | Option off | Option on |
+|---|---|---|
+| `a,b\rc` | rejected, bare CR | one record, second field `b\rc` |
+| `aB\r\n` | one record, field `aB` | unchanged - CRLF is a terminator |
+| `a\r\nB\r\n` | two records | unchanged |
+| `a\r\r\nb` | rejected | `a\r` then `b` - the bare CR is content, the CRLF ends the record |
+
+Setting `accept_cr` makes the first row split into two records instead, which
+is the point: the dialect decides what a terminator is, and the option decides
+what happens to everything else.
+
+The fuzzer compared every dialect option except this one and
+`treat_first_row_as_header`. It now compares this one too: 2,682,853
+executions with no disagreement between the table parser and the chunked
+stream.
 
 **Bare CR rejected by default**, as described above - stricter than Python's
 `csv` module, which accepts it.
@@ -311,7 +344,6 @@ was written, so this pins existing behavior rather than recording a fix.
   `gtext_csv_dialect_default()` only in the field it names.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
   dates, by design.
-- **A coherent `allow_unquoted_newlines`**, as above.
 
 ---
 

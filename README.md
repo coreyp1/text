@@ -113,8 +113,9 @@ compliant".
 **CSV — stable.** RFC 4180 by default, with configurable dialects and
 support for ragged rows. The streaming parser gives the same answer whatever
 chunk sizes it is fed, and the fuzzer checks it against the table parser on
-every input. `validate_utf8` is honored by the DOM parser but not yet by the
-streaming one, and `allow_unquoted_newlines` is a known incoherent option.
+every input, every dialect option included. `validate_utf8` is honored by both
+parsers, incrementally in the streaming one so that a sequence split across
+feeds is still checked.
 See [the CSV page](@ref format_csv).
 
 **YAML — alpha.** Block and flow collections, all five scalar styles,
