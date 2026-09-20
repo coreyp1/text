@@ -1237,15 +1237,20 @@ static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
  *
  * YAML says an absent value is null, so the fix is to supply one.
  *
- * The supplied node is "~", the plain null scalar, rather than an empty one.
- * The resolver reads a scalar's text and does not look at whether it was
- * quoted, so an empty scalar resolves to the empty *string* - which would
- * make "a:" indistinguishable from "a: ''", and those are different values.
- * "~" resolves to GTEXT_YAML_NULL through the ordinary path and needs no tag,
- * so the result is exactly what writing "a: ~" by hand produces.
+ * The supplied node is empty, because that is what was written. It used to
+ * be "~": the resolver read a scalar's text without looking at how it was
+ * written, so an empty scalar resolved to the empty *string* and "a:" could
+ * not be told apart from "a: ''". The resolver consults the scalar's style
+ * now - only a plain scalar is resolved by its contents (10.3.2) - so a
+ * plain empty scalar reaches GTEXT_YAML_NULL on its own and the substitute
+ * spelling is no longer needed to get there.
+ *
+ * Which matters because the spelling was visible. gtext_yaml_node_as_string()
+ * returned "~" for a node whose author wrote nothing, and two null keys
+ * written the same way came out as different JSON keys once coerced.
  */
 static bool mapping_supply_null_value(parser_state *p) {
-	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "~", 1, NULL, NULL);
+	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "", 0, NULL, NULL);
 	if (!empty) {
 		return false;
 	}
@@ -1260,7 +1265,7 @@ static bool mapping_supply_null_value(parser_state *p) {
  * being dropped, so the sequence came back one entry short.
  */
 static bool sequence_supply_empty_entry(parser_state *p) {
-	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "~", 1, NULL, NULL);
+	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "", 0, NULL, NULL);
 	if (!empty) {
 		return false;
 	}
@@ -3500,7 +3505,7 @@ static GTEXT_YAML_Status parse_callback(
 							/* c-ns-flow-map-empty-key-entry: e-node, then the
 							 * value (7.4).  "[: 1]" is [{null: 1}]. */
 							pair_key = yaml_node_new_scalar(
-								p->ctx, "~", 1, NULL, NULL);
+								p->ctx, "", 0, NULL, NULL);
 						}
 						if (!pair_key) {
 							p->failed = true;
