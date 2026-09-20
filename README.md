@@ -119,7 +119,7 @@ streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1,296 tests across 72 binaries with zero failures, clean
+The test suite runs 1,305 tests across 73 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
 from `make test` output needs care: three binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
@@ -157,8 +157,8 @@ conversion. The API may change before 1.0. The YAML test suite has never been
 run against this parser, so conformance to 1.2.2 is unmeasured rather than
 partial.
 
-Comparison against PyYAML keeps finding defects here, so treat this module as
-the least settled of the three. Nine are fixed so far, and what they have in
+Comparison against other implementations keeps finding defects here, so treat
+this module as the least settled of the three. Fifteen are fixed so far, and what they have in
 common is worth stating plainly: most did not fail on valid input, they
 quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
 were truncated. Tags were dropped from block-style collections. A mapping key
@@ -172,11 +172,27 @@ lines below them, so a continuation became a key of its own. And a plain
 scalar inside `[` `]` or `{` `}` ended at its first space, so `[a b, c]` came
 out as three entries rather than two.
 
-A 121-document comparison now backs this, of which 114 agree. The seven that
-do not are listed with reproductions on [the YAML page](@ref format_yaml):
-two are features not implemented - a flow plain scalar folding across a line
-break, and a single-pair mapping written directly in a flow sequence - and
-five are malformed documents accepted rather than refused.
+Six more have been fixed since: a flow plain scalar now folds across a line
+break, `[a: 1]` parses as the single-pair mapping it is, input ending inside
+a flow collection is an error rather than an empty document, two flow entries
+with nothing between them are refused, a scalar with no key to hold it is
+refused, and `key: a : b` is refused rather than rearranged into
+`{key: "a", b: null}`.
+
+A 153-document comparison backs this, checked against two implementations
+rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
+implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
+is a case where this parser is the more faithful of the two. Five differ from
+PyYAML, and all five are places where the two oracles disagree with each
+other and this parser follows 1.2 - it keeps tabs inside a plain scalar,
+which 1.1 refuses. Having two oracles is what made those five legible as a
+version question rather than as defects; against PyYAML alone they looked
+like bugs, and one of them had been recorded here as such.
+
+None of the defects this page used to list as open is outstanding. That is
+not conformance: the comparison is chosen by working outward from defects
+already found, not a conformance suite, and the YAML test suite has still
+never been run against this parser.
 
 ## Macros and Utilities
 

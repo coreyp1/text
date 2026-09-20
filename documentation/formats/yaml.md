@@ -157,10 +157,11 @@ semantically equal to the input, not textually equal.
 | Scalar style round-trip | no | |
 | Plain scalars containing `-`, `,`, `?`, `#` | yes, since the §7.3.3 fix | `: ` and ` #` still end the scalar |
 | Multi-line plain scalars | yes, in block context | folded to spaces; blank lines give breaks |
-| Multi-line plain scalars in flow | no | `[a` then an indented `b]` does not fold |
+| Multi-line plain scalars in flow | yes | `[a` over an indented `b]` is one scalar |
 | Flow plain scalars with spaces | yes | `[a - b, c]` is two entries |
 | Block scalar chomping and folding | yes | clip, strip and keep; indentation indicator honoured |
-| Single-pair mappings in flow (`[a: 1]`) | no | write `[{a: 1}]` |
+| Single-pair mappings in flow (`[a: 1]`) | yes | equivalent to `[{a: 1}]` |
+| Tabs inside a plain scalar | yes | 1.2 allows them; PyYAML, a 1.1 parser, does not |
 
 @anchor yaml-deviations
 ## Deviations
@@ -246,12 +247,19 @@ and those are different values. `a: ''` still gives a string.
 Checked against PyYAML over 38 documents; 36 agreed, and the two that did not
 are fixed below.
 
-Those 38 have since grown into a 121-document comparison covering block
-scalars, block structure and plain scalars, of which 114 now agree. The seven
-that do not are each listed as still open on this page: one is a flow plain
-scalar that does not fold across a line break, one a single-pair mapping in
-flow, and the other five are malformed documents accepted rather than
-refused.
+Those 38 have since grown into a 153-document comparison covering block
+scalars, block structure, plain scalars and flow collections. It is checked
+against two implementations rather than one: PyYAML, which implements YAML
+1.1, and js-yaml, which implements 1.2. 152 of the 153 agree with js-yaml,
+and the one that does not is a case where this parser is the more faithful of
+the two - js-yaml renders `[[1]: 2]` as `{"1": 2}` only because a JavaScript
+object cannot have an array key, while the DOM here keeps the sequence.
+
+Five differ from PyYAML, and all five are places where the two oracles
+disagree with each other and this parser follows 1.2: PyYAML rejects tabs
+that 1.2 allows inside a plain scalar, and folds a flow scalar across a line
+break with no indentation at all, which js-yaml refuses. Where a
+YAML-version question arises, that is the rule this page records.
 
 **Fixed: block scalars keep the line breaks 8.1 gives them.**
 
@@ -366,16 +374,17 @@ a `-` with no space before it was always kept, which is what located the
 fault in the space-then-indicator transition rather than in indicator
 handling generally.
 
-Of a 48-case comparison against PyYAML, agreement went from 11 to 38. The
-ten that still differ are listed under
-[Tested scope](#yaml-tested-scope); four of them are cases where this parser
-is right and PyYAML is applying YAML 1.1 rules.
+Of a 48-case comparison against PyYAML, agreement went from 11 to 38 when
+that fix landed. Those cases are now part of the wider comparison described
+above, and all of them agree.
 
-**Still open: `key: a : b` is truncated rather than rejected.** A `:`
-followed by a space does end a plain scalar, and PyYAML raises a
-`ScannerError` for the trailing `b`. This parser yields `a` and discards the
-rest. It is the one remaining case in that family, and it is a malformed
-document either way.
+**Fixed: `key: a : b` is rejected rather than rearranged.** A `:` followed by
+a space ends a plain scalar, and both oracles refuse the trailing `b`. This
+parser used to yield `{key: "a", b: null}` - the tail of a value quietly
+turned into a pair of its own. The scalar before a `:` is its key, held
+provisionally as the previous key's value until the `:` claims it; with none
+outstanding the `:` has no key at all. A `:` with no space after it is
+ordinary content, so `key: a :b` is still the one scalar `a :b`.
 
 **Fixed: a block plain scalar continues onto the lines below it.**
 
@@ -430,12 +439,70 @@ rather than one pair. Both match PyYAML. Three tests were written in JSON's
 spelling and counted the nodes they expected from it; their inputs now say
 what they meant.
 
-**Still open: a flow plain scalar does not fold across a line break.**
-`key: [a` over an indented `b]` is `["a b"]` to PyYAML and two entries here.
-Block context gained this; flow context has not.
+**Fixed: a flow plain scalar folds across a line break.**
 
-**Still open: a single-pair mapping in a flow sequence.** `[a: 1]` is
-`[{a: 1}]` to PyYAML and does not parse here; write `[{a: 1}]`.
+Block context gained this and flow context had not, so `key: [a` over an
+indented `b]` stayed two entries where it is one scalar. The two now share
+one rule, with one difference: in flow context a line that begins with the
+collection's own punctuation ends the scalar rather than continuing it, which
+is what keeps `[a - b` over ` , c]` two entries.
+
+**Fixed: `[a: 1]`, a single-pair mapping written straight into a flow
+sequence.**
+
+It did not parse at all. The `:` fell through to the block-mapping path and
+pushed a block level inside the sequence, which then swallowed the `]` that
+should have closed it - so the failure was reported as an unterminated
+collection, some distance from its cause. The pair has no `}` of its own, so
+the `,` or `]` that ends the entry closes it, and a pair whose value never
+arrived gets the null it stands for: `[a:]` is `[{a: null}]`. The key may be
+a collection, as in `[[1]: 2]`.
+
+**Fixed: input that ends inside a flow collection is an error.**
+
+`gtext_yaml_parse()` returned a document whose root was NULL and reported
+success, so `key: [a, b` with no `]` looked like an empty document rather
+than a broken one - and a caller checking only for a NULL document saw
+nothing wrong. The dedent rule deliberately stops at a flow collection,
+because indentation says nothing about where `[` and `{` end, and nothing
+else closed them either. An empty document still has a NULL root, and that is
+still not an error.
+
+**Fixed: two flow entries with nothing between them are refused.**
+
+`key: [a` over `b]` quietly became a two-entry sequence. Within a line two
+words are one plain scalar, so this only arises across a line break, where
+the second line is not indented enough to continue the scalar and becomes a
+second entry instead. The same rule covers flow mappings, where the entry is
+a whole pair, and nested collections and aliases as well as scalars. Laying a
+flow collection out over several lines is unaffected: entries separated by
+`,` need no indentation of their own.
+
+**Fixed: a scalar with no key to hold it is refused.**
+
+A scalar indented past its block mapping is that mapping's value, and only
+while a key above is still waiting for one. With every key already paired
+there was nothing for it to be, and it became a trailing key with a null
+value:
+
+```yaml
+a: |
+    deep
+  shallow
+```
+
+gave `{a: "deep\n", shallow: null}`. The column that decides this is the
+line's first non-space rather than the scalar's own, because a tag or anchor
+sits before the scalar and belongs to the same node - `!!str true` as a key
+starts where the tag does.
+
+**Tabs inside a plain scalar are content, and this parser keeps them.**
+PyYAML raises on a tab anywhere in a plain scalar, and this page previously
+counted that as a defect here. It is a YAML 1.1 rule: 1.2's
+`nb-ns-plain-in-line` allows `s-white`, which includes a tab, between plain
+characters. PyYAML rejects `key:\ta` on the same grounds, which no reading of
+1.2 supports, and js-yaml keeps the tab. Where the two oracles disagree this
+parser follows 1.2.
 
 **`!!timestamp`, `!!set`, `!!omap` and `!!pairs` are honored at all**, which
 1.2 does not require, since they are 1.1 repository types. Parsers that
@@ -444,8 +511,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 64 test files under `tests/yaml/`, carrying 484 of the suite's
-1296 test cases across 72 binaries, all passing. They cover the scalar styles,
+**Tests.** 65 test files under `tests/yaml/`, carrying 493 of the suite's
+1305 test cases across 73 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -503,10 +570,15 @@ untrusted input use `gtext_yaml_parse_options_safe()`, which bounds resource
 consumption.
 
 The silent-truncation defect that previously made every plain scalar suspect
-is fixed. What remains open is narrower and listed under
-[Deviations](#yaml-deviations): multi-line plain scalars, flow plain scalars
-containing spaces, and one malformed input reported as truncation rather
-than as an error.
+is fixed, as are the multi-line and flow cases that were still open beside
+it. Nothing on the list this page used to carry under
+[Deviations](#yaml-deviations) is outstanding; every entry there now records
+a fixed defect, and the only remaining difference from either oracle is one
+where this parser is the more faithful of the two.
+
+That is not the same as conformance. The comparison is 153 documents chosen
+by working outward from defects already found, not a conformance suite, and
+the YAML test suite has still never been run against this parser.
 
 ---
 
