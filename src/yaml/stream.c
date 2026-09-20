@@ -156,6 +156,20 @@ static bool stream_props_left_behind(
   const GTEXT_YAML_Token *tok
 ) {
   if (!s->pending_anchor && !s->pending_tag) return false;
+  /* Inside a flow collection neither the line nor the indentation says
+     anything, so the token settles it: a ",", a ":" or the collection's own
+     closing bracket cannot be the node the properties name, which means that
+     node is empty and they belong to it.  "{a: !!str}" is a's value being
+     the empty string, "[&x]" an anchored null entry, and "{!!str : bar}" an
+     empty key (spec example 7.2, suite case WZ62).  None of them reached the
+     flush: the line tests below all say "same line" for a flow collection
+     written on one, so the properties were carried past the end of the
+     collection instead. */
+  if (s->current_depth > 0 && tok->type == GTEXT_YAML_TOKEN_INDICATOR
+      && (tok->u.c == ',' || tok->u.c == ':'
+       || tok->u.c == ']' || tok->u.c == '}')) {
+    return true;
+  }
   if (tok->line == s->pending_prop_line) return false;
   if (s->pending_prop_opens_line) return false;
   if (s->cur_line_start > s->pending_prop_line_start) return false;
