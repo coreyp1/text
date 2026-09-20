@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Twelve more came out of running yaml-test-suite. Quoted scalars now fold
+Nineteen more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -205,6 +205,19 @@ the indentation and a value but not between it and a block mapping key. And
 a line of a space and a tab was not recognised as blank when a plain scalar
 looked past it, so `foo: 1` over such a line gave foo the string `"1 "`.
 
+The last group is positional. A scalar standing at a block mapping's own
+indentation that no `:` ever claimed was being made a key with a null value,
+so `top1:` over `  key1: val1` over `top2` parsed as three-quarters of a
+document and a pair invented from the rest. A comment has to be preceded by
+white space unless it opens the line, and `key: "value"# c` was reading the
+rest of the line as a comment. A block entry is preceded on its line only by
+indentation and by the `-`, `?` or `:` of the entries containing it, so
+`key: - a` and `- { y: z }- invalid` are refused. `-` and `?` are indicators
+only where nothing plain-safe follows them, the rule `:` already had - until
+that, `- !!int -2` came out as `[1, [2], 33]` with the `-2` read as a nested
+sequence. And an implicit key now ends the explicit key above it, so `? a`
+over `? b` over `c:` is the three keys it looks like.
+
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
 implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
@@ -221,14 +234,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **74.6%** of the 366 cases that can be checked by
+this parser against it: **80.9%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - so a mature implementation does not score
 100% here either. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. Eighty-two cases have been fixed since, in four batches:
+had suggested. A hundred and five cases have been fixed since, in five
+batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -236,8 +250,11 @@ beside a more-indented line in a folded scalar keeps its break, and a
 malformed block header is refused; the rule that a `:` is a mapping
 indicator only where it ends a key; and tabs, which were refused wherever
 they appeared in leading white space when only indentation is forbidden to
-them. The largest group still failing is the
-48 documents that should be refused and are not.
+them; and a group of positional rules - a scalar no ":" ever claimed is not
+a key, a comment needs white space in front of it, a block entry cannot
+start beside a node already on its line, and "-" and "?" are indicators only
+where nothing plain-safe follows them, as ":" already was. The largest group still failing is the
+36 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness
 bug rather than progress: three suite cases carry an explicit null where the

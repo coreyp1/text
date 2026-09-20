@@ -1,10 +1,9 @@
 /**
- * A ":" that does not end a mapping key (5.3, 7.3.3, 7.4.2).
+ * ":", "-" and "?" where nothing plain-safe follows them (5.3, 7.3.3, 7.4.2).
  *
- * A colon is a mapping indicator only where it separates a key from a value:
- * followed by white space or the end of the line, and inside a flow
- * collection also by one of the flow indicators. Everywhere else it is an
- * ordinary plain character.
+ * All three are indicators only where white space, the end of the line, or -
+ * inside a flow collection - a flow indicator follows. Everywhere else they
+ * are ordinary plain characters.
  *
  * That was already true of a colon reached part way through a scalar, which
  * is why "key: a :b" gave "a :b". A colon that *began* a node was still
@@ -18,6 +17,10 @@
  * quoted scalar, or a closing "]" or "}" - the colon may follow with nothing
  * between them. That is what makes '{"a":1}' a mapping rather than the
  * single scalar '"a":1'.
+ *
+ * "-" and "?" had the same gap, and there it cost data rather than a
+ * refusal: "- !!int -2" gave [1, [2], 33], with -2 read as a nested
+ * sequence holding 2, and "{?foo: bar}" lost its key entirely.
  *
  * Expectations are js-yaml's, which agree with PyYAML wherever PyYAML will
  * parse the input at all; 1.1 refuses a plain scalar that starts with a
@@ -118,6 +121,23 @@ const Case kBlockCases[] = {
 	{"a : b\n", "{\"a\": \"b\"}"},  /* unchanged: a colon with space either side ends the key */
 };
 
+const Case kDashAndQuestionCases[] = {
+	{"- !!int -2\n", "[-2]"},  /* a negative number after a tag, not a nested sequence */
+	{"safe dash: -foo\n", "{\"safe dash\": \"-foo\"}"},  /* a plain scalar may begin with a dash */
+	{"safe question mark: ?foo\n", "{\"safe question mark\": \"?foo\"}"},  /* or a question mark */
+	{"a: -1\n", "{\"a\": -1}"},  /* the ordinary negative number */
+	{"- -1\n", "[-1]"},  /* as a sequence entry */
+	{"[-1, 2]\n", "[-1, 2]"},  /* and inside a flow sequence */
+	{"[a, -1]\n", "[\"a\", -1]"},  /* after a comma */
+	{"{?foo: bar}\n", "{\"?foo\": \"bar\"}"},  /* a flow key beginning with a question mark */
+	{"[?a]\n", "[\"?a\"]"},  /* and a flow entry */
+	{"- ?foo\n", "[\"?foo\"]"},  /* in block context too */
+	{"- a\n- b\n", "[\"a\", \"b\"]"},  /* unchanged: a dash with a space after it is an entry */
+	{"- - a\n", "[[\"a\"]]"},  /* nested, likewise */
+	{"? a\n: 1\n", "{\"a\": 1}"},  /* and a question mark with a space opens an explicit key */
+	{"{? foo: bar}\n", "{\"foo\": \"bar\"}"},  /* including in flow */
+};
+
 const Case kFlowCases[] = {
 	{"{x: :x}\n", "{\"x\": \":x\"}"},  /* a value may begin with a colon */
 	{"[:x]\n", "[\":x\"]"},  /* so may a sequence entry */
@@ -136,6 +156,13 @@ const Case kFlowCases[] = {
 
 TEST(YamlColonContent, BlockContext) {
 	for (const Case &c : kBlockCases) {
+		EXPECT_EQ(Render(c.input), std::string(c.expected))
+			<< "input: " << ::testing::PrintToString(std::string(c.input));
+	}
+}
+
+TEST(YamlColonContent, DashAndQuestionMark) {
+	for (const Case &c : kDashAndQuestionCases) {
 		EXPECT_EQ(Render(c.input), std::string(c.expected))
 			<< "input: " << ::testing::PrintToString(std::string(c.input));
 	}

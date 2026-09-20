@@ -107,6 +107,7 @@ typedef struct {
 	int last_event_line;                /* Last event line processed */
 	int last_scalar_line;               /* Last scalar event line */
 	int last_scalar_col;                /* Last scalar event column */
+	size_t last_scalar_offset;          /* Last scalar event byte offset */
 	int last_scalar_key_col;            /* Last scalar key start column */
 	GTEXT_YAML_Node *last_scalar_node;  /* Last scalar node seen */
 	/* True when the last scalar's tag was written on an earlier line than the
@@ -118,6 +119,12 @@ typedef struct {
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
+	/* The last node a ":" or a "?" claimed as a mapping key. A block
+	 * mapping's trailing key is allowed to have no value - "a:" at the end
+	 * of a document is {"a": null} - but a scalar that was never claimed at
+	 * all is not a key, and was being turned into one. Compared by identity
+	 * so a nested collection's key cannot be mistaken for its parent's. */
+	const GTEXT_YAML_Node *claimed_key;
 	bool explicit_key_pending;          /* True if '?' indicator seen and key is pending */
 	bool explicit_key_active;           /* True if explicit key stored and awaiting ':' */
 	int explicit_key_indent;            /* Indent column for explicit key */
@@ -210,6 +217,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_event_line = -1;
 	p->last_scalar_line = -1;
 	p->last_scalar_col = -1;
+	p->last_scalar_offset = 0;
 	p->last_scalar_key_col = -1;
 	p->last_scalar_node = NULL;
 	p->last_scalar_tag_own_line = false;
@@ -1253,19 +1261,114 @@ static int line_key_col_from_offset(const parser_state *p, size_t offset) {
 		break;
 	}
 
-	if (i < end && buffer[i] == '-') {
+	/* A compact entry puts its node after one or more "-", "?" or ":"
+	 * indicators on the same line, and the node begins where they end:
+	 * "- b: c" has b at column 2, and "? a" over ": b: c" has b at column 3.
+	 * Only the "-" was being stepped over, so an explicit key's value colon
+	 * left the following key measured at the colon's own column - it then
+	 * matched the mapping's indentation and "? a" over ": b: c" was refused
+	 * for having no key before the second colon. */
+	while (i < end && (buffer[i] == '-' || buffer[i] == '?' || buffer[i] == ':')) {
 		size_t j = i + 1;
-		int col_after_dash = col + 1;
-		if (j < end && (buffer[j] == ' ' || buffer[j] == '\t')) {
-			while (j < end && (buffer[j] == ' ' || buffer[j] == '\t')) {
-				j++;
-				col_after_dash++;
-			}
-			return col_after_dash;
+		int col_after = col + 1;
+		if (j >= end || (buffer[j] != ' ' && buffer[j] != '\t')) break;
+		while (j < end && (buffer[j] == ' ' || buffer[j] == '\t')) {
+			j++;
+			col_after++;
 		}
+		i = j;
+		col = col_after;
 	}
 
 	return col;
+}
+
+/**
+ * @brief Whether a block collection entry may begin at @p offset.
+ *
+ * A block entry is preceded on its line by indentation and, where entries
+ * nest compactly, by the "-" or "?" of the entries that contain it:
+ * l+block-sequence is ( s-indent(n+m) c-l-block-seq-entry(n+m) )+, and a
+ * compact sequence or mapping may follow a "-" on the same line. Anything
+ * else on the line means a node has already been written there, and a second
+ * one cannot start beside it.
+ *
+ * That was not being checked, so four shapes went through: "key: - a" put a
+ * block sequence on the same line as the key that owns it (a block
+ * collection as a mapping value has to start on the next line -
+ * s-l+block-collection has s-l-comments in front of it), "&anchor - x"
+ * attached an anchor to a sequence indicator, and "- { y: z }- invalid" and
+ * "x: { y: z }in: valid" started a second node beside a finished flow
+ * collection.
+ */
+static bool block_entry_may_start_at(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t length = 0;
+	size_t line_start = 0;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return true;
+	buffer = p->ctx->input_buffer;
+	length = p->ctx->input_buffer_len;
+	if (offset > length) return true;
+
+	line_start = offset;
+	while (line_start > 0) {
+		const char ch = buffer[line_start - 1];
+		if (ch == '\n' || ch == '\r') break;
+		line_start--;
+	}
+
+	for (size_t i = line_start; i < offset; i++) {
+		const char ch = buffer[i];
+		/* A ":" is allowed only where everything before it was itself
+		   indentation or an entry indicator, which is exactly an explicit
+		   key's value colon - c-l-block-map-explicit-value(n) is
+		   s-indent(n) ":" s-l+block-indented(n), so "? a" over ": - b" opens
+		   a compact sequence. In "key: - a" the "k" is reached first and the
+		   scan has already returned. */
+		if (ch == ' ' || ch == '\t' || ch == '-' || ch == '?' || ch == ':') continue;
+		return false;
+	}
+	return true;
+}
+
+/**
+ * @brief The same question for a mapping key, which may carry properties.
+ *
+ * An anchor or a tag belongs to the node it precedes and sits in front of it
+ * on the line - "!!str true: 2" is a tagged key - so those are allowed here
+ * where they are not in front of a "-". A "&anchor" before a sequence
+ * indicator has no node to attach to, which is what makes "&anchor - x"
+ * malformed while "&anchor x: 1" is fine.
+ */
+static bool block_key_may_start_at(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t i = 0;
+	size_t line_start = 0;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return true;
+	buffer = p->ctx->input_buffer;
+	if (offset > p->ctx->input_buffer_len) return true;
+
+	line_start = offset;
+	while (line_start > 0) {
+		const char ch = buffer[line_start - 1];
+		if (ch == '\n' || ch == '\r') break;
+		line_start--;
+	}
+
+	i = line_start;
+	while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t'
+			|| buffer[i] == '-' || buffer[i] == '?' || buffer[i] == ':')) {
+		i++;
+	}
+	/* An anchor and a tag, in either order, each running to white space. */
+	for (int prop = 0; prop < 2 && i < offset; ++prop) {
+		if (buffer[i] != '&' && buffer[i] != '!') break;
+		while (i < offset && buffer[i] != ' ' && buffer[i] != '\t') i++;
+		while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t')) i++;
+	}
+	return i >= offset;
 }
 
 static bool stack_top_is_block(const parser_state *p) {
@@ -1414,6 +1517,9 @@ static GTEXT_YAML_Status capture_explicit_key(
 		}
 		return GTEXT_YAML_E_OOM;
 	}
+	/* A "?" claims its key as surely as a ":" does: an explicit key with no
+	 * ":" after it is the block spelling of a set. */
+	p->claimed_key = node;
 
 	if (first_key) {
 		adopt_own_line_tag(p, node);
@@ -1428,6 +1534,36 @@ static GTEXT_YAML_Status capture_explicit_key(
 
 static void flow_entry_completed(parser_state *p);
 static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p);
+
+/**
+ * @brief Close a mapping whose last key has no value.
+ *
+ * "a:" at the end of a document is {"a": null}, and so is "? a" with no ":"
+ * after it, so an odd number of children is ordinarily just a trailing key.
+ * What it must not be is a scalar that nothing ever claimed as a key: "top1:"
+ * over "  key1: val1" over "top2" was giving {"top1": {...}, "top2": null},
+ * inventing a pair out of a line that is simply malformed. The claimed_key
+ * pointer says which of the two this is.
+ *
+ * Only in block context: "{a}" really is {"a": null}.
+ *
+ * On OOM the key is dropped as it was before, which is the old behavior
+ * rather than a new one.
+ */
+static GTEXT_YAML_Status mapping_close_trailing_key(parser_state *p) {
+	if ((p->temp.count % 2) == 0) return GTEXT_YAML_OK;
+	if (p->stack.depth > 0 && p->stack.is_block[p->stack.depth - 1]
+			&& p->temp.items[p->temp.count - 1] != p->claimed_key) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message = "Scalar with no ':' in a block mapping";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+	(void)mapping_supply_null_value(p);
+	return GTEXT_YAML_OK;
+}
 
 static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	GTEXT_YAML_Node *node = NULL;
@@ -1467,11 +1603,9 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 			node->as.sequence.children[i] = p->temp.items[i];
 		}
 	} else {
-		/* A trailing key with no value, by the same rule: "a:" at the end of a
-		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
-		 * as it was before, which is the old behavior rather than a new one. */
-		if ((p->temp.count % 2) != 0) {
-			(void)mapping_supply_null_value(p);
+		{
+			GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
+			if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
 		}
 		size_t pair_count = p->temp.count / 2;
 		node = yaml_node_new_mapping(p->ctx, pair_count, tag, anchor);
@@ -1867,6 +2001,7 @@ static GTEXT_YAML_Status parse_callback(
 				p->last_scalar_node = node;
 				p->last_scalar_line = event->line;
 				p->last_scalar_col = event->col;
+				p->last_scalar_offset = event->offset;
 				p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
 				p->last_emitted_node = node;
 				p->last_emitted_line = event->line;
@@ -1965,6 +2100,7 @@ static GTEXT_YAML_Status parse_callback(
 			p->last_scalar_node = node;
 			p->last_scalar_line = event->line;
 			p->last_scalar_col = event->col;
+			p->last_scalar_offset = event->offset;
 			p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
 			p->last_emitted_node = node;
 			p->last_emitted_line = event->line;
@@ -2150,13 +2286,11 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Create mapping node with collected key-value pairs */
 			/* temp.items should have [key0, val0, key1, val1, ...] */
-			/* A trailing key with no value, by the same rule: "a:" at the end of a
-		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
-		 * as it was before, which is the old behavior rather than a new one. */
-		if ((p->temp.count % 2) != 0) {
-			(void)mapping_supply_null_value(p);
-		}
-		size_t pair_count = p->temp.count / 2;
+			{
+				GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
+				if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
+			}
+			size_t pair_count = p->temp.count / 2;
 			
 			GTEXT_YAML_Node *node = yaml_node_new_mapping(
 				p->ctx,
@@ -2489,13 +2623,11 @@ static GTEXT_YAML_Status parse_callback(
 					);
 					
 					/* temp.count should be even (key-value pairs) */
-					/* A trailing key with no value, by the same rule: "a:" at the end of a
-		 * document, or "? a" with no ':' after it.  On OOM the key is dropped
-		 * as it was before, which is the old behavior rather than a new one. */
-		if ((p->temp.count % 2) != 0) {
-			(void)mapping_supply_null_value(p);
-		}
-		size_t pair_count = p->temp.count / 2;
+					{
+						GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
+						if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
+					}
+					size_t pair_count = p->temp.count / 2;
 					GTEXT_YAML_Node *node = yaml_node_new_mapping(
 						p->ctx, pair_count, tag, anchor
 					);
@@ -2576,6 +2708,38 @@ static GTEXT_YAML_Status parse_callback(
 						in_block_mapping = p->stack.is_block[top] &&
 							(p->stack.states[top] == STATE_MAPPING_KEY ||
 							 p->stack.states[top] == STATE_MAPPING_VALUE);
+					}
+
+					/* An explicit key's value colon stands on a line of its own
+					 * (c-l-block-map-explicit-value is s-indent(n) ":" ...).
+					 * A ":" with a scalar in front of it on the same line
+					 * belongs to that scalar, so the explicit key above it
+					 * simply never got a value: "? a" over "? b" over "c:"
+					 * is three keys, and was being refused because b's colon
+					 * was looked for in c's. */
+					if (p->explicit_key_active && in_block_mapping
+							&& p->stack.depth == p->explicit_key_depth
+							&& p->last_scalar_line == event->line) {
+						/* The scalar on this line is already in temp, sitting
+						 * where the explicit key's value belongs, so it has to
+						 * step aside while the null goes in behind it. */
+						GTEXT_YAML_Node *implicit_key = NULL;
+						if (p->temp.count > 0) {
+							implicit_key = p->temp.items[--p->temp.count];
+						}
+						if (!mapping_supply_null_value(p)
+								|| (implicit_key && !temp_add(p, implicit_key))) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory completing explicit key";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->explicit_key_active = false;
+						if (p->stack.depth > 0) {
+							p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+						}
 					}
 
 					if (p->explicit_key_active && p->stack.depth == p->explicit_key_depth) {
@@ -2669,6 +2833,21 @@ static GTEXT_YAML_Status parse_callback(
 						return GTEXT_YAML_E_INVALID;
 					}
 
+					/* The key has to stand where a block entry may start,
+					 * for the same reason a "-" does: in
+					 * "x: { y: z }in: valid" the second key sits beside a
+					 * flow mapping that is already a complete node. */
+					if (in_block_mapping
+							&& !block_key_may_start_at(p, p->last_scalar_offset)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Mapping key beside a node already on this line";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					if (in_block_mapping && p->stack.indents[top] == key_indent) {
 						/* The scalar before a ":" is its key, and it is held
 						 * provisionally as the previous key's value until this
@@ -2684,6 +2863,7 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_INVALID;
 						}
+						p->claimed_key = p->temp.items[p->temp.count - 1];
 						p->stack.states[top] = STATE_MAPPING_VALUE;
 						p->expect_mapping_value = true;
 						break;
@@ -2754,6 +2934,7 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+					p->claimed_key = key_node;
 
 					p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
 					p->expect_mapping_value = true;
@@ -2883,6 +3064,16 @@ static GTEXT_YAML_Status parse_callback(
 					/* Block sequence indicator */
 					bool start_new = true;
 					int indent = event->col;
+
+					if (!block_entry_may_start_at(p, event->offset)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Block sequence entry beside a node already on this line";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
 
 					if (p->stack.depth > 0) {
 						size_t top = p->stack.depth - 1;

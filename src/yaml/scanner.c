@@ -750,6 +750,12 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   
   /* Skip whitespace and comments */
   int c;
+  /* Whether anything separated this position from the token before it. A
+     comment has to be preceded by white space unless it opens the line
+     (6.6: c-nb-comment-text follows s-separate-in-line), so "[a, b,#c" and
+     'key: "value"# c' are malformed rather than commented. Both were being
+     read as comments, which quietly threw the rest of the line away. */
+  bool saw_separation = false;
   do {
     c = scanner_peek(s);
     if (c == -1) {
@@ -766,9 +772,20 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
       scanner_consume(s);
+      saw_separation = true;
       continue;
     }
     if (c == '#') {
+      if (!saw_separation && s->col != 1) {
+        if (err) {
+          err->code = GTEXT_YAML_E_INVALID;
+          err->message = "Comment must be preceded by white space";
+          err->offset = s->offset;
+          err->line = s->line;
+          err->col = s->col;
+        }
+        return GTEXT_YAML_E_INVALID;
+      }
       size_t look = 0;
       while (s->cursor + look < s->input.len) {
         int nc = (unsigned char)s->input.data[s->cursor + look];
@@ -1300,15 +1317,19 @@ block_scalar_collected:
     }
   }
 
-  /* A ":" is a mapping indicator only where it ends a key: followed by white
-     space or the end of the line, and inside a flow collection also by one of
-     ", ] }" (5.3, and c-ns-flow-map-separate-value's "not followed by
-     ns-plain-safe").  Anywhere else it is an ordinary plain character.  That
-     was already true of a ":" reached part way through a scalar, which is why
-     "key: a :b" gives "a :b", but a ":" that *began* a node was still taken
-     as an indicator - so "- ::vector" and "::" were refused for having no key
-     in front of the colon, when both are plain scalars. */
-  if (c == ':') {
+  /* ":", "-" and "?" are indicators only where nothing plain-safe follows
+     them: white space, the end of the line, or inside a flow collection one
+     of the flow indicators (5.3, ns-plain-first, and
+     c-ns-flow-map-separate-value's "not followed by ns-plain-safe").
+     Anywhere else they open a plain scalar.
+
+     That was already true of a ":" reached part way through a scalar, which
+     is why "key: a :b" gives "a :b", but one that *began* a node was taken
+     as an indicator - so "- ::vector" was refused for having no key in front
+     of the colon. "-" and "?" had the same gap and it cost data rather than
+     a refusal: "- !!int -2" gave [1, [2], 33] with -2 read as a nested
+     sequence, and "{?foo: bar}" lost its key. */
+  if (c == ':' || c == '-' || c == '?') {
     int nc;
     if (s->cursor + 1 < s->input.len) {
       nc = (unsigned char)s->input.data[s->cursor + 1];
@@ -1318,17 +1339,22 @@ block_scalar_collected:
       nc = -1;
     }
     const bool in_flow = scanner_current_context(s) != YAML_CONTEXT_BLOCK;
-    const bool ends_key = nc == -1 || nc == ' ' || nc == '\t'
+    const bool is_indicator = nc == -1 || nc == ' ' || nc == '\t'
       || nc == '\n' || nc == '\r'
-      /* ns-plain-safe(flow-in) excludes every flow indicator, so a ":" in
-         front of one of them ends a key: "{a:{b: 1}}" is a nested mapping,
-         not the one scalar "a:{b". */
+      /* ns-plain-safe(flow-in) excludes every flow indicator, so one of
+         these in front of it means the character is not plain: "{a:{b: 1}}"
+         is a nested mapping, not the one scalar "a:{b". */
       || (in_flow && (nc == ',' || nc == '[' || nc == ']'
                    || nc == '{' || nc == '}'))
       /* 7.4.2: after a JSON-like key the ":" may be adjacent, which is what
-         makes '{"a":1}' a mapping rather than the one scalar '"a":1'. */
-      || (in_flow && s->last_json_like);
-    if (!ends_key) goto scan_plain_scalar;
+         makes '{"a":1}' a mapping rather than the one scalar '"a":1'. Only
+         the ":" has that rule; a "-" or "?" in that position is not an
+         indicator. Widening it to all three survives the suite, because the
+         only inputs that reach it - '{"a"-b: 1}' and the like - are refused
+         for having no separator between two flow entries whichever way this
+         goes. It stays narrow because that is what the grammar says. */
+      || (c == ':' && in_flow && s->last_json_like);
+    if (!is_indicator) goto scan_plain_scalar;
   }
 
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
@@ -1914,13 +1940,15 @@ scan_plain_scalar:
          they are content, so "[a-b, c]" holds "a-b" rather than ending the
          scalar at the dash.
 
-         ":" is the exception: the rule just above has already decided
-         whether this one separates a key, and if it did not then it is a
-         plain character even at the start of the scalar - ns-plain-first
-         allows one when a plain-safe character follows. Ending the scalar
-         here instead left it empty, so "{x: :x}" produced no token at all
-         and the collection was reported as never closed. */
-      if (scalar.len == 0 && c != ':' && is_indicator_char(c)) {
+         ":", "-" and "?" are the exception: the rule at the top of the
+         scanner has already decided whether this one is an indicator, and
+         if it is not then it is a plain character even at the start of the
+         scalar - ns-plain-first allows all three when a plain-safe
+         character follows. Ending the scalar here instead left it empty, so
+         "{x: :x}" and "[-1, 2]" produced no token at all and the collection
+         was reported as never closed. */
+      if (scalar.len == 0 && c != ':' && c != '-' && c != '?'
+          && is_indicator_char(c)) {
         if (!(s->last_indicator == '!' && c == '!')) break;
       }
     }

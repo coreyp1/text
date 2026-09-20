@@ -308,3 +308,74 @@ TEST(YamlMissingValue, FlowMappingKeyWithNoValue) {
 	gtext_yaml_free(doc);
 	gtext_yaml_error_free(&err);
 }
+
+// ---------------------------------------------------------------------------
+// An implicit key ends the explicit key above it
+//
+// An explicit key's value colon stands on a line of its own:
+// c-l-block-map-explicit-value(n) is s-indent(n) ":" s-l+block-indented(n).
+// A ":" with a scalar in front of it on the same line belongs to that
+// scalar, so the explicit key above it simply never got a value.
+//
+// That was not distinguished, so the ":" of "c:" was taken for the value
+// colon of the "? b" above it and refused for being at the wrong column:
+//
+//     ? a
+//     ? b
+//     c:          was "Explicit key ':' indentation mismatch"
+//
+// A flow mapping has no such rule - "{? foo: bar}" puts the colon on the
+// same line by design - so the check only applies in block context.
+// Expectations are PyYAML's.
+// ---------------------------------------------------------------------------
+
+TEST(YamlExplicitKeys, AnImplicitKeyEndsTheExplicitKeyAboveIt) {
+	GTEXT_YAML_Error err = {};
+	GTEXT_YAML_Document *doc = parse_ok("? a\n? b\nc:\n", &err);
+	ASSERT_NE(doc, nullptr);
+	ASSERT_EQ(gtext_yaml_mapping_size(gtext_yaml_document_root(doc)), 3u);
+	expect_null_value(doc, "a");
+	expect_null_value(doc, "b");
+	expect_null_value(doc, "c");
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+}
+
+TEST(YamlExplicitKeys, AnImplicitKeyMayFollowAnExplicitOneDirectly) {
+	GTEXT_YAML_Error err = {};
+	GTEXT_YAML_Document *doc = parse_ok("? a\nb: 1\n", &err);
+	ASSERT_NE(doc, nullptr);
+	ASSERT_EQ(gtext_yaml_mapping_size(gtext_yaml_document_root(doc)), 2u);
+	expect_null_value(doc, "a");
+	const GTEXT_YAML_Node *b = value_of(doc, "b");
+	ASSERT_NE(b, nullptr);
+	EXPECT_EQ(gtext_yaml_node_type(b), GTEXT_YAML_INT);
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+}
+
+TEST(YamlExplicitKeys, AFlowExplicitKeyKeepsItsColonOnTheSameLine) {
+	GTEXT_YAML_Error err = {};
+	GTEXT_YAML_Document *doc = parse_ok("{? foo: bar}\n", &err);
+	ASSERT_NE(doc, nullptr);
+	ASSERT_EQ(gtext_yaml_mapping_size(gtext_yaml_document_root(doc)), 1u);
+	const GTEXT_YAML_Node *foo = value_of(doc, "foo");
+	ASSERT_NE(foo, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(foo), "bar");
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+}
+
+// An explicit key with no ":" after it is a key with a null value, which is
+// the block spelling of a set. Without that, the trailing-key rule in
+// finalize would read the last one as a scalar nothing had claimed.
+TEST(YamlExplicitKeys, ATrailingExplicitKeyNeedsNoColon) {
+	GTEXT_YAML_Error err = {};
+	GTEXT_YAML_Document *doc = parse_ok("? a\n? b\n", &err);
+	ASSERT_NE(doc, nullptr);
+	ASSERT_EQ(gtext_yaml_mapping_size(gtext_yaml_document_root(doc)), 2u);
+	expect_null_value(doc, "a");
+	expect_null_value(doc, "b");
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+}

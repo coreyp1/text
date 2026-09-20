@@ -122,7 +122,7 @@ it gives the score against a corpus nobody here chose, which is the only
 figure that says how long that table really is. That last part took a while
 to arrive, and when it did it cut the apparent conformance roughly in half:
 a hand-built corpus agreed at 152 of 153 documents, and yaml-test-suite at
-191 of 368. Fixing what it found has since taken that to 273 of 366, which
+191 of 368. Fixing what it found has since taken that to 296 of 366, which
 is the other half of the point: a score nobody here chose is also a list of
 what to do next.
 

@@ -582,19 +582,22 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **273
-pass, 74.6%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **296
+pass, 80.9%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. Eighty-two cases have been fixed
-since, in four batches: quoted-scalar line folding and directives; a group
-of structural refusals - a second top-level node, a root block scalar's
-indentation, a folded scalar's blank lines, and the block scalar header; the
-rule that a `:` is a mapping indicator only where it ends a key; and tabs,
-which were refused anywhere in leading white space when only indentation is
-forbidden to them.
+The first run scored 191 of 368, 51.9%. A hundred and five cases have been
+fixed since, in five batches: quoted-scalar line folding and directives; a
+group of structural refusals - a second top-level node, a root block
+scalar's indentation, a folded scalar's blank lines, and the block scalar
+header; the rule that `:`, `-` and `?` are indicators only where nothing
+plain-safe follows them; tabs, which were refused anywhere in leading white
+space when only indentation is forbidden to them; and a group of positional
+rules - a scalar no `:` ever claimed is not a key, a comment needs white
+space in front of it, and a block entry cannot start beside a node already
+on its line.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
@@ -604,16 +607,15 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **48 documents that should be refused are accepted.** This is much the
-  largest group and it is not one defect: a bare scalar at the end of a
-  block mapping becomes a key with a null value rather than an error, an
-  unknown escape such as `"\\."` is copied through instead of refused, a
-  flow sequence accepts a leading or doubled comma, and content after a
-  closing `]` is ignored.
+- **36 documents that should be refused are accepted.** Still the largest
+  group, and still not one defect: an unknown escape such as `"\\."` is
+  copied through instead of refused, a flow sequence accepts a leading or
+  doubled comma, content after a closing `]` is ignored, and a document
+  that ends without a footer before the next directive is allowed.
+- **An empty node is dropped rather than made null**, so `-` on its own is
+  `[]` where it should be `[null]`.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
-- **A trailing space is kept in a plain key**, so `foo : bar` has the key
-  `"foo "`.
 - **Tag resolution diverges on the non-specific `!` tag** and on verbatim
   `!<...>` tags.
 - **A scanner error loses its message.** Every one surfaces as the
