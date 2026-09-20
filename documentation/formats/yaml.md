@@ -582,30 +582,36 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **241
-pass, 65.5%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **256
+pass, 69.6%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 81.7% and PyYAML at 77.1%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191, 51.9%. Two fixes account for the fifty cases since:
-quoted scalars now fold their line breaks, and a `%` directive no longer
-leaves an empty document in front of the real one.
+The first run scored 191, 51.9%. Sixty-five cases have been fixed since, in
+two batches: quoted-scalar line folding and directives, then a group of
+structural refusals - a second top-level node, a root block scalar's
+indentation, a folded scalar's blank lines, and the block scalar header.
 
 The failures that remain group into a few shapes, largest first:
 
-- **57 documents that should be refused are accepted.** This is now much the
-  largest group. It is not one defect: a bare scalar at the end of a block
-  mapping becomes a key with a null value rather than an error, an unknown
-  escape such as `"\\."` is copied through instead of refused, a flow
-  sequence accepts a leading or doubled comma, and content after a closing
-  `]` is ignored.
+- **48 documents that should be refused are accepted.** This is much the
+  largest group and it is not one defect: a bare scalar at the end of a
+  block mapping becomes a key with a null value rather than an error, an
+  unknown escape such as `"\\."` is copied through instead of refused, a
+  flow sequence accepts a leading or doubled comma, and content after a
+  closing `]` is ignored.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
 - **A trailing space is kept in a plain key**, so `foo : bar` has the key
   `"foo "`.
 - **Tag resolution diverges on the non-specific `!` tag** and on verbatim
   `!<...>` tags.
+- **A scanner error loses its message.** Every one surfaces as the
+  parser's generic "Parse error", because the stream layer drops the
+  `GTEXT_YAML_Error` the scanner filled in. Parser-level errors carry
+  their own text; scanner-level ones - an unterminated quoted scalar, a
+  malformed block header - do not.
 
 ---
 

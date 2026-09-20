@@ -1324,6 +1324,33 @@ static void maybe_finish_block_mapping_value(parser_state *p) {
 	p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
 }
 
+/**
+ * @brief Make @p node the document root, or refuse a second one.
+ *
+ * A document has exactly one root node (3.2.1). Every site that finished a
+ * node at stack depth zero simply assigned it, so a second top-level node
+ * overwrote the first and the first was gone: "- a\n- b\ninvalid: x"
+ * returned {"invalid": "x"} with the sequence dropped, and "word1 # comment"
+ * over "word2" returned just "word2". Silent data loss rather than a
+ * refusal, which is the shape most of the defects in this parser have had.
+ *
+ * detach_last_scalar() clears the root when a scalar taken provisionally as
+ * the root turns out to be a mapping key, so the ordinary "a: 1" path still
+ * reaches here with no root set.
+ */
+static GTEXT_YAML_Status set_document_root(parser_state *p, GTEXT_YAML_Node *node) {
+	if (p->root) {
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message = "Second top-level node in one document";
+		}
+		p->failed = true;
+		return GTEXT_YAML_E_INVALID;
+	}
+	p->root = node;
+	return GTEXT_YAML_OK;
+}
+
 static GTEXT_YAML_Node *detach_last_scalar(parser_state *p) {
 	GTEXT_YAML_Node *node = p->last_scalar_node;
 
@@ -1497,7 +1524,8 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	}
 
 	if (p->stack.depth == 0) {
-		p->root = node;
+		GTEXT_YAML_Status root_status = set_document_root(p, node);
+		if (root_status != GTEXT_YAML_OK) return root_status;
 	} else {
 		if (!temp_add(p, node)) {
 			if (p->error) {
@@ -1847,7 +1875,8 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
-				p->root = node;
+				GTEXT_YAML_Status root_status = set_document_root(p, node);
+				if (root_status != GTEXT_YAML_OK) return root_status;
 				p->last_scalar_in_root = true;
 				p->last_scalar_in_temp = false;
 			} else {
@@ -2043,7 +2072,8 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
-				p->root = node;
+				GTEXT_YAML_Status root_status = set_document_root(p, node);
+				if (root_status != GTEXT_YAML_OK) return root_status;
 			} else {
 				bool explicit_handled = false;
 				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
@@ -2173,7 +2203,8 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
-				p->root = node;
+				GTEXT_YAML_Status root_status = set_document_root(p, node);
+				if (root_status != GTEXT_YAML_OK) return root_status;
 			} else {
 				bool explicit_handled = false;
 				GTEXT_YAML_Status explicit_status = capture_explicit_key(p, node, &explicit_handled);
@@ -2268,7 +2299,8 @@ static GTEXT_YAML_Status parse_callback(
 			
 			/* Add to parent or set as root */
 			if (p->stack.depth == 0) {
-				p->root = node;
+				GTEXT_YAML_Status root_status = set_document_root(p, node);
+				if (root_status != GTEXT_YAML_OK) return root_status;
 			} else {
 				explicit_status = capture_explicit_key(p, node, &explicit_handled);
 				if (explicit_status != GTEXT_YAML_OK) {
@@ -2387,7 +2419,8 @@ static GTEXT_YAML_Status parse_callback(
 					
 					/* Add to parent or set as root */
 					if (p->stack.depth == 0) {
-						p->root = node;
+						GTEXT_YAML_Status root_status = set_document_root(p, node);
+						if (root_status != GTEXT_YAML_OK) return root_status;
 					} else {
 						if (!temp_add(p, node)) {
 							p->failed = true;
@@ -2493,7 +2526,8 @@ static GTEXT_YAML_Status parse_callback(
 					
 					/* Add to parent or set as root */
 					if (p->stack.depth == 0) {
-						p->root = node;
+						GTEXT_YAML_Status root_status = set_document_root(p, node);
+						if (root_status != GTEXT_YAML_OK) return root_status;
 					} else {
 						if (!temp_add(p, node)) {
 							p->failed = true;
@@ -2856,6 +2890,33 @@ static GTEXT_YAML_Status parse_callback(
 							p->stack.states[top] == STATE_SEQUENCE &&
 							p->stack.indents[top] == indent) {
 							start_new = false;
+						}
+					}
+
+					/* A block mapping's entries are pairs, so a "-" at the
+					 * mapping's own column with every key already paired has
+					 * nothing to be an entry of. It was becoming a sequence
+					 * standing where a key belongs: "a: 1" over "- b" gave
+					 * {"a": 1, ["b"]: null}, a sequence as a mapping key,
+					 * which neither PyYAML nor js-yaml will parse. A key
+					 * still waiting for its value is the ordinary case -
+					 * "a:" over "- b" is that sequence as a's value - and an
+					 * odd temp count is what tells them apart. */
+					if (start_new && p->stack.depth > 0) {
+						const size_t top = p->stack.depth - 1;
+						if (p->stack.is_block[top] &&
+							(p->stack.states[top] == STATE_MAPPING_KEY ||
+							 p->stack.states[top] == STATE_MAPPING_VALUE) &&
+							p->stack.indents[top] >= 0 &&
+							indent <= p->stack.indents[top] &&
+							(p->temp.count % 2) == 0) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message =
+									"Block sequence entry where a mapping key belongs";
+							}
+							return GTEXT_YAML_E_INVALID;
 						}
 					}
 

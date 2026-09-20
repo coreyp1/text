@@ -825,26 +825,68 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     /* The indentation of the line the header sits on. An indentation
        indicator counts from the parent node, and the parent node begins at
        the first non-space character of this line - the key, the "-" or the
-       "?" that owns the scalar, or the indicator itself at the root. */
-    size_t parent_indent = (size_t)s->line_indent;
-    /* optional chomping/indent indicator: ([+-])?(\d+)?
-       capture values so we can implement chomping behavior and explicit indent. */
+       "?" that owns the scalar.
+
+       At the root there is no such node, and the spec's n is -1 (8.1.2,
+       8.1.3, where the content is at n+m). Taking the header's own column
+       there made a root block scalar demand content indented past column 0,
+       so "--- >" over three lines at column 0 collected nothing and the
+       three lines came back as three documents' worth of separate nodes. */
+    int parent_indent = (s->node_indent < 0) ? -1 : s->line_indent;
+    /* The block header carries a chomping indicator and an indentation
+       indicator, either one optional and in either order (8.1.1,
+       c-b-block-header). This read the sign first and the digits second, so
+       ">1-" left the "-" to be swallowed as part of the header's trailing
+       comment and the scalar was chomped clip instead of strip. */
     int ch = scanner_peek(s);
     int chomping = 0; /* 0=clip(default), 1=keep(+), -1=strip(-) */
     size_t explicit_indent = 0; /* 0 == none provided */
-    if (ch == '+' || ch == '-') {
-      if (ch == '+') chomping = 1; else chomping = -1;
-      scanner_consume(s);
-      ch = scanner_peek(s);
-    }
-    /* optional indentation indicator (one or more digits) */
-    if (ch >= '0' && ch <= '9') {
-      size_t val = 0;
-      while ((ch = scanner_peek(s)) >= '0' && ch <= '9') {
-        val = val * 10 + (ch - '0');
+    bool bad_header = false;
+    for (int field = 0; field < 2; ++field) {
+      if (ch == '+' || ch == '-') {
+        if (chomping != 0) { bad_header = true; break; }
+        chomping = (ch == '+') ? 1 : -1;
         scanner_consume(s);
+        ch = scanner_peek(s);
+        continue;
       }
-      if (val > 0) explicit_indent = val;
+      if (ch >= '0' && ch <= '9') {
+        /* One digit, and not zero: c-indentation-indicator is
+           ns-dec-digit - "0". "|0" and "|10" are both malformed headers and
+           were being read as an indentation of 0 and of 10. */
+        if (explicit_indent != 0 || ch == '0') { bad_header = true; break; }
+        explicit_indent = (size_t)(ch - '0');
+        scanner_consume(s);
+        ch = scanner_peek(s);
+        continue;
+      }
+      break;
+    }
+    /* Only white space, then a comment, then the end of the line may follow
+       the header (s-b-block-header ends in s-b-comment). Anything else -
+       "|1 2", "| junk" - is a malformed header, and both references refuse
+       it rather than reading it as a comment. */
+    if (!bad_header) {
+      size_t look = 0;
+      int after = ch;
+      while (after == ' ' || after == '\t') {
+        look++;
+        after = (s->cursor + look < s->input.len)
+          ? (unsigned char)s->input.data[s->cursor + look] : -1;
+      }
+      if (after != -1 && after != '#' && after != '\n' && after != '\r') {
+        bad_header = true;
+      }
+    }
+    if (bad_header) {
+      if (err) {
+        err->code = GTEXT_YAML_E_INVALID;
+        err->message = "Malformed block scalar header";
+        err->offset = off;
+        err->line = line;
+        err->col = col;
+      }
+      return GTEXT_YAML_E_INVALID;
     }
     /* consume the rest of the line (possible comments) up to newline */
     int header_break = 0;
@@ -881,7 +923,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
        indented less than the block; a non-empty line indented less ends it. */
     size_t block_indent = 0;
     if (explicit_indent > 0) {
-      block_indent = parent_indent + explicit_indent;
+      block_indent = (size_t)(parent_indent + (int)explicit_indent);
     } else {
       size_t scan = s->cursor;
       bool detected = false;
@@ -902,7 +944,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       if (!detected) {
         if (!s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
         block_indent = 0;
-      } else if (block_indent <= parent_indent) {
+      } else if ((int)block_indent <= parent_indent) {
         /* The content of a block scalar is indented further than the node
            that owns it. A first non-empty line at or left of the parent means
            this scalar is empty and that line belongs to what follows, so set
@@ -1066,7 +1108,14 @@ block_scalar_collected:
           const bool nxt_more = nxt <= last_content
             && (in_buf[starts[nxt]] == ' ' || in_buf[starts[nxt]] == '\t');
           if (blanks > 0) {
-            if (cur_more) tmp[out_pos++] = '\n';
+            /* A more-indented line on either side of the run makes the break
+               that opens it content too (8.1.3: b-l-spaced, and the
+               b-as-line-feed that separates two l-nb-same-lines groups), so
+               the run yields one break more than it has empty lines. Only
+               the line before the run was being checked, so a blank line in
+               front of a more-indented one lost a break - spec example 2.15
+               came back with the blank above its indented block missing. */
+            if (cur_more || nxt_more) tmp[out_pos++] = '\n';
             for (size_t b = 0; b < blanks; b++) tmp[out_pos++] = '\n';
           } else if (cur_more || nxt_more) {
             tmp[out_pos++] = '\n';

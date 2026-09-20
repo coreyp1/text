@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Three more came out of running yaml-test-suite. Quoted scalars now fold
+Nine more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -187,6 +187,16 @@ apply to it is now refused. And a quoted scalar whose escape or line break
 straddled a feed boundary lost bytes, because the scanner took the byte it
 was still deciding about for the closing quote; that one was found by a test
 that feeds the input one byte at a time, not by the suite.
+
+The rest are structural. A second top-level node used to overwrite the
+first, so `- a` and `- b` followed by `invalid: x` returned only
+`{"invalid": "x"}` with the sequence gone. A `-` at a block mapping's own
+column with no key waiting became a sequence standing where a key belongs.
+A block scalar that is the document's root was required to be indented past
+column 0, so `--- >` over three lines at column 0 collected nothing. In a
+folded scalar a blank line before a more-indented line lost its break. And
+a malformed block header - `|0`, `|10`, `|+-`, `| junk` - was read as
+something rather than refused.
 
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
@@ -204,18 +214,21 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **65.5%** of the 368 cases that can be checked by
+this parser against it: **69.6%** of the 368 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 81.7%** and **PyYAML at 77.1%** - so a mature implementation does not score
 100% here either. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. Two fixes account for the fifty cases since: quoted scalars
-now fold their line breaks the way plain and block scalars already did, and
-a `%` directive no longer leaves an empty document in front of the real one.
-The largest group still failing is the 57 documents that should be refused
-and are not.
+had suggested. Sixty-five cases have been fixed since, in two batches:
+quoted-scalar line folding and directives, then a group of structural
+refusals - a second top-level node no longer silently replaces the first,
+a root block scalar is no longer required to be indented past column 0, a
+blank line beside a more-indented line in a folded scalar keeps its break,
+and a malformed block header is refused rather than read as something. The
+largest group still failing is the 48 documents that should be refused and
+are not.
 
 ## Macros and Utilities
 

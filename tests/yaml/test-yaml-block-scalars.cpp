@@ -11,6 +11,7 @@
  */
 #include <gtest/gtest.h>
 #include <string.h>
+#include <string>
 #include <ghoti.io/text/yaml.h>
 
 namespace {
@@ -136,6 +137,103 @@ TEST(YamlBlockScalars, ContentLeftOfTheParentIsNotSwallowed) {
 	ASSERT_NE(b, nullptr);
 	EXPECT_STREQ(gtext_yaml_node_as_string(b), "2");
 	gtext_yaml_free(doc);
+}
+
+namespace {
+
+/* The whole document as one scalar, for block scalars that are the root. */
+std::string RootScalar(const char *input) {
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(input, strlen(input), nullptr, &err);
+	EXPECT_NE(doc, nullptr) << "parse failed: " << (err.message ? err.message : "?");
+	if (!doc) return "<parse-failed>";
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	std::string out = root && gtext_yaml_node_as_string(root)
+		? gtext_yaml_node_as_string(root) : "<missing>";
+	gtext_yaml_free(doc);
+	return out;
+}
+
+}  // namespace
+
+/* A block scalar that is the document's root has no owning node, and the
+   spec's n is -1 there (9.1.2 l-bare-document, and the n+m in 8.1.2/8.1.3).
+   The scanner took the header's own column instead, so a root block scalar
+   demanded content indented past column 0 and collected nothing: "--- >"
+   over three lines at column 0 returned the three lines as separate nodes,
+   which is now also a refusal rather than a wrong answer. */
+TEST(YamlBlockScalars, ARootBlockScalarHasNoParentIndentation) {
+	EXPECT_EQ(RootScalar("--- >\nline1\nline2\nline3\n"),
+		std::string("line1 line2 line3\n"));
+	EXPECT_EQ(RootScalar("--- |\na\nb\n"), std::string("a\nb\n"));
+	EXPECT_EQ(RootScalar(">\nfoo\nbar\n"), std::string("foo bar\n"));
+	/* With an indicator the content sits at n+m, so m=1 means column 0 and
+	   the one space on the line is content. PyYAML says "a\n" here; js-yaml
+	   and the spec's own arithmetic say " a\n". */
+	EXPECT_EQ(RootScalar("--- >1\n a\n"), std::string(" a\n"));
+}
+
+/* The header's two indicators may come in either order (8.1.1). Reading the
+   sign first and the digits second left the sign of ">1-" to be swallowed as
+   part of the trailing comment, so the scalar was chomped clip. */
+TEST(YamlBlockScalars, HeaderIndicatorsComeInEitherOrder) {
+	EXPECT_EQ(ScalarAt("a: >1-\n  strip\n\n", "a"), std::string(" strip"));
+	EXPECT_EQ(ScalarAt("a: >-1\n  strip\n\n", "a"), std::string(" strip"));
+	EXPECT_EQ(ScalarAt("a: |+2\n   x\n\n", "a"), std::string(" x\n\n"));
+	EXPECT_EQ(ScalarAt("a: |2+\n   x\n\n", "a"), std::string(" x\n\n"));
+}
+
+/* And a malformed header is refused rather than read as something. The
+   indentation indicator is one digit and not zero (8.1.1.1,
+   c-indentation-indicator is ns-dec-digit minus "0"), there is at most one
+   chomping indicator, and only a comment may follow. "|0" was being read as
+   an indentation of zero and "|10" as ten. */
+TEST(YamlBlockScalars, RefusesAMalformedHeader) {
+	static const char *const kBad[] = {
+		"a: |0\n x\n",     /* zero is not a valid indentation indicator */
+		"a: |10\n x\n",    /* nor is a second digit */
+		"a: |+-\n x\n",    /* two chomping indicators */
+		"a: |-+\n x\n",
+		"a: |1 2\n x\n",   /* the indicator is not repeatable either */
+		"a: |x\n x\n",     /* only a comment may follow the header */
+	};
+	for (const char *input : kBad) {
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(input, strlen(input), nullptr, &err);
+		EXPECT_EQ(doc, nullptr) << input;
+		gtext_yaml_free(doc);
+	}
+
+	/* What still has to parse. */
+	EXPECT_EQ(ScalarAt("a: | # comment\n  x\n", "a"), std::string("x\n"));
+	EXPECT_EQ(ScalarAt("a: |9\n         x\n", "a"), std::string("x\n"));
+	EXPECT_EQ(ScalarAt("a: |-\n  x\n", "a"), std::string("x"));
+	EXPECT_EQ(ScalarAt("a: |\n  x\n", "a"), std::string("x\n"));
+}
+
+/* Folding (8.1.3): a run of empty lines beside a more-indented line yields
+   one break more than it has empty lines - the b-as-line-feed that separates
+   two l-nb-same-lines groups, or b-l-spaced's own break. Only the line
+   *before* the run was checked, so a blank line in front of a more-indented
+   one lost a break and spec example 2.15 came back with its indented block
+   pulled up against the paragraph above it. */
+TEST(YamlBlockScalars, ABlankLineBesideAMoreIndentedLineKeepsItsBreak) {
+	EXPECT_EQ(RootScalar(">\n a\n\n   b\n"), std::string("a\n\n  b\n"));
+	EXPECT_EQ(RootScalar(">\n a\n\n\n   b\n"), std::string("a\n\n\n  b\n"));
+	/* Unchanged: two ordinary lines fold to a space, and a run of empty
+	   lines between them to one break each. */
+	EXPECT_EQ(RootScalar(">\n a\n b\n"), std::string("a b\n"));
+	EXPECT_EQ(RootScalar(">\n a\n\n b\n"), std::string("a\nb\n"));
+	EXPECT_EQ(RootScalar(">\n a\n   b\n"), std::string("a\n  b\n"));
+	EXPECT_EQ(RootScalar(">\n   a\n\n\n   b\n"), std::string("a\n\nb\n"));
+	/* Spec example 6.7, which is where the rule came from: a line of only
+	   white space is an empty line even though the next line is
+	   more-indented, and both breaks survive. */
+	EXPECT_EQ(RootScalar(">\n  foo \n \n  \t bar\n\n  baz\n"),
+		std::string("foo \n\n\t bar\n\nbaz\n"));
 }
 
 int main(int argc, char **argv) {

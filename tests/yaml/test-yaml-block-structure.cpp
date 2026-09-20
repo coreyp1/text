@@ -176,6 +176,28 @@ TEST(YamlBlockStructure, RefusesAColonWithNoKeyBeforeIt) {
 	EXPECT_EQ(Render("? a\n: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
 }
 
+/* A document has one root node (3.2.1). Every place that finished a node at
+   the top level simply assigned it as the root, so a second one overwrote
+   the first and the first vanished - the sequence in the first case below
+   was returned as {"invalid": "x"}, with nothing to say two thirds of the
+   document had been dropped. */
+TEST(YamlBlockStructure, RefusesASecondTopLevelNode) {
+	EXPECT_EQ(Render("- a\n- b\ninvalid: x\n"), std::string(""));
+	EXPECT_EQ(Render("a: 1\n- b\n"), std::string(""));
+	EXPECT_EQ(Render("[a, b]\n[c]\n"), std::string(""));
+	EXPECT_EQ(Render("{a: 1}\nb\n"), std::string(""));
+
+	/* What still has to work: one root, however it is spelled. A scalar held
+	   provisionally as the root and then claimed by a ":" is the ordinary
+	   mapping path and must not trip this. */
+	EXPECT_EQ(Render("a: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
+	EXPECT_EQ(Render("- a\n- b\n"), std::string("[\"a\", \"b\"]"));
+	EXPECT_EQ(Render("scalar\n"), std::string("\"scalar\""));
+	EXPECT_EQ(Render("a:\n  b:\n    c: 1\n"),
+		std::string("{\"a\": {\"b\": {\"c\": 1}}}"));
+	EXPECT_EQ(Render("- - a\n- b\n"), std::string("[[\"a\"], \"b\"]"));
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
