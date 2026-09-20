@@ -280,6 +280,50 @@ static bool line_starts_forbidden_marker(
 }
 
 /**
+ * @brief Has the whole of a "&", "*" or "!" property arrived?
+ *
+ * The scanner hands the indicator back as one token and the name after it as
+ * the next, and it consumes destructively: there is no putting the indicator
+ * back once it has been taken.  So neither is taken until both are in the
+ * buffer.  Without this, a caller feeding the input in small pieces took the
+ * "&", found no name behind it yet, and dropped the anchor on the floor; the
+ * name then arrived looking like an ordinary scalar.  "First occurrence:
+ * &anchor Foo" fed a byte at a time came back with "anchor" as a scalar of
+ * its own and "Foo" unanchored - a different document, decided by nothing
+ * but where the caller happened to split the input.
+ *
+ * The name ends at white space, at a flow indicator, or at the end of the
+ * input (5.3, 6.9.1, 7.1).  A verbatim tag "!<...>" is the exception: it runs
+ * to its ">" and may hold any of those characters on the way.
+ *
+ * ns-anchor-char and ns-tag-char are both ns-char minus c-flow-indicator, so
+ * a "," or a bracket really does end the name.  Listing them changes no
+ * answer, only how soon one can be given: without them a property inside
+ * "[&a,&b,&c]" would wait for the white space at the end of the collection
+ * before the first anchor could be handed over.  Deferring is always safe,
+ * which is why no test can tell the two apart.
+ */
+static bool property_token_complete(const GTEXT_YAML_Scanner *s)
+{
+  size_t p = s->cursor + 1; /* past the indicator itself */
+  if (p < s->input.len && s->input.data[s->cursor] == '!'
+      && s->input.data[p] == '<') {
+    for (p++; p < s->input.len; p++) {
+      if (s->input.data[p] == '>') return true;
+    }
+    return false;
+  }
+  for (; p < s->input.len; p++) {
+    const char ch = s->input.data[p];
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
+        || ch == ',' || ch == '[' || ch == ']' || ch == '{' || ch == '}') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * @brief What a fold across one or more line breaks turned out to be.
  */
 typedef enum {
@@ -1553,6 +1597,15 @@ block_scalar_collected:
 
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
   if (is_indicator_char(c)) {
+    /* A property or an alias is one thing, not two.  Ask for the rest of it
+       before taking any of it - see property_token_complete().  This stands
+       ahead of everything below because the lines that follow mutate the
+       scanner, and there is no undoing them. */
+    if ((c == '&' || c == '*' || c == '!') && !s->finished
+        && !property_token_complete(s)) {
+      return GTEXT_YAML_E_INCOMPLETE;
+    }
+
     /* Update context stack for flow collection boundaries */
     if (c == '[') {
       scanner_push_context(s, YAML_CONTEXT_FLOW_SEQUENCE);
@@ -1990,12 +2043,36 @@ scan_plain_scalar:
   }
   
   size_t look = 0;
+  /* The buffer running out is not the input running out.  Every lookahead
+     below reads -1 when it falls off the end of what has arrived so far, and
+     each of them used to read that as "the token ends here".  It does only
+     when the stream is finished; otherwise more may still be coming and the
+     token may go on.  Feeding "name: Mark McGwire" one byte at a time came
+     back as the two scalars "Mark" and "McGwire", because the space was
+     judged a terminator by a lookahead that had simply run out of bytes -
+     so what the parser produced depended on how the caller had chopped up
+     the input, which is the one thing a streaming parser may not do.
+
+     Asking for more is safe at any point in this loop: `look` is an offset
+     into the buffer, nothing has been consumed, and the consume loop runs
+     only after the token is settled.  The next call re-scans from here. */
+#define GTEXT_YAML_PLAIN_NEED_MORE()                       \
+      do {                                                 \
+        if (!s->finished) {                                \
+          gtext_yaml_dynbuf_free(&scalar);                 \
+          return GTEXT_YAML_E_INCOMPLETE;                  \
+        }                                                  \
+      } while (0)
   while (1) {
     if (s->cursor + look >= s->input.len) {
       c = -1;
     } else {
       c = (unsigned char)s->input.data[s->cursor + look];
     }
+    /* Falling off the end here needs no separate ask: `look` is then at the
+       end of the buffer, which is exactly what the guard after this loop
+       tests. The lookaheads below are the ones that need it, because they
+       break with `look` still pointing at a character. */
     if (c == -1) break;
     
     /* Context-aware whitespace handling */
@@ -2049,7 +2126,7 @@ scan_plain_scalar:
         }
         
         /* Break at the end of input. */
-        if (next_c == -1) break;
+        if (next_c == -1) { GTEXT_YAML_PLAIN_NEED_MORE(); break; }
         /* White space before a line break is separation rather than content.
            Step over it so the break itself decides whether the scalar goes on
            to the next line. */
@@ -2071,6 +2148,7 @@ scan_plain_scalar:
             after_colon =
                 (unsigned char)s->input.data[s->cursor + look + ws_len + 1];
           }
+          if (after_colon == -1) GTEXT_YAML_PLAIN_NEED_MORE();
           if (after_colon == -1 || after_colon == ' ' || after_colon == '\t'
               || after_colon == '\r' || after_colon == '\n') {
             break;
@@ -2106,6 +2184,7 @@ scan_plain_scalar:
         if (s->cursor + look + 1 < s->input.len) {
           next_c = (unsigned char)s->input.data[s->cursor + look + 1];
         }
+        if (next_c == -1) GTEXT_YAML_PLAIN_NEED_MORE();
         if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c ==  '\n') {
           /* A key on a continuation line is refused by the parser, which
              already rejects a key that is not on the same line as its ':'.
@@ -2126,6 +2205,7 @@ scan_plain_scalar:
           if (s->cursor + look + 1 < s->input.len) {
             next_c = (unsigned char)s->input.data[s->cursor + look + 1];
           }
+          if (next_c == -1) GTEXT_YAML_PLAIN_NEED_MORE();
           if (next_c == -1 || next_c == ' ' || next_c == '\t' || next_c == '\r' || next_c == '\n') {
             break;
           }
@@ -2197,7 +2277,7 @@ scan_plain_scalar:
           next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
         }
 
-        if (next_c == -1) break;
+        if (next_c == -1) { GTEXT_YAML_PLAIN_NEED_MORE(); break; }
         /* White space before a break is separation; step over it and let the
            break decide whether the scalar goes on. */
         if (next_c == '\r' || next_c == '\n') {
@@ -2216,6 +2296,7 @@ scan_plain_scalar:
             after_colon =
                 (unsigned char)s->input.data[s->cursor + look + ws_len + 1];
           }
+          if (after_colon == -1) GTEXT_YAML_PLAIN_NEED_MORE();
           if (after_colon == -1 || after_colon == ' ' || after_colon == '\t'
               || after_colon == '\r' || after_colon == '\n'
               || after_colon == ',' || after_colon == '[' || after_colon == ']'
@@ -2250,6 +2331,7 @@ scan_plain_scalar:
         if (s->cursor + look + 1 < s->input.len) {
           next_c = (unsigned char)s->input.data[s->cursor + look + 1];
         }
+        if (next_c == -1) GTEXT_YAML_PLAIN_NEED_MORE();
         if (next_c == -1 || next_c == ' ' || next_c == '\t'
             || next_c == '\r' || next_c == '\n'
             || next_c == ',' || next_c == '[' || next_c == ']'
@@ -2310,6 +2392,8 @@ scan_plain_scalar:
     s->last_indicator = 0;
     return GTEXT_YAML_OK;
   }
+
+#undef GTEXT_YAML_PLAIN_NEED_MORE
 
   /* If our lookahead reached the end of the current input buffer and the
      scanner hasn't been marked finished, it's a partial scalar. Signal
