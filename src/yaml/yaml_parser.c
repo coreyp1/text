@@ -1883,9 +1883,64 @@ static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p) {
  * pair whose value never arrived gets the null it stands for, the same as
  * anywhere else.
  */
+/**
+ * @brief Note that the entry an explicit key sat in has just been completed.
+ *
+ * A "?" key is finished by whatever ends its entry, not only by a ":". In
+ * "[ ? a, ? b ]" and "{ ? a, ? b }" the "," ends the first one; a "]" or a
+ * "}" would do the same.
+ *
+ * Leaving the flag set let the next "?" read that key as one still waiting
+ * for a value and supply a second null behind the one the entry's end had
+ * already put there, so "{ ? a, ? b }" came out as {"a": null, null: "b"}.
+ * Inside a flow sequence it was worse: explicit_key_depth pointed at a level
+ * about to be popped, so the null went into the sequence and the sequence
+ * itself was switched into mapping-key state.
+ */
+/**
+ * @brief Give an explicit key that holds nothing the empty node it stands for.
+ *
+ * The same node a missing value gets - e-node either way (7.2) - under the
+ * name that says which half of the pair is missing here.
+ */
+static bool mapping_supply_empty_key(parser_state *p) {
+	return mapping_supply_null_value(p);
+}
+
+static void explicit_key_entry_done(parser_state *p) {
+	if (!p) return;
+	if (p->explicit_key_depth != p->stack.depth) return;
+	p->explicit_key_active = false;
+	p->explicit_key_pending = false;
+}
+
 static GTEXT_YAML_Status close_flow_pair(parser_state *p) {
 	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
 	if (!(p->stack.flow_flags[p->stack.depth - 1] & GTEXT_YAML_FLOW_PAIR)) return GTEXT_YAML_OK;
+
+	/* A "?" that never got a key still makes an entry.
+	 * ns-flow-map-explicit-entry is
+	 *
+	 *     ns-flow-map-implicit-entry | ( e-node e-node )
+	 *
+	 * (7.4), so "[ ? ]" is one pair of empty nodes and comes out as
+	 * [{null: null}].  Dropping the key left the pair with no children at
+	 * all, which finalized as the empty mapping [{}] - a different document,
+	 * and one the grammar has no way to write.
+	 *
+	 * The level is known to be empty without asking: a pending "?" is one
+	 * whose key has not arrived, and the pair was pushed by that same "?",
+	 * so nothing has been added to it since. */
+	if (p->explicit_key_pending
+			&& p->explicit_key_depth == p->stack.depth
+			&& !mapping_supply_empty_key(p)) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_OOM;
+			p->error->message = "Out of memory completing flow pair";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
 
 	if ((p->temp.count % 2) == 1 && !mapping_supply_null_value(p)) {
 		p->failed = true;
@@ -1895,6 +1950,7 @@ static GTEXT_YAML_Status close_flow_pair(parser_state *p) {
 		}
 		return GTEXT_YAML_E_OOM;
 	}
+	explicit_key_entry_done(p);
 	return finalize_top_collection(p);
 }
 
@@ -3315,6 +3371,7 @@ static GTEXT_YAML_Status parse_callback(
 				{
 					bool in_mapping = false;
 					bool in_flow_mapping = false;
+					bool in_flow_sequence = false;
 					bool at_block_mapping = false;
 					int indent = event->col;
 					size_t top = 0;
@@ -3354,9 +3411,57 @@ static GTEXT_YAML_Status parse_callback(
 						in_flow_mapping = in_mapping && !p->stack.is_block[top];
 						at_block_mapping = in_mapping && p->stack.is_block[top] &&
 							p->stack.indents[top] == indent;
+						in_flow_sequence = !p->stack.is_block[top] &&
+							p->stack.states[top] == STATE_SEQUENCE;
 					}
 
 					if (in_flow_mapping) {
+						p->explicit_key_pending = true;
+						p->explicit_key_active = false;
+						p->explicit_key_indent = indent;
+						p->explicit_key_depth = p->stack.depth;
+						break;
+					}
+
+					/* A "?" directly inside a flow sequence opens a single-pair
+					 * mapping, exactly as a ":" does there.  ns-flow-pair is
+					 *
+					 *     ( "?" s-separate ns-flow-map-explicit-entry )
+					 *   | ns-flow-pair-entry
+					 *
+					 * (7.4), so "[ ? a : b ]" is "[{a: b}]" and "[ ? a ]" is
+					 * "[{a: null}]".  The pair ends where the sequence entry
+					 * ends - at the "," or the "]" - rather than at a "}",
+					 * which is what GTEXT_YAML_FLOW_PAIR marks; close_flow_pair
+					 * is already called from both.
+					 *
+					 * Without this the "?" fell through to the block arm below
+					 * and pushed a *block* mapping inside the flow sequence.
+					 * That level then measured itself by indentation, which
+					 * says nothing inside "[" and "]", and swallowed the
+					 * bracket that should have closed the sequence. */
+					if (in_flow_sequence) {
+						if (!stack_push(
+							p,
+							NULL,
+							STATE_MAPPING_KEY,
+							NULL,
+							NULL,
+							-1,
+							false,
+							event->offset,
+							event->line,
+							event->col
+						)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory starting flow pair";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->stack.flow_flags[p->stack.depth - 1] |=
+							GTEXT_YAML_FLOW_PAIR;
 						p->explicit_key_pending = true;
 						p->explicit_key_active = false;
 						p->explicit_key_indent = indent;
@@ -3470,6 +3575,7 @@ static GTEXT_YAML_Status parse_callback(
 								}
 								return GTEXT_YAML_E_OOM;
 							}
+							explicit_key_entry_done(p);
 						}
 						if (p->stack.states[sep_top] == STATE_MAPPING_VALUE) {
 							p->stack.states[sep_top] = STATE_MAPPING_KEY;

@@ -514,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 83 test files under `tests/yaml/`, carrying 545 of the suite's
-2130 test cases across 95 binaries, all passing. They cover the scalar styles,
+**Tests.** 83 test files under `tests/yaml/`, carrying 546 of the suite's
+2131 test cases across 96 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -585,8 +585,8 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **360
-pass, 98.4%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **361
+pass, 98.6%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
@@ -622,8 +622,8 @@ The failures that remain group into a few shapes, largest first:
 
 - **1 document that should be refused is accepted**: a node may carry two
   anchors, and the second one silently replaces the first.
-- **2 valid documents are refused**: an explicit `?` key inside a flow
-  sequence, and a multi-line plain scalar under an explicit key.
+- **1 valid document is refused**: a multi-line plain scalar under an
+  explicit key.
 - **3 differ in the value they produce**, in binary content, in the
   white space a folded scalar keeps, and in how a directive carries across
   a document boundary.
