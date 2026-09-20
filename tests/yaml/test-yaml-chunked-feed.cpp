@@ -47,6 +47,7 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 
 extern "C" {
 #include <ghoti.io/text/yaml.h>
@@ -324,6 +325,80 @@ TEST(YamlChunkedFeed, ADocumentEndsEarlyEnoughToEmit) {
 	EXPECT_NE(seen.find("first\n"), std::string::npos)
 		<< "the first document waited for the whole stream; saw: " << seen;
 	gtext_yaml_reader_free(reader);
+}
+
+/* Checking for the whole block before taking any of it must not turn into a
+ * rescan of the block on every feed.
+ *
+ * It did at first: a 0.9MB literal scalar delivered in 1KB pieces took 1.25s
+ * where the same bytes in one piece took 0.03s, and the cost grows with the
+ * square of the block's length - a caller reading from a socket in small
+ * reads would pay it. The scan now resumes where it stopped.
+ *
+ * This is a timing test, which is worth saying out loud. It compares the two
+ * feeds against each other rather than against a clock, so a loaded machine
+ * slows both and the ratio holds: linear is a small multiple, and the shape
+ * this guards against is roughly a thousand times the whole-input run at
+ * these sizes. The bound is far enough from both to say which one it is. */
+TEST(YamlChunkedFeed, ABigBlockScalarIsNotRescannedEveryFeed) {
+	std::string doc = "big: |\n";
+	doc.reserve(4u << 20);
+	for (int i = 0; doc.size() < (4u << 20); i++) {
+		doc += "  line ";
+		doc += std::to_string(i);
+		doc += " of a large literal block scalar\n";
+	}
+
+	auto feed = [&](size_t chunk) {
+		GTEXT_YAML_Reader *reader = gtext_yaml_reader_new(nullptr);
+		if (!reader) return;
+		size_t off = 0;
+		while (off < doc.size()) {
+			const size_t n = chunk ? std::min(chunk, doc.size() - off)
+			                       : doc.size() - off;
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			if (gtext_yaml_reader_feed(reader, doc.data() + off, n, &err)
+					!= GTEXT_YAML_OK) {
+				break;
+			}
+			for (;;) {
+				GTEXT_YAML_Event ev;
+				memset(&ev, 0, sizeof(ev));
+				memset(&err, 0, sizeof(err));
+				if (gtext_yaml_reader_next(reader, &ev, &err) != GTEXT_YAML_OK) break;
+			}
+			off += n;
+		}
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		gtext_yaml_reader_feed(reader, nullptr, 0, &err);
+		for (;;) {
+			GTEXT_YAML_Event ev;
+			memset(&ev, 0, sizeof(ev));
+			memset(&err, 0, sizeof(err));
+			if (gtext_yaml_reader_next(reader, &ev, &err) != GTEXT_YAML_OK) break;
+		}
+		gtext_yaml_reader_free(reader);
+	};
+
+	using clock = std::chrono::steady_clock;
+	const auto t0 = clock::now();
+	feed(0);
+	const auto t1 = clock::now();
+	feed(512);
+	const auto t2 = clock::now();
+
+	const double whole =
+		std::chrono::duration<double>(t1 - t0).count();
+	const double pieces =
+		std::chrono::duration<double>(t2 - t1).count();
+	/* Guard the denominator: a fast machine can read the whole document in
+	 * less than the clock's resolution. */
+	const double base = std::max(whole, 1e-4);
+	EXPECT_LT(pieces / base, 50.0)
+		<< "whole " << whole << "s, in 512-byte pieces " << pieces
+		<< "s - the block looks like it is being rescanned on every feed";
 }
 
 int main(int argc, char **argv) {

@@ -64,6 +64,26 @@ struct GTEXT_YAML_Scanner {
   /* Track last indicator character for tag/anchor/alias parsing */
   int last_indicator;
 
+  /* How far a block_scalar_complete() that ran out of input had got, so the
+     next one resumes instead of starting over.  Walking the whole block on
+     every feed is quadratic in its length: a 0.9MB literal scalar delivered
+     in 1KB pieces took 1.25s where the same bytes in one piece took 0.03s,
+     and the cost grows with the square.  Nothing is consumed while the scan
+     is unfinished, so the bytes it already walked are still there.
+
+     The hint is tied to the absolute offset it was taken at, which never
+     repeats, and is cleared whenever a scan finds the end of a block.  Both
+     of those are belt and braces: a paused scan is always resumed on the
+     same block, because pausing means the token was refused and no input
+     moved, and a finished scan is followed by the block being consumed.
+     Removing either - or both - breaks nothing that can be measured.  They
+     stay because a stale hint would resume in the middle of a different
+     block and mis-read it silently, which is the one failure mode this
+     whole area has had too much of. */
+  bool block_scan_valid;
+  size_t block_scan_offset;  /* s->offset the hint belongs to */
+  size_t block_scan_from;    /* bytes past s->cursor already walked */
+
   /* Payload of the token most recently returned, owned here.
      SCALAR and COMMENT tokens point into this buffer; it is released when the
      next token is requested, which is the lifetime yaml_internal.h documents.
@@ -301,34 +321,53 @@ static bool line_starts_forbidden_marker(
  * entirely once the input is finished, which is the case gtext_yaml_parse()
  * takes.
  */
-static bool block_scalar_complete(const GTEXT_YAML_Scanner *s)
+static bool block_scalar_complete(GTEXT_YAML_Scanner *s)
 {
   const int parent = s->node_indent;
-  size_t p = s->cursor;
+  size_t p;
 
-  /* The header runs to the end of its line. */
-  while (p < s->input.len
-      && s->input.data[p] != '\n' && s->input.data[p] != '\r') {
-    p++;
-  }
-  if (p >= s->input.len) return false;
-  if (s->input.data[p] == '\r') {
-    p++;
-    if (p >= s->input.len) return false;
-    if (s->input.data[p] == '\n') p++;
+  if (s->block_scan_valid && s->block_scan_offset == s->offset
+      && s->cursor + s->block_scan_from <= s->input.len) {
+    /* Pick up where the last one stopped: a line boundary inside the block. */
+    p = s->cursor + s->block_scan_from;
   } else {
-    p++;
+    s->block_scan_valid = false;
+    p = s->cursor;
+
+    /* The header runs to the end of its line. */
+    while (p < s->input.len
+        && s->input.data[p] != '\n' && s->input.data[p] != '\r') {
+      p++;
+    }
+    if (p >= s->input.len) return false;
+    if (s->input.data[p] == '\r') {
+      p++;
+      if (p >= s->input.len) return false;
+      if (s->input.data[p] == '\n') p++;
+    } else {
+      p++;
+    }
   }
+
+  /* Every exit below that asks for more input leaves `p` on the first byte of
+     a line, which is where the next scan has to begin. */
+#define GTEXT_YAML_BLOCK_SCAN_PAUSE()            \
+    do {                                         \
+      s->block_scan_valid = true;                \
+      s->block_scan_offset = s->offset;          \
+      s->block_scan_from = p - s->cursor;        \
+      return false;                              \
+    } while (0)
 
   for (;;) {
-    if (p >= s->input.len) return false;
+    if (p >= s->input.len) GTEXT_YAML_BLOCK_SCAN_PAUSE();
     size_t sp = p;
     size_t spaces = 0;
     while (sp < s->input.len && s->input.data[sp] == ' ') { sp++; spaces++; }
-    if (sp >= s->input.len) return false;
+    if (sp >= s->input.len) GTEXT_YAML_BLOCK_SCAN_PAUSE();
     const char lc = s->input.data[sp];
     if (lc != '\n' && lc != '\r') {
-      if ((int)spaces <= parent) return true;
+      if ((int)spaces <= parent) { s->block_scan_valid = false; return true; }
       if (spaces == 0 && s->input.len - sp >= 4) {
         const char m = s->input.data[sp];
         if ((m == '-' || m == '.')
@@ -336,6 +375,7 @@ static bool block_scalar_complete(const GTEXT_YAML_Scanner *s)
           const char after = s->input.data[sp + 3];
           if (after == ' ' || after == '\t'
               || after == '\n' || after == '\r') {
+            s->block_scan_valid = false;
             return true;
           }
         }
@@ -345,16 +385,17 @@ static bool block_scalar_complete(const GTEXT_YAML_Scanner *s)
         && s->input.data[sp] != '\n' && s->input.data[sp] != '\r') {
       sp++;
     }
-    if (sp >= s->input.len) return false;
+    if (sp >= s->input.len) GTEXT_YAML_BLOCK_SCAN_PAUSE();
     if (s->input.data[sp] == '\r') {
       sp++;
-      if (sp >= s->input.len) return false;
+      if (sp >= s->input.len) GTEXT_YAML_BLOCK_SCAN_PAUSE();
       if (s->input.data[sp] == '\n') sp++;
       p = sp;
     } else {
       p = sp + 1;
     }
   }
+#undef GTEXT_YAML_BLOCK_SCAN_PAUSE
 }
 
 /**
