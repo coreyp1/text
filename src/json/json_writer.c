@@ -20,21 +20,10 @@
 
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
+#include "../text_number_internal.h"
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_dom.h>
 #include <ghoti.io/text/json/json_writer.h>
-
-// Locale support for locale-independent formatting
-#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
-#include <locale.h>
-#define HAVE_USELOCALE 1
-#elif defined(__APPLE__) || defined(__FreeBSD__)
-#include <xlocale.h>
-#define HAVE_USELOCALE 1
-#else
-#include <locale.h>
-#define HAVE_USELOCALE 0
-#endif
 
 // Internal write callback for growable buffer sink
 static int buffer_write_fn(void * user, const char * bytes, size_t len) {
@@ -433,75 +422,6 @@ static int write_indent(
   return 0;
 }
 
-// Locale-independent number formatting helpers
-#if HAVE_USELOCALE
-// Use uselocale for thread-safe locale switching (POSIX)
-static int format_number_locale_independent(
-    char * buf, size_t buf_size, const char * format, ...) {
-  // Null pointer and size checks
-  if (!buf || !format || buf_size == 0) {
-    return -1;
-  }
-
-  locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", NULL);
-  if (!c_locale) {
-    return -1;
-  }
-  locale_t old_locale = uselocale(c_locale);
-
-  va_list args;
-  va_start(args, format);
-  int result = vsnprintf(buf, buf_size, format, args);
-  va_end(args);
-
-  uselocale(old_locale);
-  freelocale(c_locale);
-
-  return result;
-}
-#else
-// Fallback: use setlocale (not thread-safe, but more portable)
-static int format_number_locale_independent(
-    char * buf, size_t buf_size, const char * format, ...) {
-  // Null pointer and size checks
-  if (!buf || !format || buf_size == 0) {
-    return -1;
-  }
-
-  char * old_locale = setlocale(LC_NUMERIC, NULL);
-  char * saved_locale = NULL;
-  if (old_locale) {
-    size_t len = strlen(old_locale);
-    // Check for integer overflow: len + 1
-    if (len == SIZE_MAX) {
-      return -1; // Cannot allocate (string too long)
-    }
-    saved_locale = (char *)malloc(len + 1);
-    if (!saved_locale) {
-      return -1;
-    }
-    memcpy(saved_locale, old_locale, len + 1);
-  }
-
-  setlocale(LC_NUMERIC, "C");
-
-  va_list args;
-  va_start(args, format);
-  int result = vsnprintf(buf, buf_size, format, args);
-  va_end(args);
-
-  if (saved_locale) {
-    setlocale(LC_NUMERIC, saved_locale);
-    free(saved_locale);
-  }
-  else {
-    setlocale(LC_NUMERIC, "C"); // Keep C locale if we couldn't save
-  }
-
-  return result;
-}
-#endif
-
 // Format a double according to the specified strategy
 static int format_double(char * buf, size_t buf_size, double d,
     GTEXT_JSON_Float_Format format, int precision) {
@@ -515,7 +435,7 @@ static int format_double(char * buf, size_t buf_size, double d,
   switch (format) {
   case GTEXT_JSON_FLOAT_SHORTEST:
     fmt_str = "%.17g";
-    return format_number_locale_independent(buf, buf_size, fmt_str, d);
+    return gtext_number_format(buf, buf_size, fmt_str, d);
 
   case GTEXT_JSON_FLOAT_FIXED:
     // Clamp precision to reasonable range
@@ -524,7 +444,7 @@ static int format_double(char * buf, size_t buf_size, double d,
     if (precision > 20)
       precision = 20;
     fmt_str = "%.*f";
-    return format_number_locale_independent(
+    return gtext_number_format(
         buf, buf_size, fmt_str, precision, d);
 
   case GTEXT_JSON_FLOAT_SCIENTIFIC:
@@ -534,13 +454,13 @@ static int format_double(char * buf, size_t buf_size, double d,
     if (precision > 20)
       precision = 20;
     fmt_str = "%.*e";
-    return format_number_locale_independent(
+    return gtext_number_format(
         buf, buf_size, fmt_str, precision, d);
 
   default:
     // Fallback to shortest
     fmt_str = "%.17g";
-    return format_number_locale_independent(buf, buf_size, fmt_str, d);
+    return gtext_number_format(buf, buf_size, fmt_str, d);
   }
 }
 
@@ -583,7 +503,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Try int64 first (if available and fits)
   if (v->as.number.has_i64) {
     int64_t i64 = v->as.number.i64;
-    int len = format_number_locale_independent(
+    int len = gtext_number_format(
         num_buf, sizeof(num_buf), "%lld", (long long)i64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
@@ -593,7 +513,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Try uint64 next
   if (v->as.number.has_u64) {
     uint64_t u64 = v->as.number.u64;
-    int len = format_number_locale_independent(
+    int len = gtext_number_format(
         num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
@@ -1565,7 +1485,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_i64(
   // Format number (locale-independent)
   char num_buf[64];
   int len =
-      format_number_locale_independent(num_buf, sizeof(num_buf), "%lld", x);
+      gtext_number_format(num_buf, sizeof(num_buf), "%lld", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return GTEXT_JSON_E_WRITE;
@@ -1618,7 +1538,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_u64(
   // Format number (locale-independent)
   char num_buf[64];
   int len =
-      format_number_locale_independent(num_buf, sizeof(num_buf), "%llu", x);
+      gtext_number_format(num_buf, sizeof(num_buf), "%llu", x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return GTEXT_JSON_E_WRITE;

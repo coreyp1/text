@@ -15,7 +15,6 @@
  */
 
 #include <inttypes.h>
-#include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,28 +26,11 @@
 #include <ghoti.io/text/yaml/yaml_stream.h>
 
 #include "yaml_internal.h"
+#include "../text_number_internal.h"
 
 /* A coerced key's name never needs more than this: the longest is a double in
    exponential form with seventeen significant digits. */
 #define GTEXT_YAML_KEY_NAME_MAX 40
-
-/**
- * @brief Put the decimal point back after a locale has moved it.
- *
- * printf writes LC_NUMERIC's decimal separator, which in a good many locales
- * is a comma. A JSON name has to read the same wherever the program runs.
- */
-static void key_name_use_c_decimal_point(char *buf) {
-	const struct lconv *lc = localeconv();
-	const char *dp = lc ? lc->decimal_point : NULL;
-	if (!dp || !dp[0] || (dp[0] == '.' && dp[1] == '\0')) return;
-
-	char *at = strstr(buf, dp);
-	if (!at) return;
-	const size_t dlen = strlen(dp);
-	*at = '.';
-	memmove(at + 1, at + dlen, strlen(at + dlen) + 1);
-}
 
 /**
  * @brief The JSON name a non-string mapping key coerces to.
@@ -95,7 +77,7 @@ static GTEXT_YAML_Status coerce_key_name(
 	case GTEXT_YAML_INT: {
 		int64_t v = 0;
 		if (!gtext_yaml_node_as_int(key, &v)) break;
-		if (snprintf(buf, buf_size, "%" PRId64, v) < 0) break;
+		if (gtext_number_format(buf, buf_size, "%" PRId64, v) < 0) break;
 		*out = buf;
 		return GTEXT_YAML_OK;
 	}
@@ -113,17 +95,15 @@ static GTEXT_YAML_Status coerce_key_name(
 		}
 		/* The shortest spelling that reads back as the same double, so that
 		   0.1 is "0.1" rather than "0.10000000000000001" and equal values
-		   still give equal names. snprintf and strtod share LC_NUMERIC, so
-		   the comparison holds in any locale and the separator is put right
-		   afterwards, once nothing has to parse the buffer again. */
+		   still give equal names. Both halves are done in the C locale, so
+		   the name carries a "." wherever this runs. */
 		int n = -1;
 		for (int prec = 15; prec <= 17; prec++) {
-			n = snprintf(buf, buf_size, "%.*g", prec, d);
+			n = gtext_number_format(buf, buf_size, "%.*g", prec, d);
 			if (n < 0 || (size_t)n >= buf_size) break;
-			if (strtod(buf, NULL) == d) break;
+			if (gtext_number_strtod(buf, NULL) == d) break;
 		}
 		if (n < 0 || (size_t)n >= buf_size) break;
-		key_name_use_c_decimal_point(buf);
 		/* "1e+20" is already unmistakably a float; "1" is not. */
 		if (!strpbrk(buf, ".eE")) {
 			const size_t len = strlen(buf);

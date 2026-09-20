@@ -16,6 +16,7 @@
 #include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
+#include "../text_number_internal.h"
 
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/json/json_dom.h>
@@ -503,7 +504,10 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_double(double x) {
   // Use %g for compact representation, but %f might be better for round-trip
   // For now, use %g and let the user specify precision if needed
   char lexeme_buf[64]; // Enough for any double
-  int snprintf_result = snprintf(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
+  /* Not snprintf: it writes LC_NUMERIC's separator, and a lexeme of "0,1"
+     is not a JSON number at all. */
+  int snprintf_result =
+      gtext_number_format(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
   if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
     json_context_free(ctx);
     return NULL;

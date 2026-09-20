@@ -17,6 +17,7 @@
 #include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include "json_internal.h"
+#include "../text_number_internal.h"
 
 #include <ghoti.io/text/json/json_core.h>
 // Check if a character is a digit
@@ -342,7 +343,10 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
 
     char * endptr;
     errno = 0;
-    double dbl_val = strtod(strtod_input, &endptr);
+    /* Not strtod: where LC_NUMERIC's separator is a comma it stops at the
+       "." and the "entire string consumed" test below then leaves the
+       number with no double value at all. */
+    double dbl_val = gtext_number_strtod(strtod_input, &endptr);
 
     // Check if entire string was consumed
     if (endptr == strtod_input + input_len && errno == 0) {

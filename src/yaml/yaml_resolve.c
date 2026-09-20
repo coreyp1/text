@@ -10,6 +10,7 @@
 
 #include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
+#include "../text_number_internal.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -813,7 +814,10 @@ static bool parse_float_value(
 
 	errno = 0;
 	char *end = NULL;
-	double parsed = strtod(clean, &end);
+	/* Not strtod: it reads LC_NUMERIC, and where the separator is a comma it
+	   stops at the "." in "0.1", leaves *end pointing at it, and the test
+	   below then calls a perfectly good float a string. */
+	double parsed = gtext_number_strtod(clean, &end);
 	if (errno == ERANGE || end == clean || (end && *end != '\0')) {
 		free(clean);
 		return false;
