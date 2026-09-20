@@ -3296,6 +3296,30 @@ static GTEXT_YAML_Status parse_callback(
 				}
 					
 				case ',':
+					/* A "," belongs to a flow collection and nowhere else:
+					 * c-flow-sequence and c-flow-mapping are the only
+					 * productions that hold one, and ns-plain-first excludes
+					 * c-indicator, so a plain scalar cannot begin with one
+					 * either (7.4, 7.3.3).  Outside "[" or "{" it was simply
+					 * ignored, which is how "- !!str, xxx" came back as the
+					 * one-entry sequence ["xxx"]: the tag name stops at the
+					 * "," correctly, and then the "," itself vanished
+					 * (suite case U99R).
+					 *
+					 * A "," inside a plain scalar is a different thing and
+					 * does not reach here - ns-plain-char allows it in block
+					 * context, so "a,b" is one scalar. */
+					if (p->stack.depth == 0
+						|| p->stack.is_block[p->stack.depth - 1]) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"',' outside a flow collection";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					/* A separator separates two entries, so there has to be
 					 * one in front of it. An empty entry was being dropped
 					 * silently, so "[ , a, b, c ]" and "[ a, b, c, , ]" both
