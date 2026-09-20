@@ -228,13 +228,15 @@ value or by refusal. For calibration, the same harness scores **js-yaml at
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. Seventy cases have been fixed since, in three batches:
+had suggested. Eighty-two cases have been fixed since, in four batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
 beside a more-indented line in a folded scalar keeps its break, and a
-malformed block header is refused; and the rule that a `:` is a mapping
-indicator only where it ends a key. The largest group still failing is the
+malformed block header is refused; the rule that a `:` is a mapping
+indicator only where it ends a key; and tabs, which were refused wherever
+they appeared in leading white space when only indentation is forbidden to
+them. The largest group still failing is the
 48 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness

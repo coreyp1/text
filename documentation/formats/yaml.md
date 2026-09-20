@@ -582,17 +582,19 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **261
-pass, 71.3%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **273
+pass, 74.6%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. Seventy cases have been fixed since,
-in three batches: quoted-scalar line folding and directives; a group of
-structural refusals - a second top-level node, a root block scalar's
-indentation, a folded scalar's blank lines, and the block scalar header; and
-the rule that a `:` is a mapping indicator only where it ends a key.
+The first run scored 191 of 368, 51.9%. Eighty-two cases have been fixed
+since, in four batches: quoted-scalar line folding and directives; a group
+of structural refusals - a second top-level node, a root block scalar's
+indentation, a folded scalar's blank lines, and the block scalar header; the
+rule that a `:` is a mapping indicator only where it ends a key; and tabs,
+which were refused anywhere in leading white space when only indentation is
+forbidden to them.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
