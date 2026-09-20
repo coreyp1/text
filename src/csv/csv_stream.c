@@ -228,7 +228,13 @@ static bool csv_utf8_sequence_ok(const unsigned char * b, int n) {
     if ((b[0] & 0x07) == 0 && (b[1] & 0x30) == 0) {
       return false; /* overlong */
     }
-    if (b[0] > 0xF4 || (b[0] == 0xF4 && (b[1] & 0xF0) != 0)) {
+    /* After F4 the second byte runs 80..8F and no further: 8F BF BF is
+       U+10FFFF. The test used to be (b[1] & 0xF0) != 0, which is true of
+       every continuation byte, so the whole of plane 16 was refused along
+       with the sequences it meant to catch. csv_validate_utf8() had the
+       same line - the comment above promising the two agree was right, and
+       they agreed on being wrong. */
+    if (b[0] > 0xF4 || (b[0] == 0xF4 && b[1] > 0x8F)) {
       return false; /* beyond U+10FFFF */
     }
   }

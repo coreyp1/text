@@ -232,10 +232,23 @@ csv_utf8_result csv_validate_utf8(const char * input, size_t input_len,
       if ((byte & 0x07) == 0 && (input[offset + 1] & 0x30) == 0) {
         return CSV_UTF8_INVALID; // Overlong encoding
       }
-      // Check for code points > U+10FFFF
+      // Check for code points > U+10FFFF.
+      //
+      // After F4 the second byte runs 80..8F and no further: 8F BF BF is
+      // U+10FFFF, the last code point there is. The test used to be
+      // (b2 & 0xF0) != 0, which is true of every continuation byte - 0x80
+      // included - so it threw out the whole of plane 16 along with the
+      // sequences it meant to catch. A CSV field holding any character from
+      // U+100000 upwards was refused as invalid UTF-8.
+      //
+      // The table parser validates twice - once here, over the whole buffer,
+      // and again through the stream tokenizer - so for the out-of-range
+      // direction each check shadows the other and a mutation to either
+      // survives. The false-refusal direction is not shadowed: both had this
+      // line wrong, and plane 16 needed both of them fixed.
       unsigned char b1 = (unsigned char)input[offset];
       unsigned char b2 = (unsigned char)input[offset + 1];
-      if (b1 == 0xF4 && (b2 & 0xF0) != 0) {
+      if (b1 == 0xF4 && b2 > 0x8F) {
         return CSV_UTF8_INVALID; // > U+10FFFF
       }
       if (b1 > 0xF4) {
