@@ -1067,7 +1067,21 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
        there made a root block scalar demand content indented past column 0,
        so "--- >" over three lines at column 0 collected nothing and the
        three lines came back as three documents' worth of separate nodes. */
-    int parent_indent = (s->node_indent < 0) ? -1 : s->line_indent;
+    /* The indentation indicator counts from the block scalar's parent node,
+       not from the line the header sits on (8.1.1.1).  Those are the same
+       column for "literal: |2" at the root, and are not for
+
+           - aaa: |2
+               xxx
+             bbb: |
+               xxx
+
+       where the line begins at 0 but the mapping holding "aaa" is at 2, so
+       the content is at 4 and "bbb" is a sibling key.  Measuring from the
+       line put the content at 2, which swallowed the rest of the mapping
+       into the scalar (suite case 4WA9).  node_indent is the parent: a ":"
+       sets it to its key's column, a "-" to its own. */
+    int parent_indent = s->node_indent;
     /* The block header carries a chomping indicator and an indentation
        indicator, either one optional and in either order (8.1.1,
        c-b-block-header). This read the sign first and the digits second, so
