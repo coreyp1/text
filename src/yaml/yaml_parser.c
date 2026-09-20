@@ -3532,6 +3532,14 @@ typedef struct {
 	const GTEXT_YAML_Parse_Options *options;
 	GTEXT_YAML_Error *error;
 	bool failed;
+	/* Whether the open document exists only because a directive needed
+	 * somewhere to be recorded. A '%' line has to open a document, but the
+	 * directive is a prologue to the document that follows rather than one of
+	 * its own - without this, "%YAML 1.2" over "--- text" produced a null
+	 * document in front of the real one. A '---' adopts that document and
+	 * clears the flag; if the stream ends with it still set, the directive
+	 * had no document to apply to. */
+	bool current_from_directive;
 } multidoc_state;
 
 /**
@@ -3680,7 +3688,27 @@ static bool multidoc_start_document(multidoc_state *state, const char *input, si
 	state->current_context = ctx;
 	state->current_doc = doc;
 	state->current_parser = parser;
+	state->current_from_directive = false;
 	
+	return true;
+}
+
+/**
+ * @brief Whether the open document is nothing but directives.
+ *
+ * A directive has to be followed by a document (6.8): "%YAML 1.2" on its own
+ * is a prologue with nothing to prologue, and was being accepted as a null
+ * document. The end of the stream can arrive as either DOCUMENT_END or
+ * STREAM_END depending on how the input ends, so both ask.
+ */
+static bool multidoc_bare_directive(multidoc_state *state) {
+	if (!state->current_parser || !state->current_doc) return false;
+	if (!state->current_from_directive) return false;
+	state->failed = true;
+	if (state->error) {
+		state->error->code = GTEXT_YAML_E_INVALID;
+		state->error->message = "Directive with no document to apply to";
+	}
 	return true;
 }
 
@@ -3700,6 +3728,13 @@ static GTEXT_YAML_Status multidoc_callback(
 	
 	/* Handle document boundaries */
 	if (type == GTEXT_YAML_EVENT_DOCUMENT_START) {
+		/* A document opened only to hold a directive is this document, not the
+		 * one before it: adopt it rather than closing it and emitting a null. */
+		if (state->current_parser && state->current_from_directive) {
+			state->current_from_directive = false;
+			return GTEXT_YAML_OK;
+		}
+
 		/* If we already have a document started, finalize it */
 		if (state->current_parser && state->current_parser->document_started) {
 			if (!multidoc_finalize_document(state)) {
@@ -3718,6 +3753,7 @@ static GTEXT_YAML_Status multidoc_callback(
 	}
 	
 	if (type == GTEXT_YAML_EVENT_DOCUMENT_END) {
+		if (multidoc_bare_directive(state)) return GTEXT_YAML_E_INVALID;
 		/* Finalize current document */
 		if (!multidoc_finalize_document(state)) {
 			return GTEXT_YAML_E_OOM;
@@ -3726,6 +3762,7 @@ static GTEXT_YAML_Status multidoc_callback(
 	}
 	
 	if (type == GTEXT_YAML_EVENT_STREAM_END) {
+		if (multidoc_bare_directive(state)) return GTEXT_YAML_E_INVALID;
 		/* Finalize any remaining document */
 		if (state->current_parser) {
 			if (!multidoc_finalize_document(state)) {
@@ -3740,6 +3777,12 @@ static GTEXT_YAML_Status multidoc_callback(
 		if (!multidoc_start_document(state, state->input, state->input_length)) {
 			return GTEXT_YAML_E_OOM;
 		}
+		/* A directive is the only event that reaches here without a document
+		 * boundary ahead of it - comments produce no event and everything
+		 * else is preceded by DOCUMENT_START - so this comparison is never
+		 * false today and a mutation of it survives the suite. It stays
+		 * because the flag has to mean what it is named if that changes. */
+		state->current_from_directive = (type == GTEXT_YAML_EVENT_DIRECTIVE);
 	}
 	
 	/* Pass event to current document's parser */
@@ -3806,7 +3849,10 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 	
 	/* Finalize any remaining document (stream doesn't emit STREAM_END) */
 	if (status == GTEXT_YAML_OK && !state.failed && state.current_parser) {
-		if (!multidoc_finalize_document(&state)) {
+		if (multidoc_bare_directive(&state)) {
+			status = GTEXT_YAML_E_INVALID;
+		}
+		else if (!multidoc_finalize_document(&state)) {
 			status = GTEXT_YAML_E_OOM;
 		}
 	}

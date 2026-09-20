@@ -64,7 +64,12 @@ TEST(YamlLineBreaks, QuotedScalarCrLfNormalized) {
 	ASSERT_NE(root, nullptr);
 	const GTEXT_YAML_Node *value = gtext_yaml_mapping_get(root, "key");
 	ASSERT_NE(value, nullptr);
-	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1\nline2");
+	/* A break inside a quoted scalar folds to a space (6.5, 7.3.1), so the
+	   CRLF normalizes to one break and that break becomes a space. This
+	   expected "line1\nline2" - the break kept verbatim, which is what the
+	   scanner used to do and what the last pass over this file wrongly left
+	   standing as correct. PyYAML and js-yaml both say "line1 line2". */
+	EXPECT_STREQ(gtext_yaml_node_as_string(value), "line1 line2");
 
 	gtext_yaml_free(doc);
 }

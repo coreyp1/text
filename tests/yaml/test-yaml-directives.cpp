@@ -6,9 +6,11 @@
 #include <gtest/gtest.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern "C" {
 #include <ghoti.io/text/yaml/yaml_stream.h>
+#include <ghoti.io/text/yaml.h>
 }
 
 struct DirectiveCapture {
@@ -59,6 +61,76 @@ TEST(YamlDirectives, EmitsYamlAndTagDirectives) {
 	EXPECT_STREQ(cap.names[1], "TAG");
 	EXPECT_STREQ(cap.values[1], "!e!");
 	EXPECT_STREQ(cap.values2[1], "tag:example.com,2026:");
+}
+
+/* A directive belongs to the document that follows it. It has to open a
+   document so the parser has somewhere to record it, and that document was
+   then being closed by the '---' and handed back as a null in front of the
+   real one - so "%YAML 1.2" over "--- text" parsed as two documents, the
+   first empty. Every case in yaml-test-suite that opens with a directive
+   failed on this, 17 of them. */
+TEST(YamlDirectives, ADirectiveDoesNotMakeADocumentOfItsOwn) {
+	struct Case {
+		const char *input;
+		size_t want_docs;
+		const char *want_first;  /* nullptr for a null root */
+	};
+	static const Case kCases[] = {
+		{"%YAML 1.2\n--- text\n", 1, "text"},
+		{"%TAG !e! tag:example.com,2000:app/\n--- !e!foo bar\n", 1, "bar"},
+		{"%YAML 1.2\n---\n", 1, nullptr},
+		{"%YAML 1.2\n--- one\n--- two\n", 2, "one"},
+		/* No directive: two '---' really are two documents. */
+		{"---\n---\n", 2, nullptr},
+		{"--- one\n--- two\n", 2, "one"},
+	};
+
+	for (const Case &c : kCases) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(c.input, strlen(c.input), &count, nullptr, &err);
+		ASSERT_NE(docs, nullptr)
+			<< c.input << ": " << (err.message ? err.message : "?");
+		EXPECT_EQ(count, c.want_docs) << c.input;
+		if (count > 0) {
+			const GTEXT_YAML_Node *root = gtext_yaml_document_root(docs[0]);
+			if (c.want_first) {
+				ASSERT_NE(root, nullptr) << c.input;
+				EXPECT_STREQ(gtext_yaml_node_as_string(root), c.want_first)
+					<< c.input;
+			}
+			else {
+				EXPECT_TRUE(root == nullptr
+					|| gtext_yaml_node_type(root) == GTEXT_YAML_NULL) << c.input;
+			}
+		}
+		for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+		free(docs);
+	}
+}
+
+/* A directive has to be followed by a document (6.8). On its own it was
+   accepted, as a null document. */
+TEST(YamlDirectives, ADirectiveWithNoDocumentIsRefused) {
+	static const char *const kInputs[] = {
+		"%YAML 1.2\n",
+		"%TAG !e! tag:example.com,2000:app/\n",
+		"%FOO bar\n",
+	};
+	for (const char *input : kInputs) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(input, strlen(input), &count, nullptr, &err);
+		EXPECT_EQ(docs, nullptr) << input;
+		if (docs) {
+			for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+			free(docs);
+		}
+	}
 }
 
 int main(int argc, char **argv) {

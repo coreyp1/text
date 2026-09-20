@@ -211,6 +211,43 @@ static GTEXT_YAML_Status scanner_tab_indent_error(
   return GTEXT_YAML_E_INVALID;
 }
 
+/* Count the run of line breaks that a quoted scalar folds away, starting at
+ * s->input.data[s->cursor + *p], and step *p past the white space opening the
+ * line that follows the run.  A quoted scalar's continuation lines are
+ * indented for readability and that indentation is not content (7.3.1,
+ * 7.3.2), so it is skipped here rather than at the call sites.
+ *
+ * Returns false if the input ran out inside the run, with *p left at the end
+ * so the caller can take the usual incomplete-or-unterminated path: the fold
+ * cannot be decided until the line after the breaks has arrived. */
+static bool scan_folded_breaks(
+    const GTEXT_YAML_Scanner *s,
+    size_t *p,
+    size_t *out_breaks)
+{
+  size_t breaks = 0;
+  for (;;) {
+    if (s->cursor + *p >= s->input.len) { *out_breaks = breaks; return false; }
+    int bc = (unsigned char)s->input.data[s->cursor + *p];
+    if (bc == '\r') {
+      (*p)++;
+      if (s->cursor + *p < s->input.len && s->input.data[s->cursor + *p] == '\n') {
+        (*p)++;
+      }
+    }
+    else if (bc == '\n') { (*p)++; }
+    else break;
+    breaks++;
+    while (s->cursor + *p < s->input.len
+        && (s->input.data[s->cursor + *p] == ' '
+         || s->input.data[s->cursor + *p] == '\t')) {
+      (*p)++;
+    }
+  }
+  *out_breaks = breaks;
+  return true;
+}
+
 /* convert ASCII hex character to value, or -1 if invalid */
 static int hexval(int c)
 {
@@ -1178,6 +1215,20 @@ block_scalar_collected:
     if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
 
     size_t look = 1; /* we will peek starting after the opening quote */
+    /* Where the run of literal white space now at the end of `scalar` began.
+     * Flow folding drops the white space that precedes a line break, but only
+     * the white space that was written literally: a `\t` escape is content
+     * and survives a break, so escapes reset this to the end of the buffer
+     * rather than extending the run. */
+    size_t ws_start = 0;
+    /* Set when the scanner has looked past the end of what has been fed and
+     * still cannot tell where the scalar ends.  `look` alone cannot say so:
+     * it is still pointing at the byte that needed a successor - a backslash
+     * whose escape is cut off, or a break whose following line has not
+     * arrived - and the end-of-buffer checks below would read that byte as
+     * the closing quote and consume past it.  There is no rewind once
+     * scanner_consume() has run, so the bytes would be gone. */
+    bool want_more = false;
     for (;;) {
       int nc;
       if (s->cursor + look >= s->input.len) {
@@ -1187,53 +1238,61 @@ block_scalar_collected:
       }
       if (nc == -1) break;
 
+      if (nc == '\n' || nc == '\r') {
+        /* Flow folding, for both quote styles (6.5, 7.3.1, 7.3.2): the white
+         * space before the break is not content, one break folds to a space,
+         * and a run of n breaks folds to n-1 line feeds. */
+        size_t breaks = 0;
+        size_t p = look;
+        scalar.len = ws_start;
+        if (!scan_folded_breaks(s, &p, &breaks)) { want_more = true; break; }
+        if (breaks == 1) {
+          char sp = ' ';
+          if (!gtext_yaml_dynbuf_append(&scalar, &sp, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+        }
+        else {
+          char lf = '\n';
+          for (size_t i = 1; i < breaks; ++i) {
+            if (!gtext_yaml_dynbuf_append(&scalar, &lf, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+          }
+        }
+        ws_start = scalar.len;
+        look = p;
+        continue;
+      }
+
       if (quote == '\'') {
         /* single-quoted: two single-quotes -> one quote, otherwise end */
         if (nc == '\'') {
           /* check next char to see if it's an escaped single-quote */
           if (s->cursor + look + 1 >= s->input.len) {
-            /* need one more byte to decide */
+            /* A second quote would make this an escaped one, so the decision
+             * needs the next byte - unless there is no next byte to come, in
+             * which case this quote closes the scalar. */
+            if (!s->finished) want_more = true;
             break;
           }
           int nextc = (unsigned char)s->input.data[s->cursor + look + 1];
           if (nextc == '\'') {
             char ch = '\'';
             if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            ws_start = scalar.len;
             look += 2;
             continue;
           }
           /* otherwise a lone quote marks end of scalar */
           break;
         }
-        if (nc == '\r') {
-          char ch = '\n';
-          if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-          if (s->cursor + look + 1 < s->input.len && s->input.data[s->cursor + look + 1] == '\n') {
-            look += 2;
-          } else {
-            look++;
-          }
-          continue;
-        }
         /* normal character inside single-quoted scalar */
         char ch = (char)nc;
         if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+        if (ch != ' ' && ch != '\t') ws_start = scalar.len;
         look++;
         continue;
       }
 
       /* double-quoted handling */
       if (quote == '"') {
-        if (nc == '\r') {
-          char ch = '\n';
-          if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-          if (s->cursor + look + 1 < s->input.len && s->input.data[s->cursor + look + 1] == '\n') {
-            look += 2;
-          } else {
-            look++;
-          }
-          continue;
-        }
         if (nc == '"') {
           /* end of double-quoted scalar */
           break;
@@ -1242,9 +1301,26 @@ block_scalar_collected:
           /* escape sequence; need next char */
           if (s->cursor + look + 1 >= s->input.len) {
             /* incomplete escape */
+            want_more = true;
             break;
           }
           int esc = (unsigned char)s->input.data[s->cursor + look + 1];
+          if (esc == '\n' || esc == '\r') {
+            /* An escaped break (7.3.1 s-double-escaped) is removed rather
+             * than folded to a space, and the white space before the
+             * backslash stays as content - spec example 7.5 keeps the tab
+             * there.  Empty lines after it still fold to line feeds. */
+            size_t breaks = 0;
+            size_t p = look + 1;
+            if (!scan_folded_breaks(s, &p, &breaks)) { want_more = true; break; }
+            char lf = '\n';
+            for (size_t i = 1; i < breaks; ++i) {
+              if (!gtext_yaml_dynbuf_append(&scalar, &lf, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            }
+            ws_start = scalar.len;
+            look = p;
+            continue;
+          }
           if (esc == 'n' || esc == 'r' || esc == 't' || esc == '"' || esc == '\\' ||
               esc == '0' || esc == 'a' || esc == 'b' || esc == 'f' || esc == 'v' || esc == 'e') {
             char outc;
@@ -1263,13 +1339,14 @@ block_scalar_collected:
               default: outc = (char)esc; break;
             }
             if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            ws_start = scalar.len;
             look += 2;
             continue;
           }
           /* hex escape: \xNN (2 hex digits) */
           if (esc == 'x') {
             /* need two hex digits beyond the 'x' */
-            if (s->cursor + look + 3 >= s->input.len) break;
+            if (s->cursor + look + 3 >= s->input.len) { want_more = true; break; }
             int h1 = (unsigned char)s->input.data[s->cursor + look + 2];
             int h2 = (unsigned char)s->input.data[s->cursor + look + 3];
             int v1 = hexval(h1);
@@ -1278,16 +1355,18 @@ block_scalar_collected:
               /* invalid hex -> conservative treat as literal chars */
               char c1 = (char)h1; char c2 = (char)h2;
               if (!gtext_yaml_dynbuf_append(&scalar, &c1, 1) || !gtext_yaml_dynbuf_append(&scalar, &c2, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+              ws_start = scalar.len;
               look += 4; continue;
             }
             char outc = (char)((v1 << 4) | v2);
             if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            ws_start = scalar.len;
             look += 4; continue;
           }
           /* unicode escapes: \uNNNN (4 hex) and \UNNNNNNNN (8 hex) */
           if (esc == 'u' || esc == 'U') {
             int need = (esc == 'u') ? 4 : 8;
-            if (s->cursor + look + 1 + need >= s->input.len) break;
+            if (s->cursor + look + 1 + need >= s->input.len) { want_more = true; break; }
             unsigned int code = 0;
             for (int i = 0; i < need; ++i) {
               int h = (unsigned char)s->input.data[s->cursor + look + 2 + i];
@@ -1302,31 +1381,35 @@ block_scalar_collected:
             else if (code <= 0xFFFF) { utf8buf[0] = (char)(0xE0 | ((code >> 12) & 0x0F)); utf8buf[1] = (char)(0x80 | ((code >> 6) & 0x3F)); utf8buf[2] = (char)(0x80 | (code & 0x3F)); utf8len = 3; }
             else { utf8buf[0] = (char)(0xF0 | ((code >> 18) & 0x07)); utf8buf[1] = (char)(0x80 | ((code >> 12) & 0x3F)); utf8buf[2] = (char)(0x80 | ((code >> 6) & 0x3F)); utf8buf[3] = (char)(0x80 | (code & 0x3F)); utf8len = 4; }
             if (!gtext_yaml_dynbuf_append(&scalar, utf8buf, utf8len)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            ws_start = scalar.len;
             look += 2 + need; continue;
           }
           /* Unknown escape form: conservatively copy escaped char verbatim */
           char outc = (char)esc;
           if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+          ws_start = scalar.len;
           look += 2;
           continue;
         }
         /* normal character inside double-quoted scalar */
         char ch = (char)nc;
         if (!gtext_yaml_dynbuf_append(&scalar, &ch, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+        if (ch != ' ' && ch != '\t') ws_start = scalar.len;
         look++;
         continue;
       }
     }
 
     /* If we reached end of buffer and haven't seen the closing quote, it's incomplete */
-    if ((s->cursor + look) >= s->input.len && !s->finished) {
+    const bool quote_at_end = want_more || (s->cursor + look) >= s->input.len;
+    if (quote_at_end && !s->finished) {
       gtext_yaml_dynbuf_free(&scalar);
       return GTEXT_YAML_E_INCOMPLETE;
     }
 
     /* At this point, s->cursor+look points at either closing-quote or EOF. If EOF and finished==1,
        then we consider it an error (unterminated quote). */
-    if (s->cursor + look >= s->input.len) {
+    if (quote_at_end) {
       gtext_yaml_dynbuf_free(&scalar);
       if (err) { err->code = GTEXT_YAML_E_INVALID; err->message = "unterminated quoted scalar"; err->offset = off; err->line = line; err->col = col; }
       return GTEXT_YAML_E_INVALID;

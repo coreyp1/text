@@ -29,16 +29,20 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** quoted scalars do not fold line breaks, so a
-double- or single-quoted scalar written across lines keeps the break and the
-following indentation. Plain and block scalars fold correctly.
+**Still unsupported:** 57 documents that yaml-test-suite says should be
+refused are accepted instead. That is the largest remaining group and it is
+not one defect - a bare scalar at the end of a block mapping becomes a key
+with a null value, an unknown escape is copied through, and a flow sequence
+accepts a leading comma.
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **51.9%** of the 368 cases that can be checked by value or
+parser. It passes **65.5%** of the 368 cases that can be checked by value or
 by refusal; the same harness scores js-yaml at 81.7% and PyYAML at 77.1%.
-Conformance to 1.2.2 is therefore partial and roughly thirty points behind
-either reference. There are no benchmarks.
+Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
+fifty cases since came from two fixes, quoted-scalar line folding and a `%`
+directive no longer leaving an empty document in front of the real one.
+There are no benchmarks.
 
 **Verified:** the suite runs 1305 tests across 73 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
@@ -830,12 +834,11 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **51.9%** of the
+The parser targets YAML 1.2.2 and hits **65.5%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
 harness scores js-yaml at 81.7% and PyYAML at 77.1%, so neither reference
-reaches 100% on this suite and this parser is about thirty points behind
-both.
+reaches 100% on this suite.
 
 That number arrived late and corrected an impression. Fifteen defects had
 been found and fixed by hand-comparison against PyYAML and js-yaml, and a

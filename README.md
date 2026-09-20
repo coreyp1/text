@@ -179,6 +179,15 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
+Three more came out of running yaml-test-suite. Quoted scalars now fold
+their line breaks, which plain and block scalars already did - a wrapped
+`"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
+longer stands as a document of its own, and on its own with no document to
+apply to it is now refused. And a quoted scalar whose escape or line break
+straddled a feed boundary lost bytes, because the scanner took the byte it
+was still deciding about for the closing quote; that one was found by a test
+that feeds the input one byte at a time, not by the suite.
+
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
 implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
@@ -195,14 +204,18 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **51.9%** of the 368 cases that can be checked by
+this parser against it: **65.5%** of the 368 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 81.7%** and **PyYAML at 77.1%** - so a mature implementation does not score
-100% here either, but this one is roughly thirty points behind both. The
-remaining 38 cases assert an event stream the harness does not emit.
+100% here either. The remaining 38 cases assert an event stream the harness
+does not emit.
 
-That is the honest measure of this module, and it is a long way from the
-99% the hand-built corpus suggested.
+The first run scored 51.9%, a long way from the 99% the hand-built corpus
+had suggested. Two fixes account for the fifty cases since: quoted scalars
+now fold their line breaks the way plain and block scalars already did, and
+a `%` directive no longer leaves an empty document in front of the real one.
+The largest group still failing is the 57 documents that should be refused
+and are not.
 
 ## Macros and Utilities
 
