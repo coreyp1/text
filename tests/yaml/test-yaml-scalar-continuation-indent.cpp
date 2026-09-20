@@ -65,6 +65,23 @@ const Case kCases[] = {
 	{"k: \"a\n\n  b\"\n", "{\"k\": \"a\\nb\"}"},
 	{"k: \"a\n\nb\"\n", nullptr},
 
+	/* Indentation is spaces, never tabs (6.1). A tab on a continuation line
+	   is separation, so it ends the indentation rather than counting toward
+	   it: a leading tab leaves the line at column 0. A space first, then a
+	   tab, is one column of indentation and then separation. Both references
+	   accept every one of these; the suite has the first as an error
+	   (DK95/1). */
+	{"foo: \"bar\n\tbaz\"\n", nullptr},
+	{"foo: \"bar\n\t baz\"\n", nullptr},
+	{"foo: \"bar\n \tbaz\"\n", "{\"foo\": \"bar baz\"}"},
+	{"foo: \"bar\n  \tbaz\"\n", "{\"foo\": \"bar baz\"}"},
+	/* At the root there is nothing to clear, so even column 0 is enough. */
+	{"\"bar\n\tbaz\"\n", "\"bar baz\""},
+	/* The tab ends the indentation for good: spaces after it are separation
+	   too, so this line is indented one column and not three. Under a key at
+	   column 2 that is not enough. */
+	{"k:\n  j: \"a\n \t  b\"\n", nullptr},
+
 	/* An escaped break folds through the same code. */
 	{"k: \"a\\\n  b\"\n", "{\"k\": \"ab\"}"},
 	{"k: \"a\\\nb\"\n", nullptr},

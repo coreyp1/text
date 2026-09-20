@@ -322,12 +322,20 @@ static fold_result scan_folded_breaks(
       *out_breaks = breaks;
       return FOLD_FORBIDDEN;
     }
+    /* Indentation is spaces, never tabs (6.1).  A tab on a continuation
+       line is separation, so it ends the indentation rather than adding to
+       it: "bar" over a tab and "baz" leaves the second line at column 0,
+       which is not indented past the mapping (suite case DK95/1). */
     indent = 0;
+    while (s->cursor + *p < s->input.len
+        && s->input.data[s->cursor + *p] == ' ') {
+      (*p)++;
+      indent++;
+    }
     while (s->cursor + *p < s->input.len
         && (s->input.data[s->cursor + *p] == ' '
          || s->input.data[s->cursor + *p] == '\t')) {
       (*p)++;
-      indent++;
     }
   }
   /* The loop leaves *p on the first content of the last continuation line,
