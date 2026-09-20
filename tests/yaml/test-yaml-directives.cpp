@@ -133,6 +133,53 @@ TEST(YamlDirectives, ADirectiveWithNoDocumentIsRefused) {
 	}
 }
 
+/* A directive belongs to the prologue of a document: it may only follow the
+   start of the stream or a "..." that closed the one before (9.2). One
+   arriving after content was simply being applied to the document already
+   underway, so "--- a" over "%YAML 1.2" over "--- b" gave the first document
+   the scalar "a %YAML 1.2" - the directive line folded into the plain scalar
+   and then set the version of the document it was not part of. */
+TEST(YamlDirectives, ADirectiveAfterContentIsRefused) {
+	static const char *const kRefused[] = {
+		"---\nkey: value\n%YAML 1.2\n---\n",
+		"--- a\n%YAML 1.2\n--- b\n",
+		"a: 1\n%TAG !e! tag:example.com,2000:\n---\n",
+		"%YAML 1.2 foo\n---\n",           /* one parameter only (6.8.1) */
+		"%YAML 1.2\n%YAML 1.2\n---\n",    /* and one directive per document */
+	};
+	for (const char *input : kRefused) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(input, strlen(input), &count, nullptr, &err);
+		EXPECT_EQ(docs, nullptr) << input;
+		if (docs) {
+			for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+			free(docs);
+		}
+	}
+}
+
+/* With the "..." in place the same directive is fine, and each document gets
+   its own. */
+TEST(YamlDirectives, ADirectiveAfterADocumentEndIsFine) {
+	const char *input = "--- a\n...\n%YAML 1.2\n--- b\n";
+	size_t count = 0;
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document **docs =
+		gtext_yaml_parse_all(input, strlen(input), &count, nullptr, &err);
+	ASSERT_NE(docs, nullptr) << (err.message ? err.message : "?");
+	EXPECT_EQ(count, 2u);
+	if (count == 2) {
+		EXPECT_STREQ(gtext_yaml_node_as_string(gtext_yaml_document_root(docs[0])), "a");
+		EXPECT_STREQ(gtext_yaml_node_as_string(gtext_yaml_document_root(docs[1])), "b");
+	}
+	for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+	free(docs);
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

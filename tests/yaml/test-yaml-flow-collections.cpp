@@ -141,6 +141,29 @@ TEST(YamlFlowCollections, MultiLineLayoutIsUnaffected) {
 	EXPECT_EQ(Render("- [\n1,\n2\n]\n"), std::string("[[1, 2]]"));
 }
 
+/* A separator separates two entries, so there has to be one in front of it.
+   An empty entry was dropped silently, so "[ , a, b, c ]" and
+   "[ a, b, c, , ]" both parsed as the three-entry sequence - the suite has
+   both as errors. A flow mapping's key with no value yet still counts as an
+   entry, because "{a, b}" is two keys. */
+TEST(YamlFlowCollections, RefusesAnEmptyEntryBeforeAComma) {
+	EXPECT_EQ(Render("[ , a, b, c ]\n"), std::string(""));
+	EXPECT_EQ(Render("[ a, b, c, , ]\n"), std::string(""));
+	EXPECT_EQ(Render("[a,,b]\n"), std::string(""));
+	EXPECT_EQ(Render("{ , a: 1}\n"), std::string(""));
+	EXPECT_EQ(Render("{a: 1, , b: 2}\n"), std::string(""));
+
+	/* A trailing comma before the bracket is allowed, and a key with no
+	   value is an entry. */
+	EXPECT_EQ(Render("[a, b,]\n"), std::string("[\"a\", \"b\"]"));
+	EXPECT_EQ(Render("{a: 1,}\n"), std::string("{\"a\": 1}"));
+	EXPECT_EQ(Render("{a, b}\n"), std::string("{\"a\": null, \"b\": null}"));
+	EXPECT_EQ(Render("{a: 1, b}\n"), std::string("{\"a\": 1, \"b\": null}"));
+	EXPECT_EQ(Render("[a: 1, b: 2]\n"),
+		std::string("[{\"a\": 1}, {\"b\": 2}]"));
+	EXPECT_EQ(Render("[[1,2],[3,4]]\n"), std::string("[[1, 2], [3, 4]]"));
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

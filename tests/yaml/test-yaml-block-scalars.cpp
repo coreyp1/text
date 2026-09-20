@@ -236,6 +236,34 @@ TEST(YamlBlockScalars, ABlankLineBesideAMoreIndentedLineKeepsItsBreak) {
 		std::string("foo \n\n\t bar\n\nbaz\n"));
 }
 
+/* 8.1.1.1: "It is an error for any of the leading empty lines to contain
+   more spaces than the first non-empty line." Without the rule there is no
+   telling which indentation the block meant, and a leading run of wider
+   blank lines was being taken as content - suite case S98Z, where a folded
+   scalar over three blank lines and a comment came back holding all four. */
+TEST(YamlBlockScalars, RefusesALeadingEmptyLineIndentedPastTheBlock) {
+	static const char *const kRefused[] = {
+		"a: >\n \n  \n   \n # c\n",
+		"a: |\n    \n  x\n",
+	};
+	for (const char *input : kRefused) {
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(input, strlen(input), nullptr, &err);
+		EXPECT_EQ(doc, nullptr) << input;
+		gtext_yaml_free(doc);
+	}
+
+	/* A leading empty line no wider than the block is ordinary, and stands
+	   for one break. */
+	EXPECT_EQ(ScalarAt("a: |\n\n  x\n", "a"), std::string("\nx\n"));
+	EXPECT_EQ(ScalarAt("a: |\n \n  x\n", "a"), std::string("\nx\n"));
+	EXPECT_EQ(ScalarAt("a: |\n  \n  x\n", "a"), std::string("\nx\n"));
+	/* And a blank line in the middle is not a leading one. */
+	EXPECT_EQ(ScalarAt("a: |\n  x\n\n  y\n", "a"), std::string("x\n\ny\n"));
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

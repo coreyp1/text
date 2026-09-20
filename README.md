@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Twenty-seven more came out of running yaml-test-suite. Quoted scalars now fold
+Thirty-two more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -245,6 +245,17 @@ carries the non-specific tag, which for a scalar is `tag:yaml.org,2002:str`
 - that is what quoting is for - and the style was not being consulted at
 all, so `a: "12"` came back as the integer 12 and `a: "null"` as null.
 
+The last group is about lists that are closed and were being treated as
+open. The escapes a double-quoted scalar may carry are exactly those in
+§5.7, so `"\."` is malformed rather than a literal `.`; four escapes that
+are on that list were missing at the same time. A separator separates two
+entries, so `[ , a, b ]` and `[ a, b, , ]` are not the sequences they were
+being read as. A directive belongs to a document's prologue and may only
+follow the start of the stream or a `...`, so `--- a` over `%YAML 1.2` is
+an error rather than the scalar `a %YAML 1.2` - and `%YAML` takes one
+parameter, once. A block scalar's leading empty lines may not be indented
+past its first content line.
+
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
 implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
@@ -261,15 +272,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **85.2%** of the 366 cases that can be checked by
+this parser against it: **88.3%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and twenty-one cases have been fixed since, in
-seven batches:
+had suggested. A hundred and thirty-two cases have been fixed since, in
+eight batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -284,7 +295,10 @@ where nothing plain-safe follows them, as `:` already was; and a group
 around documents and anchors - a lone `...` no longer invents a document,
 a stream may hold none at all, an anchor may be redefined, and an alias may
 stand where a key does; and the tag property in its three spellings, along
-with the rule that only a plain scalar is resolved by its contents. The largest group still failing is the
+with the rule that only a plain scalar is resolved by its contents; and a
+group of closed lists - the escapes a double-quoted scalar may carry, the
+entries a flow collection may leave empty, and where a directive may
+stand. The largest group still failing is the
 36 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness

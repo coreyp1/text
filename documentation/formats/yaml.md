@@ -582,14 +582,14 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **312
-pass, 85.2%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **323
+pass, 88.3%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. A hundred and twenty-one cases have
-been fixed since, in seven batches: quoted-scalar line folding and directives; a
+The first run scored 191 of 368, 51.9%. A hundred and thirty-two cases have
+been fixed since, in eight batches: quoted-scalar line folding and directives; a
 group of structural refusals - a second top-level node, a root block
 scalar's indentation, a folded scalar's blank lines, and the block scalar
 header; the rule that `:`, `-` and `?` are indicators only where nothing
@@ -601,7 +601,9 @@ on its line; and a group around documents and anchors - a lone `...` no
 longer invents a document, a stream may hold none at all, an anchor may be
 redefined, and an alias may stand where a key does; and the tag property in
 its three spellings, with the rule that only a plain scalar is resolved by
-its contents.
+its contents; and a group of closed lists - the escapes a double-quoted
+scalar may carry, the entries a flow collection may leave empty, and where
+a directive may stand.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
@@ -611,12 +613,11 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **35 documents that should be refused are accepted.** Still the largest
-  group, and still not one defect: an unknown escape such as `"\\."` is
-  copied through instead of refused, a flow sequence accepts a leading or
-  doubled comma, content after a document-end marker is ignored, and a
-  document that ends without a footer before the next directive is
-  allowed.
+- **22 documents that should be refused are accepted.** Still the largest
+  group, and still not one defect: content after a document-end marker is
+  ignored, an anchor with no node to attach to is allowed, a flow
+  collection may be indented anywhere, and a tag handle defined in one
+  document is still in scope in the next.
 - **An empty node is dropped rather than made null**, so `-` on its own is
   `[]` where it should be `[null]`.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which

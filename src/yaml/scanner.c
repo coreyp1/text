@@ -197,6 +197,10 @@ static bool plain_scalar_continues(
     if (nc == '\n' || nc == '\r') { probe += ws; continue; } /* empty line */
     if ((int)sp <= s->node_indent) return false;  /* dedent ends the scalar */
     if (nc == '#') return false;                  /* a comment, not content */
+    /* A "%" opens a directive line and can never begin a plain character
+       (ns-plain-first excludes it), so a scalar does not fold onto one.
+       "--- a" over "%YAML 1.2" was giving the scalar "a %YAML 1.2". */
+    if (nc == '%') return false;
     if (flow && (nc == ',' || nc == '[' || nc == ']' || nc == '{' || nc == '}')) {
       return false; /* the collection's own punctuation, not more scalar */
     }
@@ -1035,12 +1039,14 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     } else {
       size_t scan = s->cursor;
       bool detected = false;
+      size_t widest_empty = 0;
       while (scan < s->input.len) {
         size_t sp = scan;
         while (sp < s->input.len && s->input.data[sp] == ' ') sp++;
         if (sp >= s->input.len) break;
         char pc = s->input.data[sp];
         if (pc == '\n' || pc == '\r') { /* empty line: carries no indentation */
+          if (sp - scan > widest_empty) widest_empty = sp - scan;
           scan = sp + 1;
           if (pc == '\r' && scan < s->input.len && s->input.data[scan] == '\n') scan++;
           continue;
@@ -1048,6 +1054,21 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         block_indent = sp - scan;
         detected = true;
         break;
+      }
+      /* 8.1.1.1: "It is an error for any of the leading empty lines to
+         contain more spaces than the first non-empty line." Without the
+         rule there is no telling which indentation the block meant, and a
+         leading run of wider blank lines was being taken as content. */
+      if (detected && widest_empty > block_indent) {
+        if (err) {
+          err->code = GTEXT_YAML_E_INVALID;
+          err->message = "Leading empty line indented past the block scalar";
+          err->offset = off;
+          err->line = line;
+          err->col = col;
+        }
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_INVALID;
       }
       if (!detected) {
         if (!s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
@@ -1521,14 +1542,18 @@ block_scalar_collected:
             continue;
           }
           if (esc == 'n' || esc == 'r' || esc == 't' || esc == '"' || esc == '\\' ||
-              esc == '0' || esc == 'a' || esc == 'b' || esc == 'f' || esc == 'v' || esc == 'e') {
+              esc == '0' || esc == 'a' || esc == 'b' || esc == 'f' || esc == 'v' ||
+              esc == 'e' || esc == ' ' || esc == '/' || esc == '\t') {
             char outc;
             switch (esc) {
               case 'n': outc = '\n'; break;
               case 'r': outc = '\r'; break;
               case 't': outc = '\t'; break;
+              case '\t': outc = '\t'; break;   /* "\<TAB>" is a tab (5.7) */
               case '"': outc = '"'; break;
               case '\\': outc = '\\'; break;
+              case '/': outc = '/'; break;      /* for JSON compatibility */
+              case ' ': outc = ' '; break;
               case '0': outc = '\0'; break;
               case 'a': outc = '\a'; break;
               case 'b': outc = '\b'; break;
@@ -1562,6 +1587,31 @@ block_scalar_collected:
             ws_start = scalar.len;
             look += 4; continue;
           }
+          /* "\N", "\_", "\L" and "\P" are the named non-ASCII escapes of
+             5.7: next line, non-breaking space, line separator and
+             paragraph separator. */
+          if (esc == 'N' || esc == '_' || esc == 'L' || esc == 'P') {
+            static const unsigned int named[] = { 0x85, 0xA0, 0x2028, 0x2029 };
+            const unsigned int code =
+              named[esc == 'N' ? 0 : esc == '_' ? 1 : esc == 'L' ? 2 : 3];
+            char nbuf[4];
+            int nlen = 0;
+            if (code <= 0x7FF) {
+              nbuf[0] = (char)(0xC0 | ((code >> 6) & 0x1F));
+              nbuf[1] = (char)(0x80 | (code & 0x3F));
+              nlen = 2;
+            }
+            else {
+              nbuf[0] = (char)(0xE0 | ((code >> 12) & 0x0F));
+              nbuf[1] = (char)(0x80 | ((code >> 6) & 0x3F));
+              nbuf[2] = (char)(0x80 | (code & 0x3F));
+              nlen = 3;
+            }
+            if (!gtext_yaml_dynbuf_append(&scalar, nbuf, nlen)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+            ws_start = scalar.len;
+            look += 2;
+            continue;
+          }
           /* unicode escapes: \uNNNN (4 hex) and \UNNNNNNNN (8 hex) */
           if (esc == 'u' || esc == 'U') {
             int need = (esc == 'u') ? 4 : 8;
@@ -1583,12 +1633,19 @@ block_scalar_collected:
             ws_start = scalar.len;
             look += 2 + need; continue;
           }
-          /* Unknown escape form: conservatively copy escaped char verbatim */
-          char outc = (char)esc;
-          if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-          ws_start = scalar.len;
-          look += 2;
-          continue;
+          /* 5.7 lists every escape a double-quoted scalar may carry, and
+             anything else is malformed rather than a literal. This copied
+             the character through, so '"\\."' came back as "." where every
+             other parser refuses it. */
+          if (err) {
+            err->code = GTEXT_YAML_E_BAD_ESCAPE;
+            err->message = "Unknown escape in double-quoted scalar";
+            err->offset = off;
+            err->line = line;
+            err->col = col;
+          }
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_BAD_ESCAPE;
         }
         /* normal character inside double-quoted scalar */
         char ch = (char)nc;

@@ -131,6 +131,7 @@ typedef struct {
 	 * all is not a key, and was being turned into one. Compared by identity
 	 * so a nested collection's key cannot be mistaken for its parent's. */
 	const GTEXT_YAML_Node *claimed_key;
+	bool seen_yaml_directive;           /* One %YAML per document (6.8.1) */
 	bool explicit_key_pending;          /* True if '?' indicator seen and key is pending */
 	bool explicit_key_active;           /* True if explicit key stored and awaiting ':' */
 	int explicit_key_indent;            /* Indent column for explicit key */
@@ -229,6 +230,8 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_line = -1;
 	p->last_scalar_col = -1;
 	p->last_scalar_offset = 0;
+	p->claimed_key = NULL;
+	p->seen_yaml_directive = false;
 	p->last_scalar_key_col = -1;
 	p->last_scalar_node = NULL;
 	p->last_scalar_tag_own_line = false;
@@ -1897,8 +1900,44 @@ static GTEXT_YAML_Status parse_callback(
 				break;
 			}
 
+			/* Directives belong to the prologue of a document: they may only
+			 * follow the start of the stream or a "..." that closed the one
+			 * before (9.2, l-directive-document). One arriving after content
+			 * has no document to prologue, and was simply being applied to
+			 * the document already underway. */
+			if (p->root || p->temp.count > 0 || p->stack.depth > 0) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_INVALID;
+					p->error->message =
+						"Directive after content, with no '...' to close the document";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
+
 			p->doc->has_directives = true;
 			if (strcmp(name, "YAML") == 0) {
+				/* "%YAML" takes exactly one parameter, the version (6.8.1),
+				 * and a document may carry at most one of them. Extra words
+				 * were ignored and a second directive silently replaced the
+				 * first. */
+				if (value2) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "YAML directive takes only a version";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				if (p->seen_yaml_directive) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message = "Repeated YAML directive";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				p->seen_yaml_directive = true;
 				if (!value) {
 					p->failed = true;
 					if (p->error) {
@@ -3076,6 +3115,30 @@ static GTEXT_YAML_Status parse_callback(
 				}
 					
 				case ',':
+					/* A separator separates two entries, so there has to be
+					 * one in front of it. An empty entry was being dropped
+					 * silently, so "[ , a, b, c ]" and "[ a, b, c, , ]" both
+					 * parsed as the three-entry sequence. A flow mapping's
+					 * key with no value yet counts as an entry - "{a, b}" is
+					 * two keys - which an odd child count is what says. */
+					if (p->stack.depth > 0 && !p->stack.is_block[p->stack.depth - 1]) {
+						const size_t sep_top = p->stack.depth - 1;
+						const bool in_flow_map =
+							p->stack.states[sep_top] == STATE_MAPPING_KEY ||
+							p->stack.states[sep_top] == STATE_MAPPING_VALUE;
+						const bool have_entry =
+							(p->stack.flow_flags[sep_top] & GTEXT_YAML_FLOW_ITEM_DONE)
+							|| (in_flow_map && (p->temp.count % 2) == 1);
+						if (!have_entry) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message =
+									"Flow collection entry missing before ','";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+					}
 					/* Item separator - handle mapping state flip */
 					{
 						GTEXT_YAML_Status pair_status = close_flow_pair(p);
