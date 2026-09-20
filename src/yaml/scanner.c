@@ -176,14 +176,25 @@ static bool plain_scalar_continues(
     }
     breaks++;
 
+    /* Indentation is counted in spaces (6.1), and the separation that may
+       follow it can hold tabs as well. Only spaces were being stepped over,
+       so a line of " \t" was not recognised as empty and its tab was taken
+       as the scalar's next character - "foo: 1" over " \t" over "bar: 2"
+       gave foo the string "1 " rather than the number 1. */
     size_t sp = 0;
     while (s->cursor + probe + sp < s->input.len
            && s->input.data[s->cursor + probe + sp] == ' ') {
       sp++;
     }
-    if (s->cursor + probe + sp >= s->input.len) { *out_need_more = true; return false; }
-    char nc = s->input.data[s->cursor + probe + sp];
-    if (nc == '\n' || nc == '\r') { probe += sp; continue; } /* empty line */
+    size_t ws = sp;
+    while (s->cursor + probe + ws < s->input.len
+           && (s->input.data[s->cursor + probe + ws] == ' '
+            || s->input.data[s->cursor + probe + ws] == '\t')) {
+      ws++;
+    }
+    if (s->cursor + probe + ws >= s->input.len) { *out_need_more = true; return false; }
+    char nc = s->input.data[s->cursor + probe + ws];
+    if (nc == '\n' || nc == '\r') { probe += ws; continue; } /* empty line */
     if ((int)sp <= s->node_indent) return false;  /* dedent ends the scalar */
     if (nc == '#') return false;                  /* a comment, not content */
     if (flow && (nc == ',' || nc == '[' || nc == ']' || nc == '{' || nc == '}')) {
@@ -191,10 +202,10 @@ static bool plain_scalar_continues(
     }
     /* "---" and "..." open and close documents wherever they stand, so a
        scalar never folds across one. */
-    if ((nc == '-' || nc == '.') && s->cursor + probe + sp + 2 < s->input.len
-        && s->input.data[s->cursor + probe + sp + 1] == nc
-        && s->input.data[s->cursor + probe + sp + 2] == nc) {
-      const size_t after = s->cursor + probe + sp + 3;
+    if ((nc == '-' || nc == '.') && s->cursor + probe + ws + 2 < s->input.len
+        && s->input.data[s->cursor + probe + ws + 1] == nc
+        && s->input.data[s->cursor + probe + ws + 2] == nc) {
+      const size_t after = s->cursor + probe + ws + 3;
       if (after >= s->input.len || s->input.data[after] == ' '
           || s->input.data[after] == '\t' || s->input.data[after] == '\n'
           || s->input.data[after] == '\r') {
@@ -202,7 +213,7 @@ static bool plain_scalar_continues(
       }
     }
     *out_breaks = breaks;
-    *out_continue_at = probe + sp;
+    *out_continue_at = probe + ws;
     return true;
   }
 }
@@ -257,6 +268,73 @@ static bool scan_folded_breaks(
   }
   *out_breaks = breaks;
   return true;
+}
+
+/**
+ * @brief Whether the tab now at the cursor is standing in for indentation.
+ *
+ * 6.1 counts indentation in spaces alone, and a tab after it is ordinary
+ * separation - "foo:" over " \tbar" is a scalar value reached across one
+ * space of indentation and a tab, which is valid. What a tab may not do is
+ * sit between the indentation and a block collection entry: l+block-mapping
+ * is ( s-indent(n) ns-l-block-map-entry(n) )+ with nothing allowed in
+ * between, so "  \tb: 2" under "  a: 1" is malformed.
+ *
+ * Every tab in leading white space used to be refused, which took six valid
+ * documents in yaml-test-suite with it - a line of nothing but a tab, a tab
+ * before a flow collection at the root, and a tab before a plain value.
+ */
+static bool tab_stands_for_indentation(const GTEXT_YAML_Scanner *s)
+{
+  size_t i = s->cursor;
+  while (i < s->input.len
+      && (s->input.data[i] == ' ' || s->input.data[i] == '\t')) {
+    i++;
+  }
+  if (i >= s->input.len) return false;
+  const char first = s->input.data[i];
+  /* A blank line, or one holding only a comment, indents nothing. */
+  if (first == '\n' || first == '\r' || first == '#') return false;
+
+  if (s->context_depth != 0) {
+    /* Inside a flow collection the continuation lines still need s-indent(n)
+       before their separation, and n is one past the node that owns the
+       collection (s-l+flow-in-block's n+1). Only the first tab of a line
+       reaches here and only when every character before it was a space, so
+       the column counts those spaces. */
+    return (s->col - 1) < s->node_indent + 1;
+  }
+
+  /* A flow collection is a node reached across separation, not an entry. */
+  if (first == '[' || first == '{') return false;
+  /* "-" or "?" followed by white space opens an entry right here. */
+  if (first == '-' || first == '?') {
+    const char next = (i + 1 < s->input.len) ? s->input.data[i + 1] : '\n';
+    if (next == ' ' || next == '\t' || next == '\n' || next == '\r') return true;
+  }
+
+  /* Otherwise this is an entry only if the line carries a ":" that ends a
+     key. Quoted spans are stepped over so a colon inside a scalar value
+     does not count. */
+  for (; i < s->input.len; i++) {
+    const char ch = s->input.data[i];
+    if (ch == '\n' || ch == '\r') break;
+    if (ch == '"' || ch == '\'') {
+      const char quote = ch;
+      for (i++; i < s->input.len; i++) {
+        if (s->input.data[i] == '\n' || s->input.data[i] == '\r') break;
+        if (quote == '"' && s->input.data[i] == '\\') { i++; continue; }
+        if (s->input.data[i] == quote) break;
+      }
+      continue;
+    }
+    if (ch == '#') break;
+    if (ch == ':') {
+      const char next = (i + 1 < s->input.len) ? s->input.data[i + 1] : '\n';
+      if (next == ' ' || next == '\t' || next == '\n' || next == '\r') return true;
+    }
+  }
+  return false;
 }
 
 /* convert ASCII hex character to value, or -1 if invalid */
@@ -683,7 +761,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       s->last_indicator = 0;
       return GTEXT_YAML_OK;
     }
-    if (c == '\t' && s->indent_ws) {
+    if (c == '\t' && s->indent_ws && tab_stands_for_indentation(s)) {
       return scanner_tab_indent_error(s, err, 0);
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {

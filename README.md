@@ -217,7 +217,7 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **71.3%** of the 366 cases that can be checked by
+this parser against it: **74.6%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - so a mature implementation does not score
 100% here either. The remaining 38 cases assert an event stream the harness
