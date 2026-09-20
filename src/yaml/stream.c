@@ -80,6 +80,12 @@ struct GTEXT_YAML_Stream {
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
   int pending_tag_line; /* 1-based line pending_tag was written on */
   int pending_anchor_line; /* 1-based line pending_anchor was written on */
+  /* An earlier property that a second one has displaced, still waiting to
+     learn which node it belongs to.  See stream_defer_property(). */
+  char *outer_anchor;
+  int outer_anchor_line;
+  char *outer_tag;
+  int outer_tag_line;
   /* Where the pending anchor or tag was written. An empty node made out of
      them has to be reported there and not at the token that proved them
      unclaimed, or the parser measures its indentation from the wrong line
@@ -263,6 +269,119 @@ static void stream_props_claimed_by_sequence(GTEXT_YAML_Stream *s) {
   s->pending_prop_opens_line = true;
 }
 
+/**
+ * @brief Record an error the stream itself found, rather than the scanner.
+ *
+ * stream_scan() keeps what the scanner reports; this keeps what the loop
+ * works out for itself, so both reach the caller the same way.
+ */
+static void stream_fail(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok,
+  const char *msg
+) {
+  s->last_error.code = GTEXT_YAML_E_INVALID;
+  s->last_error.message = msg;
+  s->last_error.offset = tok ? tok->offset : 0;
+  s->last_error.line = tok ? tok->line : 0;
+  s->last_error.col = tok ? tok->col : 0;
+}
+
+/**
+ * @brief Set a pending property aside when a second one of its kind arrives.
+ *
+ * A node carries at most one anchor and at most one tag (c-ns-properties,
+ * 7.1), so a second one turning up while the first is still pending means one
+ * of two things.
+ *
+ * Written on the same line there is nothing between them, so they name one
+ * node and the document is in error:
+ *
+ *     a: &x &y 1
+ *
+ * Written on different lines a block collection may open between them, and
+ * then they name two different nodes - the collection and its first key:
+ *
+ *     top1: &node1        &node1 is the mapping's,
+ *       &k1 key1: val1    &k1 the key's
+ *
+ * Whether that collection opens is not known until the token *after* the
+ * node, so the first property is set aside here and both travel to the
+ * parser, which is where the answer arrives.  If no collection opens, the two
+ * named one node after all and the parser refuses it - suite case 4JVG:
+ *
+ *     top2: &node2
+ *       &v2 val2
+ *
+ * A third has nowhere to go under either reading.
+ *
+ * Only properties on a line the first has not been left behind by get this
+ * far: the caller flushes a left-behind property as its own empty node first,
+ * which is what makes one spare slot enough.
+ */
+static GTEXT_YAML_Status stream_defer_property(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok,
+  char **slot,
+  int *slot_line,
+  char **outer,
+  int *outer_line,
+  const char *two_on_one_node
+) {
+  if (!*slot) return GTEXT_YAML_OK;
+  if (*slot_line == tok->line || *outer) {
+    stream_fail(s, tok, two_on_one_node);
+    return GTEXT_YAML_E_INVALID;
+  }
+  *outer = *slot;
+  *outer_line = *slot_line;
+  *slot = NULL;
+  *slot_line = 0;
+  return GTEXT_YAML_OK;
+}
+
+/**
+ * @brief Hang the pending properties on an event about to be reported.
+ */
+static void stream_attach_pending(
+  GTEXT_YAML_Stream *s,
+  GTEXT_YAML_Event *ev
+) {
+  ev->anchor = s->pending_anchor;
+  ev->anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
+  ev->tag = s->pending_tag;
+  ev->tag_line = s->pending_tag ? s->pending_tag_line : 0;
+  ev->outer_anchor = s->outer_anchor;
+  ev->outer_anchor_line = s->outer_anchor ? s->outer_anchor_line : 0;
+  ev->outer_tag = s->outer_tag;
+  ev->outer_tag_line = s->outer_tag ? s->outer_tag_line : 0;
+  ev->prop_line = s->pending_prop_min_line;
+  ev->prop_col = s->pending_prop_min_col;
+}
+
+/**
+ * @brief Drop the properties an event has just taken.
+ *
+ * The outer slots go too: a node that took the inner property is the one the
+ * outer was waiting on, and from here it is the parser's to place.
+ */
+static void stream_clear_pending(GTEXT_YAML_Stream *s) {
+  free(s->pending_anchor);
+  s->pending_anchor = NULL;
+  s->pending_anchor_line = 0;
+  free(s->pending_tag);
+  s->pending_tag = NULL;
+  s->pending_tag_line = 0;
+  free(s->outer_anchor);
+  s->outer_anchor = NULL;
+  s->outer_anchor_line = 0;
+  free(s->outer_tag);
+  s->outer_tag = NULL;
+  s->outer_tag_line = 0;
+  s->pending_prop_min_col = -1;
+  s->pending_prop_min_line = 0;
+}
+
 static GTEXT_YAML_Status stream_flush_empty_node(
   GTEXT_YAML_Stream *s,
   const GTEXT_YAML_Token *at
@@ -275,12 +394,7 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   ev.data.scalar.ptr = "";
   ev.data.scalar.len = 0;
   ev.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
-  ev.anchor = s->pending_anchor;
-  ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
-  ev.tag = s->pending_tag;
-  ev.tag_line = s->pending_tag_line;
-  ev.prop_line = s->pending_prop_min_line;
-  ev.prop_col = s->pending_prop_min_col;
+  stream_attach_pending(s, &ev);
   ev.offset = s->pending_prop_offset;
   ev.line = s->pending_prop_line;
   ev.col = s->pending_prop_col;
@@ -289,14 +403,7 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   GTEXT_YAML_Status rc = GTEXT_YAML_OK;
   if (s->cb) rc = s->cb(s, &ev, s->user);
 
-  free(s->pending_anchor);
-  s->pending_anchor = NULL;
-  s->pending_anchor_line = 0;
-  free(s->pending_tag);
-  s->pending_tag = NULL;
-  s->pending_tag_line = 0;
-  s->pending_prop_min_col = -1;
-  s->pending_prop_min_line = 0;
+  stream_clear_pending(s);
   return rc;
 }
 
@@ -451,6 +558,8 @@ GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s)
   if (s->resolver) gtext_yaml_resolver_free(s->resolver);
   if (s->pending_anchor) free(s->pending_anchor);
   if (s->pending_tag) free(s->pending_tag);
+  if (s->outer_anchor) free(s->outer_anchor);
+  if (s->outer_tag) free(s->outer_tag);
   free(s);
 }
 
@@ -658,12 +767,7 @@ process_token:
         start_ev.type = (tok.u.c == '[')
           ? GTEXT_YAML_EVENT_SEQUENCE_START
           : GTEXT_YAML_EVENT_MAPPING_START;
-        start_ev.anchor = s->pending_anchor;  /* Attach pending anchor if any */
-        start_ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
-        start_ev.tag = s->pending_tag;
-        start_ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
-        start_ev.prop_line = s->pending_prop_min_line;
-        start_ev.prop_col = s->pending_prop_min_col;
+        stream_attach_pending(s, &start_ev);
         start_ev.offset = tok.offset;
         start_ev.line = tok.line;
         start_ev.col = tok.col;
@@ -673,19 +777,7 @@ process_token:
           if (rc != GTEXT_YAML_OK) return rc;
         }
         
-        /* Clear pending anchor after attaching */
-        if (s->pending_anchor) {
-          free(s->pending_anchor);
-          s->pending_anchor = NULL;
-          s->pending_anchor_line = 0;
-        }
-        if (s->pending_tag) {
-          free(s->pending_tag);
-          s->pending_tag = NULL;
-          s->pending_tag_line = 0;
-        }
-        s->pending_prop_min_col = -1;
-        s->pending_prop_min_line = 0;
+        stream_clear_pending(s);
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
         if (s->current_depth > 0) s->current_depth--;
@@ -720,7 +812,17 @@ process_token:
         buf[namelen] = '\0';
         
         /* Store anchor name - it will be attached to the next node event */
-        if (s->pending_anchor) free(s->pending_anchor);
+        /* A property whose node was never written belongs to an empty one, and
+           is reported as that before this one takes its place. */
+        if (stream_props_left_behind(s, &tok)) {
+          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+          if (flush != GTEXT_YAML_OK) return flush;
+        }
+        GTEXT_YAML_Status defer = stream_defer_property(
+          s, &tok, &s->pending_anchor, &s->pending_anchor_line,
+          &s->outer_anchor, &s->outer_anchor_line,
+          "Node has more than one anchor");
+        if (defer != GTEXT_YAML_OK) return defer;
         s->pending_anchor = strdup(buf);
         s->pending_anchor_line = tok.line;
         s->pending_prop_offset = tok.offset;
@@ -747,7 +849,17 @@ process_token:
         if (stream_tag_is_non_specific(&tok, &tag_tok)) {
           /* The "!" was the whole property. Record it and go round again
              with the token just read, which is the node it applies to. */
-          if (s->pending_tag) free(s->pending_tag);
+          /* A property whose node was never written belongs to an empty one, and
+             is reported as that before this one takes its place. */
+          if (stream_props_left_behind(s, &tok)) {
+            GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+            if (flush != GTEXT_YAML_OK) return flush;
+          }
+          GTEXT_YAML_Status defer = stream_defer_property(
+            s, &tok, &s->pending_tag, &s->pending_tag_line,
+            &s->outer_tag, &s->outer_tag_line,
+            "Node has more than one tag");
+          if (defer != GTEXT_YAML_OK) return defer;
           s->pending_tag = strdup("!");
           s->pending_tag_line = tok.line;
           tok = tag_tok;
@@ -789,7 +901,17 @@ process_token:
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
-        if (s->pending_tag) free(s->pending_tag);
+        /* A property whose node was never written belongs to an empty one, and
+           is reported as that before this one takes its place. */
+        if (stream_props_left_behind(s, &tok)) {
+          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+          if (flush != GTEXT_YAML_OK) return flush;
+        }
+        GTEXT_YAML_Status defer = stream_defer_property(
+          s, &tok, &s->pending_tag, &s->pending_tag_line,
+          &s->outer_tag, &s->outer_tag_line,
+          "Node has more than one tag");
+        if (defer != GTEXT_YAML_OK) return defer;
         s->pending_tag = strdup(buf);
         /* tok is the '!' that introduced the tag. */
         s->pending_tag_line = tok.line;
@@ -853,32 +975,14 @@ process_token:
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
       ev.scalar_style = tok.scalar_style;
-      /* Attach pending anchor if any */
-      ev.anchor = s->pending_anchor;
-      ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
-      ev.tag = s->pending_tag;
-      ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
-      ev.prop_line = s->pending_prop_min_line;
-      ev.prop_col = s->pending_prop_min_col;
+      stream_attach_pending(s, &ev);
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
           return rc;
         }
       }
-      /* Clear pending anchor after attaching */
-      if (s->pending_anchor) {
-        free(s->pending_anchor);
-        s->pending_anchor = NULL;
-        s->pending_anchor_line = 0;
-      }
-      if (s->pending_tag) {
-        free(s->pending_tag);
-        s->pending_tag = NULL;
-        s->pending_tag_line = 0;
-      }
-      s->pending_prop_min_col = -1;
-      s->pending_prop_min_line = 0;
+      stream_clear_pending(s);
       continue;
     }
   }
@@ -1037,11 +1141,7 @@ process_token_finish:
         start_ev.type = (tok.u.c == '[')
           ? GTEXT_YAML_EVENT_SEQUENCE_START
           : GTEXT_YAML_EVENT_MAPPING_START;
-        start_ev.anchor = s->pending_anchor;
-        start_ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
-        start_ev.tag = s->pending_tag;
-        start_ev.prop_line = s->pending_prop_min_line;
-        start_ev.prop_col = s->pending_prop_min_col;
+        stream_attach_pending(s, &start_ev);
         start_ev.offset = tok.offset;
         start_ev.line = tok.line;
         start_ev.col = tok.col;
@@ -1051,18 +1151,7 @@ process_token_finish:
           if (rc != GTEXT_YAML_OK) return rc;
         }
 
-        if (s->pending_anchor) {
-          free(s->pending_anchor);
-          s->pending_anchor = NULL;
-          s->pending_anchor_line = 0;
-        }
-        if (s->pending_tag) {
-          free(s->pending_tag);
-          s->pending_tag = NULL;
-          s->pending_tag_line = 0;
-        }
-        s->pending_prop_min_col = -1;
-        s->pending_prop_min_line = 0;
+        stream_clear_pending(s);
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
         if (s->current_depth > 0) s->current_depth--;
@@ -1096,7 +1185,17 @@ process_token_finish:
         memcpy(buf, name_tok.u.scalar.ptr, namelen);
         buf[namelen] = '\0';
         
-        if (s->pending_anchor) free(s->pending_anchor);
+        /* A property whose node was never written belongs to an empty one, and
+           is reported as that before this one takes its place. */
+        if (stream_props_left_behind(s, &tok)) {
+          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+          if (flush != GTEXT_YAML_OK) return flush;
+        }
+        GTEXT_YAML_Status defer = stream_defer_property(
+          s, &tok, &s->pending_anchor, &s->pending_anchor_line,
+          &s->outer_anchor, &s->outer_anchor_line,
+          "Node has more than one anchor");
+        if (defer != GTEXT_YAML_OK) return defer;
         s->pending_anchor = strdup(buf);
         s->pending_anchor_line = tok.line;
         s->pending_prop_offset = tok.offset;
@@ -1124,7 +1223,17 @@ process_token_finish:
         if (stream_tag_is_non_specific(&tok, &tag_tok)) {
           /* The "!" was the whole property. Record it and go round again
              with the token just read, which is the node it applies to. */
-          if (s->pending_tag) free(s->pending_tag);
+          /* A property whose node was never written belongs to an empty one, and
+             is reported as that before this one takes its place. */
+          if (stream_props_left_behind(s, &tok)) {
+            GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+            if (flush != GTEXT_YAML_OK) return flush;
+          }
+          GTEXT_YAML_Status defer = stream_defer_property(
+            s, &tok, &s->pending_tag, &s->pending_tag_line,
+            &s->outer_tag, &s->outer_tag_line,
+            "Node has more than one tag");
+          if (defer != GTEXT_YAML_OK) return defer;
           s->pending_tag = strdup("!");
           s->pending_tag_line = tok.line;
           tok = tag_tok;
@@ -1166,7 +1275,17 @@ process_token_finish:
           return GTEXT_YAML_E_BAD_TOKEN;
         }
 
-        if (s->pending_tag) free(s->pending_tag);
+        /* A property whose node was never written belongs to an empty one, and
+           is reported as that before this one takes its place. */
+        if (stream_props_left_behind(s, &tok)) {
+          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+          if (flush != GTEXT_YAML_OK) return flush;
+        }
+        GTEXT_YAML_Status defer = stream_defer_property(
+          s, &tok, &s->pending_tag, &s->pending_tag_line,
+          &s->outer_tag, &s->outer_tag_line,
+          "Node has more than one tag");
+        if (defer != GTEXT_YAML_OK) return defer;
         s->pending_tag = strdup(buf);
         s->pending_tag_line = tok.line;
         s->pending_prop_offset = tok.offset;
@@ -1214,30 +1333,14 @@ process_token_finish:
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
       ev.scalar_style = tok.scalar_style;
-      ev.anchor = s->pending_anchor;  /* Attach pending anchor */
-      ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
-      ev.tag = s->pending_tag;
-      ev.prop_line = s->pending_prop_min_line;
-      ev.prop_col = s->pending_prop_min_col;
+      stream_attach_pending(s, &ev);
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
           return rc;
         }
       }
-      /* Clear pending anchor after use */
-      if (s->pending_anchor) {
-        free(s->pending_anchor);
-        s->pending_anchor = NULL;
-        s->pending_anchor_line = 0;
-      }
-      if (s->pending_tag) {
-        free(s->pending_tag);
-        s->pending_tag = NULL;
-        s->pending_tag_line = 0;
-      }
-      s->pending_prop_min_col = -1;
-      s->pending_prop_min_line = 0;
+      stream_clear_pending(s);
       continue;
     }
   }

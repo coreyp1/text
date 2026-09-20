@@ -87,6 +87,31 @@ typedef struct {
 	} data;
 	const char * anchor;  /* Anchor name for this node (NULL if none) */
 	const char * tag;     /* Explicit tag for this node (NULL if none) */
+	/* A second anchor or tag, written before the one above and on an earlier
+	 * line, whose node is not this one but the block collection this node
+	 * opens - if it opens one.
+	 *
+	 * A node carries at most one anchor and at most one tag (7.1), so two of
+	 * a kind with nothing between them name two nodes, and in block context
+	 * the only thing that can stand between them is a collection that starts
+	 * where the second was written:
+	 *
+	 *     top1: &node1        &node1 is the mapping's, &k1 the key's, and
+	 *       &k1 key1: val1    they arrive together on the key
+	 *
+	 * The stream cannot tell whether that collection opens until the token
+	 * after the node, so it reports both and leaves the question to the
+	 * consumer. If no collection opens the two named one node after all,
+	 * which is an error - suite case 4JVG:
+	 *
+	 *     top2: &node2
+	 *       &v2 val2
+	 *
+	 * NULL, with a line of 0, when there is no such property. */
+	const char * outer_anchor;
+	int outer_anchor_line;
+	const char * outer_tag;
+	int outer_tag_line;
 	/* 1-based line the tag was written on, or 0 when there is no tag.
 	 *
 	 * A tag applies to the node that follows it, and in block context the

@@ -128,6 +128,15 @@ typedef struct {
 	 * "!custom a: 1" tags the key.  The events are otherwise identical. */
 	bool last_scalar_tag_own_line;
 	bool last_scalar_anchor_own_line;
+	/* A property the stream could not place: written before the one on the
+	 * last scalar, and on an earlier line, so it belongs to the block
+	 * collection that scalar opens rather than to the scalar.  Held from the
+	 * scalar event until the collection is pushed, which is one event later
+	 * at most.  Still held when anything else happens means no collection
+	 * opened and both properties named one node, which is an error - suite
+	 * case 4JVG.  See GTEXT_YAML_Event::outer_anchor. */
+	char *outer_anchor;
+	char *outer_tag;
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
@@ -242,6 +251,8 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_node = NULL;
 	p->last_scalar_tag_own_line = false;
 	p->last_scalar_anchor_own_line = false;
+	p->outer_anchor = NULL;
+	p->outer_tag = NULL;
 	p->pending_leading_comment = NULL;
 	p->last_emitted_node = NULL;
 	p->last_emitted_line = -1;
@@ -290,6 +301,8 @@ static void parser_free(parser_state *p) {
 	free(p->aliases.targets);
 
 	free(p->pending_leading_comment);
+	free(p->outer_anchor);
+	free(p->outer_tag);
 
 	/* Free tag handles */
 	for (size_t i = 0; i < p->tag_handles.count; i++) {
@@ -1495,25 +1508,70 @@ static int stack_top_indent(const parser_state *p) {
  * The collection's tag lives in the stack entry until the node is created at
  * its end, which is the same slot a flow collection's tag arrives in.
  */
-static void adopt_own_line_tag(parser_state *p, GTEXT_YAML_Node *node) {
-	if (!p || !node || !p->last_scalar_tag_own_line) return;
-	if (p->stack.depth == 0) return;
+static GTEXT_YAML_Status adopt_own_line_tag(
+		parser_state *p, GTEXT_YAML_Node *node) {
+	if (!p || !node) return GTEXT_YAML_OK;
+	if (p->stack.depth == 0) return GTEXT_YAML_OK;
+
+	/* A tag the stream could not place is this collection's: it was written
+	 * before the one the node carries, so the node is inside it.
+	 *
+	 * The node's own tag may then belong to a collection too - a deeper one,
+	 * not yet pushed - because more than one can open in a row.  Spec
+	 * example 2.24 does exactly that:
+	 *
+	 *     --- !shape        !shape is the sequence's, !circle the first
+	 *     - !circle         entry's mapping's, and that mapping does not
+	 *       center: 1       open until the ":" two tokens later
+	 *
+	 * So the node's tag goes into the slot the outer one just left, and
+	 * waits for that push.  If none comes, it named the collection filled
+	 * here after all - which would then have two - and the check between
+	 * events refuses it:
+	 *
+	 *     top: !!seq        !!seq and !!map both name the sequence
+	 *       !!map
+	 *       - 1
+	 */
+	if (p->outer_tag) {
+		size_t held = p->stack.depth - 1;
+		if (!p->stack.temps[held].tag) {
+			p->stack.temps[held].tag = p->outer_tag;
+		} else {
+			free(p->outer_tag);
+		}
+		p->outer_tag = NULL;
+
+		if (p->last_scalar_tag_own_line && node->type < GTEXT_YAML_SEQUENCE
+				&& node->as.scalar.tag) {
+			p->outer_tag = strdup(node->as.scalar.tag);
+			if (!p->outer_tag) return GTEXT_YAML_OK; /* keep it on the node */
+			node->as.scalar.tag = NULL;
+			p->last_scalar_tag_own_line = false;
+		}
+		return GTEXT_YAML_OK;
+	}
+
+	if (!p->last_scalar_tag_own_line) return GTEXT_YAML_OK;
 	/* The DOM has no single scalar type: NULL through STRING are the scalar
 	 * kinds, and SEQUENCE onwards are collections and aliases. */
-	if (node->type >= GTEXT_YAML_SEQUENCE) return;
+	if (node->type >= GTEXT_YAML_SEQUENCE) return GTEXT_YAML_OK;
 
 	const char *tag = node->as.scalar.tag;
-	if (!tag) return;
+	if (!tag) return GTEXT_YAML_OK;
 
 	size_t top = p->stack.depth - 1;
-	if (p->stack.temps[top].tag) return; /* the collection already has one */
+	/* the collection already has one */
+	if (p->stack.temps[top].tag) return GTEXT_YAML_OK;
 
 	char *moved = strdup(tag);
-	if (!moved) return; /* leaving the tag on the scalar beats losing it */
+	/* leaving the tag on the scalar beats losing it */
+	if (!moved) return GTEXT_YAML_OK;
 
 	p->stack.temps[top].tag = moved;
 	node->as.scalar.tag = NULL;
 	p->last_scalar_tag_own_line = false;
+	return GTEXT_YAML_OK;
 }
 
 /**
@@ -1548,23 +1606,53 @@ static void adopt_own_line_tag(parser_state *p, GTEXT_YAML_Node *node) {
  * temps[depth - 1] at depth zero is out of bounds, and as.scalar.anchor on a
  * collection reads the wrong member of the union - so they stay.
  */
-static void adopt_own_line_anchor(parser_state *p, GTEXT_YAML_Node *node) {
-	if (!p || !node || !p->last_scalar_anchor_own_line) return;
-	if (p->stack.depth == 0) return;
-	if (node->type >= GTEXT_YAML_SEQUENCE) return;
+static GTEXT_YAML_Status adopt_own_line_anchor(
+		parser_state *p, GTEXT_YAML_Node *node) {
+	if (!p || !node) return GTEXT_YAML_OK;
+	if (p->stack.depth == 0) return GTEXT_YAML_OK;
+
+	/* The same handover adopt_own_line_tag() describes, for anchors:
+	 *
+	 *     top1: &node1        &node1 is the mapping's, &k1 the key's, and
+	 *       &k1 key1: val1    both arrive on the key
+	 */
+	if (p->outer_anchor) {
+		size_t held = p->stack.depth - 1;
+		if (!p->stack.temps[held].anchor) {
+			p->stack.temps[held].anchor = p->outer_anchor;
+		} else {
+			free(p->outer_anchor);
+		}
+		p->outer_anchor = NULL;
+
+		if (p->last_scalar_anchor_own_line && node->type < GTEXT_YAML_SEQUENCE
+				&& node->as.scalar.anchor) {
+			p->outer_anchor = strdup(node->as.scalar.anchor);
+			if (!p->outer_anchor) return GTEXT_YAML_OK; /* keep it on the node */
+			node->as.scalar.anchor = NULL;
+			p->last_scalar_anchor_own_line = false;
+		}
+		return GTEXT_YAML_OK;
+	}
+
+	if (!p->last_scalar_anchor_own_line) return GTEXT_YAML_OK;
+	if (node->type >= GTEXT_YAML_SEQUENCE) return GTEXT_YAML_OK;
 
 	const char *anchor = node->as.scalar.anchor;
-	if (!anchor) return;
+	if (!anchor) return GTEXT_YAML_OK;
 
 	size_t top = p->stack.depth - 1;
-	if (p->stack.temps[top].anchor) return; /* the collection already has one */
+	/* the collection already has one */
+	if (p->stack.temps[top].anchor) return GTEXT_YAML_OK;
 
 	char *moved = strdup(anchor);
-	if (!moved) return; /* leaving it on the scalar beats losing it */
+	/* leaving it on the scalar beats losing it */
+	if (!moved) return GTEXT_YAML_OK;
 
 	p->stack.temps[top].anchor = moved;
 	node->as.scalar.anchor = NULL;
 	p->last_scalar_anchor_own_line = false;
+	return GTEXT_YAML_OK;
 }
 
 static void maybe_finish_block_mapping_value(parser_state *p) {
@@ -1670,8 +1758,9 @@ static GTEXT_YAML_Status capture_explicit_key(
 	p->claimed_key = node;
 
 	if (first_key) {
-		adopt_own_line_tag(p, node);
-		adopt_own_line_anchor(p, node);
+		GTEXT_YAML_Status adopted = adopt_own_line_tag(p, node);
+		if (adopted == GTEXT_YAML_OK) adopted = adopt_own_line_anchor(p, node);
+		if (adopted != GTEXT_YAML_OK) return adopted;
 	}
 
 	p->explicit_key_pending = false;
@@ -1982,6 +2071,34 @@ static GTEXT_YAML_Status close_flow_pair(parser_state *p) {
  * success.  A caller that checked only for a NULL document got an empty one
  * instead of an error.
  */
+/**
+ * @brief Refuse a property the stream set aside that no collection claimed.
+ *
+ * An outer property is held from the scalar that carried it until the block
+ * collection that scalar opens is pushed - one event later at most.  Still
+ * held means no collection opened, so the two properties named one node:
+ *
+ *     top2: &node2        &node2 and &v2 are both val2's, and a node
+ *       &v2 val2          carries at most one anchor (7.1)
+ *
+ * Suite case 4JVG.  Checked between events and again when the document ends,
+ * because the last node in a document has no event after it - and in
+ * gtext_yaml_parse_all() the DOCUMENT_END that would have served never
+ * reaches the per-document parser at all.
+ */
+static GTEXT_YAML_Status check_outer_property_claimed(parser_state *p) {
+	if (!p || (!p->outer_anchor && !p->outer_tag)) return GTEXT_YAML_OK;
+	const bool anchors = p->outer_anchor != NULL;
+	p->failed = true;
+	if (p->error) {
+		p->error->code = GTEXT_YAML_E_INVALID;
+		p->error->message = anchors
+			? "Node has more than one anchor"
+			: "Node has more than one tag";
+	}
+	return GTEXT_YAML_E_INVALID;
+}
+
 static GTEXT_YAML_Status check_flow_contexts_closed(parser_state *p) {
 	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
 	if (p->stack.is_block[p->stack.depth - 1]) return GTEXT_YAML_OK;
@@ -2161,6 +2278,18 @@ static GTEXT_YAML_Status parse_callback(
 				"Anchor or tag not indented past the collection it is written in";
 		}
 		return GTEXT_YAML_E_INVALID;
+	}
+
+	/* An outer property is held from the scalar that carried it until the
+	 * block collection that scalar opens is pushed, which happens either
+	 * inside that same scalar event (a sequence, whose "-" pushed the level
+	 * before the scalar arrived) or in the ":" that follows it (a mapping).
+	 * Anything else reaching here with one still held means no collection
+	 * opened, so the two properties named the one node. */
+	if (!(type == GTEXT_YAML_EVENT_INDICATOR
+			&& event->data.indicator == ':')) {
+		GTEXT_YAML_Status held = check_outer_property_claimed(p);
+		if (held != GTEXT_YAML_OK) return held;
 	}
 
 	switch (type) {
@@ -2344,6 +2473,32 @@ static GTEXT_YAML_Status parse_callback(
 			p->last_scalar_anchor_own_line = (event->anchor != NULL
 				&& event->anchor_line > 0 && event->anchor_line < event->line);
 
+			/* A property the stream could not place.  The check at the top of
+			 * this function has already refused anything left over from the
+			 * scalar before, so these slots are empty. */
+			if (event->outer_anchor) {
+				p->outer_anchor = strdup(event->outer_anchor);
+				if (!p->outer_anchor) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory holding an anchor";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+			if (event->outer_tag) {
+				p->outer_tag = strdup(event->outer_tag);
+				if (!p->outer_tag) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_OOM;
+						p->error->message = "Out of memory holding a tag";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+			}
+
 			parser_attach_leading_comment(p, node);
 			
 			/* Register anchor if present */
@@ -2448,8 +2603,11 @@ static GTEXT_YAML_Status parse_callback(
 				if (first_in_level
 					&& p->stack.states[p->stack.depth - 1] == STATE_SEQUENCE
 					&& p->stack.is_block[p->stack.depth - 1]) {
-					adopt_own_line_tag(p, node);
-					adopt_own_line_anchor(p, node);
+					GTEXT_YAML_Status adopted = adopt_own_line_tag(p, node);
+					if (adopted == GTEXT_YAML_OK) {
+						adopted = adopt_own_line_anchor(p, node);
+					}
+					if (adopted != GTEXT_YAML_OK) return adopted;
 				}
 
 				p->last_scalar_in_root = false;
@@ -3495,8 +3653,12 @@ static GTEXT_YAML_Status parse_callback(
 					 * node the scanner has to attach it to.  It belongs to the
 					 * mapping.  Done after the push, so the mapping's stack
 					 * entry is the one on top. */
-					adopt_own_line_tag(p, key_node);
-					adopt_own_line_anchor(p, key_node);
+					GTEXT_YAML_Status adopted =
+						adopt_own_line_tag(p, key_node);
+					if (adopted == GTEXT_YAML_OK) {
+						adopted = adopt_own_line_anchor(p, key_node);
+					}
+					if (adopted != GTEXT_YAML_OK) return adopted;
 
 					if (!temp_add(p, key_node)) {
 						p->failed = true;
@@ -4036,6 +4198,9 @@ GTEXT_YAML_Document *yaml_parse_document(
 		status = close_block_contexts(&parser, -1);
 	}
 	if (status == GTEXT_YAML_OK && !parser.failed) {
+		status = check_outer_property_claimed(&parser);
+	}
+	if (status == GTEXT_YAML_OK) {
 		status = check_flow_contexts_closed(&parser);
 	}
 	
@@ -4594,6 +4759,10 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 	 * flow collection is broken, not empty.  This path had been left out, so
 	 * gtext_yaml_parse_all() still accepted what gtext_yaml_parse() refused. */
 	if (check_flow_contexts_closed(p) != GTEXT_YAML_OK) {
+		state->failed = true;
+		return false;
+	}
+	if (check_outer_property_claimed(p) != GTEXT_YAML_OK) {
 		state->failed = true;
 		return false;
 	}
