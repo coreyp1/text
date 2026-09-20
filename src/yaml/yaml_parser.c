@@ -1699,7 +1699,35 @@ static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p);
  * On OOM the key is dropped as it was before, which is the old behavior
  * rather than a new one.
  */
+/**
+ * @brief Give a key that holds nothing the empty node it stands for.
+ *
+ * The same node a missing value gets - e-node either way (7.2) - under the
+ * name that says which half of the pair is missing here.
+ */
+static bool mapping_supply_empty_key(parser_state *p) {
+	return mapping_supply_null_value(p);
+}
+
 static GTEXT_YAML_Status mapping_close_trailing_key(parser_state *p) {
+	/* A "?" whose key never arrived still made an entry, and both halves of
+	 * it are the empty node: ns-flow-map-explicit-entry is
+	 * "ns-flow-map-implicit-entry | ( e-node e-node )" (7.4), so "{ ? }" is
+	 * {null: null}.  Dropping the key left the mapping empty instead. */
+	if (p->explicit_key_pending
+			&& p->stack.depth > 0
+			&& p->explicit_key_depth == p->stack.depth
+			&& (p->temp.count % 2) == 0) {
+		if (!mapping_supply_empty_key(p)) {
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory completing explicit key";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+		p->explicit_key_pending = false;
+	}
 	if ((p->temp.count % 2) == 0) return GTEXT_YAML_OK;
 	if (p->stack.depth > 0 && p->stack.is_block[p->stack.depth - 1]
 			&& p->temp.items[p->temp.count - 1] != p->claimed_key) {
@@ -1897,16 +1925,6 @@ static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p) {
  * about to be popped, so the null went into the sequence and the sequence
  * itself was switched into mapping-key state.
  */
-/**
- * @brief Give an explicit key that holds nothing the empty node it stands for.
- *
- * The same node a missing value gets - e-node either way (7.2) - under the
- * name that says which half of the pair is missing here.
- */
-static bool mapping_supply_empty_key(parser_state *p) {
-	return mapping_supply_null_value(p);
-}
-
 static void explicit_key_entry_done(parser_state *p) {
 	if (!p) return;
 	if (p->explicit_key_depth != p->stack.depth) return;
@@ -3057,6 +3075,33 @@ static GTEXT_YAML_Status parse_callback(
 					int source_col = 0;
 					size_t top = 0;
 
+					/* A "?" whose key never arrived still has one: the
+					 * empty node.  "? " over ": 1" and "[ ? : 1 ]" are
+					 * {null: 1}, by c-l-block-map-explicit-entry's
+					 * "e-node" arm in block context and by
+					 * ns-flow-map-explicit-entry's "( e-node e-node )" in
+					 * flow (8.2.2, 7.4).  Both were refused.
+					 *
+					 * A "?" left behind at a *shallower* level is a
+					 * different thing - a key the parser lost track of as
+					 * collections opened under it - and stays an error. */
+					if (p->explicit_key_pending
+							&& p->stack.depth == p->explicit_key_depth
+							&& p->stack.depth > 0) {
+						if (!mapping_supply_empty_key(p)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message =
+									"Out of memory completing explicit key";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->explicit_key_pending = false;
+						p->explicit_key_active = true;
+						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+					}
+
 					if (p->explicit_key_pending && p->stack.depth <= p->explicit_key_depth) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
@@ -3166,6 +3211,7 @@ static GTEXT_YAML_Status parse_callback(
 						&& p->stack.states[top] == STATE_SEQUENCE
 						&& !p->explicit_key_active
 						&& !p->explicit_key_pending
+						&& (p->stack.flow_flags[top] & GTEXT_YAML_FLOW_ITEM_DONE)
 						&& p->last_scalar_node != NULL
 						&& p->last_scalar_line >= 0
 						&& event->line != p->last_scalar_line) {
@@ -3179,6 +3225,39 @@ static GTEXT_YAML_Status parse_callback(
 					}
 
 					if (in_flow_mapping) {
+						/* c-ns-flow-map-empty-key-entry is "e-node" then the
+						 * value (7.4), so "{ : 1 }" is {null: 1} and
+						 * "{a: 1, : 2}" is {a: 1, null: 2}.  Children are
+						 * held as alternating key, value pairs, so an even
+						 * count in key state means no key is waiting for
+						 * this ":" and the empty node is it.  Without this
+						 * the value landed in the key slot and picked up a
+						 * null of its own: "{ : 1 }" came out as {1: null},
+						 * which is neither the right key nor the right
+						 * value.
+						 *
+						 * The key-state test is a precondition rather than
+						 * a branch: a ":" never reaches here in value state
+						 * with an even count.  An even count above zero is
+						 * exactly what marks the entry complete, so the node
+						 * after such a colon is refused for having no ","
+						 * before it, and the only even count left is zero,
+						 * which the "," resets to key state.  Instrumenting
+						 * it across the whole suite found no input that
+						 * reaches it.  It stays because supplying a key
+						 * where a value is expected would be wrong whatever
+						 * made it reachable. */
+						if (p->stack.states[top] == STATE_MAPPING_KEY
+								&& (p->temp.count % 2) == 0
+								&& !mapping_supply_empty_key(p)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message =
+									"Out of memory completing flow mapping entry";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
 						p->stack.states[top] = STATE_MAPPING_VALUE;
 						break;
 					}
@@ -3192,20 +3271,41 @@ static GTEXT_YAML_Status parse_callback(
 					 * "]" that should have closed it. */
 					if (p->stack.depth > 0 && !p->stack.is_block[top] &&
 						p->stack.states[top] == STATE_SEQUENCE) {
-						GTEXT_YAML_Node *pair_key = detach_last_scalar(p);
-						if (!pair_key && p->temp.count > 0) {
-							/* The key may be a collection rather than a scalar,
-							 * as in "[[1]: 2]", and detach_last_scalar() only
-							 * knows about scalars. */
-							pair_key = p->temp.items[--p->temp.count];
+						GTEXT_YAML_Node *pair_key = NULL;
+						/* The key is the entry this ":" belongs to, and there
+						 * is one only if something has landed since the last
+						 * separator - which is what FLOW_ITEM_DONE says.
+						 *
+						 * Without that test the key was taken from wherever
+						 * the last node happened to be, reaching back across
+						 * the comma: "[a, : 1]" paired "a" with "1" and came
+						 * out as [{"a": 1}], one entry where there are two
+						 * and a pair nobody wrote.  Nothing was reported;
+						 * the document simply changed meaning. */
+						if (p->stack.flow_flags[top] & GTEXT_YAML_FLOW_ITEM_DONE) {
+							pair_key = detach_last_scalar(p);
+							if (!pair_key && p->temp.count > 0) {
+								/* The key may be a collection rather than a
+								 * scalar, as in "[[1]: 2]", and
+								 * detach_last_scalar() only knows about
+								 * scalars. */
+								pair_key = p->temp.items[--p->temp.count];
+							}
+						}
+						if (!pair_key) {
+							/* c-ns-flow-map-empty-key-entry: e-node, then the
+							 * value (7.4).  "[: 1]" is [{null: 1}]. */
+							pair_key = yaml_node_new_scalar(
+								p->ctx, "~", 1, NULL, NULL);
 						}
 						if (!pair_key) {
 							p->failed = true;
 							if (p->error) {
-								p->error->code = GTEXT_YAML_E_INVALID;
-								p->error->message = "Mapping key not found before ':'";
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message =
+									"Out of memory starting flow pair";
 							}
-							return GTEXT_YAML_E_INVALID;
+							return GTEXT_YAML_E_OOM;
 						}
 						size_t pair_offset = 0;
 						int pair_line = 0, pair_col = 0;
@@ -3534,9 +3634,18 @@ static GTEXT_YAML_Status parse_callback(
 						const bool in_flow_map =
 							p->stack.states[sep_top] == STATE_MAPPING_KEY ||
 							p->stack.states[sep_top] == STATE_MAPPING_VALUE;
+						/* A "?" starts an entry even before its key
+						 * arrives, and an entry whose key never arrives is
+						 * still one: "[ ? , ? ]" is two pairs of empty
+						 * nodes. "[ , ]" holds nothing at all and stays an
+						 * error. */
+						const bool started_explicit =
+							(p->explicit_key_pending || p->explicit_key_active)
+							&& p->explicit_key_depth == p->stack.depth;
 						const bool have_entry =
 							(p->stack.flow_flags[sep_top] & GTEXT_YAML_FLOW_ITEM_DONE)
-							|| (in_flow_map && (p->temp.count % 2) == 1);
+							|| (in_flow_map && (p->temp.count % 2) == 1)
+							|| started_explicit;
 						if (!have_entry) {
 							p->failed = true;
 							if (p->error) {
@@ -3565,6 +3674,26 @@ static GTEXT_YAML_Status parse_callback(
 						 * pairs, so an odd count means the entry just closed has
 						 * no value yet.  Without this, "{a, b}" paired the two
 						 * keys with each other. */
+						/* A "?" whose key never arrived still leaves an
+						 * entry behind at the comma, both halves empty:
+						 * "{ ? , a }" is {null: null, a: null}.  The key has
+						 * to go in before the rule below, which is what
+						 * turns the odd count into the null value. */
+						if (in_flow_map
+								&& p->explicit_key_pending
+								&& p->explicit_key_depth == p->stack.depth
+								&& (p->temp.count % 2) == 0) {
+							if (!mapping_supply_empty_key(p)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_OOM;
+									p->error->message =
+										"Out of memory completing explicit key";
+								}
+								return GTEXT_YAML_E_OOM;
+							}
+							p->explicit_key_pending = false;
+						}
 						if (in_flow_map && (p->temp.count % 2) == 1) {
 							if (!mapping_supply_null_value(p)) {
 								p->failed = true;

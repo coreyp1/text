@@ -119,7 +119,7 @@ streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 2,131 tests across 96 binaries with zero failures, clean
+The test suite runs 2,132 tests across 97 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
 from `make test` output needs care: three binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line

@@ -52,7 +52,7 @@ scalar's continuation lines have to be, and rendering `!!set` and `!!omap` as
 the JSON they already are, and the line a flow pair's key and colon share.
 There are no benchmarks.
 
-**Verified:** the suite runs 2131 tests across 96 binaries with zero
+**Verified:** the suite runs 2132 tests across 97 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
 that has found two scanner hangs, a use-after-free and several leaks.
 
@@ -808,7 +808,7 @@ jobs:
 ## 13. Testing
 
 The YAML module is covered by 82 test files, part of a suite that runs
-2131 tests across 96 binaries with zero failures. They cover:
+2132 tests across 97 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -953,4 +953,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 546 YAML test cases, of 2131 across the suite, all passing
+**Test count:** 547 YAML test cases, of 2132 across the suite, all passing
