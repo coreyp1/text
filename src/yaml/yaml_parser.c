@@ -127,6 +127,7 @@ typedef struct {
 	 * rather than the scalar: "!custom" then "a: 1" tags the mapping, while
 	 * "!custom a: 1" tags the key.  The events are otherwise identical. */
 	bool last_scalar_tag_own_line;
+	bool last_scalar_anchor_own_line;
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
@@ -240,6 +241,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_key_col = -1;
 	p->last_scalar_node = NULL;
 	p->last_scalar_tag_own_line = false;
+	p->last_scalar_anchor_own_line = false;
 	p->pending_leading_comment = NULL;
 	p->last_emitted_node = NULL;
 	p->last_emitted_line = -1;
@@ -1514,6 +1516,57 @@ static void adopt_own_line_tag(parser_state *p, GTEXT_YAML_Node *node) {
 	p->last_scalar_tag_own_line = false;
 }
 
+/**
+ * @brief Move an own-line anchor from the first scalar to its collection.
+ *
+ * The same rule as adopt_own_line_tag(), for the other half of a node's
+ * properties, and it was never applied. An anchor on a *flow* collection
+ * arrives with the "[" or "{" and reaches the collection; a block one has no
+ * such token, so the anchor stayed on whichever scalar the stream could
+ * attach it to - the first entry of a sequence, or the first key of a
+ * mapping. Spec example 2.27 is the plain case:
+ *
+ *     bill-to: &id001
+ *         given  : Chris
+ *         ...
+ *     ship-to: *id001
+ *
+ * where *id001 came back as the string "given" rather than the mapping
+ * (suite case UGM3). "x: &anc" over "  - 1" is the sequence version, whose
+ * alias gave 1 instead of [1].
+ *
+ * The scalar has already registered the anchor by the time this runs. The
+ * collection registers it again when it is built, and an alias takes the
+ * most recent preceding definition (3.2.2.2), so an alias after the
+ * collection sees the collection.
+ *
+ * The three tests before the work are preconditions rather than behaviour,
+ * and mirror adopt_own_line_tag() line for line. Instrumenting them shows no
+ * input reaching any of the three: today's call sites always have a level on
+ * the stack and always pass a scalar, and the levels they pass have no anchor
+ * of their own. Two of them are what makes the function safe to call at all -
+ * temps[depth - 1] at depth zero is out of bounds, and as.scalar.anchor on a
+ * collection reads the wrong member of the union - so they stay.
+ */
+static void adopt_own_line_anchor(parser_state *p, GTEXT_YAML_Node *node) {
+	if (!p || !node || !p->last_scalar_anchor_own_line) return;
+	if (p->stack.depth == 0) return;
+	if (node->type >= GTEXT_YAML_SEQUENCE) return;
+
+	const char *anchor = node->as.scalar.anchor;
+	if (!anchor) return;
+
+	size_t top = p->stack.depth - 1;
+	if (p->stack.temps[top].anchor) return; /* the collection already has one */
+
+	char *moved = strdup(anchor);
+	if (!moved) return; /* leaving it on the scalar beats losing it */
+
+	p->stack.temps[top].anchor = moved;
+	node->as.scalar.anchor = NULL;
+	p->last_scalar_anchor_own_line = false;
+}
+
 static void maybe_finish_block_mapping_value(parser_state *p) {
 	if (!p || p->stack.depth == 0) return;
 	if (!p->stack.is_block[p->stack.depth - 1]) return;
@@ -1618,6 +1671,7 @@ static GTEXT_YAML_Status capture_explicit_key(
 
 	if (first_key) {
 		adopt_own_line_tag(p, node);
+		adopt_own_line_anchor(p, node);
 	}
 
 	p->explicit_key_pending = false;
@@ -2173,6 +2227,8 @@ static GTEXT_YAML_Status parse_callback(
 			 * previous scalar left behind. */
 			p->last_scalar_tag_own_line = (event->tag != NULL
 				&& event->tag_line > 0 && event->tag_line < event->line);
+			p->last_scalar_anchor_own_line = (event->anchor != NULL
+				&& event->anchor_line > 0 && event->anchor_line < event->line);
 
 			parser_attach_leading_comment(p, node);
 			
@@ -2279,6 +2335,7 @@ static GTEXT_YAML_Status parse_callback(
 					&& p->stack.states[p->stack.depth - 1] == STATE_SEQUENCE
 					&& p->stack.is_block[p->stack.depth - 1]) {
 					adopt_own_line_tag(p, node);
+					adopt_own_line_anchor(p, node);
 				}
 
 				p->last_scalar_in_root = false;
@@ -3197,6 +3254,7 @@ static GTEXT_YAML_Status parse_callback(
 					 * mapping.  Done after the push, so the mapping's stack
 					 * entry is the one on top. */
 					adopt_own_line_tag(p, key_node);
+					adopt_own_line_anchor(p, key_node);
 
 					if (!temp_add(p, key_node)) {
 						p->failed = true;

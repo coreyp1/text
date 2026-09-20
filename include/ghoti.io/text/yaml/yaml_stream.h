@@ -96,6 +96,20 @@ typedef struct {
 	 * only in where the tag was written, so the position has to travel with
 	 * it. */
 	int tag_line;
+	/* 1-based line the anchor was written on, or 0 when there is no anchor.
+	 *
+	 * The same problem as tag_line, and the same answer. An anchor applies to
+	 * the node that follows it, and in block context the parser cannot tell
+	 * which node that is until it has seen what comes next: "&a key: 1"
+	 * anchors the key, while "&a" on its own line and then "key: 1" anchors
+	 * the mapping. The two produce the same events and differ only in where
+	 * the anchor was written.
+	 *
+	 * prop_line below will not answer this. It is the leftmost property's
+	 * line, and with an anchor on one line and a tag further left on the
+	 * next, the leftmost is the tag - so an anchor written before the
+	 * collection would look as though it shared the node's line. */
+	int anchor_line;
 	/* Where the leftmost property of this node was written: 1-based line and
 	 * 0-based column, or 0 and -1 when the node carries no properties.
 	 *

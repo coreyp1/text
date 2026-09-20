@@ -79,6 +79,7 @@ struct GTEXT_YAML_Stream {
   char *pending_anchor;  /* Anchor name to attach to next node (malloc'd, NULL if none) */
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
   int pending_tag_line; /* 1-based line pending_tag was written on */
+  int pending_anchor_line; /* 1-based line pending_anchor was written on */
   /* Where the pending anchor or tag was written. An empty node made out of
      them has to be reported there and not at the token that proved them
      unclaimed, or the parser measures its indentation from the wrong line
@@ -219,6 +220,7 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   ev.data.scalar.len = 0;
   ev.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   ev.anchor = s->pending_anchor;
+  ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
   ev.tag = s->pending_tag;
   ev.tag_line = s->pending_tag_line;
   ev.prop_line = s->pending_prop_min_line;
@@ -233,6 +235,7 @@ static GTEXT_YAML_Status stream_flush_empty_node(
 
   free(s->pending_anchor);
   s->pending_anchor = NULL;
+  s->pending_anchor_line = 0;
   free(s->pending_tag);
   s->pending_tag = NULL;
   s->pending_tag_line = 0;
@@ -586,6 +589,7 @@ process_token:
           ? GTEXT_YAML_EVENT_SEQUENCE_START
           : GTEXT_YAML_EVENT_MAPPING_START;
         start_ev.anchor = s->pending_anchor;  /* Attach pending anchor if any */
+        start_ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
         start_ev.tag = s->pending_tag;
         start_ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
         start_ev.prop_line = s->pending_prop_min_line;
@@ -603,6 +607,7 @@ process_token:
         if (s->pending_anchor) {
           free(s->pending_anchor);
           s->pending_anchor = NULL;
+          s->pending_anchor_line = 0;
         }
         if (s->pending_tag) {
           free(s->pending_tag);
@@ -648,6 +653,7 @@ process_token:
         /* Store anchor name - it will be attached to the next node event */
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
+        s->pending_anchor_line = tok.line;
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
@@ -783,6 +789,7 @@ process_token:
       ev.scalar_style = tok.scalar_style;
       /* Attach pending anchor if any */
       ev.anchor = s->pending_anchor;
+      ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
       ev.tag = s->pending_tag;
       ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
       ev.prop_line = s->pending_prop_min_line;
@@ -797,6 +804,7 @@ process_token:
       if (s->pending_anchor) {
         free(s->pending_anchor);
         s->pending_anchor = NULL;
+        s->pending_anchor_line = 0;
       }
       if (s->pending_tag) {
         free(s->pending_tag);
@@ -965,6 +973,7 @@ process_token_finish:
           ? GTEXT_YAML_EVENT_SEQUENCE_START
           : GTEXT_YAML_EVENT_MAPPING_START;
         start_ev.anchor = s->pending_anchor;
+        start_ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
         start_ev.tag = s->pending_tag;
         start_ev.prop_line = s->pending_prop_min_line;
         start_ev.prop_col = s->pending_prop_min_col;
@@ -980,6 +989,7 @@ process_token_finish:
         if (s->pending_anchor) {
           free(s->pending_anchor);
           s->pending_anchor = NULL;
+          s->pending_anchor_line = 0;
         }
         if (s->pending_tag) {
           free(s->pending_tag);
@@ -1024,6 +1034,7 @@ process_token_finish:
         
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
+        s->pending_anchor_line = tok.line;
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
@@ -1143,6 +1154,7 @@ process_token_finish:
       ev.data.scalar.len = tok.u.scalar.len;
       ev.scalar_style = tok.scalar_style;
       ev.anchor = s->pending_anchor;  /* Attach pending anchor */
+      ev.anchor_line = s->pending_anchor ? s->pending_anchor_line : 0;
       ev.tag = s->pending_tag;
       ev.prop_line = s->pending_prop_min_line;
       ev.prop_col = s->pending_prop_min_col;
@@ -1156,6 +1168,7 @@ process_token_finish:
       if (s->pending_anchor) {
         free(s->pending_anchor);
         s->pending_anchor = NULL;
+        s->pending_anchor_line = 0;
       }
       if (s->pending_tag) {
         free(s->pending_tag);
