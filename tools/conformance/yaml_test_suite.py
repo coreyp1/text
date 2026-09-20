@@ -79,13 +79,17 @@ for f in sorted(glob.glob(SUITE + '/src/*.yaml')):
             continue
         if 'json' not in case:
             results['skip-tree-only'] += 1; continue
+        # Decode the expectation before judging the answer. Three cases carry
+        # an explicit null here, and checking `rejected` first scored those as
+        # defects when an implementation refused them and skipped them when it
+        # did not - a case with no expectation cannot be a failure either way.
+        try: want = expected_docs(case['json'])
+        except Exception:
+            results['skip-bad-expect'] += 1; continue
         if rejected:
             results['json-rejected'] += 1
             failures.append((label, name, 'rejected a valid document', '', out.strip()[:90]))
             continue
-        try: want = expected_docs(case['json'])
-        except Exception:
-            results['skip-bad-expect'] += 1; continue
         got = []; bad = False
         for line in out.splitlines():
             if not line.strip(): continue

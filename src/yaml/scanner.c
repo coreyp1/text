@@ -36,6 +36,17 @@ struct GTEXT_YAML_Scanner {
   int line_indent;        /* column of the first non-space on this line, 0-based */
   int node_indent;        /* indentation of the block node being built, -1 at the root */
   int last_scalar_col;    /* 0-based column the last scalar token started at */
+  /* Whether the last token was a JSON-like node - a quoted scalar or a
+     closing "]" or "}".  Inside a flow collection a ":" straight after one of
+     those is a mapping indicator even with nothing between them
+     (c-ns-flow-map-adjacent-value), which is what lets '{"a":1}' parse.
+
+     Only quoted scalars and indicators write this.  A plain scalar does not
+     need to clear it: two nodes cannot sit next to each other without an
+     indicator between them, and every indicator clears it.  A comment
+     deliberately leaves it alone, so the adjacent value still works when a
+     comment separates it from its key. */
+  bool last_json_like;
   int suppress_lf;        /* 1 if previous char was CR and LF should not advance line */
 
   int encoding_determined;
@@ -575,6 +586,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->context_depth = 0; /* Start in block context */
   s->node_indent = -1;  /* nothing open yet: the document root */
   s->last_scalar_col = 0;
+  s->last_json_like = false;
   s->last_indicator = 0;
   return s;
 }
@@ -806,6 +818,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       scanner_consume(s);
     }
 
+    s->last_json_like = false;
     tok->type = GTEXT_YAML_TOKEN_DIRECTIVE;
     s->token_payload = out;
     tok->u.scalar.ptr = out;
@@ -1153,7 +1166,7 @@ block_scalar_collected:
   gtext_yaml_dynbuf_free(&scalar);
 
     s->last_scalar_col = col - 1; /* col is 1-based */
-    tok->type = GTEXT_YAML_TOKEN_SCALAR;
+      tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (style == '>')
       ? GTEXT_YAML_SCALAR_STYLE_FOLDED
       : GTEXT_YAML_SCALAR_STYLE_LITERAL;
@@ -1193,6 +1206,7 @@ block_scalar_collected:
           /* A new document starts at the root again, with no block node
              open for a plain scalar to be measured against. */
           s->node_indent = -1;
+          s->last_json_like = false;
           tok->type = (c == '-') ? GTEXT_YAML_TOKEN_DOCUMENT_START : GTEXT_YAML_TOKEN_DOCUMENT_END;
           tok->offset = off;
           tok->line = line;
@@ -1208,6 +1222,37 @@ block_scalar_collected:
     }
   }
 
+  /* A ":" is a mapping indicator only where it ends a key: followed by white
+     space or the end of the line, and inside a flow collection also by one of
+     ", ] }" (5.3, and c-ns-flow-map-separate-value's "not followed by
+     ns-plain-safe").  Anywhere else it is an ordinary plain character.  That
+     was already true of a ":" reached part way through a scalar, which is why
+     "key: a :b" gives "a :b", but a ":" that *began* a node was still taken
+     as an indicator - so "- ::vector" and "::" were refused for having no key
+     in front of the colon, when both are plain scalars. */
+  if (c == ':') {
+    int nc;
+    if (s->cursor + 1 < s->input.len) {
+      nc = (unsigned char)s->input.data[s->cursor + 1];
+    } else if (!s->finished) {
+      return GTEXT_YAML_E_INCOMPLETE;
+    } else {
+      nc = -1;
+    }
+    const bool in_flow = scanner_current_context(s) != YAML_CONTEXT_BLOCK;
+    const bool ends_key = nc == -1 || nc == ' ' || nc == '\t'
+      || nc == '\n' || nc == '\r'
+      /* ns-plain-safe(flow-in) excludes every flow indicator, so a ":" in
+         front of one of them ends a key: "{a:{b: 1}}" is a nested mapping,
+         not the one scalar "a:{b". */
+      || (in_flow && (nc == ',' || nc == '[' || nc == ']'
+                   || nc == '{' || nc == '}'))
+      /* 7.4.2: after a JSON-like key the ":" may be adjacent, which is what
+         makes '{"a":1}' a mapping rather than the one scalar '"a":1'. */
+      || (in_flow && s->last_json_like);
+    if (!ends_key) goto scan_plain_scalar;
+  }
+
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
   if (is_indicator_char(c)) {
     /* Update context stack for flow collection boundaries */
@@ -1221,6 +1266,7 @@ block_scalar_collected:
     
     const bool opens_block_node = (c == ':' || c == '-' || c == '?')
       && scanner_current_context(s) == YAML_CONTEXT_BLOCK;
+    s->last_json_like = (c == ']' || c == '}');
 
     scanner_consume(s);
 
@@ -1490,6 +1536,7 @@ block_scalar_collected:
     gtext_yaml_dynbuf_free(&scalar);
 
     s->last_scalar_col = col - 1; /* col is 1-based */
+    s->last_json_like = true;
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (quote == '\'')
       ? GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED
@@ -1507,6 +1554,8 @@ block_scalar_collected:
   /* collect scalar into temp dynbuf without consuming input yet. We peek
      ahead to determine token completeness; only consume when token is
      confirmed complete to avoid losing bytes on incremental feeds. */
+scan_plain_scalar:
+  ;
   GTEXT_YAML_DynBuf scalar;
   if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
 
@@ -1785,8 +1834,15 @@ block_scalar_collected:
 
       /* The rest are indicators only where a node may begin (5.3).  Mid-scalar
          they are content, so "[a-b, c]" holds "a-b" rather than ending the
-         scalar at the dash. */
-      if (scalar.len == 0 && is_indicator_char(c)) {
+         scalar at the dash.
+
+         ":" is the exception: the rule just above has already decided
+         whether this one separates a key, and if it did not then it is a
+         plain character even at the start of the scalar - ns-plain-first
+         allows one when a plain-safe character follows. Ending the scalar
+         here instead left it empty, so "{x: :x}" produced no token at all
+         and the collection was reported as never closed. */
+      if (scalar.len == 0 && c != ':' && is_indicator_char(c)) {
         if (!(s->last_indicator == '!' && c == '!')) break;
       }
     }

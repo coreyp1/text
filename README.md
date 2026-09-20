@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Nine more came out of running yaml-test-suite. Quoted scalars now fold
+Ten more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -196,7 +196,10 @@ A block scalar that is the document's root was required to be indented past
 column 0, so `--- >` over three lines at column 0 collected nothing. In a
 folded scalar a blank line before a more-indented line lost its break. And
 a malformed block header - `|0`, `|10`, `|+-`, `| junk` - was read as
-something rather than refused.
+something rather than refused. And a `:` that begins a node is now an
+ordinary plain character where it does not end a key, so `- ::vector` and
+`{x: :x}` parse instead of being refused for having no key in front of the
+colon.
 
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
@@ -214,21 +217,28 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **69.6%** of the 368 cases that can be checked by
+this parser against it: **71.3%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
-81.7%** and **PyYAML at 77.1%** - so a mature implementation does not score
+82.0%** and **PyYAML at 77.3%** - so a mature implementation does not score
 100% here either. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. Sixty-five cases have been fixed since, in two batches:
-quoted-scalar line folding and directives, then a group of structural
-refusals - a second top-level node no longer silently replaces the first,
-a root block scalar is no longer required to be indented past column 0, a
-blank line beside a more-indented line in a folded scalar keeps its break,
-and a malformed block header is refused rather than read as something. The
-largest group still failing is the 48 documents that should be refused and
-are not.
+had suggested. Seventy cases have been fixed since, in three batches:
+quoted-scalar line folding and directives; a group of structural refusals -
+a second top-level node no longer silently replaces the first, a root block
+scalar is no longer required to be indented past column 0, a blank line
+beside a more-indented line in a folded scalar keeps its break, and a
+malformed block header is refused; and the rule that a `:` is a mapping
+indicator only where it ends a key. The largest group still failing is the
+48 documents that should be refused and are not.
+
+The denominator moved from 368 to 366 along the way, and that was a harness
+bug rather than progress: three suite cases carry an explicit null where the
+expected value goes, and the harness was checking whether the parser had
+refused the input before it tried to decode that. Refusing one of those
+scored as a defect while accepting it was skipped. It is measured before the
+answer is judged now, and the reference scores moved with it.
 
 ## Macros and Utilities
 

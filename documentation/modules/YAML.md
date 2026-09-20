@@ -38,11 +38,12 @@ arrives as the generic "Parse error".
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **69.6%** of the 368 cases that can be checked by value or
-by refusal; the same harness scores js-yaml at 81.7% and PyYAML at 77.1%.
+parser. It passes **71.3%** of the 366 cases that can be checked by value or
+by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
 Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
-sixty-five cases since came from quoted-scalar line folding, directives, and
-a group of structural refusals. There are no benchmarks.
+seventy cases since came from quoted-scalar line folding, directives, a
+group of structural refusals, and the rule that a `:` is a mapping indicator
+only where it ends a key. There are no benchmarks.
 
 **Verified:** the suite runs 1305 tests across 73 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
@@ -834,10 +835,10 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **69.6%** of the
+The parser targets YAML 1.2.2 and hits **71.3%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
-harness scores js-yaml at 81.7% and PyYAML at 77.1%, so neither reference
+harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference
 reaches 100% on this suite.
 
 That number arrived late and corrected an impression. Fifteen defects had
