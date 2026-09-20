@@ -14,6 +14,8 @@
 #include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/yaml/yaml_stream.h>
 
+#include "yaml_internal.h"
+
 typedef struct {
 	GTEXT_YAML_Event *items;
 	size_t head;
@@ -29,6 +31,36 @@ struct GTEXT_YAML_Reader {
 	bool finished;
 	bool stream_end_queued;
 };
+
+/**
+ * @brief Report a stream failure, preferring the scanner's own account of it.
+ *
+ * The stream hands back a status and keeps the detail, so asking it turns
+ * "Failed to parse YAML input" into the fault the scanner actually found and
+ * the line it found it on. @p fallback covers the failures that came from
+ * somewhere the scanner never saw.
+ */
+static void reader_report(
+	GTEXT_YAML_Reader *reader,
+	GTEXT_YAML_Error *out_err,
+	GTEXT_YAML_Status status,
+	const char *fallback
+) {
+	if (!out_err) return;
+	GTEXT_YAML_Error scan_err;
+	memset(&scan_err, 0, sizeof(scan_err));
+	if (reader && gtext_yaml_stream_last_error(reader->stream, &scan_err)
+			&& scan_err.message) {
+		out_err->code = scan_err.code;
+		out_err->message = scan_err.message;
+		out_err->offset = scan_err.offset;
+		out_err->line = scan_err.line;
+		out_err->col = scan_err.col;
+		return;
+	}
+	out_err->code = status;
+	out_err->message = fallback;
+}
 
 static void event_zero(GTEXT_YAML_Event *event) {
 	if (!event) return;
@@ -273,10 +305,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_feed(
 		}
 		GTEXT_YAML_Status status = gtext_yaml_stream_finish(reader->stream);
 		if (status != GTEXT_YAML_OK) {
-			if (out_err) {
-				out_err->code = status;
-				out_err->message = "Failed to finalize YAML stream";
-			}
+			reader_report(reader, out_err, status,
+				"Failed to finalize YAML stream");
 			return status;
 		}
 		reader->finished = true;
@@ -298,10 +328,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_feed(
 
 	GTEXT_YAML_Status status = gtext_yaml_stream_feed(reader->stream, (const char *)data, len);
 	if (status != GTEXT_YAML_OK) {
-		if (out_err) {
-			out_err->code = status;
-			out_err->message = "Failed to parse YAML input";
-		}
+		reader_report(reader, out_err, status, "Failed to parse YAML input");
 		return status;
 	}
 

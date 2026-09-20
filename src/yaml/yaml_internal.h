@@ -359,4 +359,20 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
 /* Stream internal API */
 GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(GTEXT_YAML_Stream *s, bool sync);
 
+/**
+ * @brief Report what the scanner said when it last refused a token.
+ *
+ * gtext_yaml_stream_feed() and gtext_yaml_stream_finish() hand back a status
+ * and nothing else, so a caller that wants to tell the user which fault it hit
+ * has to come back and ask. Returns false, leaving @p out alone, when the
+ * stream has not seen a scan fail.
+ *
+ * The message points at a string literal in the scanner and stays valid after
+ * the stream is freed; the struct carries nothing that needs releasing.
+ */
+GTEXT_INTERNAL_API bool gtext_yaml_stream_last_error(
+	const GTEXT_YAML_Stream *s,
+	GTEXT_YAML_Error *out
+);
+
 #endif /* GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H */

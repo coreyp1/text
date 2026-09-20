@@ -29,13 +29,12 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** 17 documents that yaml-test-suite says should be
-refused are accepted instead. That is the largest remaining group and it is
-not one defect - an unknown escape is copied through, a flow sequence
-accepts a leading comma, and content after a document-end marker is
-ignored. An empty node is also dropped rather than made null, so `-` on its
-own is `[]` where it should be `[null]`. Separately, a scanner error loses
-its message and arrives as the generic "Parse error".
+**Still unsupported:** six of the 366 checkable cases. One document that
+yaml-test-suite says should be refused is accepted instead - a node may
+carry two anchors, and the second silently replaces the first. Two valid
+documents are refused: an explicit `?` key inside a flow sequence, and a
+multi-line plain scalar under an explicit key. The remaining three differ in
+the value they produce.
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
@@ -54,7 +53,7 @@ scalar's continuation lines have to be, and rendering `!!set` and `!!omap` as
 the JSON they already are, and the line a flow pair's key and colon share.
 There are no benchmarks.
 
-**Verified:** the suite runs 2122 tests across 94 binaries with zero
+**Verified:** the suite runs 2130 tests across 95 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
 that has found two scanner hangs, a use-after-free and several leaks.
 
@@ -810,7 +809,7 @@ jobs:
 ## 13. Testing
 
 The YAML module is covered by 82 test files, part of a suite that runs
-2122 tests across 94 binaries with zero failures. They cover:
+2130 tests across 95 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -955,4 +954,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 537 YAML test cases, of 2122 across the suite, all passing
+**Test count:** 545 YAML test cases, of 2130 across the suite, all passing

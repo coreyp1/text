@@ -514,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 82 test files under `tests/yaml/`, carrying 537 of the suite's
-2122 test cases across 94 binaries, all passing. They cover the scalar styles,
+**Tests.** 83 test files under `tests/yaml/`, carrying 545 of the suite's
+2130 test cases across 95 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -622,11 +622,16 @@ The failures that remain group into a few shapes, largest first:
 
 - **1 document that should be refused is accepted**: a node may carry two
   anchors, and the second one silently replaces the first.
-- **A scanner error loses its message.** Every one surfaces as the
-  parser's generic "Parse error", because the stream layer drops the
-  `GTEXT_YAML_Error` the scanner filled in. Parser-level errors carry
-  their own text; scanner-level ones - an unterminated quoted scalar, a
-  malformed block header - do not.
+- **2 valid documents are refused**: an explicit `?` key inside a flow
+  sequence, and a multi-line plain scalar under an explicit key.
+- **3 differ in the value they produce**, in binary content, in the
+  white space a folded scalar keeps, and in how a directive carries across
+  a document boundary.
+
+A refused document says which fault it hit. The scanner describes
+everything it rejects, and that message now travels back with the status
+rather than being left behind in the token loop, so an unterminated quoted
+scalar and a stray tab no longer arrive as the same three words.
 
 ---
 

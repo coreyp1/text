@@ -113,7 +113,46 @@ struct GTEXT_YAML_Stream {
   bool sync_mode; /* If true, call scanner_finish after each feed */
   bool document_started; /* True if we've emitted DOCUMENT_START */
   bool document_closed; /* True if current document is closed */
+  /* What the scanner said when it last refused a token. The status alone
+     travels back to the caller through every return in the token loops, and
+     the message the scanner wrote went with the stack frame it was written
+     in, so callers reported "Parse error" for faults the scanner had already
+     described exactly. Keep it here and let them ask. */
+  GTEXT_YAML_Error last_error;
 };
+
+/**
+ * @brief Read the next token, keeping the message if the scan fails.
+ *
+ * Every scan goes through here. The scanner fills in the code, the message
+ * and the position and leaves the rest of the struct it is handed alone, so
+ * only those five fields are worth keeping - copying a context_snippet out of
+ * a local nobody wrote would hand the caller a pointer into dead stack.
+ *
+ * An incomplete token is not a failure: it means the input ran out mid-token
+ * and more may still arrive.
+ */
+static GTEXT_YAML_Status stream_scan(
+    GTEXT_YAML_Stream *s, GTEXT_YAML_Token *tok) {
+  GTEXT_YAML_Error err;
+  err.code = GTEXT_YAML_OK;
+  err.message = NULL;
+  err.offset = 0;
+  err.line = 0;
+  err.col = 0;
+  GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, tok, &err);
+  if (st != GTEXT_YAML_OK && st != GTEXT_YAML_E_INCOMPLETE) {
+    /* The scanner's code and the status it returns are the same value on
+       every path it takes, and the status is what the caller sees, so record
+       that one. */
+    s->last_error.code = st;
+    s->last_error.message = err.message;
+    s->last_error.offset = err.offset;
+    s->last_error.line = err.line;
+    s->last_error.col = err.col;
+  }
+  return st;
+}
 
 static GTEXT_YAML_Status stream_apply_alias_limit(GTEXT_YAML_Stream *s) {
   if (!s) return GTEXT_YAML_E_INVALID;
@@ -398,6 +437,21 @@ GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s)
   free(s);
 }
 
+GTEXT_INTERNAL_API bool gtext_yaml_stream_last_error(
+  const GTEXT_YAML_Stream * s,
+  GTEXT_YAML_Error * out
+) {
+  if (!s || !out || s->last_error.code == GTEXT_YAML_OK) return false;
+  /* Only the fields stream_scan() kept. The caller's snippet and token
+     strings are its own business and are left as it had them. */
+  out->code = s->last_error.code;
+  out->message = s->last_error.message;
+  out->offset = s->last_error.offset;
+  out->line = s->last_error.line;
+  out->col = s->last_error.col;
+  return true;
+}
+
 /* Internal: Set synchronous mode (for use by gtext_yaml_parse) */
 GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(
   GTEXT_YAML_Stream *s,
@@ -426,9 +480,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
   }
 
   GTEXT_YAML_Token tok;
-  GTEXT_YAML_Error err;
   for (;;) {
-    GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, &tok, &err);
+    GTEXT_YAML_Status st = stream_scan(s, &tok);
     if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data */
     if (st != GTEXT_YAML_OK) return st;
     if (tok.type == GTEXT_YAML_TOKEN_EOF) {
@@ -638,8 +691,7 @@ process_token:
         /* Anchor definition: read anchor name and store it.
            The next token (handled by subsequent iteration) will pick it up. */
         GTEXT_YAML_Token name_tok;
-        GTEXT_YAML_Error name_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &name_tok);
         if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
         if (nst != GTEXT_YAML_OK) return nst;
         if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
@@ -668,8 +720,7 @@ process_token:
         continue;
       } else if (tok.u.c == '!') {
         GTEXT_YAML_Token tag_tok;
-        GTEXT_YAML_Error tag_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &tag_tok, &tag_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &tag_tok);
         if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
         if (nst != GTEXT_YAML_OK) return nst;
 
@@ -688,8 +739,7 @@ process_token:
 
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
-          GTEXT_YAML_Error name_err;
-          nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
+          nst = stream_scan(s, &name_tok);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
             return GTEXT_YAML_E_BAD_TOKEN;
@@ -740,8 +790,7 @@ process_token:
       } else if (tok.u.c == '*') {
         /* Process alias immediately; if name incomplete, defer to next feed */
         GTEXT_YAML_Token next_tok;
-        GTEXT_YAML_Error next_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &next_tok, &next_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &next_tok);
         if (nst == GTEXT_YAML_E_INCOMPLETE) {
           s->pending_alias = true;
           return GTEXT_YAML_OK;
@@ -829,9 +878,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
   /* Drain any remaining tokens now that the scanner is finished. */
   for (;;) {
     GTEXT_YAML_Token tok;
-    GTEXT_YAML_Error err;
-    
-    GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, &tok, &err);
+
+    GTEXT_YAML_Status st = stream_scan(s, &tok);
     if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
     if (st != GTEXT_YAML_OK) return st;
     if (tok.type == GTEXT_YAML_TOKEN_EOF) {
@@ -1021,8 +1069,7 @@ process_token_finish:
       /* Handle anchor definition */
       if (tok.u.c == '&') {
         GTEXT_YAML_Token name_tok;
-        GTEXT_YAML_Error name_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &name_tok);
         if (nst != GTEXT_YAML_OK) return nst;
         if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
         
@@ -1051,8 +1098,7 @@ process_token_finish:
 
       if (tok.u.c == '!') {
         GTEXT_YAML_Token tag_tok;
-        GTEXT_YAML_Error tag_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &tag_tok, &tag_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &tag_tok);
         if (nst != GTEXT_YAML_OK) return nst;
 
         char buf[256];
@@ -1070,8 +1116,7 @@ process_token_finish:
 
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
-          GTEXT_YAML_Error name_err;
-          nst = gtext_yaml_scanner_next(s->scanner, &name_tok, &name_err);
+          nst = stream_scan(s, &name_tok);
           if (nst != GTEXT_YAML_OK) return nst;
           if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
             return GTEXT_YAML_E_BAD_TOKEN;
@@ -1123,8 +1168,7 @@ process_token_finish:
       /* Handle alias reference */
       if (tok.u.c == '*') {
         GTEXT_YAML_Token next_tok;
-        GTEXT_YAML_Error next_err;
-        GTEXT_YAML_Status nst = gtext_yaml_scanner_next(s->scanner, &next_tok, &next_err);
+        GTEXT_YAML_Status nst = stream_scan(s, &next_tok);
         if (nst == GTEXT_YAML_E_INCOMPLETE) {
           s->pending_alias = true;
           return GTEXT_YAML_OK;

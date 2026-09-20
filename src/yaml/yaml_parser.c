@@ -2013,6 +2013,46 @@ static bool property_left_of_open_collection(
 /**
  * @brief Streaming parser callback - builds DOM from events.
  */
+/**
+ * @brief Take the scanner's complaint off a stream before the stream is freed.
+ *
+ * Returns a zeroed error when the scanner never refused a token, which reads
+ * as "nothing to say" to parse_error_fallback() below.
+ */
+static GTEXT_YAML_Error stream_take_error(GTEXT_YAML_Stream *stream) {
+	GTEXT_YAML_Error e;
+	memset(&e, 0, sizeof(e));
+	if (stream) gtext_yaml_stream_last_error(stream, &e);
+	return e;
+}
+
+/**
+ * @brief Describe a parse failure that nothing more specific has described.
+ *
+ * A fault the scanner caught arrives here as a bare status, because the token
+ * loops in stream.c hand back nothing else; the scanner's own message says
+ * which fault it was and where, and is far better than the "Parse error" this
+ * used to report for every one of them. Leaves @p error alone when it already
+ * holds a failure - whoever set it was closer to the problem.
+ */
+static void parse_error_fallback(
+	GTEXT_YAML_Error *error,
+	GTEXT_YAML_Status status,
+	const GTEXT_YAML_Error *scan_err
+) {
+	if (!error || error->code != GTEXT_YAML_OK) return;
+	if (scan_err && scan_err->code != GTEXT_YAML_OK && scan_err->message) {
+		error->code = scan_err->code;
+		error->message = scan_err->message;
+		error->offset = scan_err->offset;
+		error->line = scan_err->line;
+		error->col = scan_err->col;
+		return;
+	}
+	error->code = status;
+	error->message = "Parse error";
+}
+
 static GTEXT_YAML_Status parse_callback(
 	GTEXT_YAML_Stream *s,
 	const void *event_payload,
@@ -3707,6 +3747,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 		status = gtext_yaml_stream_finish(stream);
 	}
 	
+	GTEXT_YAML_Error scan_err = stream_take_error(stream);
 	gtext_yaml_stream_free(stream);
 	
 	/* Finalize any open block collections */
@@ -3721,10 +3762,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	if (status != GTEXT_YAML_OK || parser.failed) {
 		parser_free(&parser);
 		yaml_context_free(ctx);
-		if (error && error->code == GTEXT_YAML_OK) {
-			error->code = status;
-			error->message = "Parse error";
-		}
+		parse_error_fallback(error, status, &scan_err);
 		return NULL;
 	}
 	
@@ -4123,6 +4161,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 	if (status == GTEXT_YAML_OK) {
 		status = gtext_yaml_stream_finish(stream);
 	}
+	GTEXT_YAML_Error scan_err = stream_take_error(stream);
 	gtext_yaml_stream_free(stream);
 
 	partial_capture_root(&state);
@@ -4131,10 +4170,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 		parser_free(&state.parser);
 		if (out_err) {
 			*out_err = state.last_error;
-			if (out_err->code == GTEXT_YAML_OK) {
-				out_err->code = status;
-				out_err->message = "Parse error";
-			}
+			parse_error_fallback(out_err, status, &scan_err);
 		}
 		for (size_t i = 0; i < state.error_count; i++) {
 			gtext_yaml_error_free(&state.errors[i]);
@@ -4560,6 +4596,7 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 		status = gtext_yaml_stream_finish(stream);
 	}
 	
+	GTEXT_YAML_Error scan_err = stream_take_error(stream);
 	gtext_yaml_stream_free(stream);
 	
 	/* Finalize any remaining document (stream doesn't emit STREAM_END) */
@@ -4589,10 +4626,7 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 			yaml_context_free(state.current_context);
 		}
 		
-		if (error && error->code == GTEXT_YAML_OK) {
-			error->code = status;
-			error->message = "Parse error";
-		}
+		parse_error_fallback(error, status, &scan_err);
 		return NULL;
 	}
 	
