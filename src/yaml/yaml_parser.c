@@ -2975,6 +2975,56 @@ static GTEXT_YAML_Status parse_callback(
 						break;
 					}
 
+					/* A single-pair entry of a flow sequence keeps its key
+					 * and its ":" on one line.  "[a: 1]" is ns-flow-pair,
+					 * whose key is ns-s-implicit-yaml-key(c) - a node
+					 * followed by s-separate-in-line?, which is white space
+					 * with no break in it (7.4).  So
+					 *
+					 *     [ key
+					 *       : value ]
+					 *
+					 * has no production, and it parsed as {"key": "value"}
+					 * (suite cases DK4H and ZXT5).
+					 *
+					 * A flow *mapping* is the opposite case and is left
+					 * alone.  ns-flow-map-yaml-key-entry reaches its ":"
+					 * across s-separate(n,c), which may hold a line break,
+					 * so {"foo"\n: "bar"} is well formed - the first draft
+					 * of this rule refused it and seven cases like it.
+					 *
+					 * An explicit key is exempt too: "? a" over ": b" is
+					 * what the "?" is for.  A key that is a collection
+					 * rather than a scalar is not covered, because it is the
+					 * pending scalar that carries the line.
+					 *
+					 * Two of the tests below cannot be made to change an
+					 * answer today, and are kept for scope rather than
+					 * effect.  !is_block keeps the rule where ns-flow-pair
+					 * is - a block sequence's "- key" over ": value" is
+					 * already refused, by the rule that a block mapping's
+					 * key shares its colon's line.  last_scalar_node keeps
+					 * it to a colon that has a key to pair with; a ":" with
+					 * no key before it is already refused too.  Both stop
+					 * this rule quietly taking over those shapes if the
+					 * rules that cover them ever move. */
+					if (p->stack.depth > 0
+						&& !p->stack.is_block[top]
+						&& p->stack.states[top] == STATE_SEQUENCE
+						&& !p->explicit_key_active
+						&& !p->explicit_key_pending
+						&& p->last_scalar_node != NULL
+						&& p->last_scalar_line >= 0
+						&& event->line != p->last_scalar_line) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Implicit key and its ':' on different lines";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					if (in_flow_mapping) {
 						p->stack.states[top] = STATE_MAPPING_VALUE;
 						break;
