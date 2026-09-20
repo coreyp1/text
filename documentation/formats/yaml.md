@@ -514,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 76 test files under `tests/yaml/`, carrying 528 of the suite's
-2113 test cases across 88 binaries, all passing. They cover the scalar styles,
+**Tests.** 77 test files under `tests/yaml/`, carrying 529 of the suite's
+2114 test cases across 89 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -585,8 +585,8 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **350
-pass, 95.6%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **351
+pass, 95.9%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
@@ -620,10 +620,11 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **6 documents that should be refused are accepted.** Still the largest
+- **5 documents that should be refused are accepted.** Still the largest
   group, and still not one defect: a node may carry two anchors, a tag may
   contain a comma, a tag handle defined in one document is still in scope in
-  the next, and a sequence item may sit at an indentation of its own.
+  the next, and a tab may stand in for the indentation of a flow
+  collection's continuation line or sit in front of a block entry's "-".
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
 - **A scanner error loses its message.** Every one surfaces as the

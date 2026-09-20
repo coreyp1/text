@@ -119,7 +119,7 @@ streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 2,113 tests across 88 binaries with zero failures, clean
+The test suite runs 2,114 tests across 89 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
 from `make test` output needs care: three binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
@@ -281,7 +281,7 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **95.6%** of the 366 cases that can be checked by
+this parser against it: **95.9%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now close to eleven points ahead of the better of the two.

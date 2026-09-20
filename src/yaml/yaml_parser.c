@@ -3371,6 +3371,24 @@ static GTEXT_YAML_Status parse_callback(
 						return GTEXT_YAML_E_INVALID;
 					}
 
+					/* Inside "[" or "{" there are only flow nodes:
+					 * c-flow-sequence holds ns-flow-seq-entry, and a block
+					 * sequence is not one of them (7.4).  A "-" there is
+					 * either plain content or an error, never an entry
+					 * indicator, and "[" over "- a" over "]" was building a
+					 * block sequence inside the flow one and giving
+					 * [["a"]].  Both references refuse it. */
+					if (p->stack.depth > 0
+						&& !p->stack.is_block[p->stack.depth - 1]) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Block sequence entry inside a flow collection";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					if (p->stack.depth > 0) {
 						size_t top = p->stack.depth - 1;
 						if (p->stack.is_block[top] &&
@@ -3402,6 +3420,45 @@ static GTEXT_YAML_Status parse_callback(
 								p->error->code = GTEXT_YAML_E_INVALID;
 								p->error->message =
 									"Block sequence entry where a mapping key belongs";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+					}
+
+					/* A nested sequence needs something waiting to hold it.
+					 * Inside a block sequence that is the entry indicator
+					 * above it, still open; once that entry has its node, a
+					 * "-" indented past the sequence belongs to nothing:
+					 *
+					 *     - key: value
+					 *      - item1
+					 *
+					 * became a second entry holding ["item1"] (suite case
+					 * ZVH3). l+block-sequence(n) is a run of s-indent(n)
+					 * c-l-block-seq-entry(n), so every entry of one sequence
+					 * is at the same column, and a deeper one has to be some
+					 * other node's value.
+					 *
+					 * A "-" after a *scalar* entry never reaches here: it
+					 * folds into that scalar as plain content, which is why
+					 * "- a" over " - b" is the one string "a - b".
+					 *
+					 * "Deeper" needs no test of its own. start_new is false
+					 * when the "-" is at the sequence's own column, and a
+					 * "-" left of it closed the sequence before reaching
+					 * this, so start_new already means deeper.  Neither does
+					 * "block": the rule above has already refused a "-"
+					 * inside a flow collection. */
+					if (start_new && p->stack.depth > 0) {
+						const size_t top = p->stack.depth - 1;
+						if (p->stack.states[top] == STATE_SEQUENCE &&
+							!(p->stack.flow_flags[top]
+								& GTEXT_YAML_BLOCK_ENTRY_OPEN)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message =
+									"Block sequence entry indented past its sequence";
 							}
 							return GTEXT_YAML_E_INVALID;
 						}
