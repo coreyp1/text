@@ -122,6 +122,80 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
   return c;
 }
 
+/**
+ * @brief Decide whether a plain scalar continues past the break at @p look.
+ *
+ * 7.3.3's ns-plain-multi-line: the scalar goes on while the lines below it
+ * are indented past the node it belongs to.  A run of empty lines counts, so
+ * @p out_breaks is the number of breaks crossed - one folds to a space, and
+ * more than one gives a line break each.
+ *
+ * @p flow tells it that a line beginning with a flow indicator ends the
+ * scalar rather than continuing it, which is what keeps "[a - b" over " , c"
+ * two entries rather than one.
+ */
+static bool plain_scalar_continues(
+    const GTEXT_YAML_Scanner *s,
+    size_t look,
+    bool flow,
+    size_t *out_breaks,
+    size_t *out_continue_at,
+    bool *out_need_more)
+{
+  size_t probe = look;
+  size_t breaks = 0;
+  *out_need_more = false;
+
+  for (;;) {
+    if (s->cursor + probe >= s->input.len) { *out_need_more = true; return false; }
+    char bc = s->input.data[s->cursor + probe];
+    if (bc == '\r') {
+      probe++;
+      if (s->cursor + probe < s->input.len
+          && s->input.data[s->cursor + probe] == '\n') {
+        probe++;
+      } else if (s->cursor + probe >= s->input.len) {
+        *out_need_more = true;
+        return false;
+      }
+    } else if (bc == '\n') {
+      probe++;
+    } else {
+      return false;
+    }
+    breaks++;
+
+    size_t sp = 0;
+    while (s->cursor + probe + sp < s->input.len
+           && s->input.data[s->cursor + probe + sp] == ' ') {
+      sp++;
+    }
+    if (s->cursor + probe + sp >= s->input.len) { *out_need_more = true; return false; }
+    char nc = s->input.data[s->cursor + probe + sp];
+    if (nc == '\n' || nc == '\r') { probe += sp; continue; } /* empty line */
+    if ((int)sp <= s->node_indent) return false;  /* dedent ends the scalar */
+    if (nc == '#') return false;                  /* a comment, not content */
+    if (flow && (nc == ',' || nc == '[' || nc == ']' || nc == '{' || nc == '}')) {
+      return false; /* the collection's own punctuation, not more scalar */
+    }
+    /* "---" and "..." open and close documents wherever they stand, so a
+       scalar never folds across one. */
+    if ((nc == '-' || nc == '.') && s->cursor + probe + sp + 2 < s->input.len
+        && s->input.data[s->cursor + probe + sp + 1] == nc
+        && s->input.data[s->cursor + probe + sp + 2] == nc) {
+      const size_t after = s->cursor + probe + sp + 3;
+      if (after >= s->input.len || s->input.data[after] == ' '
+          || s->input.data[after] == '\t' || s->input.data[after] == '\n'
+          || s->input.data[after] == '\r') {
+        return false;
+      }
+    }
+    *out_breaks = breaks;
+    *out_continue_at = probe + sp;
+    return true;
+  }
+}
+
 static GTEXT_YAML_Status scanner_tab_indent_error(
     const GTEXT_YAML_Scanner *s,
     GTEXT_YAML_Error *err,
@@ -1326,57 +1400,11 @@ block_scalar_collected:
          to (7.3.3 ns-plain-multi-line).  A single break folds to a space; a
          run of blank lines gives one line break each, as flow folding does. */
       if (c == '\r' || c == '\n') {
-        size_t probe = look;
         size_t breaks = 0;
         size_t continue_at = 0;
-        bool continues = false;
         bool need_more = false;
-
-        for (;;) {
-          if (s->cursor + probe >= s->input.len) { need_more = true; break; }
-          char bc = s->input.data[s->cursor + probe];
-          if (bc == '\r') {
-            probe++;
-            if (s->cursor + probe < s->input.len
-                && s->input.data[s->cursor + probe] == '\n') {
-              probe++;
-            } else if (s->cursor + probe >= s->input.len) {
-              need_more = true;
-              break;
-            }
-          } else if (bc == '\n') {
-            probe++;
-          } else {
-            break;
-          }
-          breaks++;
-
-          size_t sp = 0;
-          while (s->cursor + probe + sp < s->input.len
-                 && s->input.data[s->cursor + probe + sp] == ' ') {
-            sp++;
-          }
-          if (s->cursor + probe + sp >= s->input.len) { need_more = true; break; }
-          char nc = s->input.data[s->cursor + probe + sp];
-          if (nc == '\n' || nc == '\r') { probe += sp; continue; } /* blank */
-          if ((int)sp <= s->node_indent) break;   /* dedent ends the scalar */
-          if (nc == '#') break;                   /* a comment, not content */
-          /* "---" and "..." open and close documents wherever they stand, so
-             a scalar never folds across one. */
-          if ((nc == '-' || nc == '.') && s->cursor + probe + sp + 2 < s->input.len
-              && s->input.data[s->cursor + probe + sp + 1] == nc
-              && s->input.data[s->cursor + probe + sp + 2] == nc) {
-            const size_t after = s->cursor + probe + sp + 3;
-            if (after >= s->input.len || s->input.data[after] == ' '
-                || s->input.data[after] == '\t' || s->input.data[after] == '\n'
-                || s->input.data[after] == '\r') {
-              break;
-            }
-          }
-          continues = true;
-          continue_at = probe + sp;
-          break;
-        }
+        const bool continues =
+          plain_scalar_continues(s, look, false, &breaks, &continue_at, &need_more);
 
         /* Without the rest of the input there is no telling whether the
            scalar goes on, and this scanner cannot rewind to ask again. */
@@ -1518,7 +1546,34 @@ block_scalar_collected:
          space as a delimiter did not merely refuse "[a - b]": it silently
          split valid documents, so "[a b, c]" came out as three entries rather
          than two and "{k: v w, j: x}" was scrambled outright. */
-      if (c == '\r' || c == '\n') break;
+      if (c == '\r' || c == '\n') {
+        /* A flow scalar folds across a break the same way a block one does,
+           except that a line starting with the collection's own punctuation
+           ends it rather than continuing it. */
+        size_t breaks = 0;
+        size_t continue_at = 0;
+        bool need_more = false;
+        const bool continues =
+          plain_scalar_continues(s, look, true, &breaks, &continue_at, &need_more);
+
+        if (need_more && !s->finished) {
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_INCOMPLETE;
+        }
+        if (!continues || scalar.len == 0) break;
+
+        const size_t folded = (breaks == 1) ? 1 : (breaks - 1);
+        const char fold_ch = (breaks == 1) ? ' ' : '\n';
+        for (size_t fi = 0; fi < folded; fi++) {
+          if (!gtext_yaml_dynbuf_append(&scalar, &fold_ch, 1)) {
+            gtext_yaml_dynbuf_free(&scalar);
+            if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; }
+            return GTEXT_YAML_E_OOM;
+          }
+        }
+        look = continue_at;
+        continue;
+      }
 
       if (c == ' ' || c == '\t') {
         /* Look past the run of white space to see whether the scalar goes on.
@@ -1535,7 +1590,14 @@ block_scalar_collected:
           next_c = (unsigned char)s->input.data[s->cursor + look + ws_len];
         }
 
-        if (next_c == -1 || next_c == '\r' || next_c == '\n') break;
+        if (next_c == -1) break;
+        /* White space before a break is separation; step over it and let the
+           break decide whether the scalar goes on. */
+        if (next_c == '\r' || next_c == '\n') {
+          if (scalar.len == 0) break;
+          look += ws_len;
+          continue;
+        }
         if (next_c == '#') break; /* " #" opens a comment */
         if (next_c == ',' || next_c == '[' || next_c == ']'
             || next_c == '{' || next_c == '}') {

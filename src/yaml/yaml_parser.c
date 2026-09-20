@@ -41,6 +41,13 @@ typedef struct {
 	char *prefix;
 } tag_handle_entry;
 
+/* Per-level flow flags.  PAIR marks a "[a: 1]" single-pair mapping, which has
+ * no "}" and is closed by the "," or "]" that ends the entry.  ITEM_DONE says
+ * a flow collection already holds a complete entry, so the next one needs a
+ * "," in front of it. */
+#define GTEXT_YAML_FLOW_PAIR      0x1u
+#define GTEXT_YAML_FLOW_ITEM_DONE 0x2u
+
 /* Parser state for building DOM from events */
 typedef struct {
 	yaml_context *ctx;                  /* Context owns arena */
@@ -53,6 +60,7 @@ typedef struct {
 		int *states;                    /* State per level: 0=seq, 1=map_key, 2=map_value */
 		int *indents;                   /* Indent level for block collections */
 		bool *is_block;                 /* True if this level is block-style */
+		unsigned char *flow_flags;      /* GTEXT_YAML_FLOW_* bits, per level */
 		saved_temp *temps;              /* Saved temp state per level */
 		size_t capacity;
 		size_t depth;
@@ -138,14 +146,16 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->stack.states = (int *)malloc(p->stack.capacity * sizeof(int));
 	p->stack.indents = (int *)malloc(p->stack.capacity * sizeof(int));
 	p->stack.is_block = (bool *)malloc(p->stack.capacity * sizeof(bool));
+	p->stack.flow_flags = (unsigned char *)calloc(p->stack.capacity, 1);
 	p->stack.temps = (saved_temp *)calloc(p->stack.capacity, sizeof(saved_temp));
 	
 	if (!p->stack.nodes || !p->stack.states || !p->stack.indents ||
-		!p->stack.is_block || !p->stack.temps) {
+		!p->stack.is_block || !p->stack.flow_flags || !p->stack.temps) {
 		free(p->stack.nodes);
 		free(p->stack.states);
 		free(p->stack.indents);
 		free(p->stack.is_block);
+		free(p->stack.flow_flags);
 		free(p->stack.temps);
 		return false;
 	}
@@ -158,6 +168,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 		free(p->stack.states);
 		free(p->stack.indents);
 		free(p->stack.is_block);
+		free(p->stack.flow_flags);
 		free(p->stack.temps);
 		return false;
 	}
@@ -170,6 +181,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 		free(p->stack.states);
 		free(p->stack.indents);
 		free(p->stack.is_block);
+		free(p->stack.flow_flags);
 		free(p->stack.temps);
 		free(p->temp.items);
 		return false;
@@ -183,6 +195,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 		free(p->stack.states);
 		free(p->stack.indents);
 		free(p->stack.is_block);
+		free(p->stack.flow_flags);
 		free(p->stack.temps);
 		free(p->temp.items);
 		free(p->anchors.entries);
@@ -233,6 +246,7 @@ static void parser_free(parser_state *p) {
 	free(p->stack.states);
 	free(p->stack.indents);
 	free(p->stack.is_block);
+	free(p->stack.flow_flags);
 	free(p->stack.temps);
 	free(p->temp.items);
 	
@@ -930,24 +944,29 @@ static bool stack_push(
 		int *new_states = (int *)realloc(p->stack.states, new_cap * sizeof(int));
 		int *new_indents = (int *)realloc(p->stack.indents, new_cap * sizeof(int));
 		bool *new_is_block = (bool *)realloc(p->stack.is_block, new_cap * sizeof(bool));
+		unsigned char *new_flow_flags = (unsigned char *)realloc(p->stack.flow_flags, new_cap);
 		saved_temp *new_temps = (saved_temp *)realloc(p->stack.temps, new_cap * sizeof(saved_temp));
 		
-		if (!new_nodes || !new_states || !new_indents || !new_is_block || !new_temps) {
+		if (!new_nodes || !new_states || !new_indents || !new_is_block ||
+			!new_flow_flags || !new_temps) {
 			free(new_nodes);
 			free(new_states);
 			free(new_indents);
 			free(new_is_block);
+			free(new_flow_flags);
 			free(new_temps);
 			return false;
 		}
 		
 		/* Zero-initialize new slots */
 		memset(new_temps + p->stack.capacity, 0, (new_cap - p->stack.capacity) * sizeof(saved_temp));
+		memset(new_flow_flags + p->stack.capacity, 0, new_cap - p->stack.capacity);
 		
 		p->stack.nodes = new_nodes;
 		p->stack.states = new_states;
 		p->stack.indents = new_indents;
 		p->stack.is_block = new_is_block;
+		p->stack.flow_flags = new_flow_flags;
 		p->stack.temps = new_temps;
 		p->stack.capacity = new_cap;
 	}
@@ -982,6 +1001,7 @@ static bool stack_push(
 	p->stack.states[p->stack.depth] = state;
 	p->stack.indents[p->stack.depth] = indent;
 	p->stack.is_block[p->stack.depth] = is_block;
+	p->stack.flow_flags[p->stack.depth] = 0;
 	p->stack.depth++;
 	return true;
 }
@@ -1379,6 +1399,9 @@ static GTEXT_YAML_Status capture_explicit_key(
 	return GTEXT_YAML_OK;
 }
 
+static void flow_entry_completed(parser_state *p);
+static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p);
+
 static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	GTEXT_YAML_Node *node = NULL;
 	char *anchor = NULL;
@@ -1483,10 +1506,98 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 			}
 			return GTEXT_YAML_E_OOM;
 		}
+		flow_entry_completed(p);
 		maybe_finish_block_mapping_value(p);
 	}
 
 	return GTEXT_YAML_OK;
+}
+
+/**
+ * @brief Note that a flow collection now holds a complete entry.
+ *
+ * The next one needs a "," in front of it.  Within a line two words are one
+ * plain scalar, so this only ever fires across a line break: "[a" over "b]"
+ * is two entries with nothing between them, which is not a flow sequence.
+ */
+static void flow_entry_completed(parser_state *p) {
+	if (!p || p->stack.depth == 0) return;
+	const size_t top = p->stack.depth - 1;
+	if (p->stack.is_block[top]) return;
+	if (p->stack.states[top] == STATE_SEQUENCE) {
+		p->stack.flow_flags[top] |= GTEXT_YAML_FLOW_ITEM_DONE;
+		return;
+	}
+	if (p->stack.states[top] == STATE_MAPPING_KEY ||
+		p->stack.states[top] == STATE_MAPPING_VALUE) {
+		/* A flow mapping's entry is a whole pair, so it is complete only when
+		 * the value has landed and the alternating list is even again. */
+		if (p->temp.count > 0 && (p->temp.count % 2) == 0) {
+			p->stack.flow_flags[top] |= GTEXT_YAML_FLOW_ITEM_DONE;
+		}
+	}
+}
+
+/**
+ * @brief Refuse a second entry where the first was never separated from it.
+ */
+static GTEXT_YAML_Status flow_entry_needs_separator(parser_state *p) {
+	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
+	const size_t top = p->stack.depth - 1;
+	if (p->stack.is_block[top]) return GTEXT_YAML_OK;
+	if (!(p->stack.flow_flags[top] & GTEXT_YAML_FLOW_ITEM_DONE)) return GTEXT_YAML_OK;
+
+	p->failed = true;
+	if (p->error) {
+		p->error->code = GTEXT_YAML_E_INVALID;
+		p->error->message = "Flow collection entries must be separated by ','";
+	}
+	return GTEXT_YAML_E_INVALID;
+}
+
+/**
+ * @brief Close a "[a: 1]" single-pair mapping if one is open.
+ *
+ * Such a pair is opened by a ":" inside a flow sequence and has no "}" to
+ * close it, so the "," or "]" that ends the entry closes it instead.  A
+ * pair whose value never arrived gets the null it stands for, the same as
+ * anywhere else.
+ */
+static GTEXT_YAML_Status close_flow_pair(parser_state *p) {
+	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
+	if (!(p->stack.flow_flags[p->stack.depth - 1] & GTEXT_YAML_FLOW_PAIR)) return GTEXT_YAML_OK;
+
+	if ((p->temp.count % 2) == 1 && !mapping_supply_null_value(p)) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_OOM;
+			p->error->message = "Out of memory completing flow pair";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	return finalize_top_collection(p);
+}
+
+/**
+ * @brief Refuse a flow collection that the input ended inside.
+ *
+ * close_block_contexts() deliberately stops at a flow collection, because
+ * indentation says nothing about where "[" and "{" end.  Nothing else closed
+ * them either, so input ending inside one left the stack standing and the
+ * root never set - and a document with a NULL root was handed back as a
+ * success.  A caller that checked only for a NULL document got an empty one
+ * instead of an error.
+ */
+static GTEXT_YAML_Status check_flow_contexts_closed(parser_state *p) {
+	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
+	if (p->stack.is_block[p->stack.depth - 1]) return GTEXT_YAML_OK;
+
+	p->failed = true;
+	if (p->error && p->error->code == GTEXT_YAML_OK) {
+		p->error->code = GTEXT_YAML_E_INVALID;
+		p->error->message = "Unterminated flow collection";
+	}
+	return GTEXT_YAML_E_INVALID;
 }
 
 /**
@@ -1760,6 +1871,41 @@ static GTEXT_YAML_Status parse_callback(
 				 * answerable. */
 				const bool first_in_level = (p->temp.count == 0);
 
+				{
+					GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
+					if (sep_status != GTEXT_YAML_OK) return sep_status;
+				}
+
+				/* A scalar indented past its block mapping is that mapping's
+				 * value, and only when a key above is still waiting for one.
+				 * With every key already paired there is nothing for it to be,
+				 * and it used to become a trailing key with a null value - so
+				 * "a: |" over a deeper "deep" over a shallower "shallow" gave
+				 * {"a": "deep\n", "shallow": null} for input no other parser
+				 * accepts.  A "-" never reaches here, so a block sequence at
+				 * its key's own column is unaffected.
+				 *
+				 * The column is the line's first non-space, not the scalar's
+				 * own: a tag or anchor sits before the scalar and belongs to
+				 * the same node, so "!!str true" as a key starts where the
+				 * tag does. */
+				const int node_col = line_key_col_from_offset(p, event->offset);
+				if (node_col >= 0 &&
+					p->stack.is_block[p->stack.depth - 1] &&
+					(p->stack.states[p->stack.depth - 1] == STATE_MAPPING_KEY ||
+					 p->stack.states[p->stack.depth - 1] == STATE_MAPPING_VALUE) &&
+					p->stack.indents[p->stack.depth - 1] >= 0 &&
+					node_col > p->stack.indents[p->stack.depth - 1] &&
+					(p->temp.count % 2) == 0) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message =
+							"Scalar indented deeper than its mapping with no key to hold it";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+
 				if (!temp_add(p, node)) {
 					p->failed = true;
 					if (p->error) {
@@ -1783,6 +1929,7 @@ static GTEXT_YAML_Status parse_callback(
 				p->last_scalar_in_temp = true;
 				p->last_scalar_temp_depth = p->stack.depth;
 
+				flow_entry_completed(p);
 				maybe_finish_block_mapping_value(p);
 			}
 
@@ -1798,6 +1945,14 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_SEQUENCE_START: {
 			/* Start building a sequence - we don't know the size yet */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
+
+			/* Checked as this one opens, not as it closes: by the time it
+			 * closes its own level is on the stack and the entry it has to be
+			 * separated from is a level below. */
+			{
+				GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
+				if (sep_status != GTEXT_YAML_OK) return sep_status;
+			}
 			
 			/* Push placeholder (we'll create the actual node on SEQUENCE_END) */
 			/* Store anchor and tag from event for later use */
@@ -1824,6 +1979,12 @@ static GTEXT_YAML_Status parse_callback(
 		}
 		
 		case GTEXT_YAML_EVENT_SEQUENCE_END: {
+			/* A "[a: 1]" pair has no "}" of its own; the "]" that ends the
+			 * entry closes it. */
+			{
+				GTEXT_YAML_Status pair_status = close_flow_pair(p);
+				if (pair_status != GTEXT_YAML_OK) return pair_status;
+			}
 			/* Get anchor and tag from saved stack state */
 			char *anchor = NULL;
 			char *tag = NULL;
@@ -1899,6 +2060,7 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+					flow_entry_completed(p);
 					maybe_finish_block_mapping_value(p);
 				}
 			}
@@ -1912,6 +2074,11 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_MAPPING_START: {
 			/* Start building a mapping */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
+
+			{
+				GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
+				if (sep_status != GTEXT_YAML_OK) return sep_status;
+			}
 			
 			if (!stack_push(
 				p,
@@ -2022,6 +2189,7 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+					flow_entry_completed(p);
 					maybe_finish_block_mapping_value(p);
 				}
 			}
@@ -2107,6 +2275,8 @@ static GTEXT_YAML_Status parse_callback(
 					return explicit_status;
 				}
 				if (!explicit_handled) {
+					GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
+					if (sep_status != GTEXT_YAML_OK) return sep_status;
 					if (!temp_add(p, node)) {
 						p->failed = true;
 						if (p->error) {
@@ -2115,6 +2285,7 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+					flow_entry_completed(p);
 					maybe_finish_block_mapping_value(p);
 				}
 			}
@@ -2131,6 +2302,10 @@ static GTEXT_YAML_Status parse_callback(
 			switch (ch) {
 				case '[':
 					/* Start flow sequence (fallback if START event not emitted) */
+					{
+						GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
+						if (sep_status != GTEXT_YAML_OK) return sep_status;
+					}
 					if (!stack_push(
 						p,
 						NULL,
@@ -2154,6 +2329,10 @@ static GTEXT_YAML_Status parse_callback(
 					
 				case ']': {
 					/* End flow sequence - create node with collected items */
+					{
+						GTEXT_YAML_Status pair_status = close_flow_pair(p);
+						if (pair_status != GTEXT_YAML_OK) return pair_status;
+					}
 					if (p->stack.depth == 0 || p->stack.states[p->stack.depth - 1] != STATE_SEQUENCE) {
 						p->failed = true;
 						if (p->error) {
@@ -2218,6 +2397,7 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_OOM;
 						}
+						flow_entry_completed(p);
 						maybe_finish_block_mapping_value(p);
 					}
 
@@ -2323,6 +2503,7 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_OOM;
 						}
+						flow_entry_completed(p);
 						maybe_finish_block_mapping_value(p);
 					}
 
@@ -2389,6 +2570,55 @@ static GTEXT_YAML_Status parse_callback(
 						break;
 					}
 
+					/* A ":" directly inside a flow sequence makes that entry a
+					 * single-pair mapping: "[a: 1]" is "[{a: 1}]".  The pair
+					 * closes at the next "," or "]" rather than at a "}", so
+					 * the level is marked to say so.  Without this the ":" fell
+					 * through to the block-mapping path below and pushed a
+					 * block level inside the sequence, which then swallowed the
+					 * "]" that should have closed it. */
+					if (p->stack.depth > 0 && !p->stack.is_block[top] &&
+						p->stack.states[top] == STATE_SEQUENCE) {
+						GTEXT_YAML_Node *pair_key = detach_last_scalar(p);
+						if (!pair_key && p->temp.count > 0) {
+							/* The key may be a collection rather than a scalar,
+							 * as in "[[1]: 2]", and detach_last_scalar() only
+							 * knows about scalars. */
+							pair_key = p->temp.items[--p->temp.count];
+						}
+						if (!pair_key) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message = "Mapping key not found before ':'";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
+						size_t pair_offset = 0;
+						int pair_line = 0, pair_col = 0;
+						node_get_source_location(pair_key, &pair_offset, &pair_line, &pair_col);
+						if (!stack_push(p, NULL, STATE_MAPPING_VALUE, NULL, NULL,
+								-1, false, pair_offset, pair_line, pair_col)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory starting flow pair";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->stack.flow_flags[p->stack.depth - 1] |= GTEXT_YAML_FLOW_PAIR;
+						if (!temp_add(p, pair_key)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory starting flow pair";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+						p->expect_mapping_value = true;
+						break;
+					}
+
 					if (key_indent < 0) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
@@ -2406,6 +2636,20 @@ static GTEXT_YAML_Status parse_callback(
 					}
 
 					if (in_block_mapping && p->stack.indents[top] == key_indent) {
+						/* The scalar before a ":" is its key, and it is held
+						 * provisionally as the previous key's value until this
+						 * ":" arrives to claim it.  An even count means no such
+						 * scalar is outstanding, so this ":" has no key at all:
+						 * "key: a : b" used to yield {"key": "a", "b": null},
+						 * silently turning the tail of a value into a pair. */
+						if ((p->temp.count % 2) == 0) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_INVALID;
+								p->error->message = "Mapping key missing before ':'";
+							}
+							return GTEXT_YAML_E_INVALID;
+						}
 						p->stack.states[top] = STATE_MAPPING_VALUE;
 						p->expect_mapping_value = true;
 						break;
@@ -2566,7 +2810,13 @@ static GTEXT_YAML_Status parse_callback(
 					
 				case ',':
 					/* Item separator - handle mapping state flip */
+					{
+						GTEXT_YAML_Status pair_status = close_flow_pair(p);
+						if (pair_status != GTEXT_YAML_OK) return pair_status;
+					}
 					if (p->stack.depth > 0) {
+						p->stack.flow_flags[p->stack.depth - 1] &=
+							(unsigned char)~GTEXT_YAML_FLOW_ITEM_DONE;
 						const size_t sep_top = p->stack.depth - 1;
 						const bool in_flow_map = !p->stack.is_block[sep_top] &&
 							(p->stack.states[sep_top] == STATE_MAPPING_KEY ||
@@ -2747,6 +2997,9 @@ GTEXT_YAML_Document *yaml_parse_document(
 	/* Finalize any open block collections */
 	if (status == GTEXT_YAML_OK && !parser.failed) {
 		status = close_block_contexts(&parser, -1);
+	}
+	if (status == GTEXT_YAML_OK && !parser.failed) {
+		status = check_flow_contexts_closed(&parser);
 	}
 	
 	/* Check if parsing succeeded */

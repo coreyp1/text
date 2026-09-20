@@ -133,19 +133,47 @@ TEST(YamlBlockStructure, MatchesReferenceImplementation) {
 	}
 }
 
-/* Still open. Each of these is malformed and PyYAML raises on it; this parser
-   accepts it instead. Unlike the two defects above, none of them is a valid
-   document being read wrongly - they are invalid documents being let through,
-   so they are recorded rather than fixed here.
-
-   The first three are a bare scalar sitting where nothing expects one, after
-   a block scalar has already supplied the value. The fourth is a key inside a
-   block sequence entry whose scalar is already complete. */
-TEST(YamlBlockStructure, DISABLED_RefusesScalarsWithNoPlaceToGo) {
+/* A scalar indented past its block mapping is that mapping's value, and only
+   while a key above is still waiting for one. With every key already paired
+   there is nothing for it to be, and it used to become a trailing key with a
+   null value - so a block scalar followed by a line that dedents out of it,
+   but not back to the mapping, produced {"a": "deep\n", "shallow": null} for
+   input neither PyYAML nor js-yaml accepts. */
+TEST(YamlBlockStructure, RefusesScalarsWithNoPlaceToGo) {
 	EXPECT_EQ(Render("a: |\n    deep\n  shallow\n"), std::string(""));
 	EXPECT_EQ(Render("a: |\n  one\n b\n"), std::string(""));
 	EXPECT_EQ(Render("a: >\n    one\n  two\n"), std::string(""));
+	/* A plain value does continue onto an indented line, so this one stands:
+	   the rule above fires only where the value is already complete. */
+	EXPECT_EQ(Render("a: 1\n  b\n"), std::string("{\"a\": \"1 b\"}"));
+}
+
+/* The column that decides it is the line's first non-space, not the scalar's
+   own: a tag or anchor sits before the scalar and belongs to the same node,
+   so "!!str true" as a key starts where the tag does. */
+TEST(YamlBlockStructure, ATaggedKeyStartsWhereItsTagDoes) {
+	EXPECT_EQ(Render("true: 1\n!!str true: 2\n"),
+		std::string("{true: 1, \"true\": 2}"));
+	EXPECT_EQ(Render("a: 1\n&x b: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
+}
+
+/* A key inside a block sequence entry whose scalar is already complete. */
+TEST(YamlBlockStructure, RefusesAKeyInsideACompleteSequenceEntry) {
 	EXPECT_EQ(Render("a:\n- 1\n  b: 2\n"), std::string(""));
+}
+
+/* The scalar before a ":" is its key, held provisionally as the previous
+   key's value until the ":" claims it. With none outstanding the ":" has no
+   key at all, and "key: a : b" used to yield {"key": "a", "b": null} - the
+   tail of a value silently turned into a pair. A ":" with no space after it
+   is ordinary content and is unaffected. */
+TEST(YamlBlockStructure, RefusesAColonWithNoKeyBeforeIt) {
+	EXPECT_EQ(Render("key: a : b\n"), std::string(""));
+	EXPECT_EQ(Render("key: a: b\n"), std::string(""));
+	EXPECT_EQ(Render("a: 1\n: 2\n"), std::string(""));
+	EXPECT_EQ(Render("key: a :b\n"), std::string("{\"key\": \"a :b\"}"));
+	EXPECT_EQ(Render("a: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
+	EXPECT_EQ(Render("? a\n: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
 }
 
 int main(int argc, char **argv) {

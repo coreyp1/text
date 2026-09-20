@@ -177,18 +177,20 @@ TEST(YamlPlainScalarSpaces, StopsAtADocumentMarkerOrComment) {
 	EXPECT_EQ(Render("a\n#c\n"), std::string("\"a\""));
 }
 
-/* Still open, and each differs from PyYAML.
+/* These were recorded here as open and are now fixed; the flow cases they
+   cover live in test-yaml-flow-collections.cpp.
 
-   A plain scalar in a flow collection does not fold across a line break, so
-   "[a" over an indented "b]" stays two entries. A single-pair mapping
-   written directly in a flow sequence ("[a: 1]") is not built. And two
-   malformed inputs are accepted rather than refused: a tab inside a flow
-   plain scalar, and a comment opened inside a flow collection. */
-TEST(YamlPlainScalarSpaces, DISABLED_FlowGapsAgainstTheReference) {
-	EXPECT_EQ(Render("key: [a\n  b]\n"), std::string("{\"key\": [\"a b\"]}"));
-	EXPECT_EQ(Render("key: [a: 1]\n"), std::string("{\"key\": [{\"a\": 1}]}"));
-	EXPECT_EQ(Render("key: [a\tb]\n"), std::string(""));
-	EXPECT_EQ(Render("key: [a #b, c]\n"), std::string(""));
+   The tab is the exception, and it is not a defect. PyYAML raises on a tab
+   anywhere in a plain scalar, but that is a YAML 1.1 rule - 1.2's
+   nb-ns-plain-in-line allows s-white, which includes a tab, between plain
+   characters, and js-yaml keeps it. PyYAML rejects "key:\ta" on the same
+   grounds, which no reading of 1.2 supports. */
+TEST(YamlPlainScalarSpaces, ATabInsideAPlainScalarIsContent) {
+	/* Render() writes a tab as the two characters "\\t", so the expectation
+	   carries them literally. */
+	EXPECT_EQ(Render("key: [a\tb]\n"), std::string("{\"key\": [\"a\\tb\"]}"));
+	EXPECT_EQ(Render("key: a\tb\n"), std::string("{\"key\": \"a\\tb\"}"));
+	EXPECT_EQ(Render("key:\ta\n"), std::string("{\"key\": \"a\"}"));
 }
 
 int main(int argc, char **argv) {
