@@ -295,9 +295,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
+      /* A "..." with no document open closes nothing: l-document-suffix
+         stands on its own in a stream (9.2), and "..." by itself is a
+         stream with no documents in it. Opening one here so that it could
+         be closed gave every such suffix a null document of its own - a
+         bare "..." parsed as one null, and one between two documents put a
+         third between them. */
       if (!s->document_started || s->document_closed) {
-        GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
-        if (rc != GTEXT_YAML_OK) return rc;
+        continue;
       }
       GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
       if (rc != GTEXT_YAML_OK) return rc;
@@ -579,9 +584,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
+      /* A "..." with no document open closes nothing: l-document-suffix
+         stands on its own in a stream (9.2), and "..." by itself is a
+         stream with no documents in it. Opening one here so that it could
+         be closed gave every such suffix a null document of its own - a
+         bare "..." parsed as one null, and one between two documents put a
+         third between them. */
       if (!s->document_started || s->document_closed) {
-        GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
-        if (rc != GTEXT_YAML_OK) return rc;
+        continue;
       }
       GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
       if (rc != GTEXT_YAML_OK) return rc;

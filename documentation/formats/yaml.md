@@ -582,14 +582,14 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **296
-pass, 80.9%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **306
+pass, 83.6%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. A hundred and five cases have been
-fixed since, in five batches: quoted-scalar line folding and directives; a
+The first run scored 191 of 368, 51.9%. A hundred and fifteen cases have
+been fixed since, in six batches: quoted-scalar line folding and directives; a
 group of structural refusals - a second top-level node, a root block
 scalar's indentation, a folded scalar's blank lines, and the block scalar
 header; the rule that `:`, `-` and `?` are indicators only where nothing
@@ -597,7 +597,9 @@ plain-safe follows them; tabs, which were refused anywhere in leading white
 space when only indentation is forbidden to them; and a group of positional
 rules - a scalar no `:` ever claimed is not a key, a comment needs white
 space in front of it, and a block entry cannot start beside a node already
-on its line.
+on its line; and a group around documents and anchors - a lone `...` no
+longer invents a document, a stream may hold none at all, an anchor may be
+redefined, and an alias may stand where a key does.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,

@@ -83,6 +83,12 @@ typedef struct {
 	/* List of alias nodes to resolve after parsing */
 	struct {
 		GTEXT_YAML_Node **nodes;        /* Array of alias nodes */
+		/* The node each alias pointed at when it was read. An anchor may be
+		 * redefined, and an alias refers to "the most recent preceding node
+		 * having the same anchor" (3.2.2.2), so the binding has to be taken
+		 * at the alias rather than from the anchor map once parsing has
+		 * finished. NULL where the anchor was not yet known. */
+		GTEXT_YAML_Node **targets;
 		size_t count;
 		size_t capacity;
 	} aliases;
@@ -197,7 +203,12 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	/* Allocate alias list */
 	p->aliases.capacity = 16;
 	p->aliases.nodes = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
-	if (!p->aliases.nodes) {
+	p->aliases.targets = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
+	if (!p->aliases.nodes || !p->aliases.targets) {
+		free(p->aliases.nodes);
+		free(p->aliases.targets);
+		p->aliases.nodes = NULL;
+		p->aliases.targets = NULL;
 		free(p->stack.nodes);
 		free(p->stack.states);
 		free(p->stack.indents);
@@ -266,6 +277,7 @@ static void parser_free(parser_state *p) {
 	
 	/* Free alias list */
 	free(p->aliases.nodes);
+	free(p->aliases.targets);
 
 	free(p->pending_leading_comment);
 
@@ -741,13 +753,18 @@ static GTEXT_YAML_Document *yaml_parse_json_document_internal(
 static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEXT_YAML_Node *node) {
 	if (!name || !node) return GTEXT_YAML_OK;  /* No anchor to register */
 
-	if (lookup_anchor(p, name)) {
-		p->failed = true;
-		if (p->error) {
-			p->error->code = GTEXT_YAML_E_INVALID;
-			p->error->message = "Duplicate anchor name";
+	/* An anchor may be redefined, and the most recent definition is the one
+	 * an alias resolves to (3.2.2.2: "the alias node refers to the most
+	 * recent preceding node having the same anchor"). This refused the
+	 * second definition outright, which made spec example 7.1 unparseable.
+	 * Overwrite the entry so later aliases see the new node and earlier ones,
+	 * already resolved, keep the old. */
+	for (size_t i = 0; i < p->anchors.count; i++) {
+		if (p->anchors.entries[i].name
+				&& strcmp(p->anchors.entries[i].name, name) == 0) {
+			p->anchors.entries[i].node = node;
+			return GTEXT_YAML_OK;
 		}
-		return GTEXT_YAML_E_INVALID;
 	}
 
 	/* Check if we need to grow the anchor map */
@@ -788,7 +805,11 @@ static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEX
 /**
  * @brief Track an alias node for later resolution.
  */
-static bool track_alias(parser_state *p, GTEXT_YAML_Node *alias_node) {
+static bool track_alias(
+	parser_state *p,
+	GTEXT_YAML_Node *alias_node,
+	GTEXT_YAML_Node *target
+) {
 	if (!alias_node) return true;
 	
 	/* Check if we need to grow the alias list */
@@ -799,9 +820,15 @@ static bool track_alias(parser_state *p, GTEXT_YAML_Node *alias_node) {
 		);
 		if (!new_nodes) return false;
 		p->aliases.nodes = new_nodes;
+		GTEXT_YAML_Node **new_targets = (GTEXT_YAML_Node **)realloc(
+			p->aliases.targets, new_cap * sizeof(GTEXT_YAML_Node *)
+		);
+		if (!new_targets) return false;
+		p->aliases.targets = new_targets;
 		p->aliases.capacity = new_cap;
 	}
 	
+	p->aliases.targets[p->aliases.count] = target;
 	p->aliases.nodes[p->aliases.count++] = alias_node;
 	return true;
 }
@@ -889,7 +916,8 @@ static GTEXT_YAML_Status resolve_aliases(parser_state *p) {
 		alias_count++;
 		
 		const char *anchor_name = alias->as.alias.anchor_name;
-		GTEXT_YAML_Node *target = lookup_anchor(p, anchor_name);
+		GTEXT_YAML_Node *target = p->aliases.targets[i];
+		if (!target) target = lookup_anchor(p, anchor_name);
 		
 		if (!target) {
 			/* Unknown anchor */
@@ -1358,8 +1386,12 @@ static bool block_key_may_start_at(const parser_state *p, size_t offset) {
 	}
 
 	i = line_start;
+	/* "*" is in the run because an alias event's offset points at the name
+	   rather than at the indicator, and an alias may stand as a key:
+	   "*b : *a" is a mapping whose key is whatever &b named (7.1). */
 	while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t'
-			|| buffer[i] == '-' || buffer[i] == '?' || buffer[i] == ':')) {
+			|| buffer[i] == '-' || buffer[i] == '?' || buffer[i] == ':'
+			|| buffer[i] == '*')) {
 		i++;
 	}
 	/* An anchor and a tag, in either order, each running to white space. */
@@ -2422,7 +2454,10 @@ static GTEXT_YAML_Status parse_callback(
 			parser_attach_leading_comment(p, node);
 			
 			/* Track alias for later resolution */
-			if (!track_alias(p, node)) {
+			/* Bound here rather than after the parse: an anchor may be
+			 * redefined, and this alias means whichever node held the name
+			 * when it was written. */
+			if (!track_alias(p, node, lookup_anchor(p, anchor_name))) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -2435,6 +2470,8 @@ static GTEXT_YAML_Status parse_callback(
 			if (p->stack.depth == 0) {
 				GTEXT_YAML_Status root_status = set_document_root(p, node);
 				if (root_status != GTEXT_YAML_OK) return root_status;
+				p->last_scalar_in_root = true;
+				p->last_scalar_in_temp = false;
 			} else {
 				explicit_status = capture_explicit_key(p, node, &explicit_handled);
 				if (explicit_status != GTEXT_YAML_OK) {
@@ -2451,9 +2488,24 @@ static GTEXT_YAML_Status parse_callback(
 						}
 						return GTEXT_YAML_E_OOM;
 					}
+					p->last_scalar_in_root = false;
+					p->last_scalar_in_temp = true;
+					p->last_scalar_temp_depth = p->stack.depth;
 					flow_entry_completed(p);
 					maybe_finish_block_mapping_value(p);
 				}
+			}
+
+			/* An alias may stand where a key does - "*b : *a" is a mapping
+			 * whose key is whatever &b named (7.1) - so the ":" that follows
+			 * has to find it the same way it finds a scalar. Without this it
+			 * looked for a key on an earlier line and refused the document. */
+			if (!explicit_handled) {
+				p->last_scalar_node = node;
+				p->last_scalar_line = event->line;
+				p->last_scalar_col = event->col;
+				p->last_scalar_offset = event->offset;
+				p->last_scalar_key_col = line_key_col_from_offset(p, event->offset);
 			}
 
 			p->last_emitted_node = node;
@@ -4133,6 +4185,24 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 		return NULL;
 	}
 	
+	/* A stream may legitimately hold no documents at all - an empty input,
+	 * or a lone "..." (9.2, where l-document-suffix stands on its own). The
+	 * array was left NULL there, which every caller reads as a failure, so
+	 * both came back as parse errors. Hand back an empty array instead:
+	 * callers free it with free() the same way. */
+	if (state.count == 0 && !state.documents) {
+		state.documents =
+			(GTEXT_YAML_Document **)malloc(sizeof(GTEXT_YAML_Document *));
+		if (!state.documents) {
+			if (error) {
+				error->code = GTEXT_YAML_E_OOM;
+				error->message = "Out of memory allocating documents array";
+			}
+			return NULL;
+		}
+		state.documents[0] = NULL;
+	}
+
 	*document_count = state.count;
 	return state.documents;
 }

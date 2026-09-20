@@ -34,77 +34,10 @@
 #include <string>
 #include <ghoti.io/text/yaml.h>
 
+#include "yaml_render.h"
+
 namespace {
 
-void RenderInto(const GTEXT_YAML_Node *n, std::string &out) {
-	if (!n) { out += "<null-node>"; return; }
-	switch (gtext_yaml_node_type(n)) {
-	case GTEXT_YAML_NULL:
-		out += "null";
-		return;
-	case GTEXT_YAML_BOOL:
-	case GTEXT_YAML_INT:
-	case GTEXT_YAML_FLOAT: {
-		const char *s = gtext_yaml_node_as_string(n);
-		out += s ? s : "<none>";
-		return;
-	}
-	case GTEXT_YAML_STRING: {
-		const char *s = gtext_yaml_node_as_string(n);
-		out += '"';
-		for (; s && *s; ++s) {
-			if (*s == '\n') out += "\\n";
-			else if (*s == '\t') out += "\\t";
-			else if (*s == '"') out += "\\\"";
-			else if (*s == '\\') out += "\\\\";
-			else out += *s;
-		}
-		out += '"';
-		return;
-	}
-	case GTEXT_YAML_SEQUENCE:
-	case GTEXT_YAML_SET:
-	case GTEXT_YAML_OMAP:
-	case GTEXT_YAML_PAIRS: {
-		out += '[';
-		const size_t len = gtext_yaml_sequence_length(n);
-		for (size_t i = 0; i < len; ++i) {
-			if (i) out += ", ";
-			RenderInto(gtext_yaml_sequence_get(n, i), out);
-		}
-		out += ']';
-		return;
-	}
-	case GTEXT_YAML_MAPPING: {
-		out += '{';
-		const size_t len = gtext_yaml_mapping_size(n);
-		for (size_t i = 0; i < len; ++i) {
-			const GTEXT_YAML_Node *k = nullptr, *v = nullptr;
-			gtext_yaml_mapping_get_at(n, i, &k, &v);
-			if (i) out += ", ";
-			RenderInto(k, out);
-			out += ": ";
-			RenderInto(v, out);
-		}
-		out += '}';
-		return;
-	}
-	default:
-		out += "<other>";
-		return;
-	}
-}
-
-std::string Render(const char *input) {
-	GTEXT_YAML_Error err;
-	memset(&err, 0, sizeof(err));
-	GTEXT_YAML_Document *doc = gtext_yaml_parse(input, strlen(input), nullptr, &err);
-	if (!doc) return "";
-	std::string out;
-	RenderInto(gtext_yaml_document_root(doc), out);
-	gtext_yaml_free(doc);
-	return out;
-}
 
 struct Case {
 	const char *input;
@@ -147,6 +80,8 @@ const Case kAccepted[] = {
 	{"? a\n: - b\n  - c\n", "{\"a\": [\"b\", \"c\"]}"},  /* and a compact sequence may follow an explicit key's ":" */
 	{"? a\n: b: c\n", "{\"a\": {\"b\": \"c\"}}"},  /* as may a compact mapping */
 	{"- - b: c\n", "[[{\"b\": \"c\"}]]"},  /* through two levels of "-" */
+	{"&a a: &b b\n*b : *a\n", "{\"a\": \"b\", \"b\": \"a\"}"},  /* an alias may stand as a key (7.1) */
+	{"a: &x 1\n*x: 2\n", "{\"a\": 1, 1: 2}"},  /* and it is the anchored node that becomes the key */
 };
 
 }  // namespace

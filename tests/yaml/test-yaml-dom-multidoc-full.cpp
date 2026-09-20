@@ -398,3 +398,53 @@ int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }
+
+/* ---------------------------------------------------------------------------
+ * A "..." with no document open closes nothing
+ *
+ * l-document-suffix stands on its own in a stream (9.2), so "..." by itself
+ * is a stream with no documents in it. The stream layer was opening a
+ * document just so that it could close one, which gave every such suffix a
+ * null document: a bare "..." parsed as one null, and one sitting between
+ * two documents put a third between them.
+ *
+ * A stream may then hold no documents at all, and gtext_yaml_parse_all()
+ * was returning NULL for that - which every caller reads as a failure - so
+ * an empty input and a lone "..." both came back as parse errors. It hands
+ * back an empty array now, freed with free() like any other.
+ *
+ * Expectations are yaml-test-suite's (HWV9, QT73, AVM7, M7A3). js-yaml
+ * gives a null document for a bare "..."; the grammar does not.
+ * ---------------------------------------------------------------------------
+ */
+TEST(YamlMultiDocFull, ADocumentEndWithNoDocumentOpensNone) {
+	struct Case {
+		const char *input;
+		size_t want;
+	};
+	static const Case kCases[] = {
+		{"...\n", 0},
+		{"# comment\n...\n", 0},
+		{"", 0},
+		{"   \n\n", 0},
+		{"---\n...\n", 1},          /* the "---" opens one, empty */
+		{"a\n...\n", 1},
+		{"a\n...\n...\n---\nb\n", 2},
+		{"a: 1\n...\n---\nb: 2\n", 2},
+	};
+
+	for (const Case &c : kCases) {
+		size_t count = 12345;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(c.input, strlen(c.input), &count, nullptr, &err);
+		ASSERT_NE(docs, nullptr)
+			<< ::testing::PrintToString(std::string(c.input)) << ": "
+			<< (err.message ? err.message : "?");
+		EXPECT_EQ(count, c.want)
+			<< ::testing::PrintToString(std::string(c.input));
+		for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+		free(docs);
+	}
+}
