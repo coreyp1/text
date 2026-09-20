@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Twenty-three more came out of running yaml-test-suite. Quoted scalars now fold
+Twenty-seven more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -229,6 +229,22 @@ redefined and an alias takes the most recent *preceding* definition, so the
 binding is made where the alias is written rather than from the finished
 anchor map. And an alias may stand where a key does, which `*b : *a` needs.
 
+The last four are about tags and types. A `!` on its own is the
+non-specific tag and the node follows it; the stream was reading that node
+as the tag's name, so `! a` came back as null. A verbatim `!<...>` tag was
+not understood at all - the brackets are not plain characters and the `:`
+inside a URI is not a key separator - so `!<tag:yaml.org,2002:str> foo` was
+read as a plain scalar starting part way through the URI. A plain scalar
+never ends in white space, and a break that folded to a space and was then
+followed by something that ended the scalar left one behind, so `{foo`
+over `: bar}` had the key `"foo "`.
+
+The fourth is the worst of them and nothing in 1,305 tests had caught it:
+**only a plain scalar is resolved by its contents.** Every other style
+carries the non-specific tag, which for a scalar is `tag:yaml.org,2002:str`
+- that is what quoting is for - and the style was not being consulted at
+all, so `a: "12"` came back as the integer 12 and `a: "null"` as null.
+
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
 implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
@@ -245,15 +261,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **83.6%** of the 366 cases that can be checked by
+this parser against it: **85.2%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and fifteen cases have been fixed since, in six
-batches:
+had suggested. A hundred and twenty-one cases have been fixed since, in
+seven batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -267,7 +283,8 @@ start beside a node already on its line, and "-" and "?" are indicators only
 where nothing plain-safe follows them, as `:` already was; and a group
 around documents and anchors - a lone `...` no longer invents a document,
 a stream may hold none at all, an anchor may be redefined, and an alias may
-stand where a key does. The largest group still failing is the
+stand where a key does; and the tag property in its three spellings, along
+with the rule that only a plain scalar is resolved by its contents. The largest group still failing is the
 36 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness

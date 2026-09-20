@@ -1636,6 +1636,17 @@ static GTEXT_YAML_Status resolve_scalar(
 		return GTEXT_YAML_OK;
 	}
 
+	/* Only a plain scalar is resolved by its contents. Every other style
+	 * carries the non-specific tag "!", which for a scalar resolves to
+	 * tag:yaml.org,2002:str (10.3.2) - that is the whole point of quoting.
+	 * The style was not being consulted at all, so 'a: "12"' came back as
+	 * the integer 12 and 'a: "null"' as null. */
+	if (node->as.scalar.scalar_style != GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+		node->type = GTEXT_YAML_STRING;
+		node->as.scalar.type = GTEXT_YAML_STRING;
+		return GTEXT_YAML_OK;
+	}
+
 	if (opts->schema == GTEXT_YAML_SCHEMA_FAILSAFE) {
 		return GTEXT_YAML_OK;
 	}

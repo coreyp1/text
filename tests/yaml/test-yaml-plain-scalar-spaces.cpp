@@ -126,6 +126,22 @@ TEST(YamlPlainScalarSpaces, ATabInsideAPlainScalarIsContent) {
 	EXPECT_EQ(Render("key:\ta\n"), std::string("{\"key\": \"a\"}"));
 }
 
+/* A plain scalar never ends in white space: nb-ns-plain-in-line(c) is
+   ( s-white* ns-plain-char(c) )*, so a space is content only when a plain
+   character follows it. The same-line case was handled as the scalar was
+   collected, but a break that folds to a space and is then followed by
+   something that ends the scalar left one behind - "{foo" over ": bar}"
+   gave the key "foo " with the fold still on it. */
+TEST(YamlPlainScalarSpaces, APlainScalarNeverEndsInWhiteSpace) {
+	EXPECT_EQ(Render("{foo\n: bar}\n"), std::string("{\"foo\": \"bar\"}"));
+	EXPECT_EQ(Render("[foo\n, bar]\n"), std::string("[\"foo\", \"bar\"]"));
+	EXPECT_EQ(Render("[foo\n]\n"), std::string("[\"foo\"]"));
+	EXPECT_EQ(Render("a: b \nc: d\n"), std::string("{\"a\": \"b\", \"c\": \"d\"}"));
+	/* Interior white space is still content. */
+	EXPECT_EQ(Render("a: b c\n"), std::string("{\"a\": \"b c\"}"));
+	EXPECT_EQ(Render("a: b\n  c\n"), std::string("{\"a\": \"b c\"}"));
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

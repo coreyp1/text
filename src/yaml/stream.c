@@ -186,6 +186,21 @@ static GTEXT_YAML_Status stream_emit_document_end(
   return GTEXT_YAML_OK;
 }
 
+/**
+ * @brief Whether a "!" stands alone as the non-specific tag.
+ *
+ * "!" on its own is a whole tag property (5.3, c-non-specific-tag) and the
+ * node follows it; "!foo" is a shorthand whose name begins at the very next
+ * byte. The stream read the token after the "!" as the name either way, so
+ * "! a" used the node as its own tag and came back as null.
+ */
+static bool stream_tag_is_non_specific(
+  const GTEXT_YAML_Token *bang,
+  const GTEXT_YAML_Token *next
+) {
+  return next->offset != bang->offset + 1;
+}
+
 static GTEXT_YAML_Status stream_ensure_document_started(
   GTEXT_YAML_Stream *s,
   const GTEXT_YAML_Token *tok
@@ -266,6 +281,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     if (st != GTEXT_YAML_OK) return st;
     if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
 
+process_token:
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
         return GTEXT_YAML_E_BAD_TOKEN;
@@ -435,6 +451,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
         char buf[256];
         size_t tag_len = 0;
 
+        if (stream_tag_is_non_specific(&tok, &tag_tok)) {
+          /* The "!" was the whole property. Record it and go round again
+             with the token just read, which is the node it applies to. */
+          if (s->pending_tag) free(s->pending_tag);
+          s->pending_tag = strdup("!");
+          s->pending_tag_line = tok.line;
+          tok = tag_tok;
+          goto process_token;
+        }
+
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
           GTEXT_YAML_Error name_err;
@@ -449,6 +475,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
           buf[1] = '!';
           memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
           tag_len += 2;
+          buf[tag_len] = '\0';
+        } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR
+            && tag_tok.u.scalar.len >= 2
+            && tag_tok.u.scalar.ptr[0] == '<'
+            && tag_tok.u.scalar.ptr[tag_tok.u.scalar.len - 1] == '>') {
+          /* A verbatim tag: "!<X>" is the tag X exactly as written, with no
+             handle to expand (5.3). Keep the URI and drop the brackets. */
+          tag_len = tag_tok.u.scalar.len - 2;
+          if (tag_len > sizeof(buf) - 1) tag_len = sizeof(buf) - 1;
+          memcpy(buf, tag_tok.u.scalar.ptr + 1, tag_len);
           buf[tag_len] = '\0';
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
           tag_len = tag_tok.u.scalar.len;
@@ -555,6 +591,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     if (st != GTEXT_YAML_OK) return st;
     if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
 
+process_token_finish:
     if (s->pending_alias) {
       if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
         return GTEXT_YAML_E_BAD_TOKEN;
@@ -703,6 +740,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
         char buf[256];
         size_t tag_len = 0;
 
+        if (stream_tag_is_non_specific(&tok, &tag_tok)) {
+          /* The "!" was the whole property. Record it and go round again
+             with the token just read, which is the node it applies to. */
+          if (s->pending_tag) free(s->pending_tag);
+          s->pending_tag = strdup("!");
+          s->pending_tag_line = tok.line;
+          tok = tag_tok;
+          goto process_token_finish;
+        }
+
         if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
           GTEXT_YAML_Token name_tok;
           GTEXT_YAML_Error name_err;
@@ -717,6 +764,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
           buf[1] = '!';
           memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
           tag_len += 2;
+          buf[tag_len] = '\0';
+        } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR
+            && tag_tok.u.scalar.len >= 2
+            && tag_tok.u.scalar.ptr[0] == '<'
+            && tag_tok.u.scalar.ptr[tag_tok.u.scalar.len - 1] == '>') {
+          /* A verbatim tag: "!<X>" is the tag X exactly as written, with no
+             handle to expand (5.3). Keep the URI and drop the brackets. */
+          tag_len = tag_tok.u.scalar.len - 2;
+          if (tag_len > sizeof(buf) - 1) tag_len = sizeof(buf) - 1;
+          memcpy(buf, tag_tok.u.scalar.ptr + 1, tag_len);
           buf[tag_len] = '\0';
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
           tag_len = tag_tok.u.scalar.len;

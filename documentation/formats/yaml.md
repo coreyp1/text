@@ -582,14 +582,14 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **306
-pass, 83.6%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **312
+pass, 85.2%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. A hundred and fifteen cases have
-been fixed since, in six batches: quoted-scalar line folding and directives; a
+The first run scored 191 of 368, 51.9%. A hundred and twenty-one cases have
+been fixed since, in seven batches: quoted-scalar line folding and directives; a
 group of structural refusals - a second top-level node, a root block
 scalar's indentation, a folded scalar's blank lines, and the block scalar
 header; the rule that `:`, `-` and `?` are indicators only where nothing
@@ -599,7 +599,9 @@ rules - a scalar no `:` ever claimed is not a key, a comment needs white
 space in front of it, and a block entry cannot start beside a node already
 on its line; and a group around documents and anchors - a lone `...` no
 longer invents a document, a stream may hold none at all, an anchor may be
-redefined, and an alias may stand where a key does.
+redefined, and an alias may stand where a key does; and the tag property in
+its three spellings, with the rule that only a plain scalar is resolved by
+its contents.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
@@ -609,17 +611,19 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **36 documents that should be refused are accepted.** Still the largest
+- **35 documents that should be refused are accepted.** Still the largest
   group, and still not one defect: an unknown escape such as `"\\."` is
   copied through instead of refused, a flow sequence accepts a leading or
-  doubled comma, content after a closing `]` is ignored, and a document
-  that ends without a footer before the next directive is allowed.
+  doubled comma, content after a document-end marker is ignored, and a
+  document that ends without a footer before the next directive is
+  allowed.
 - **An empty node is dropped rather than made null**, so `-` on its own is
   `[]` where it should be `[null]`.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
-- **Tag resolution diverges on the non-specific `!` tag** and on verbatim
-  `!<...>` tags.
+- **`!!set` and `!!omap` cannot be converted to JSON**, so a document
+  using either is refused by the conformance harness rather than by the
+  parser.
 - **A scanner error loses its message.** Every one surfaces as the
   parser's generic "Parse error", because the stream layer drops the
   `GTEXT_YAML_Error` the scanner filled in. Parser-level errors carry

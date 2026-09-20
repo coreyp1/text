@@ -1668,6 +1668,64 @@ scan_plain_scalar:
   /* If this scalar follows an anchor/alias indicator, it must be space-delimited
      (anchor/alias names cannot contain spaces per YAML spec) */
   int require_space_delimiter = (s->last_indicator == '&' || s->last_indicator == '*' || s->last_indicator == '!');
+
+  /* A verbatim tag, "!<...>" (5.3, c-verbatim-tag): the URI between the
+     brackets is taken as written, and the ordinary plain-scalar rules do not
+     apply to it - a ":" inside it is not a key separator. Without this the
+     scanner read "!<tag:yaml.org,2002:str> foo" as a plain scalar starting
+     part way through the URI. */
+  if (s->last_indicator == '!' && scanner_peek(s) == '<') {
+    size_t vlen = 1;
+    for (;;) {
+      if (s->cursor + vlen >= s->input.len) {
+        if (!s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
+        if (err) {
+          err->code = GTEXT_YAML_E_INVALID;
+          err->message = "Unterminated verbatim tag";
+          err->offset = off;
+          err->line = line;
+          err->col = col;
+        }
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_INVALID;
+      }
+      const char vc = s->input.data[s->cursor + vlen];
+      vlen++;
+      if (vc == '>') break;
+      if (vc == '\n' || vc == '\r') {
+        if (err) {
+          err->code = GTEXT_YAML_E_INVALID;
+          err->message = "Unterminated verbatim tag";
+          err->offset = off;
+          err->line = line;
+          err->col = col;
+        }
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_INVALID;
+      }
+    }
+    if (!gtext_yaml_dynbuf_append(&scalar, s->input.data + s->cursor, vlen)) {
+      gtext_yaml_dynbuf_free(&scalar);
+      return GTEXT_YAML_E_OOM;
+    }
+    for (size_t i = 0; i < vlen; ++i) scanner_consume(s);
+    char *vout = (char *)malloc(scalar.len);
+    if (!vout) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+    memcpy(vout, scalar.data, scalar.len);
+    const size_t vsize = scalar.len;
+    gtext_yaml_dynbuf_free(&scalar);
+    s->token_payload = vout;
+    s->last_scalar_col = col - 1;
+    tok->type = GTEXT_YAML_TOKEN_SCALAR;
+    tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
+    tok->u.scalar.ptr = vout;
+    tok->u.scalar.len = vsize;
+    tok->offset = off;
+    tok->line = line;
+    tok->col = col;
+    s->last_indicator = 0;
+    return GTEXT_YAML_OK;
+  }
   
   size_t look = 0;
   while (1) {
@@ -1962,7 +2020,17 @@ scan_plain_scalar:
     look++;
   }
 
-  /* Debug printing removed; scanner emits tokens without runtime diagnostics */
+  /* A plain scalar never ends in white space: nb-ns-plain-in-line(c) is
+     ( s-white* ns-plain-char(c) )*, so every space has to be followed by a
+     plain character to be content. The same-line case is handled as the
+     scalar is collected, but a break that folds to a space and is then
+     followed by something that ends the scalar leaves one behind - "{foo"
+     over ": bar}" gave the key "foo " with the fold still on it. */
+  while (scalar.len > 0
+      && (scalar.data[scalar.len - 1] == ' '
+       || scalar.data[scalar.len - 1] == '\t')) {
+    scalar.len--;
+  }
 
   if (scalar.len == 0) {
     gtext_yaml_dynbuf_free(&scalar);
