@@ -29,13 +29,16 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** multi-line plain scalars, and flow plain scalars
-containing spaces. Quote those, or use a block scalar.
+**Still unsupported:** quoted scalars do not fold line breaks, so a
+double- or single-quoted scalar written across lines keeps the break and the
+following indentation. Plain and block scalars fold correctly.
 
-**Unmeasured:** the [YAML test suite](https://github.com/yaml/yaml-test-suite)
-has never been run against this parser, so conformance to 1.2.2 is not
-partial - it is unknown outside the cases the tests below cover. There are no
-benchmarks.
+**Measured:** `make conformance` runs the
+[YAML test suite](https://github.com/yaml/yaml-test-suite) against this
+parser. It passes **51.9%** of the 368 cases that can be checked by value or
+by refusal; the same harness scores js-yaml at 81.7% and PyYAML at 77.1%.
+Conformance to 1.2.2 is therefore partial and roughly thirty points behind
+either reference. There are no benchmarks.
 
 **Verified:** the suite runs 1305 tests across 73 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
@@ -827,13 +830,18 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2. How closely it hits that target is **not
-known**: the [YAML test suite](https://github.com/yaml/yaml-test-suite) has
-never been run against it, and no differential testing against libyaml or
-PyYAML is automated. One deviation has been characterized by hand - plain
-scalars truncate at an embedded ` - `, ` , ` or ` : ` - and it was found
-within the first handful of inputs tried, which is the best available
-evidence that a real corpus would find more.
+The parser targets YAML 1.2.2 and hits **51.9%** of the
+[YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
+checked by value or by refusal, measured by `make conformance`. The same
+harness scores js-yaml at 81.7% and PyYAML at 77.1%, so neither reference
+reaches 100% on this suite and this parser is about thirty points behind
+both.
+
+That number arrived late and corrected an impression. Fifteen defects had
+been found and fixed by hand-comparison against PyYAML and js-yaml, and a
+153-document corpus built from them agreed at 152/153 - which measured the
+cases already fixed rather than the parser. Running a corpus nobody here
+chose is what made the remaining distance visible.
 
 See \ref format_yaml "the YAML format page" for the deviation table and the
 full statement of tested scope.

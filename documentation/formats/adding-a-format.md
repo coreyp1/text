@@ -118,8 +118,11 @@ say that `validate_utf8` did not validate UTF-8 - a defect found by checking
 the claim rather than reading the code path, and fixed as a result. The YAML
 page could give a table of plain scalars that a reference parser and this one
 disagreed about, which is how a silent data-loss bug was found and fixed; and
-it still says that the YAML test suite has never been run, so nobody knows
-how long that table really is.
+it gives the score against a corpus nobody here chose, which is the only
+figure that says how long that table really is. That last part took a while
+to arrive, and when it did it cut the apparent conformance roughly in half:
+a hand-built corpus agreed at 152 of 153 documents, and yaml-test-suite at
+191 of 368.
 
 That last sentence is the most useful one on any of the three pages. A format
 page that only lists features is a marketing document. Name the oracle, name

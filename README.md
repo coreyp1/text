@@ -189,10 +189,20 @@ which 1.1 refuses. Having two oracles is what made those five legible as a
 version question rather than as defects; against PyYAML alone they looked
 like bugs, and one of them had been recorded here as such.
 
-None of the defects this page used to list as open is outstanding. That is
-not conformance: the comparison is chosen by working outward from defects
-already found, not a conformance suite, and the YAML test suite has still
-never been run against this parser.
+None of the defects this page used to list as open is outstanding, and that
+turned out to matter much less than it sounds. The corpus was chosen by
+working outward from defects already found, so it measured the things that
+had already been fixed.
+
+**yaml-test-suite has now been run.** `make conformance` clones it and scores
+this parser against it: **51.9%** of the 368 cases that can be checked by
+value or by refusal. For calibration, the same harness scores **js-yaml at
+81.7%** and **PyYAML at 77.1%** - so a mature implementation does not score
+100% here either, but this one is roughly thirty points behind both. The
+remaining 38 cases assert an event stream the harness does not emit.
+
+That is the honest measure of this module, and it is a long way from the
+99% the hand-built corpus suggested.
 
 ## Macros and Utilities
 
