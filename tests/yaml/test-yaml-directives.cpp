@@ -135,14 +135,19 @@ TEST(YamlDirectives, ADirectiveWithNoDocumentIsRefused) {
 
 /* A directive belongs to the prologue of a document: it may only follow the
    start of the stream or a "..." that closed the one before (9.2). One
-   arriving after content was simply being applied to the document already
-   underway, so "--- a" over "%YAML 1.2" over "--- b" gave the first document
-   the scalar "a %YAML 1.2" - the directive line folded into the plain scalar
-   and then set the version of the document it was not part of. */
+   arriving after content was being applied to the document already underway.
+
+   What counts as "after content" is not simply "at column 0 after a
+   document started": a "%" cannot BEGIN a plain scalar (ns-plain-first
+   excludes it) but may appear on a continuation line (ns-plain-char does
+   not), so "--- scalar" over "%YAML 1.2" is the single scalar
+   "scalar %YAML 1.2" and not a directive at all - suite case XLQ9, and
+   js-yaml reads it the same way. The line is a directive only where the
+   content above it has already ended, which for these is the dedent to
+   column 0 out of a mapping. */
 TEST(YamlDirectives, ADirectiveAfterContentIsRefused) {
 	static const char *const kRefused[] = {
 		"---\nkey: value\n%YAML 1.2\n---\n",
-		"--- a\n%YAML 1.2\n--- b\n",
 		"a: 1\n%TAG !e! tag:example.com,2000:\n---\n",
 		"%YAML 1.2 foo\n---\n",           /* one parameter only (6.8.1) */
 		"%YAML 1.2\n%YAML 1.2\n---\n",    /* and one directive per document */
@@ -158,6 +163,38 @@ TEST(YamlDirectives, ADirectiveAfterContentIsRefused) {
 			for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
 			free(docs);
 		}
+	}
+}
+
+/* A "%" on a plain scalar's continuation line is content, not a directive. */
+TEST(YamlDirectives, APercentOnAContinuationLineIsContent) {
+	static const char *const kInputs[] = {
+		"---\nscalar\n%YAML 1.2\n",
+		"{ matches\n% : 20 }\n",
+	};
+	for (size_t i = 0; i < sizeof(kInputs) / sizeof(kInputs[0]); ++i) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(kInputs[i], strlen(kInputs[i]), &count, nullptr, &err);
+		ASSERT_NE(docs, nullptr) << kInputs[i] << ": " << (err.message ? err.message : "?");
+		ASSERT_EQ(count, 1u) << kInputs[i];
+		const GTEXT_YAML_Node *root = gtext_yaml_document_root(docs[0]);
+		ASSERT_NE(root, nullptr);
+		if (i == 0) {
+			EXPECT_STREQ(gtext_yaml_node_as_string(root), "scalar %YAML 1.2");
+		}
+		else {
+			const GTEXT_YAML_Node *k = nullptr;
+			const GTEXT_YAML_Node *v = nullptr;
+			ASSERT_EQ(gtext_yaml_mapping_size(root), 1u);
+			gtext_yaml_mapping_get_at(root, 0, &k, &v);
+			EXPECT_STREQ(gtext_yaml_node_as_string(k), "matches %");
+			EXPECT_STREQ(gtext_yaml_node_as_string(v), "20");
+		}
+		for (size_t j = 0; j < count; ++j) gtext_yaml_free(docs[j]);
+		free(docs);
 	}
 }
 

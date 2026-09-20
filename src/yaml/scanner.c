@@ -197,10 +197,12 @@ static bool plain_scalar_continues(
     if (nc == '\n' || nc == '\r') { probe += ws; continue; } /* empty line */
     if ((int)sp <= s->node_indent) return false;  /* dedent ends the scalar */
     if (nc == '#') return false;                  /* a comment, not content */
-    /* A "%" opens a directive line and can never begin a plain character
-       (ns-plain-first excludes it), so a scalar does not fold onto one.
-       "--- a" over "%YAML 1.2" was giving the scalar "a %YAML 1.2". */
-    if (nc == '%') return false;
+    /* A "%" is not stopped here. ns-plain-first excludes it, so a scalar
+       cannot begin with one, but ns-plain-char does not - a continuation
+       line may hold it, and "scalar" over "%YAML 1.2" is the one scalar
+       "scalar %YAML 1.2" (suite case XLQ9). A directive line after real
+       content is caught by the dedent rule above instead: the content is
+       indented past the node it belongs to and the "%" is at column 0. */
     if (flow && (nc == ',' || nc == '[' || nc == ']' || nc == '{' || nc == '}')) {
       return false; /* the collection's own punctuation, not more scalar */
     }

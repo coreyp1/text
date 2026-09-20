@@ -251,9 +251,11 @@ open. The escapes a double-quoted scalar may carry are exactly those in
 are on that list were missing at the same time. A separator separates two
 entries, so `[ , a, b ]` and `[ a, b, , ]` are not the sequences they were
 being read as. A directive belongs to a document's prologue and may only
-follow the start of the stream or a `...`, so `--- a` over `%YAML 1.2` is
-an error rather than the scalar `a %YAML 1.2` - and `%YAML` takes one
-parameter, once. A block scalar's leading empty lines may not be indented
+follow the start of the stream or a `...`, so a `%YAML` line after a
+mapping is an error rather than a version for the document it is not part
+of - and `%YAML` takes one parameter, once. A `%` on a plain scalar's
+continuation line is content, though: `--- scalar` over `%YAML 1.2` is the
+one scalar `scalar %YAML 1.2`. A block scalar's leading empty lines may not be indented
 past its first content line.
 
 A 153-document comparison backs this, checked against two implementations
@@ -272,7 +274,7 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **88.3%** of the 366 cases that can be checked by
+this parser against it: **88.8%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
