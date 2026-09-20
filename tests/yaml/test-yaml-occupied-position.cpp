@@ -81,7 +81,11 @@ const Case kAccepted[] = {
 	{"? a\n: b: c\n", "{\"a\": {\"b\": \"c\"}}"},  /* as may a compact mapping */
 	{"- - b: c\n", "[[{\"b\": \"c\"}]]"},  /* through two levels of "-" */
 	{"&a a: &b b\n*b : *a\n", "{\"a\": \"b\", \"b\": \"a\"}"},  /* an alias may stand as a key (7.1) */
-	{"a: &x 1\n*x: 2\n", "{\"a\": 1, 1: 2}"},  /* and it is the anchored node that becomes the key */
+	/* A space is needed before the ":": an anchor name may hold one
+	   (ns-anchor-char is ns-char minus the flow indicators), so "*x:" is an
+	   alias to "x:" rather than to "x". js-yaml reads it the same way and
+	   refuses "*x: 2" for the same reason; PyYAML, being 1.1, does not. */
+	{"a: &x 1\n*x : 2\n", "{\"a\": 1, 1: 2}"},  /* the anchored node becomes the key */
 };
 
 }  // namespace

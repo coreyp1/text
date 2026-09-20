@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Thirty-two more came out of running yaml-test-suite. Quoted scalars now fold
+Thirty-eight more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -258,6 +258,13 @@ continuation line is content, though: `--- scalar` over `%YAML 1.2` is the
 one scalar `scalar %YAML 1.2`. A block scalar's leading empty lines may not be indented
 past its first content line.
 
+The last group is the empty node. A position that takes a node and holds
+nothing is the empty node, which resolves to null - or to whatever a tag on
+it says, so `!!str` with no content is the empty string. Every spelling of
+it was being dropped: `-` on its own was `[]` rather than `[null]`, `- a`
+over `- !!str` was one entry rather than two, and `a: &anchor` over
+`b: *anchor` handed the anchor to `b`, which then aliased to itself.
+
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
 implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
@@ -274,15 +281,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **89.9%** of the 366 cases that can be checked by
+this parser against it: **91.8%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and thirty-eight cases have been fixed since, in
-nine batches:
+had suggested. A hundred and forty-five cases have been fixed since, in ten
+batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -303,7 +310,8 @@ entries a flow collection may leave empty, and where a directive may
 stand; and a group about where a line may begin - only a comment may follow
 a `...`, a comment needs white space in front of it wherever it appears,
 and a flow collection's continuation lines need indenting past the node
-that owns them. The largest group still failing is the
+that owns them; and the empty node, which was being dropped rather than
+made null. The largest group still failing is the
 36 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness

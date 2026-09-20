@@ -1993,13 +1993,15 @@ scan_plain_scalar:
       }
     } else if (require_space_delimiter) {
       /* An anchor, alias or tag name really is space-delimited: 5.3 does not
-         allow white space in one. */
+         allow white space in one. What it does allow is everything else
+         except a flow indicator - ns-anchor-char is ns-char minus
+         c-flow-indicator, and ns-tag-char likewise - so a ":" and the other
+         indicators are part of the name. Ending the name at a ":" split
+         "&an:chor value" into the anchor "an" and the scalar ":chor value",
+         and left the anchor "&:@*!$\"<foo>:" of suite case W5VH empty. */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
       if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break;
-      if (c == ':') break;
-      if (scalar.len == 0 && is_indicator_char(c)) {
-        if (!(s->last_indicator == '!' && c == '!')) break;
-      }
+      if (scalar.len == 0 && c == '!' && s->last_indicator != '!') break;
     } else {
       /* Flow context.  A plain scalar here may contain white space just as it
          may in block context - 7.3.3's ns-plain-char does not exclude it, and

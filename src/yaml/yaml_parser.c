@@ -47,6 +47,11 @@ typedef struct {
  * "," in front of it. */
 #define GTEXT_YAML_FLOW_PAIR      0x1u
 #define GTEXT_YAML_FLOW_ITEM_DONE 0x2u
+/* A block sequence's "-" has been seen and nothing has landed under it yet.
+ * An entry with no node is the empty node, which is null (7.2, e-node): "-"
+ * on its own is [null] and "- # comment" is an entry too. Both were being
+ * dropped, so a sequence came back one entry short with no sign of it. */
+#define GTEXT_YAML_BLOCK_ENTRY_OPEN 0x4u
 
 /* Parser state for building DOM from events */
 typedef struct {
@@ -1233,6 +1238,21 @@ static bool mapping_supply_null_value(parser_state *p) {
 }
 
 /**
+ * @brief Give a block sequence entry that holds nothing the null it stands for.
+ *
+ * An entry with no node is the empty node (7.2, e-node), which resolves to
+ * null: "-" on its own is [null] and "- # comment" is an entry too. Both were
+ * being dropped, so the sequence came back one entry short.
+ */
+static bool sequence_supply_empty_entry(parser_state *p) {
+	GTEXT_YAML_Node *empty = yaml_node_new_scalar(p->ctx, "~", 1, NULL, NULL);
+	if (!empty) {
+		return false;
+	}
+	return temp_add(p, empty);
+}
+
+/**
  * @brief True when a node starting at @p col is a sibling key rather than the
  *        value of the key already waiting for one.
  *
@@ -1622,6 +1642,12 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	);
 
 	if (state == STATE_SEQUENCE) {
+		/* A trailing "-" with nothing under it is an entry all the same. */
+		if (p->stack.is_block[p->stack.depth - 1]
+				&& (p->stack.flow_flags[p->stack.depth - 1]
+					& GTEXT_YAML_BLOCK_ENTRY_OPEN)) {
+			(void)sequence_supply_empty_entry(p);
+		}
 		node = yaml_node_new_sequence(p->ctx, p->temp.count, tag, anchor);
 		if (!node) {
 			free(anchor);
@@ -1720,6 +1746,9 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 static void flow_entry_completed(parser_state *p) {
 	if (!p || p->stack.depth == 0) return;
 	const size_t top = p->stack.depth - 1;
+	/* Something landed at this level, so a block sequence's open entry is
+	 * no longer empty. */
+	p->stack.flow_flags[top] &= (unsigned char)~GTEXT_YAML_BLOCK_ENTRY_OPEN;
 	if (p->stack.is_block[top]) return;
 	if (p->stack.states[top] == STATE_SEQUENCE) {
 		p->stack.flow_flags[top] |= GTEXT_YAML_FLOW_ITEM_DONE;
@@ -3226,6 +3255,21 @@ static GTEXT_YAML_Status parse_callback(
 						}
 					}
 
+					/* A "-" at this level with nothing under the one before
+					 * it means that entry was empty. */
+					if (!start_new
+							&& (p->stack.flow_flags[p->stack.depth - 1]
+								& GTEXT_YAML_BLOCK_ENTRY_OPEN)) {
+						if (!sequence_supply_empty_entry(p)) {
+							p->failed = true;
+							if (p->error) {
+								p->error->code = GTEXT_YAML_E_OOM;
+								p->error->message = "Out of memory adding empty entry";
+							}
+							return GTEXT_YAML_E_OOM;
+						}
+					}
+
 					if (start_new) {
 						if (!stack_push(
 							p,
@@ -3247,6 +3291,8 @@ static GTEXT_YAML_Status parse_callback(
 							return GTEXT_YAML_E_OOM;
 						}
 					}
+					p->stack.flow_flags[p->stack.depth - 1] |=
+						GTEXT_YAML_BLOCK_ENTRY_OPEN;
 					break;
 				}
 					

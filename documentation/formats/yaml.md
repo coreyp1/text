@@ -582,14 +582,14 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 368 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **329
-pass, 89.9%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **336
+pass, 91.8%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. A hundred and thirty-eight cases
-have been fixed since, in nine batches: quoted-scalar line folding and directives; a
+The first run scored 191 of 368, 51.9%. A hundred and forty-five cases have
+been fixed since, in ten batches: quoted-scalar line folding and directives; a
 group of structural refusals - a second top-level node, a root block
 scalar's indentation, a folded scalar's blank lines, and the block scalar
 header; the rule that `:`, `-` and `?` are indicators only where nothing
@@ -606,7 +606,8 @@ scalar may carry, the entries a flow collection may leave empty, and where
 a directive may stand; and a group about where a line may begin - only a
 comment may follow a `...`, a comment needs white space in front of it, and
 a flow collection's continuation lines need indenting past the node that
-owns them.
+owns them; and the empty node, which was being dropped rather than made
+null.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
@@ -616,13 +617,11 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **18 documents that should be refused are accepted.** Still the largest
-  group, and still not one defect: an anchor with no node to attach to is
-  allowed, a document marker inside a quoted scalar is not seen, an
-  implicit key may run over two lines, and a tag handle defined in one
-  document is still in scope in the next.
-- **An empty node is dropped rather than made null**, so `-` on its own is
-  `[]` where it should be `[null]`.
+- **17 documents that should be refused are accepted.** Still the largest
+  group, and still not one defect: a document marker inside a quoted scalar
+  is not seen, an implicit key may run over two lines, a node may carry two
+  anchors, and a tag handle defined in one document is still in scope in
+  the next.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
 - **`!!set` and `!!omap` cannot be converted to JSON**, so a document

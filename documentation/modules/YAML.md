@@ -29,7 +29,7 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** 18 documents that yaml-test-suite says should be
+**Still unsupported:** 17 documents that yaml-test-suite says should be
 refused are accepted instead. That is the largest remaining group and it is
 not one defect - an unknown escape is copied through, a flow sequence
 accepts a leading comma, and content after a document-end marker is
@@ -39,7 +39,7 @@ its message and arrives as the generic "Parse error".
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **89.9%** of the 366 cases that can be checked by value or
+parser. It passes **91.8%** of the 366 cases that can be checked by value or
 by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
 Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
 hundred and thirty-two cases since came from quoted-scalar line folding,
@@ -47,7 +47,8 @@ directives, a group of structural refusals, the rule that `:`, `-` and `?`
 are indicators only where nothing plain-safe follows them, tabs in leading
 white space, a group of positional rules, a group around documents and
 anchors, the tag property in its three spellings, a group of closed lists,
-and a group about where a line may begin. There are no benchmarks.
+a group about where a line may begin, and the empty node. There are no
+benchmarks.
 
 **Verified:** the suite runs 1305 tests across 73 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
@@ -839,7 +840,7 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **89.9%** of the
+The parser targets YAML 1.2.2 and hits **91.8%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
 harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference

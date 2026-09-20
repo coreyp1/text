@@ -79,6 +79,24 @@ struct GTEXT_YAML_Stream {
   char *pending_anchor;  /* Anchor name to attach to next node (malloc'd, NULL if none) */
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
   int pending_tag_line; /* 1-based line pending_tag was written on */
+  /* Where the pending anchor or tag was written. An empty node made out of
+     them has to be reported there and not at the token that proved them
+     unclaimed, or the parser measures its indentation from the wrong line
+     and closes the collection the node belongs to. */
+  size_t pending_prop_offset;
+  int pending_prop_line;
+  int pending_prop_col;
+  /* Where the property's line began, and whether the property was the first
+     thing on it. Together these say whether a later line has left the
+     position the property was written in. */
+  int pending_prop_line_start;
+  bool pending_prop_opens_line;
+  /* The line the stream is on and the column its first token stood at. A
+     document marker counts as opening the line for a property after it:
+     "--- !shape" tags the root node, whose content may begin at column 0. */
+  int cur_line;
+  int cur_line_start;
+  bool cur_line_is_doc_marker;
   bool pending_alias; /* True if alias indicator seen and name is pending */
   bool sync_mode; /* If true, call scanner_finish after each feed */
   bool document_started; /* True if we've emitted DOCUMENT_START */
@@ -94,6 +112,73 @@ static GTEXT_YAML_Status stream_apply_alias_limit(GTEXT_YAML_Stream *s) {
   }
   s->alias_expansion_count++;
   return GTEXT_YAML_OK;
+}
+
+/**
+ * @brief Emit the empty node that an unclaimed anchor or tag belongs to.
+ *
+ * Properties without a node are properties of the empty node (7.2, e-node),
+ * which resolves to null - or to the empty string where the tag says str.
+ * The stream held them until something arrived that could take them, so
+ * "- !!str" lost its entry entirely and "a: &anchor" over "b: *anchor"
+ * handed the anchor to b, which then aliased to itself.
+ *
+ * @p at is the token that proved the properties had no node of their own,
+ * and is used only for the position on the event.
+ */
+/**
+ * @brief Whether the pending properties belong to a node that never arrived.
+ *
+ * A property that opened its own line introduces whatever follows, however
+ * that is indented. One written part way along a line belongs to the position
+ * it stands in, and a line that begins no further right has left that
+ * position:
+ *
+ *     x: !custom      the "-" line begins further right, so the tag is the
+ *       - 1           sequence's
+ *
+ *     a: !!str        the "b" line begins at the same column, so a's value
+ *     b: 1            was never written and the tag is its
+ */
+static bool stream_props_left_behind(
+  const GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *tok
+) {
+  if (!s->pending_anchor && !s->pending_tag) return false;
+  if (tok->line == s->pending_prop_line) return false;
+  if (s->pending_prop_opens_line) return false;
+  return s->cur_line_start <= s->pending_prop_line_start;
+}
+
+static GTEXT_YAML_Status stream_flush_empty_node(
+  GTEXT_YAML_Stream *s,
+  const GTEXT_YAML_Token *at
+) {
+  if (!s->pending_anchor && !s->pending_tag) return GTEXT_YAML_OK;
+
+  GTEXT_YAML_Event ev;
+  memset(&ev, 0, sizeof(ev));
+  ev.type = GTEXT_YAML_EVENT_SCALAR;
+  ev.data.scalar.ptr = "";
+  ev.data.scalar.len = 0;
+  ev.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
+  ev.anchor = s->pending_anchor;
+  ev.tag = s->pending_tag;
+  ev.tag_line = s->pending_tag_line;
+  ev.offset = s->pending_prop_offset;
+  ev.line = s->pending_prop_line;
+  ev.col = s->pending_prop_col;
+  (void)at;
+
+  GTEXT_YAML_Status rc = GTEXT_YAML_OK;
+  if (s->cb) rc = s->cb(s, &ev, s->user);
+
+  free(s->pending_anchor);
+  s->pending_anchor = NULL;
+  free(s->pending_tag);
+  s->pending_tag = NULL;
+  s->pending_tag_line = 0;
+  return rc;
 }
 
 static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Token *tok) {
@@ -279,7 +364,18 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, &tok, &err);
     if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data */
     if (st != GTEXT_YAML_OK) return st;
-    if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
+    if (tok.type == GTEXT_YAML_TOKEN_EOF) {
+      GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+      if (flush != GTEXT_YAML_OK) return flush;
+      break;
+    }
+    if (tok.line != s->cur_line) {
+      s->cur_line = tok.line;
+      s->cur_line_start = tok.col;
+      s->cur_line_is_doc_marker =
+        tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
+        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END;
+    }
 
 process_token:
     if (s->pending_alias) {
@@ -301,6 +397,10 @@ process_token:
     ev.col = tok.col;
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
+      {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       if (s->document_started && !s->document_closed) {
         GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
@@ -311,6 +411,10 @@ process_token:
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
+      {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       /* A "..." with no document open closes nothing: l-document-suffix
          stands on its own in a stream (9.2), and "..." by itself is a
          stream with no documents in it. Opening one here so that it could
@@ -365,6 +469,37 @@ process_token:
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
+      /* These end the node position rather than filling it, so properties
+         still waiting belong to the empty node - but only where they were
+         inside the position this indicator closes. A tag on a line of its
+         own introduces the collection that follows it:
+
+             !!seq        the tag belongs to the sequence
+             - a
+
+             - &a         the anchor belongs to the first entry, which is
+             - b          empty, and the second "-" is what proves it
+
+         The two are told apart by where their lines begin. A property that
+         opened its own line introduces whatever follows, however that is
+         indented. One written part way along a line belongs to the position
+         it stands in, and a later line that begins no further right has
+         left that position:
+
+             x: !custom      the "-" line begins further right, so the tag
+               - 1           is the sequence's
+
+             a: !!str        the "b" line begins at the same column, so a's
+             b: 1            value was never written and the tag is its */
+      if ((tok.u.c == '-' || tok.u.c == ':' || tok.u.c == '?'
+           || tok.u.c == ',' || tok.u.c == ']' || tok.u.c == '}')
+          && (s->pending_anchor || s->pending_tag)
+          && (tok.line == s->pending_prop_line
+              || (!s->pending_prop_opens_line
+                  && s->cur_line_start <= s->pending_prop_line_start))) {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
       /* indicator event */
@@ -439,6 +574,12 @@ process_token:
         /* Store anchor name - it will be attached to the next node event */
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
+        s->pending_prop_offset = tok.offset;
+        s->pending_prop_line = tok.line;
+        s->pending_prop_col = tok.col;
+        s->pending_prop_line_start = s->cur_line_start;
+        s->pending_prop_opens_line =
+          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
         
         continue;
       } else if (tok.u.c == '!') {
@@ -501,6 +642,12 @@ process_token:
         s->pending_tag = strdup(buf);
         /* tok is the '!' that introduced the tag. */
         s->pending_tag_line = tok.line;
+        s->pending_prop_offset = tok.offset;
+        s->pending_prop_line = tok.line;
+        s->pending_prop_col = tok.col;
+        s->pending_prop_line_start = s->cur_line_start;
+        s->pending_prop_opens_line =
+          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
         continue;
       } else if (tok.u.c == '*') {
         /* Process alias immediately; if name incomplete, defer to next feed */
@@ -544,6 +691,10 @@ process_token:
 
     if (tok.type == GTEXT_YAML_TOKEN_SCALAR) {
       /* scalar event */
+      if (stream_props_left_behind(s, &tok)) {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       ev.type = GTEXT_YAML_EVENT_SCALAR;
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;
@@ -589,7 +740,18 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     GTEXT_YAML_Status st = gtext_yaml_scanner_next(s->scanner, &tok, &err);
     if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
     if (st != GTEXT_YAML_OK) return st;
-    if (tok.type == GTEXT_YAML_TOKEN_EOF) break;
+    if (tok.type == GTEXT_YAML_TOKEN_EOF) {
+      GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+      if (flush != GTEXT_YAML_OK) return flush;
+      break;
+    }
+    if (tok.line != s->cur_line) {
+      s->cur_line = tok.line;
+      s->cur_line_start = tok.col;
+      s->cur_line_is_doc_marker =
+        tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
+        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END;
+    }
 
 process_token_finish:
     if (s->pending_alias) {
@@ -611,6 +773,10 @@ process_token_finish:
     ev.col = tok.col;
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
+      {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       if (s->document_started && !s->document_closed) {
         GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
         if (rc != GTEXT_YAML_OK) return rc;
@@ -621,6 +787,10 @@ process_token_finish:
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
+      {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       /* A "..." with no document open closes nothing: l-document-suffix
          stands on its own in a stream (9.2), and "..." by itself is a
          stream with no documents in it. Opening one here so that it could
@@ -657,6 +827,37 @@ process_token_finish:
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
+      /* These end the node position rather than filling it, so properties
+         still waiting belong to the empty node - but only where they were
+         inside the position this indicator closes. A tag on a line of its
+         own introduces the collection that follows it:
+
+             !!seq        the tag belongs to the sequence
+             - a
+
+             - &a         the anchor belongs to the first entry, which is
+             - b          empty, and the second "-" is what proves it
+
+         The two are told apart by where their lines begin. A property that
+         opened its own line introduces whatever follows, however that is
+         indented. One written part way along a line belongs to the position
+         it stands in, and a later line that begins no further right has
+         left that position:
+
+             x: !custom      the "-" line begins further right, so the tag
+               - 1           is the sequence's
+
+             a: !!str        the "b" line begins at the same column, so a's
+             b: 1            value was never written and the tag is its */
+      if ((tok.u.c == '-' || tok.u.c == ':' || tok.u.c == '?'
+           || tok.u.c == ',' || tok.u.c == ']' || tok.u.c == '}')
+          && (s->pending_anchor || s->pending_tag)
+          && (tok.line == s->pending_prop_line
+              || (!s->pending_prop_opens_line
+                  && s->cur_line_start <= s->pending_prop_line_start))) {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
 
@@ -727,6 +928,12 @@ process_token_finish:
         
         if (s->pending_anchor) free(s->pending_anchor);
         s->pending_anchor = strdup(buf);
+        s->pending_prop_offset = tok.offset;
+        s->pending_prop_line = tok.line;
+        s->pending_prop_col = tok.col;
+        s->pending_prop_line_start = s->cur_line_start;
+        s->pending_prop_opens_line =
+          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
         
         continue;
       }
@@ -788,6 +995,13 @@ process_token_finish:
 
         if (s->pending_tag) free(s->pending_tag);
         s->pending_tag = strdup(buf);
+        s->pending_tag_line = tok.line;
+        s->pending_prop_offset = tok.offset;
+        s->pending_prop_line = tok.line;
+        s->pending_prop_col = tok.col;
+        s->pending_prop_line_start = s->cur_line_start;
+        s->pending_prop_opens_line =
+          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
         continue;
       }
       
@@ -816,6 +1030,10 @@ process_token_finish:
     }
 
     if (tok.type == GTEXT_YAML_TOKEN_SCALAR) {
+      if (stream_props_left_behind(s, &tok)) {
+        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+        if (flush != GTEXT_YAML_OK) return flush;
+      }
       ev.type = GTEXT_YAML_EVENT_SCALAR;
       ev.data.scalar.ptr = tok.u.scalar.ptr;
       ev.data.scalar.len = tok.u.scalar.len;

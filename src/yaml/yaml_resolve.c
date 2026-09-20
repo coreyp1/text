@@ -381,6 +381,10 @@ static bool parse_bool_value(
 }
 
 static bool parse_null_value(const char *s, size_t len, bool json_only) {
+	/* The empty node resolves to null (10.3.2, and the "Empty" row of the
+	   core schema's resolution table), which is what "a:" with no value and
+	   "&anchor" with no node both stand for. */
+	if (len == 0) return true;
 	if (json_only) {
 		return str_eq_len(s, len, "null");
 	}
