@@ -274,15 +274,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **88.8%** of the 366 cases that can be checked by
+this parser against it: **89.9%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
 and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
 does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and thirty-two cases have been fixed since, in
-eight batches:
+had suggested. A hundred and thirty-eight cases have been fixed since, in
+nine batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -300,7 +300,10 @@ stand where a key does; and the tag property in its three spellings, along
 with the rule that only a plain scalar is resolved by its contents; and a
 group of closed lists - the escapes a double-quoted scalar may carry, the
 entries a flow collection may leave empty, and where a directive may
-stand. The largest group still failing is the
+stand; and a group about where a line may begin - only a comment may follow
+a `...`, a comment needs white space in front of it wherever it appears,
+and a flow collection's continuation lines need indenting past the node
+that owns them. The largest group still failing is the
 36 documents that should be refused and are not.
 
 The denominator moved from 368 to 366 along the way, and that was a harness

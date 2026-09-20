@@ -47,7 +47,7 @@ const Case kCases[] = {
 	{"key: [\n a\n]\n", "{\"key\": [\"a\"]}"},
 	{"key: {\n  a: 1,\n  b: 2\n}\n", "{\"key\": {\"a\": 1, \"b\": 2}}"},
 	{"key: [a - b\n , c]\n", "{\"key\": [\"a - b\", \"c\"]}"},
-	{"key: [a,\nb]\n", "{\"key\": [\"a\", \"b\"]}"},
+	{"key: [a,\nb]\n", ""},  /* the entry is at column 0, no further in than "key" */
 	{"key: [a\nb]\n", nullptr},
 	{"key: [a: 1]\n", "{\"key\": [{\"a\": 1}]}"},
 	{"key: [a: 1, b: 2]\n", "{\"key\": [{\"a\": 1}, {\"b\": 2}]}"},
@@ -62,7 +62,7 @@ const Case kCases[] = {
 	{"key: [[1]\n[2]]\n", nullptr},
 	{"key: [{a: 1}\n{b: 2}]\n", nullptr},
 	{"key: [[1] [2]]\n", nullptr},
-	{"key: [a\n, b]\n", "{\"key\": [\"a\", \"b\"]}"},
+	{"key: [a\n, b]\n", ""},  /* nor is the comma */
 	{"key: [[1], [2]]\n", "{\"key\": [[1], [2]]}"},
 	{"key: [&x 1\n*x]\n", nullptr},
 	{"key: [a]\n", "{\"key\": [\"a\"]}"},
@@ -70,11 +70,11 @@ const Case kCases[] = {
 	{"key: [{a: 1}, {b: 2}]\n", "{\"key\": [{\"a\": 1}, {\"b\": 2}]}"},
 	{"key: {a: 1\nb: 2}\n", nullptr},
 	{"key: [1\n2]\n", nullptr},
-	{"key: [\na,\nb\n]\n", "{\"key\": [\"a\", \"b\"]}"},
-	{"key:\n- [\na,\nb\n]\n", "{\"key\": [[\"a\", \"b\"]]}"},
-	{"key: {\na: 1,\nb: 2\n}\n", "{\"key\": {\"a\": 1, \"b\": 2}}"},
-	{"- [\n1,\n2\n]\n", "[[1, 2]]"},
-	{"key: [\na b,\nc\n]\n", "{\"key\": [\"a b\", \"c\"]}"},
+	{"key: [\na,\nb\n]\n", ""},
+	{"key:\n- [\na,\nb\n]\n", ""},
+	{"key: {\na: 1,\nb: 2\n}\n", ""},
+	{"- [\n1,\n2\n]\n", ""},
+	{"key: [\na b,\nc\n]\n", ""},
 };
 
 } // namespace
@@ -133,12 +133,37 @@ TEST(YamlFlowCollections, ACollectionMayBeAPairsKey) {
 	EXPECT_EQ(Render("? [1]\n: 2\n"), std::string("{[1]: 2}"));
 }
 
-/* Laying a flow collection out over several lines is ordinary, and the
-   entries need no indentation of their own when a "," separates them. */
-TEST(YamlFlowCollections, MultiLineLayoutIsUnaffected) {
-	EXPECT_EQ(Render("key: [\na,\nb\n]\n"), std::string("{\"key\": [\"a\", \"b\"]}"));
-	EXPECT_EQ(Render("key: {\na: 1,\nb: 2\n}\n"), std::string("{\"key\": {\"a\": 1, \"b\": 2}}"));
-	EXPECT_EQ(Render("- [\n1,\n2\n]\n"), std::string("[[1, 2]]"));
+/* A flow collection laid out over several lines needs its content indented
+   past the node that owns it: s-l+flow-in-block(n) puts the collection at
+   n+1 and every line of it needs s-indent of at least that (7.4, 6.1).
+
+   The rows above used to expect the unindented spellings to parse, because
+   they were generated from js-yaml, which accepts them; so does PyYAML.
+   yaml-test-suite does not - 9C9N is called "Wrong indented flow sequence"
+   and VJP3/0 is the mapping version - and the grammar does not either.
+
+   The closing bracket is the exception this file keeps. Strictly it needs
+   the same indentation, but people write
+
+       key: [
+         a,
+         b
+       ]
+
+   and both references accept it. */
+TEST(YamlFlowCollections, MultiLineLayoutNeedsItsIndentation) {
+	EXPECT_EQ(Render("key: [\n  a,\n  b\n]\n"), std::string("{\"key\": [\"a\", \"b\"]}"));
+	EXPECT_EQ(Render("key: {\n  a: 1,\n  b: 2\n}\n"),
+		std::string("{\"key\": {\"a\": 1, \"b\": 2}}"));
+	EXPECT_EQ(Render("- [\n  1,\n  2\n]\n"), std::string("[[1, 2]]"));
+	/* At the root there is no owning node, so n is -1 and column 0 is
+	   already further in than that. */
+	EXPECT_EQ(Render("[\n1,\n2\n]\n"), std::string("[1, 2]"));
+
+	/* Unindented under a key, refused. */
+	EXPECT_EQ(Render("key: [\na,\nb\n]\n"), std::string(""));
+	EXPECT_EQ(Render("key: {\na: 1,\nb: 2\n}\n"), std::string(""));
+	EXPECT_EQ(Render("- [\n1,\n2\n]\n"), std::string(""));
 }
 
 /* A separator separates two entries, so there has to be one in front of it.

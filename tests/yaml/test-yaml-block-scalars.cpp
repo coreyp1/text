@@ -197,6 +197,8 @@ TEST(YamlBlockScalars, RefusesAMalformedHeader) {
 		"a: |-+\n x\n",
 		"a: |1 2\n x\n",   /* the indicator is not repeatable either */
 		"a: |x\n x\n",     /* only a comment may follow the header */
+		"a: ># comment\n  x\n",  /* and a comment needs white space (6.6) */
+		"a: |#c\n  x\n",
 	};
 	for (const char *input : kBad) {
 		GTEXT_YAML_Error err;

@@ -781,6 +781,34 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       saw_separation = true;
       continue;
     }
+    if (s->indent_ws && s->context_depth != 0
+        && (s->col - 1) <= s->node_indent
+        && c != ']' && c != '}') {
+      /* A flow collection's continuation lines are indented past the node
+         that owns it: s-l+flow-in-block(n) puts the collection at n+1, and
+         every line of it needs s-indent of at least that (7.4, 6.1). A line
+         at or left of the owner was being folded in regardless, so "k: {"
+         over "k" over ":" over "v" at column 0 parsed as a nested mapping.
+
+         The closing bracket is let through wherever it stands. Strictly it
+         needs the same indentation, but
+
+             key: [
+               a,
+               b
+             ]
+
+         is how people write this and both references accept it; the suite
+         has no case either way. Content lines are the ones that matter. */
+      if (err) {
+        err->code = GTEXT_YAML_E_INVALID;
+        err->message = "Flow collection line indented no further than its node";
+        err->offset = s->offset;
+        err->line = s->line;
+        err->col = s->col;
+      }
+      return GTEXT_YAML_E_INVALID;
+    }
     if (c == '#') {
       if (!saw_separation && s->col != 1) {
         if (err) {
@@ -983,13 +1011,18 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
     if (!bad_header) {
       size_t look = 0;
       int after = ch;
+      bool spaced = false;
       while (after == ' ' || after == '\t') {
+        spaced = true;
         look++;
         after = (s->cursor + look < s->input.len)
           ? (unsigned char)s->input.data[s->cursor + look] : -1;
       }
-      if (after != -1 && after != '#' && after != '\n' && after != '\r') {
-        bad_header = true;
+      if (after != -1 && after != '\n' && after != '\r') {
+        /* A comment needs white space in front of it (6.6), here as
+           anywhere else, so "># comment" is a malformed header rather than
+           a folded scalar with a comment. */
+        if (after != '#' || !spaced) bad_header = true;
       }
     }
     if (bad_header) {
@@ -1316,6 +1349,32 @@ block_scalar_collected:
         
         /* Document markers must be followed by whitespace, newline, or EOF */
         if (c3 == -1 || c3 == ' ' || c3 == '\t' || c3 == '\r' || c3 == '\n') {
+          /* A "---" opens a document and its node may follow on the same
+             line, but a "..." closes one and only a comment may follow:
+             l-document-suffix is c-document-end s-l-comments (9.2). Content
+             after it was starting a document of its own, so "... invalid"
+             gave a second document holding "invalid". */
+          if (c == '.') {
+            size_t after = s->cursor + 3;
+            while (after < s->input.len
+                && (s->input.data[after] == ' ' || s->input.data[after] == '\t')) {
+              after++;
+            }
+            if (after >= s->input.len && !s->finished) return GTEXT_YAML_E_INCOMPLETE;
+            if (after < s->input.len) {
+              const char tail = s->input.data[after];
+              if (tail != '#' && tail != '\n' && tail != '\r') {
+                if (err) {
+                  err->code = GTEXT_YAML_E_INVALID;
+                  err->message = "Content after a document-end marker";
+                  err->offset = off;
+                  err->line = line;
+                  err->col = col;
+                }
+                return GTEXT_YAML_E_INVALID;
+              }
+            }
+          }
           /* Consume all three characters */
           scanner_consume(s);
           scanner_consume(s);

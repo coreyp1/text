@@ -448,3 +448,41 @@ TEST(YamlMultiDocFull, ADocumentEndWithNoDocumentOpensNone) {
 		free(docs);
 	}
 }
+
+/* Only a comment may follow a "...": l-document-suffix is c-document-end
+   s-l-comments (9.2). Content after it was starting a document of its own,
+   so "... invalid" gave a second document holding "invalid". */
+TEST(YamlMultiDocFull, RefusesContentAfterADocumentEndMarker) {
+	static const char *const kRefused[] = {
+		"---\nkey: value\n... invalid\n",
+		"--- a\n... b\n",
+	};
+	/* "...x" is not a marker at all - one needs white space or the end of
+	   the line after it - so it is the plain scalar "...x", as js-yaml
+	   reads it too. */
+	for (const char *input : kRefused) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(input, strlen(input), &count, nullptr, &err);
+		EXPECT_EQ(docs, nullptr) << input;
+		if (docs) {
+			for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+			free(docs);
+		}
+	}
+
+	/* A comment after it is fine, and so is nothing. */
+	for (const char *input : { "a: 1\n... # done\n", "a: 1\n...\n" }) {
+		size_t count = 0;
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(input, strlen(input), &count, nullptr, &err);
+		ASSERT_NE(docs, nullptr) << input << ": " << (err.message ? err.message : "?");
+		EXPECT_EQ(count, 1u) << input;
+		for (size_t i = 0; i < count; ++i) gtext_yaml_free(docs[i]);
+		free(docs);
+	}
+}
