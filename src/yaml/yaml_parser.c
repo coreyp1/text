@@ -1875,6 +1875,48 @@ static GTEXT_YAML_Status close_block_contexts(parser_state *p, int new_indent) {
 }
 
 /**
+ * @brief Was a node's properties written left of a collection already open?
+ *
+ * c-ns-properties reaches a block collection only through s-separate(n+1,c)
+ * (8.2), so an anchor or tag has to be indented past every block collection
+ * that was already open when it was written.  "&node" alone on a line between
+ * two "- " entries is at the sequence's own indentation: it introduces
+ * nothing, and there is no node for it to name.
+ *
+ * The column of the node the properties end up attached to will not do for
+ * this.  By the time the scalar arrives, the collection the properties
+ * introduced has been opened at a deeper indentation, and the scalar sits
+ * inside it.  GTEXT_YAML_Event carries the properties' own position instead.
+ *
+ * Levels that opened on the properties' line or later are exactly the ones the
+ * properties introduce, so they are skipped; the first level below those is
+ * the one the properties had to clear.
+ *
+ * Flow levels need no case of their own.  Indentation constrains nothing
+ * inside "[" or "{", and every flow level is pushed with an indent of -1, so
+ * the comparison below is already false for them.
+ */
+static bool property_left_of_open_collection(
+	const parser_state *p,
+	const GTEXT_YAML_Event *event
+) {
+	if (!event || event->prop_col < 0) return false;
+	/* Properties written on the same line as the node they name are a key's
+	   own properties, and a key sits at its mapping's indentation, not past
+	   it: "!!str 23: !!bool false" is a well-formed entry of a mapping at
+	   column 0 (suite case 74H7).  An implicit key and its properties have
+	   to share a line, so a property left on a line of its own is never one of
+	   these - that is what this rule is about. */
+	if (event->prop_line == event->line) return false;
+	for (size_t i = p->stack.depth; i > 0; i--) {
+		const size_t idx = i - 1;
+		if (p->stack.temps[idx].source_line >= event->prop_line) continue;
+		return event->prop_col <= p->stack.indents[idx];
+	}
+	return false;
+}
+
+/**
  * @brief Streaming parser callback - builds DOM from events.
  */
 static GTEXT_YAML_Status parse_callback(
@@ -1902,7 +1944,17 @@ static GTEXT_YAML_Status parse_callback(
 	if (p->first_document_complete) {
 		return GTEXT_YAML_OK;
 	}
-	
+
+	if (property_left_of_open_collection(p, event)) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_INVALID;
+			p->error->message =
+				"Anchor or tag not indented past the collection it is written in";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
 	switch (type) {
 		case GTEXT_YAML_EVENT_STREAM_START:
 			/* Start of stream - nothing to do */

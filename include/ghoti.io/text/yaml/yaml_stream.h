@@ -96,6 +96,23 @@ typedef struct {
 	 * only in where the tag was written, so the position has to travel with
 	 * it. */
 	int tag_line;
+	/* Where the leftmost property of this node was written: 1-based line and
+	 * 0-based column, or 0 and -1 when the node carries no properties.
+	 *
+	 * A property has to be indented past the block collection that is already
+	 * open, because c-ns-properties appears in s-l+block-collection(n,c) only
+	 * after s-separate(n+1,c) (8.2).  The parser cannot use the column of the
+	 * node itself to check that: by the time a scalar arrives, the collection
+	 * its properties introduced may already have been opened at a deeper
+	 * indentation.  The leftmost is the one that binds, since every property
+	 * of the node has to clear the same indentation.
+	 *
+	 * For example, "&node" on a line of its own between two "- " entries is
+	 * at the sequence's own indentation, so it introduces nothing and the
+	 * document is in error - even though the scalar it ends up attached to
+	 * sits further in. */
+	int prop_line;
+	int prop_col;
 	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style (SCALAR events) */
 	size_t offset;
 	int line;

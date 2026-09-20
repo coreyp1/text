@@ -86,6 +86,12 @@ struct GTEXT_YAML_Stream {
   size_t pending_prop_offset;
   int pending_prop_line;
   int pending_prop_col;
+  /* The leftmost property recorded for the node being built, and the line it
+     was written on.  Several properties may apply to one node ("&a !!str x",
+     or an anchor and a tag on separate lines); the one furthest left is the
+     one that has to clear the open collection's indentation. */
+  int pending_prop_min_col;
+  int pending_prop_min_line;
   /* Where the property's line began, and whether the property was the first
      thing on it. Together these say whether a later line has left the
      position the property was written in. */
@@ -201,6 +207,8 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   ev.anchor = s->pending_anchor;
   ev.tag = s->pending_tag;
   ev.tag_line = s->pending_tag_line;
+  ev.prop_line = s->pending_prop_min_line;
+  ev.prop_col = s->pending_prop_min_col;
   ev.offset = s->pending_prop_offset;
   ev.line = s->pending_prop_line;
   ev.col = s->pending_prop_col;
@@ -214,6 +222,8 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   free(s->pending_tag);
   s->pending_tag = NULL;
   s->pending_tag_line = 0;
+  s->pending_prop_min_col = -1;
+  s->pending_prop_min_line = 0;
   return rc;
 }
 
@@ -346,6 +356,10 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   s->total_bytes_consumed = 0;
   s->current_depth = 0;
   s->alias_expansion_count = 0;
+  /* No property pending: column 0 is a real column, so "none" has to be -1
+     rather than the zero memset() left here. */
+  s->pending_prop_min_col = -1;
+  s->pending_prop_min_line = 0;
   s->scanner = gtext_yaml_scanner_new();
   s->resolver = gtext_yaml_resolver_new(&s->opts);
   if (!s->scanner) { free(s); return NULL; }
@@ -560,6 +574,8 @@ process_token:
         start_ev.anchor = s->pending_anchor;  /* Attach pending anchor if any */
         start_ev.tag = s->pending_tag;
         start_ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
+        start_ev.prop_line = s->pending_prop_min_line;
+        start_ev.prop_col = s->pending_prop_min_col;
         start_ev.offset = tok.offset;
         start_ev.line = tok.line;
         start_ev.col = tok.col;
@@ -579,6 +595,8 @@ process_token:
           s->pending_tag = NULL;
           s->pending_tag_line = 0;
         }
+        s->pending_prop_min_col = -1;
+        s->pending_prop_min_line = 0;
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
         if (s->current_depth > 0) s->current_depth--;
@@ -619,6 +637,10 @@ process_token:
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
+        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
+          s->pending_prop_min_col = tok.col;
+          s->pending_prop_min_line = tok.line;
+        }
         s->pending_prop_line_start = s->cur_line_start;
         s->pending_prop_opens_line = s->cur_line_only_props;
         s->pending_prop_line_dash = s->cur_line_opens_with_dash;
@@ -687,6 +709,10 @@ process_token:
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
+        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
+          s->pending_prop_min_col = tok.col;
+          s->pending_prop_min_line = tok.line;
+        }
         s->pending_prop_line_start = s->cur_line_start;
         s->pending_prop_opens_line = s->cur_line_only_props;
         s->pending_prop_line_dash = s->cur_line_opens_with_dash;
@@ -745,6 +771,8 @@ process_token:
       ev.anchor = s->pending_anchor;
       ev.tag = s->pending_tag;
       ev.tag_line = s->pending_tag ? s->pending_tag_line : 0;
+      ev.prop_line = s->pending_prop_min_line;
+      ev.prop_col = s->pending_prop_min_col;
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
@@ -761,6 +789,8 @@ process_token:
         s->pending_tag = NULL;
         s->pending_tag_line = 0;
       }
+      s->pending_prop_min_col = -1;
+      s->pending_prop_min_line = 0;
       continue;
     }
   }
@@ -922,6 +952,8 @@ process_token_finish:
           : GTEXT_YAML_EVENT_MAPPING_START;
         start_ev.anchor = s->pending_anchor;
         start_ev.tag = s->pending_tag;
+        start_ev.prop_line = s->pending_prop_min_line;
+        start_ev.prop_col = s->pending_prop_min_col;
         start_ev.offset = tok.offset;
         start_ev.line = tok.line;
         start_ev.col = tok.col;
@@ -940,6 +972,8 @@ process_token_finish:
           s->pending_tag = NULL;
           s->pending_tag_line = 0;
         }
+        s->pending_prop_min_col = -1;
+        s->pending_prop_min_line = 0;
         continue;
       } else if (tok.u.c == ']' || tok.u.c == '}') {
         if (s->current_depth > 0) s->current_depth--;
@@ -979,6 +1013,10 @@ process_token_finish:
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
+        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
+          s->pending_prop_min_col = tok.col;
+          s->pending_prop_min_line = tok.line;
+        }
         s->pending_prop_line_start = s->cur_line_start;
         s->pending_prop_opens_line = s->cur_line_only_props;
         s->pending_prop_line_dash = s->cur_line_opens_with_dash;
@@ -1047,6 +1085,10 @@ process_token_finish:
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
+        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
+          s->pending_prop_min_col = tok.col;
+          s->pending_prop_min_line = tok.line;
+        }
         s->pending_prop_line_start = s->cur_line_start;
         s->pending_prop_opens_line = s->cur_line_only_props;
         s->pending_prop_line_dash = s->cur_line_opens_with_dash;
@@ -1088,6 +1130,8 @@ process_token_finish:
       ev.scalar_style = tok.scalar_style;
       ev.anchor = s->pending_anchor;  /* Attach pending anchor */
       ev.tag = s->pending_tag;
+      ev.prop_line = s->pending_prop_min_line;
+      ev.prop_col = s->pending_prop_min_col;
       if (s->cb) {
         GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
         if (rc != GTEXT_YAML_OK) {
@@ -1104,6 +1148,8 @@ process_token_finish:
         s->pending_tag = NULL;
         s->pending_tag_line = 0;
       }
+      s->pending_prop_min_col = -1;
+      s->pending_prop_min_line = 0;
       continue;
     }
   }

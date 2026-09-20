@@ -119,7 +119,7 @@ streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1,305 tests across 73 binaries with zero failures, clean
+The test suite runs 2,104 tests across 82 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
 from `make test` output needs care: three binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
@@ -281,11 +281,11 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **92.1%** of the 366 cases that can be checked by
+this parser against it: **92.9%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
 82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
-and this parser is now a point and a half ahead of the better of the two. The remaining 38 cases assert an event stream the harness
-does not emit.
+and this parser is now close to eleven points ahead of the better of the two.
+The remaining 38 cases assert an event stream the harness does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
 had suggested. A hundred and forty-five cases have been fixed since, in ten
