@@ -210,6 +210,23 @@ static bool stream_props_left_behind(
        || tok->u.c == ']' || tok->u.c == '}')) {
     return true;
   }
+  /* A ":" on the property's own line, with nothing between the two, is a
+     key nobody wrote. c-ns-properties may stand on its own and the node it
+     names is then the empty node (7.2), so "!!str : 1" is {"": 1} and
+     "&a : 1" is a null key carrying an anchor. Both references agree. The
+     same-line test just below would instead carry the properties past the
+     ":" to the value, which left the ":" with no key in front of it and the
+     document refused outright.
+
+     A property at the *end* of a line is the other thing entirely: it
+     introduces whatever the next line holds, so "top3: &node3" over
+     "  *alias1 : scalar3" anchors the nested mapping rather than an empty
+     key (suite case 26DV). That ":" is on a later line and never reaches
+     here; the indentation test below is what protects it. */
+  if (tok->type == GTEXT_YAML_TOKEN_INDICATOR && tok->u.c == ':'
+      && tok->line == s->pending_prop_line) {
+    return true;
+  }
   if (tok->line == s->pending_prop_line) return false;
   if (s->pending_prop_opens_line) return false;
   if (s->cur_line_start > s->pending_prop_line_start) return false;
