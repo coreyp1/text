@@ -807,7 +807,7 @@ jobs:
 
 ## 13. Testing
 
-The YAML module is covered by 82 test files, part of a suite that runs
+The YAML module is covered by 90 test files, part of a suite that runs
 2148 tests across 102 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
