@@ -56,6 +56,30 @@ const Case kCases[] = {
 	/* An unresolvable core-schema value under the standard handle is still
 	   refused, which is what the first row would have done without the fix. */
 	{"!!int 1 - 3\n", nullptr},
+
+	/* A named handle exists only where a %TAG put it, and a shorthand using
+	   one that was never declared is an error (6.8.2.2). It resolved to
+	   itself and the document was accepted, which is how a handle declared
+	   in the first document of a stream looked like it carried into the
+	   rest: each document does get its own table, and the later ones simply
+	   never complained (suite case QLJ7). */
+	{"!prefix!A foo\n", nullptr},
+	{"!e!\n", nullptr},
+	{"%TAG !p! tag:example.com,2011:\n---\n!p!A foo\n", "\"foo\""},
+	{"%TAG !p! tag:example.com,2011:\n---\n!p! foo\n", "\"foo\""},
+
+	/* The primary and secondary handles need no directive, and a verbatim
+	   tag has no handle at all. */
+	{"!foo bar\n", "\"bar\""},
+	{"! x\n", "\"x\""},
+	{"!<tag:example.com,2000:x> y\n", "\"y\""},
+
+	/* ns-uri-char allows "!", so a prefix may contain one and the expanded
+	   tag then looks like a shorthand with a handle of its own. The check
+	   only applies to tags still written as shorthands - expansion has
+	   already happened by then - which is what the leading "!" test is for. */
+	{"%TAG !p! tag:x!y!\n---\n!p!A foo\n", "\"foo\""},
+	{"%TAG !p! tag:x!y!\n---\n!p! foo\n", "\"foo\""},
 };
 
 } // namespace

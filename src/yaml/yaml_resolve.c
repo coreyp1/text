@@ -78,11 +78,59 @@ static bool is_standard_tag(const char *tag) {
 	return false;
 }
 
+/**
+ * @brief Is this a named tag shorthand whose handle was never declared?
+ *
+ * A shorthand is a handle and a suffix. The primary handle "!" and the
+ * secondary "!!" are always available, but "!name!" exists only where a %TAG
+ * directive put it, and a shorthand using one that was never declared is an
+ * error (6.8.2.2).  It resolved to itself instead and the document was
+ * accepted - which is how a handle declared in the first document of a
+ * stream appeared to carry into the rest of them: each document does get its
+ * own table, and the later ones simply never complained (suite case QLJ7).
+ */
+static bool tag_handle_undeclared(
+	const GTEXT_YAML_Document *doc,
+	const char *tag
+) {
+	const char *second = NULL;
+	size_t hlen = 0;
+
+	if (!tag || tag[0] != '!') return false;
+	/* "!!x" is the secondary handle and "!x" the primary; a named handle is
+	   "!" name "!" with the name not empty. */
+	second = strchr(tag + 1, '!');
+	if (!second || second == tag + 1) return false;
+	hlen = (size_t)(second - tag) + 1;
+
+	if (!doc) return true;
+	for (size_t i = 0; i < doc->tag_handle_count; i++) {
+		const char *handle = doc->tag_handles[i].handle;
+		if (!handle) continue;
+		/* Comparing hlen characters is enough: a handle is "!" name "!"
+		   with no further "!" in it, so one whose first hlen characters
+		   match - hlen reaching to and including the shorthand's second
+		   "!" - has no more characters to differ in. */
+		if (strncmp(handle, tag, hlen) == 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static GTEXT_YAML_Status enforce_tag_policy(
+	const GTEXT_YAML_Document *doc,
 	const char *tag,
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Error *error
 ) {
+	if (tag_handle_undeclared(doc, tag)) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Tag shorthand uses a handle no %TAG declared";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
 	if (!opts || opts->allow_nonstandard_tags) return GTEXT_YAML_OK;
 	if (is_standard_tag(tag)) return GTEXT_YAML_OK;
 	if (error) {
@@ -1489,7 +1537,7 @@ static GTEXT_YAML_Status resolve_scalar(
 		tag = resolved_tag;
 	}
 
-	tag_status = enforce_tag_policy(tag, opts, error);
+	tag_status = enforce_tag_policy(doc, tag, opts, error);
 	if (tag_status != GTEXT_YAML_OK) return tag_status;
 	if (!opts || !opts->resolve_tags) return GTEXT_YAML_OK;
 
@@ -1760,7 +1808,7 @@ static GTEXT_YAML_Status resolve_node(
 			}
 			{
 				const char *tag = node->as.sequence.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(tag, opts, error);
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, opts, error);
 				if (tag_status != GTEXT_YAML_OK) return tag_status;
 			}
 			for (size_t i = 0; i < node->as.sequence.count; i++) {
@@ -1847,7 +1895,7 @@ static GTEXT_YAML_Status resolve_node(
 			}
 			{
 				const char *tag = node->as.mapping.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(tag, opts, error);
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, opts, error);
 				if (tag_status != GTEXT_YAML_OK) return tag_status;
 			}
 			for (size_t i = 0; i < node->as.mapping.count; i++) {
