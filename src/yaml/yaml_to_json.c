@@ -652,6 +652,25 @@ static GTEXT_YAML_Status convert_node(
 				break;
 			}
 
+			/* Coercion is many-to-one: the null key and the empty string
+			   key are different YAML keys and both spell "", as the integer
+			   1 and the string "1" both spell "1".  A JSON object cannot
+			   hold the two, and gtext_json_object_put() would keep the
+			   second and drop the first without saying so - which is the
+			   opposite of what this library does with duplicate keys
+			   everywhere else, where the default is to refuse them. */
+			if (gtext_json_object_get(*out_json, key, strlen(key)) != NULL) {
+				if (out_err) {
+					out_err->code = GTEXT_YAML_E_INVALID;
+					out_err->message =
+						"cannot convert: two mapping keys coerce to one JSON name";
+				}
+				gtext_json_free(*out_json);
+				*out_json = NULL;
+				status = GTEXT_YAML_E_INVALID;
+				break;
+			}
+
 			value_status = convert_node(value_node, &value, ctx, out_err);
 			if (value_status != GTEXT_YAML_OK) {
 				gtext_json_free(*out_json);
