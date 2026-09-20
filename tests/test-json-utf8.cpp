@@ -23,6 +23,12 @@
  * GTEXT_JSON_OK and no message - so a caller testing the code rather than the
  * pointer read a refusal as a success. A leading-zero number and these UTF-8
  * sequences both arrived that way.
+ *
+ * Note the gtext_json_error_free() after every parse. A refused parse may
+ * leave a heap-allocated context_snippet behind, and the caller owns it - the
+ * first version of this file did not, and ASan reported 30 bytes leaked
+ * across five allocations. The leak was the test's, not the library's, but it
+ * is the same mistake a user would make from the same reading.
  */
 #include <gtest/gtest.h>
 #include <string>
@@ -90,6 +96,7 @@ TEST(JsonUtf8, IllFormedSequencesAreRefused) {
 		GTEXT_JSON_Value *v = Parse(doc, &err);
 		EXPECT_EQ(v, nullptr) << "accepted: " << c.name;
 		if (v) gtext_json_free(v);
+		gtext_json_error_free(&err);
 	}
 }
 
@@ -101,6 +108,7 @@ TEST(JsonUtf8, WellFormedSequencesAreAccepted) {
 		EXPECT_NE(v, nullptr) << "refused: " << c.name
 			<< " (" << (err.message ? err.message : "no message") << ")";
 		if (v) gtext_json_free(v);
+		gtext_json_error_free(&err);
 	}
 }
 
@@ -125,6 +133,7 @@ TEST(JsonUtf8, ARefusalAlwaysCarriesACodeAndAMessage) {
 		EXPECT_NE(err.code, GTEXT_JSON_OK)
 			<< "refused but reported GTEXT_JSON_OK";
 		EXPECT_NE(err.message, nullptr) << "refused with no message";
+		gtext_json_error_free(&err);
 	}
 }
 
@@ -145,6 +154,7 @@ TEST(JsonUtf8, TheMostSpecificMessageIsTheOneKept) {
 		ASSERT_EQ(v, nullptr) << "expected a refusal: " << c.doc;
 		ASSERT_NE(err.message, nullptr);
 		EXPECT_STREQ(err.message, c.wanted) << "input: " << c.doc;
+		gtext_json_error_free(&err);
 	}
 }
 
@@ -161,6 +171,7 @@ TEST(JsonUtf8, ValidationCanBeTurnedOff) {
 		<< "validate_utf8=false still refused it: "
 		<< (err.message ? err.message : "");
 	if (v) gtext_json_free(v);
+	gtext_json_error_free(&err);
 }
 
 int main(int argc, char **argv) {
