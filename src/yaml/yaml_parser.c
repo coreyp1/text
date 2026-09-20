@@ -1253,6 +1253,46 @@ static bool sequence_supply_empty_entry(parser_state *p) {
 }
 
 /**
+ * @brief Is the node at @p offset written on a document-start line?
+ *
+ * A block collection may not begin on the "---" line.  s-l+block-collection
+ * reaches l+block-mapping(n) only through s-l-comments (8.2), and once the
+ * line has content on it that needs a line break, so "--- a: b" has no
+ * production.  A scalar is another matter - "--- a" and "--- !!str a" are
+ * ordinary bare documents - so this asks only about the line and the caller
+ * applies it where a block collection is about to start.
+ *
+ * yaml-test-suite has both spellings as errors: CXX2 "--- &anchor a: b" and
+ * 9KBC "--- key1: value1" with a second key below it.  PyYAML refuses them
+ * too.  js-yaml accepts the plain "--- a: b" and refuses the rest, which is
+ * the more forgiving reading; this follows the grammar.
+ */
+static bool node_is_on_document_start_line(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t length = 0;
+	size_t line_start = 0;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
+	buffer = p->ctx->input_buffer;
+	length = p->ctx->input_buffer_len;
+	if (offset > length) offset = length;
+
+	line_start = offset;
+	while (line_start > 0) {
+		const char ch = buffer[line_start - 1];
+		if (ch == '\n' || ch == '\r') break;
+		line_start--;
+	}
+
+	if (length - line_start < 4) return false;
+	if (buffer[line_start] != '-' || buffer[line_start + 1] != '-'
+		|| buffer[line_start + 2] != '-') {
+		return false;
+	}
+	return buffer[line_start + 3] == ' ' || buffer[line_start + 3] == '\t';
+}
+
+/**
  * @brief True when a node starting at @p col is a sibling key rather than the
  *        value of the key already waiting for one.
  *
@@ -3060,6 +3100,16 @@ static GTEXT_YAML_Status parse_callback(
 					 * regardless, which put a mapping where a key should be:
 					 * "a: 1" followed by an indented "b: 2" parsed as
 					 * {"a": 1, {"b": 2}: null} rather than being refused. */
+					if (node_is_on_document_start_line(p, source_offset)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Block mapping may not begin on the \"---\" line";
+						}
+						return GTEXT_YAML_E_INVALID;
+					}
+
 					if (in_block_mapping && key_indent > p->stack.indents[top] &&
 						(p->temp.count % 2) == 0) {
 						p->failed = true;
@@ -3320,6 +3370,17 @@ static GTEXT_YAML_Status parse_callback(
 							}
 							return GTEXT_YAML_E_OOM;
 						}
+					}
+
+					if (start_new
+						&& node_is_on_document_start_line(p, event->offset)) {
+						p->failed = true;
+						if (p->error) {
+							p->error->code = GTEXT_YAML_E_INVALID;
+							p->error->message =
+								"Block sequence may not begin on the \"---\" line";
+						}
+						return GTEXT_YAML_E_INVALID;
 					}
 
 					if (start_new) {

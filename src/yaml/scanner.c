@@ -1332,7 +1332,12 @@ block_scalar_collected:
   }
 
   /* Check for document markers: "---" and "..." */
-  if (c == '-' || c == '.') {
+  /* Both markers are productions of their own line: c-directives-end and
+     c-document-end take no s-indent before them (9.1.2, 9.2), so they are
+     only markers at column 1.  Without that test "a: --- b" ended the
+     document in the middle of the value and left {"a": null} behind, where
+     the "---" is plain content and both references read it as one. */
+  if ((c == '-' || c == '.') && col == 1) {
     /* Need to peek ahead for 3 characters total */
     if (s->cursor + 2 < s->input.len) {
       int c1 = (unsigned char)s->input.data[s->cursor + 1];
