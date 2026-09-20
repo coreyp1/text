@@ -14,6 +14,9 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <inttypes.h>
+#include <locale.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +27,123 @@
 #include <ghoti.io/text/yaml/yaml_stream.h>
 
 #include "yaml_internal.h"
+
+/* A coerced key's name never needs more than this: the longest is a double in
+   exponential form with seventeen significant digits. */
+#define GTEXT_YAML_KEY_NAME_MAX 40
+
+/**
+ * @brief Put the decimal point back after a locale has moved it.
+ *
+ * printf writes LC_NUMERIC's decimal separator, which in a good many locales
+ * is a comma. A JSON name has to read the same wherever the program runs.
+ */
+static void key_name_use_c_decimal_point(char *buf) {
+	const struct lconv *lc = localeconv();
+	const char *dp = lc ? lc->decimal_point : NULL;
+	if (!dp || !dp[0] || (dp[0] == '.' && dp[1] == '\0')) return;
+
+	char *at = strstr(buf, dp);
+	if (!at) return;
+	const size_t dlen = strlen(dp);
+	*at = '.';
+	memmove(at + 1, at + dlen, strlen(at + dlen) + 1);
+}
+
+/**
+ * @brief The JSON name a non-string mapping key coerces to.
+ *
+ * The name follows the key's *value*, not the way it was written. This parser
+ * already reads mapping keys that way: "0x10" and "16" are one key and are
+ * refused as duplicates, as are "Null" and "~", and "True" and "true". A
+ * conversion that then emitted a different name for each would contradict its
+ * own idea of which keys are the same, and two YAML documents that mean the
+ * same thing would come out as two different JSON documents.
+ *
+ * Writing the key as written is the other coherent rule, and it is the one
+ * this used to follow. It loses here because the conversion is not a round
+ * trip: anchors, tags, comments and styles are already gone by this point and
+ * a JSON name is a string, so there is no way back for the spelling to
+ * matter to. Number *values* keep their lexeme where there is a round trip to
+ * protect - JSON in, identical JSON out - and that is a different operation.
+ *
+ * A float gets the shortest spelling that reads back as the same double, so
+ * one name per value however it was written, and is forced to carry a "." or
+ * an exponent so that a float key and an integer key never collide by
+ * accident. ".inf" and ".nan" have no JSON spelling at all and are refused,
+ * as the writer already refuses them as values.
+ */
+static GTEXT_YAML_Status coerce_key_name(
+	const GTEXT_YAML_Node *key,
+	char *buf,
+	size_t buf_size,
+	const char **out,
+	GTEXT_YAML_Error *out_err
+) {
+	switch (gtext_yaml_node_type(key)) {
+	case GTEXT_YAML_NULL:
+		*out = "null";
+		return GTEXT_YAML_OK;
+
+	case GTEXT_YAML_BOOL: {
+		bool b = false;
+		if (!gtext_yaml_node_as_bool(key, &b)) break;
+		*out = b ? "true" : "false";
+		return GTEXT_YAML_OK;
+	}
+
+	case GTEXT_YAML_INT: {
+		int64_t v = 0;
+		if (!gtext_yaml_node_as_int(key, &v)) break;
+		if (snprintf(buf, buf_size, "%" PRId64, v) < 0) break;
+		*out = buf;
+		return GTEXT_YAML_OK;
+	}
+
+	case GTEXT_YAML_FLOAT: {
+		double d = 0;
+		if (!gtext_yaml_node_as_float(key, &d)) break;
+		if (!isfinite(d)) {
+			if (out_err) {
+				out_err->code = GTEXT_YAML_E_INVALID;
+				out_err->message =
+					"cannot convert: an infinite or NaN mapping key has no JSON name";
+			}
+			return GTEXT_YAML_E_INVALID;
+		}
+		/* The shortest spelling that reads back as the same double, so that
+		   0.1 is "0.1" rather than "0.10000000000000001" and equal values
+		   still give equal names. snprintf and strtod share LC_NUMERIC, so
+		   the comparison holds in any locale and the separator is put right
+		   afterwards, once nothing has to parse the buffer again. */
+		int n = -1;
+		for (int prec = 15; prec <= 17; prec++) {
+			n = snprintf(buf, buf_size, "%.*g", prec, d);
+			if (n < 0 || (size_t)n >= buf_size) break;
+			if (strtod(buf, NULL) == d) break;
+		}
+		if (n < 0 || (size_t)n >= buf_size) break;
+		key_name_use_c_decimal_point(buf);
+		/* "1e+20" is already unmistakably a float; "1" is not. */
+		if (!strpbrk(buf, ".eE")) {
+			const size_t len = strlen(buf);
+			if (len + 3 > buf_size) break;
+			memcpy(buf + len, ".0", 3);
+		}
+		*out = buf;
+		return GTEXT_YAML_OK;
+	}
+
+	default:
+		break;
+	}
+
+	if (out_err) {
+		out_err->code = GTEXT_YAML_E_INVALID;
+		out_err->message = "cannot convert: complex mapping key cannot be coerced";
+	}
+	return GTEXT_YAML_E_INVALID;
+}
 
 #define GTEXT_YAML_JSON_MAX_SAFE_INT 9007199254740991LL
 #define GTEXT_YAML_JSON_MIN_SAFE_INT (-9007199254740991LL)
@@ -612,32 +732,29 @@ static GTEXT_YAML_Status convert_node(
 				break;
 			}
 
-			if (key_type != GTEXT_YAML_STRING && ctx->options.coerce_keys_to_strings) {
-				if (key_type != GTEXT_YAML_NULL &&
-					key_type != GTEXT_YAML_BOOL &&
-					key_type != GTEXT_YAML_INT &&
-					key_type != GTEXT_YAML_FLOAT) {
+			char key_buf[GTEXT_YAML_KEY_NAME_MAX];
+			key = NULL;
+			if (key_type == GTEXT_YAML_STRING) {
+				key = gtext_yaml_node_as_string(resolved_key);
+				if (!key) {
 					if (out_err) {
 						out_err->code = GTEXT_YAML_E_INVALID;
-						out_err->message = "cannot convert: complex mapping key cannot be coerced";
+						out_err->message = "failed to extract key string from YAML mapping";
 					}
 					gtext_json_free(*out_json);
 					*out_json = NULL;
 					status = GTEXT_YAML_E_INVALID;
 					break;
 				}
-			}
-
-			key = gtext_yaml_node_as_string(resolved_key);
-			if (!key) {
-				if (out_err) {
-					out_err->code = GTEXT_YAML_E_INVALID;
-					out_err->message = "failed to extract key string from YAML mapping";
+			} else {
+				GTEXT_YAML_Status named = coerce_key_name(
+					resolved_key, key_buf, sizeof(key_buf), &key, out_err);
+				if (named != GTEXT_YAML_OK) {
+					gtext_json_free(*out_json);
+					*out_json = NULL;
+					status = named;
+					break;
 				}
-				gtext_json_free(*out_json);
-				*out_json = NULL;
-				status = GTEXT_YAML_E_INVALID;
-				break;
 			}
 
 			/* Reject merge keys (YAML 1.1 extension not compatible with JSON) */

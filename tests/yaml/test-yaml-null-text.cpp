@@ -19,12 +19,15 @@
  * The rule now is that the text is what the author wrote: nothing for a node
  * nobody wrote, "~" for a node spelled "~", "null" for one spelled "null".
  * The type is null in all three cases and always was.
+ *
+ * What a null key becomes when converted to JSON is a separate question, and
+ * is answered by the key's value rather than by any of these spellings - see
+ * test-yaml-key-coercion.cpp.
  */
 #include <gtest/gtest.h>
 #include <string.h>
 #include <string>
 #include <ghoti.io/text/yaml.h>
-#include <ghoti.io/text/json.h>
 
 namespace {
 
@@ -78,30 +81,6 @@ const Case kCases[] = {
 	{"a: \"\"\n",      false, GTEXT_YAML_STRING, ""},
 	{"'': 1\n",        true,  GTEXT_YAML_STRING, ""},
 };
-
-std::string ToJson(const char *src, bool coerce, GTEXT_YAML_Status *status) {
-	GTEXT_YAML_Error err;
-	memset(&err, 0, sizeof(err));
-	GTEXT_YAML_Document *doc = gtext_yaml_parse(src, strlen(src), nullptr, &err);
-	if (!doc) { *status = GTEXT_YAML_E_INVALID; return ""; }
-	GTEXT_JSON_Value *jv = nullptr;
-	GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
-	o.coerce_keys_to_strings = coerce;
-	memset(&err, 0, sizeof(err));
-	*status = gtext_yaml_to_json_with_options(doc, &jv, &o, &err);
-	if (*status != GTEXT_YAML_OK) { gtext_yaml_free(doc); return ""; }
-	GTEXT_JSON_Sink sink;
-	gtext_json_sink_buffer(&sink);
-	GTEXT_JSON_Error je;
-	memset(&je, 0, sizeof(je));
-	gtext_json_write_value(&sink, nullptr, jv, &je);
-	std::string out(gtext_json_sink_buffer_data(&sink),
-			gtext_json_sink_buffer_size(&sink));
-	gtext_json_sink_buffer_free(&sink);
-	gtext_json_free(jv);
-	gtext_yaml_free(doc);
-	return out;
-}
 
 }  // namespace
 
@@ -176,86 +155,5 @@ TEST(YamlNullText, AnEmptyNullNodeStillRoundTrips) {
 		EXPECT_EQ(gtext_yaml_node_type(v), c.type)
 			<< c.input << " wrote " << written;
 		gtext_yaml_free(back);
-	}
-}
-
-/* Coercing a key to a string is many-to-one, and two YAML keys that land on
-   one JSON name used to leave the object holding whichever came last. */
-TEST(YamlNullText, CoercionCollisionsAreRefused) {
-	GTEXT_YAML_Status status = GTEXT_YAML_OK;
-	const char *collide[] = {
-		"? \n: 1\n'': 2\n",     /* the null key and the empty string key */
-		"'': 1\n? \n: 2\n",     /* ...in the other order */
-		"1: a\n'1': b\n",       /* the integer 1 and the string "1" */
-		"true: a\n'true': b\n", /* the boolean and the string */
-	};
-	for (const char *src : collide) {
-		ToJson(src, true, &status);
-		EXPECT_EQ(status, GTEXT_YAML_E_INVALID) << "accepted: " << src;
-	}
-}
-
-TEST(YamlNullText, KeysThatDoNotCollideStillConvert) {
-	GTEXT_YAML_Status status = GTEXT_YAML_OK;
-	struct { const char *input; const char *json; } cases[] = {
-		{"a: 1\nb: 2\n", "{\"a\":1,\"b\":2}"},
-		{"? \n: 1\n", "{\"\":1}"},
-		{"~: 1\n", "{\"~\":1}"},
-		{"null: 1\n", "{\"null\":1}"},
-		{"1: a\n2: b\n", "{\"1\":\"a\",\"2\":\"b\"}"},
-	};
-	for (const auto &c : cases) {
-		EXPECT_EQ(ToJson(c.input, true, &status), c.json) << c.input;
-		EXPECT_EQ(status, GTEXT_YAML_OK) << c.input;
-	}
-}
-
-/* !!pairs and !!omap become JSON arrays, so their duplicate keys are not the
-   converter's to refuse, and a dupkeys policy that resolves a duplicate does
-   so before the conversion sees it. */
-/* The JSON name a key coerces to is the key as it was written, so "~" and a
-   key nobody wrote produce different names - but they are the same YAML key,
-   both null, so no document can hold the two and the difference is never
-   visible inside one object. The duplicate-key policy catches it first. */
-TEST(YamlNullText, TwoSpellingsOfNullAreOneKey) {
-	const char *src = "~: 1\n? \n: 2\n";
-	GTEXT_YAML_Error err;
-	memset(&err, 0, sizeof(err));
-	GTEXT_YAML_Document *doc =
-		gtext_yaml_parse(src, strlen(src), nullptr, &err);
-	EXPECT_EQ(doc, nullptr) << "two null keys should be duplicates";
-	if (doc) gtext_yaml_free(doc);
-	else EXPECT_STREQ(err.message, "Duplicate mapping key");
-}
-
-TEST(YamlNullText, TheCollisionCheckLeavesEverythingElseAlone) {
-	GTEXT_YAML_Status status = GTEXT_YAML_OK;
-	EXPECT_EQ(ToJson("!!pairs [{a: 1}, {a: 2}]\n", true, &status),
-			"[{\"a\":1},{\"a\":2}]");
-	EXPECT_EQ(status, GTEXT_YAML_OK);
-	EXPECT_EQ(ToJson("!!omap [{a: 1}, {b: 2}]\n", true, &status),
-			"[{\"a\":1},{\"b\":2}]");
-	EXPECT_EQ(status, GTEXT_YAML_OK);
-
-	for (GTEXT_YAML_Dupkey_Mode mode :
-			{GTEXT_YAML_DUPKEY_LAST_WINS, GTEXT_YAML_DUPKEY_FIRST_WINS}) {
-		GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
-		po.dupkeys = mode;
-		const char *src = "a: 1\na: 2\n";
-		GTEXT_YAML_Error err;
-		memset(&err, 0, sizeof(err));
-		GTEXT_YAML_Document *doc =
-			gtext_yaml_parse(src, strlen(src), &po, &err);
-		ASSERT_NE(doc, nullptr) << (err.message ? err.message : "?");
-		GTEXT_JSON_Value *jv = nullptr;
-		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
-		o.coerce_keys_to_strings = true;
-		memset(&err, 0, sizeof(err));
-		EXPECT_EQ(gtext_yaml_to_json_with_options(doc, &jv, &o, &err),
-				GTEXT_YAML_OK)
-			<< "mode " << (int)mode << ": "
-			<< (err.message ? err.message : "?");
-		if (jv) gtext_json_free(jv);
-		gtext_yaml_free(doc);
 	}
 }

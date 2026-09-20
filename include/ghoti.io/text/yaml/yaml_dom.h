@@ -1062,7 +1062,19 @@ typedef enum {
 typedef struct {
 	bool allow_resolved_aliases;    /* Resolve alias nodes to targets. */
 	bool allow_merge_keys;          /* Allow merge-expanded mappings. */
-	bool coerce_keys_to_strings;    /* Convert scalar keys to strings. */
+	/* Convert a non-string scalar key to a JSON name instead of refusing it.
+	 *
+	 * The name follows the key's value, not the way it was written, because
+	 * that is how this parser decides which keys are the same: "0x10" and
+	 * "16" are one key, and so are "Null", "~" and an empty key, so each
+	 * pair gets one name ("16", "null"). A float gets the shortest spelling
+	 * that reads back as the same double, always carrying a "." or an
+	 * exponent; ".inf" and ".nan" have no JSON name and are refused.
+	 *
+	 * Coercion is still many-to-one - the integer 1 and the string "1" are
+	 * different keys and JSON has one name for them - so two keys landing on
+	 * one name is refused rather than silently letting the second win. */
+	bool coerce_keys_to_strings;
 	GTEXT_YAML_JSON_Large_Int_Policy large_int_policy;
 	bool enable_custom_tags;        /* Enable custom tag JSON conversions. */
 	const GTEXT_YAML_Custom_Tag * custom_tags;
