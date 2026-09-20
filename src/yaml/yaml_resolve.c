@@ -46,8 +46,13 @@ static const char *tag_suffix(const char *tag) {
 	return NULL;
 }
 
-static bool is_standard_tag(const char *tag) {
-	static const char *allowed[] = {
+/* The tags the spec defines in the "tag:yaml.org,2002:" namespace: the
+   failsafe, JSON and core schemas plus the types YAML carries alongside
+   them.  "value" and "yaml" are named by the 1.1 type repository but no
+   schema here resolves them, and both reference implementations refuse
+   them, so they are not on this list. */
+static bool is_defined_yaml_tag(const char *suffix) {
+	static const char *defined[] = {
 		"str",
 		"bool",
 		"int",
@@ -62,6 +67,20 @@ static bool is_standard_tag(const char *tag) {
 		"timestamp",
 		"merge"
 	};
+
+	for (size_t i = 0; i < sizeof(defined) / sizeof(defined[0]); i++) {
+		if (strcmp(suffix, defined[i]) == 0) return true;
+	}
+	return false;
+}
+
+/* True for a tag that is not in the "tag:yaml.org,2002:" namespace at all:
+   a local tag ("!foo"), or a global one under somebody else's prefix.  These
+   are the tags an application defines for itself, and whether to accept them
+   is a policy question - see allow_nonstandard_tags.  Whether a tag inside
+   the YAML namespace names a type the spec actually defines is a separate
+   question, and not a matter of policy; see enforce_tag_policy(). */
+static bool is_standard_tag(const char *tag) {
 	const char *suffix = NULL;
 
 	if (!tag) return true;
@@ -71,11 +90,7 @@ static bool is_standard_tag(const char *tag) {
 	if (!suffix) return false;
 	if (suffix[0] == '\0') return true;
 
-	for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
-		if (strcmp(suffix, allowed[i]) == 0) return true;
-	}
-
-	return false;
+	return is_defined_yaml_tag(suffix);
 }
 
 /**
@@ -131,6 +146,23 @@ static GTEXT_YAML_Status enforce_tag_policy(
 		}
 		return GTEXT_YAML_E_INVALID;
 	}
+	/* The "tag:yaml.org,2002:" namespace belongs to the spec, so a tag in
+	   it that names no type the spec defines - "!!bogus" - is a malformed
+	   document, not a matter of taste.  A %TAG directive that re-points
+	   "!!" somewhere else has already been expanded by the time the tag
+	   arrives here, so this only sees tags genuinely in the namespace. */
+	const char *suffix = tag_suffix(tag);
+	if (suffix && suffix[0] != '\0' && !is_defined_yaml_tag(suffix)) {
+		if (error) {
+			error->code = GTEXT_YAML_E_INVALID;
+			error->message = "Unknown tag in the tag:yaml.org,2002 namespace";
+		}
+		return GTEXT_YAML_E_INVALID;
+	}
+
+	/* Application-defined tags are valid YAML - the spec's own examples use
+	   them - so they are accepted unless the caller has asked for a document
+	   that sticks to the tags this library resolves. */
 	if (!opts || opts->allow_nonstandard_tags) return GTEXT_YAML_OK;
 	if (is_standard_tag(tag)) return GTEXT_YAML_OK;
 	if (error) {

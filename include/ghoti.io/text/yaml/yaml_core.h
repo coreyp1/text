@@ -265,6 +265,14 @@ typedef struct {
   bool retain_comments;
   bool yaml_1_1;
   bool enable_custom_tags;
+  /* Whether application-defined tags are accepted: a local tag such as
+   * "!point", or a global one under a prefix of your own.  These are valid
+   * YAML and the specification's own examples use them, so the default is
+   * true; false is a lockdown for input you do not trust.
+   *
+   * It does not govern the "tag:yaml.org,2002:" namespace.  A tag there
+   * that names no type the specification defines - "!!bogus" - is a
+   * malformed document and is refused whatever this is set to. */
   bool allow_nonstandard_tags;
   bool allow_aliases;
   bool allow_merge_keys;

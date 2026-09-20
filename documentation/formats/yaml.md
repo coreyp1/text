@@ -126,6 +126,33 @@ correct starting point for untrusted input: it removes aliases entirely,
 which is the only complete defense against expansion attacks, and it refuses
 non-string keys, which is what most consumers assume anyway.
 
+### Tags
+
+Two rules govern tags, and only one of them is an option.
+
+A tag in the `tag:yaml.org,2002:` namespace has to name a type the spec
+defines. `!!bogus` is a malformed document and is refused whatever the
+options say, because that namespace is not the author's to extend. The
+types this library resolves there are `str`, `bool`, `int`, `float`,
+`null`, `seq`, `map`, `set`, `omap`, `pairs`, `binary`, `timestamp` and
+`merge`; `!!value` and `!!yaml` are named by the 1.1 type repository but
+are not among them, and are refused for the same reason.
+
+Everything else - a local tag like `!point`, or a global one under your own
+prefix - is what tags exist for, and is accepted by default. The spec's own
+examples use them freely. `allow_nonstandard_tags = false` refuses them, and
+that is the setting's whole job: it is a lockdown for input you do not
+trust, not a correctness rule, and turning it on for ordinary documents will
+refuse valid YAML.
+
+A `%TAG` directive is expanded before either rule is applied, so a handle
+redirected away from the YAML namespace escapes the first rule and a handle
+pointed into it does not.
+
+The event API (`gtext_yaml_stream_*`) reports tags as written and resolves
+nothing, so neither rule applies there; a consumer of events decides what a
+tag means for itself.
+
 ## Save
 
 The writer emits UTF-8 with no BOM, two-space indent, plain scalars where

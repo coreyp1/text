@@ -276,7 +276,10 @@ For manual control, the relevant toggles are:
 - `allow_merge_keys`
 - `allow_complex_keys`
 - `require_string_keys`
-- `allow_nonstandard_tags`
+- `allow_nonstandard_tags` - refuses application-defined tags (`!point`, or a
+  global tag under your own prefix). It does not govern the
+  `tag:yaml.org,2002:` namespace, where an undefined tag such as `!!bogus` is
+  refused whatever the options say.
 - `enable_custom_tags`
 
 ### 3.5 JSON Fast Path
