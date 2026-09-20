@@ -515,7 +515,7 @@ implement 1.2 strictly will reject or ignore them.
 ## Tested scope
 
 **Tests.** 90 test files under `tests/yaml/`, carrying 563 of the suite's
-2156 test cases across 104 binaries, all passing. They cover the scalar styles,
+2154 test cases across 104 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,

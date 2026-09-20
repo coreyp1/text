@@ -556,55 +556,24 @@ GTEXT_CSV_Status csv_stream_process_quoted_field(GTEXT_CSV_Stream * stream,
         stream, GTEXT_CSV_E_LIMIT, "Maximum field bytes exceeded");
   }
 
-  // If we just processed a doubled quote and see a delimiter, end the field
-  // This handles the case: "text"",field2 where the doubled quote is followed
-  // by delimiter
-  if (stream->just_processed_doubled_quote &&
-      c == stream->opts.dialect.delimiter) {
-    // End of quoted field - emit field
-    // Ensure field is buffered if needed
-    GTEXT_CSV_Status buffer_status = csv_stream_ensure_field_buffered(
-        stream, process_input, process_len, *offset);
-    if (buffer_status != GTEXT_CSV_OK) {
-      return buffer_status;
-    }
+  /* There used to be two branches here: if a doubled quote had just been
+     processed and the next character was a delimiter or a newline, the field
+     was ended.  That reads "" as a closing quote followed by a stray one,
+     which is backwards.  Inside a quoted field "" is an escaped quote and the
+     field goes on until a single quote closes it (RFC 4180 section 2), so
 
-    return csv_stream_complete_field_at_delimiter(stream, offset);
-  }
+         "a"",b"
 
-  // If we just processed a doubled quote and see a newline, end the field and
-  // record
-  if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
-    csv_newline_type nl;
-    GTEXT_CSV_Status newline_status = csv_stream_handle_newline(
-        stream, process_input, process_len, offset, byte_pos, &nl);
-    if (newline_status != GTEXT_CSV_OK) {
-      return newline_status;
-    }
-    if (nl == CSV_NEWLINE_NONE) {
-      // Not a complete newline sequence, continue processing
-      // Fall through to regular character handling
-    }
-    else {
-      // End of quoted field, end of record
-      // Ensure field is buffered if needed
-      GTEXT_CSV_Status ensure_status = csv_stream_ensure_field_buffered(
-          stream, process_input, process_len, *offset);
-      if (ensure_status != GTEXT_CSV_OK) {
-        return ensure_status;
-      }
+     is the one field a",b - which is what Python's csv module gives - and was
+     refused here with "Unexpected quote in unquoted field", because the
+     comma had ended the field and left b" to be read as an unquoted one.
+     Any CSV holding a quote and a comma in the same field hit it: embedded
+     JSON, a coordinate like 37"N, a quoted phrase before a list.
 
-      // Position already updated by csv_stream_handle_newline
-      ensure_status = csv_stream_emit_field(stream, true);
-      if (ensure_status != GTEXT_CSV_OK) {
-        return ensure_status;
-      }
-      csv_stream_clear_field_state(stream);
-      stream->field_count = 0;
-      // Position already updated by csv_stream_handle_newline
-      return csv_stream_end_record(stream);
-    }
-  }
+     The state machine without them is already the right one: QUOTED_FIELD
+     sees a quote and moves to QUOTE_IN_QUOTED, which decides between an
+     escape and a close by what comes next. */
+
 
   // A newline inside a quoted field is ordinary content unless the dialect
   // says otherwise.  The option is documented and defaults to true; until now

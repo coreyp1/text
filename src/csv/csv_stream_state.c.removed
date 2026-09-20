@@ -1,0 +1,49 @@
+  // If we just processed a doubled quote and see a delimiter, end the field
+  // This handles the case: "text"",field2 where the doubled quote is followed
+  // by delimiter
+  if (stream->just_processed_doubled_quote &&
+      c == stream->opts.dialect.delimiter) {
+    // End of quoted field - emit field
+    // Ensure field is buffered if needed
+    GTEXT_CSV_Status buffer_status = csv_stream_ensure_field_buffered(
+        stream, process_input, process_len, *offset);
+    if (buffer_status != GTEXT_CSV_OK) {
+      return buffer_status;
+    }
+
+    return csv_stream_complete_field_at_delimiter(stream, offset);
+  }
+
+  // If we just processed a doubled quote and see a newline, end the field and
+  // record
+  if (stream->just_processed_doubled_quote && (c == '\n' || c == '\r')) {
+    csv_newline_type nl;
+    GTEXT_CSV_Status newline_status = csv_stream_handle_newline(
+        stream, process_input, process_len, offset, byte_pos, &nl);
+    if (newline_status != GTEXT_CSV_OK) {
+      return newline_status;
+    }
+    if (nl == CSV_NEWLINE_NONE) {
+      // Not a complete newline sequence, continue processing
+      // Fall through to regular character handling
+    }
+    else {
+      // End of quoted field, end of record
+      // Ensure field is buffered if needed
+      GTEXT_CSV_Status ensure_status = csv_stream_ensure_field_buffered(
+          stream, process_input, process_len, *offset);
+      if (ensure_status != GTEXT_CSV_OK) {
+        return ensure_status;
+      }
+
+      // Position already updated by csv_stream_handle_newline
+      ensure_status = csv_stream_emit_field(stream, true);
+      if (ensure_status != GTEXT_CSV_OK) {
+        return ensure_status;
+      }
+      csv_stream_clear_field_state(stream);
+      stream->field_count = 0;
+      // Position already updated by csv_stream_handle_newline
+      return csv_stream_end_record(stream);
+    }
+  }

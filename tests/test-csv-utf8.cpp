@@ -73,6 +73,7 @@ bool TableAccepts(const std::string &doc) {
 	memset(&err, 0, sizeof(err));
 	GTEXT_CSV_Table *t =
 		gtext_csv_parse_table(doc.data(), doc.size(), &opts, &err);
+	gtext_csv_error_free(&err);
 	if (!t) return false;
 	gtext_csv_free_table(t);
 	return true;
@@ -133,6 +134,75 @@ TEST(CsvUtf8, TheStreamingParserAgreesWithTheTableParser) {
 			EXPECT_EQ(StreamAccepts(doc, 1), table)
 				<< "byte-by-byte stream disagrees: " << set[i].name;
 		}
+	}
+}
+
+/* An escaped quote does not close a quoted field.
+ *
+ * Inside a quoted field "" is a literal quote and the field runs on until a
+ * single quote closes it (RFC 4180 section 2). Two branches in the state
+ * machine read it the other way - "if we just processed a doubled quote and
+ * see a delimiter, end the field" - so a comma after an escaped quote ended
+ * the field and the rest of it was read as an unquoted field containing a
+ * stray quote. Every one of these was refused with "Unexpected quote in
+ * unquoted field":
+ *
+ *     "a"",b"           embedded punctuation
+ *     "{""a"": [1, 2]}" JSON in a CSV column, which is how it turned up
+ *     "x"", ""y"        a quoted phrase before a list
+ *
+ * The values below are Python's csv module's, checked against it directly.
+ */
+TEST(CsvQuotes, AnEscapedQuoteDoesNotCloseTheField) {
+	struct { const char *input; const char *field; } kCases[] = {
+		{"k\n\"a\"\",b\"\n",        "a\",b"},
+		{"k\n\"a\"\"b,c\"\n",       "a\"b,c"},
+		{"k\n\"a\"\" ,b\"\n",       "a\" ,b"},
+		{"k\n\"x\"\", \"\"y\"\n", "x\", \"y"},
+		{"k\n\"a\"\"b\"\n",         "a\"b"},
+		{"k\n\"\"\"a\"\"\"\n",    "\"a\""},
+		{"k\n\"a\"\"\n b\"\n",     "a\"\n b"},
+	};
+	for (const auto &c : kCases) {
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		GTEXT_CSV_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table *t =
+			gtext_csv_parse_table(c.input, strlen(c.input), &opts, &err);
+		ASSERT_NE(t, nullptr)
+			<< "refused: " << ::testing::PrintToString(std::string(c.input))
+			<< " (" << (err.message ? err.message : "") << ")";
+		gtext_csv_error_free(&err);
+		ASSERT_EQ(gtext_csv_row_count(t), 2u);
+		size_t len = 0;
+		const char *got = gtext_csv_field(t, 1, 0, &len);
+		ASSERT_NE(got, nullptr);
+		EXPECT_EQ(std::string(got, len), std::string(c.field))
+			<< "input: " << ::testing::PrintToString(std::string(c.input));
+		gtext_csv_free_table(t);
+	}
+}
+
+/* And a field that nothing closes is still an error - the comma and the
+ * newline are content now, so they cannot end it either. */
+TEST(CsvQuotes, AnUnterminatedQuotedFieldIsRefused) {
+	const char *kInputs[] = {
+		"k\n\"a\"\",\n",
+		"field1,\"text\"\",field2\n",
+		"field1,\"text\"\"\nfield2\n",
+		"k\n\"abc\n",
+	};
+	for (const char *input : kInputs) {
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		GTEXT_CSV_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table *t =
+			gtext_csv_parse_table(input, strlen(input), &opts, &err);
+		EXPECT_EQ(t, nullptr)
+			<< "accepted an unterminated quoted field: "
+			<< ::testing::PrintToString(std::string(input));
+		gtext_csv_error_free(&err);
+		if (t) gtext_csv_free_table(t);
 	}
 }
 

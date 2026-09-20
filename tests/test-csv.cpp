@@ -1525,24 +1525,20 @@ TEST(CsvStream, DelimiterAfterUnquotedFieldAtChunkBoundary) {
   EXPECT_EQ(fields[1], "field2");
 }
 
-// Test 6: Doubled quote at chunk boundary followed by delimiter
-// This tests when a doubled quote is split across chunks and followed by
-// delimiter Complete CSV: field1,"text"",field2 where "" is a doubled quote
-// Chunk1: field1,"text" - ends with quote (QUOTE_IN_QUOTED state)
-// Chunk2: ",field2 - starts with quote (doubled quote), then delimiter
-// Note: This case is actually covered by DoubledQuoteSplitAcrossChunks test
-// This test verifies the delimiter handling after the doubled quote
+// Test 6: a doubled quote at a chunk boundary, then a delimiter
+//
+// This used to feed `field1,"text"",field2` and expect three fields, on the
+// reading that `""` closed the field and the comma ended it. That is
+// backwards: inside a quoted field `""` is an escaped quote and the field
+// runs on until a single quote closes it (RFC 4180 section 2). So the comma
+// is content, nothing ever closes the field, and the input is malformed -
+// Python's csv module is lenient and returns the two fields `field1` and
+// `text",field2\n`; this parser says the quoted field is unterminated.
+//
+// The valid shape is the same bytes with the closing quote, and that is what
+// the second half of this test feeds. Splitting it at the doubled quote is
+// the point: the escape has to survive the chunk boundary.
 TEST(CsvStream, DoubledQuoteAtBoundaryFollowedByDelimiter) {
-  // Test a simpler case: doubled quote complete in chunk1, delimiter in chunk2
-  // Complete CSV: field1,"a""b",field2
-  // Chunk1: field1,"a""b"
-  // Chunk2: ,field2
-  // Use exact same test case as test 13 which works
-  const char * chunk1 = "field1,\"text\"\"";
-  const char * chunk2 = ",field2\n";
-
-  std::vector<std::string> fields;
-
   GTEXT_CSV_Event_cb callback = [](const GTEXT_CSV_Event * event,
                                     void * user_data) -> GTEXT_CSV_Status {
     auto * fields_vec = (std::vector<std::string> *)user_data;
@@ -1552,79 +1548,105 @@ TEST(CsvStream, DoubledQuoteAtBoundaryFollowedByDelimiter) {
     return GTEXT_CSV_OK;
   };
 
-  GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
-  GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
-  ASSERT_NE(stream, nullptr);
+  // Closed: field1,"text"",field2" is two fields, the second holding the
+  // comma and the escaped quote.
+  {
+    const char * chunk1 = "field1,\"text\"\"";
+    const char * chunk2 = ",field2\"\n";
+    std::vector<std::string> fields;
+    GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+    GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+    EXPECT_EQ(gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr),
+        GTEXT_CSV_OK);
+    EXPECT_EQ(gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr),
+        GTEXT_CSV_OK);
+    EXPECT_EQ(gtext_csv_stream_finish(stream, nullptr), GTEXT_CSV_OK);
+    gtext_csv_stream_free(stream);
 
-  GTEXT_CSV_Status status =
-      gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
+    ASSERT_EQ(fields.size(), 2u);
+    EXPECT_EQ(fields[0], "field1");
+    EXPECT_EQ(fields[1], "text\",field2");
+  }
 
-  status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_finish(stream, nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  gtext_csv_stream_free(stream);
-
-  EXPECT_EQ(fields.size(), 3u);
-  EXPECT_EQ(fields[0], "field1");
-  EXPECT_EQ(fields[1], "text\""); // Doubled quote becomes literal quote
-  EXPECT_EQ(fields[2], "field2");
+  // Unclosed: the same bytes without the final quote never end the field.
+  {
+    const char * chunk1 = "field1,\"text\"\"";
+    const char * chunk2 = ",field2\n";
+    std::vector<std::string> fields;
+    GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+    GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+    GTEXT_CSV_Status status =
+        gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
+    if (status == GTEXT_CSV_OK) {
+      status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
+    }
+    if (status == GTEXT_CSV_OK) {
+      status = gtext_csv_stream_finish(stream, nullptr);
+    }
+    EXPECT_NE(status, GTEXT_CSV_OK)
+        << "an unterminated quoted field was accepted";
+    gtext_csv_stream_free(stream);
+  }
 }
 
-// Test 7: Doubled quote at chunk boundary followed by newline
+// Test 7: a doubled quote at a chunk boundary, then a newline
+//
+// The companion to test 6, and wrong the same way. `field1,"text""\nfield2\n`
+// does not end the field at the newline: `""` is an escaped quote, so the
+// break is content and nothing closes the field. Python's csv module returns
+// the two fields `field1` and `text"\nfield2\n`; this parser reports the
+// quoted field as unterminated. The closed form is the same bytes with the
+// final quote, and holds a real newline inside the field.
 TEST(CsvStream, DoubledQuoteAtBoundaryFollowedByNewline) {
-  const char * chunk1 = "field1,\"text\"";
-  const char * chunk2 = "\"\nfield2\n";
-
-  std::vector<std::string> fields;
-  std::vector<size_t> record_boundaries;
-
   GTEXT_CSV_Event_cb callback = [](const GTEXT_CSV_Event * event,
                                     void * user_data) -> GTEXT_CSV_Status {
-    auto * data =
-        (std::pair<std::vector<std::string> *, std::vector<size_t> *> *)
-            user_data;
-    auto * fields_vec = data->first;
-    auto * boundaries = data->second;
+    auto * fields_vec = (std::vector<std::string> *)user_data;
     if (event->type == GTEXT_CSV_EVENT_FIELD) {
       fields_vec->push_back(std::string(event->data, event->data_len));
-    }
-    else if (event->type == GTEXT_CSV_EVENT_RECORD_END) {
-      boundaries->push_back(fields_vec->size());
     }
     return GTEXT_CSV_OK;
   };
 
-  std::pair<std::vector<std::string> *, std::vector<size_t> *> callback_data(
-      &fields, &record_boundaries);
+  {
+    const char * chunk1 = "field1,\"text\"";
+    const char * chunk2 = "\"\nfield2\"\n";
+    std::vector<std::string> fields;
+    GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+    GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+    EXPECT_EQ(gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr),
+        GTEXT_CSV_OK);
+    EXPECT_EQ(gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr),
+        GTEXT_CSV_OK);
+    EXPECT_EQ(gtext_csv_stream_finish(stream, nullptr), GTEXT_CSV_OK);
+    gtext_csv_stream_free(stream);
 
-  GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
-  GTEXT_CSV_Stream * stream =
-      gtext_csv_stream_new(&opts, callback, &callback_data);
-  ASSERT_NE(stream, nullptr);
+    ASSERT_EQ(fields.size(), 2u);
+    EXPECT_EQ(fields[0], "field1");
+    EXPECT_EQ(fields[1], "text\"\nfield2");
+  }
 
-  GTEXT_CSV_Status status =
-      gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_finish(stream, nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  gtext_csv_stream_free(stream);
-
-  EXPECT_EQ(fields.size(), 3u);
-  EXPECT_EQ(fields[0], "field1");
-  EXPECT_EQ(fields[1], "text\""); // Doubled quote becomes literal quote
-  EXPECT_EQ(fields[2], "field2");
-  EXPECT_EQ(record_boundaries.size(), 2u);
-  EXPECT_EQ(record_boundaries[0], 2u);
-  EXPECT_EQ(record_boundaries[1], 3u);
+  {
+    const char * chunk1 = "field1,\"text\"";
+    const char * chunk2 = "\"\nfield2\n";
+    std::vector<std::string> fields;
+    GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+    GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
+    ASSERT_NE(stream, nullptr);
+    GTEXT_CSV_Status status =
+        gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
+    if (status == GTEXT_CSV_OK) {
+      status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
+    }
+    if (status == GTEXT_CSV_OK) {
+      status = gtext_csv_stream_finish(stream, nullptr);
+    }
+    EXPECT_NE(status, GTEXT_CSV_OK)
+        << "an unterminated quoted field was accepted";
+    gtext_csv_stream_free(stream);
+  }
 }
 
 // Test 8: Multiple consecutive delimiters split across chunks
@@ -1863,108 +1885,29 @@ TEST(CsvStream, UnquotedFieldEndingWithQuoteAtChunkBoundary) {
   EXPECT_EQ(fields[1], "field2");
 }
 
-// Test 13: Quoted field with doubled quote at end, followed by delimiter in
-// next chunk
-TEST(CsvStream, DoubledQuoteAtEndFollowedByDelimiter) {
-  // Use same test case as test 13 (which works)
-  const char * chunk1 = "field1,\"text\"\"";
-  const char * chunk2 = ",field2\n";
+// Tests 13 and 14 used to live here, feeding "field1,\"text\"\"" and then
+// ",field2\n" or "\nfield2\n". Those are the same bytes as tests 6 and 7
+// above, split at the same place, and asserted the same thing - that a
+// doubled quote followed by a delimiter or a newline ends the field. It does
+// not: inside a quoted field "" is an escaped quote (RFC 4180 section 2), so
+// both inputs leave the field unterminated. Tests 6 and 7 now cover the
+// closed and the unterminated form of each, which is more than these did.
 
-  std::vector<std::string> fields;
-
-  GTEXT_CSV_Event_cb callback = [](const GTEXT_CSV_Event * event,
-                                    void * user_data) -> GTEXT_CSV_Status {
-    auto * fields_vec = (std::vector<std::string> *)user_data;
-    if (event->type == GTEXT_CSV_EVENT_FIELD) {
-      fields_vec->push_back(std::string(event->data, event->data_len));
-    }
-    return GTEXT_CSV_OK;
-  };
-
-  GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
-  GTEXT_CSV_Stream * stream = gtext_csv_stream_new(&opts, callback, &fields);
-  ASSERT_NE(stream, nullptr);
-
-  GTEXT_CSV_Status status =
-      gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_finish(stream, nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  gtext_csv_stream_free(stream);
-
-  EXPECT_EQ(fields.size(), 3u);
-  EXPECT_EQ(fields[0], "field1");
-  EXPECT_EQ(fields[1], "text\""); // Doubled quote becomes literal quote
-  EXPECT_EQ(fields[2], "field2");
-}
-
-// Test 14: Quoted field with doubled quote at end, followed by newline in next
-// chunk
-TEST(CsvStream, DoubledQuoteAtEndFollowedByNewline) {
-  const char * chunk1 = "field1,\"text\"\"";
-  const char * chunk2 = "\nfield2\n";
-
-  std::vector<std::string> fields;
-  std::vector<size_t> record_boundaries;
-
-  GTEXT_CSV_Event_cb callback = [](const GTEXT_CSV_Event * event,
-                                    void * user_data) -> GTEXT_CSV_Status {
-    auto * data =
-        (std::pair<std::vector<std::string> *, std::vector<size_t> *> *)
-            user_data;
-    auto * fields_vec = data->first;
-    auto * boundaries = data->second;
-    if (event->type == GTEXT_CSV_EVENT_FIELD) {
-      fields_vec->push_back(std::string(event->data, event->data_len));
-    }
-    else if (event->type == GTEXT_CSV_EVENT_RECORD_END) {
-      boundaries->push_back(fields_vec->size());
-    }
-    return GTEXT_CSV_OK;
-  };
-
-  std::pair<std::vector<std::string> *, std::vector<size_t> *> callback_data(
-      &fields, &record_boundaries);
-
-  GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
-  GTEXT_CSV_Stream * stream =
-      gtext_csv_stream_new(&opts, callback, &callback_data);
-  ASSERT_NE(stream, nullptr);
-
-  GTEXT_CSV_Status status =
-      gtext_csv_stream_feed(stream, chunk1, strlen(chunk1), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_feed(stream, chunk2, strlen(chunk2), nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  status = gtext_csv_stream_finish(stream, nullptr);
-  EXPECT_EQ(status, GTEXT_CSV_OK);
-
-  gtext_csv_stream_free(stream);
-
-  EXPECT_EQ(fields.size(), 3u);
-  EXPECT_EQ(fields[0], "field1");
-  EXPECT_EQ(fields[1], "text\""); // Doubled quote becomes literal quote
-  EXPECT_EQ(fields[2], "field2");
-  EXPECT_EQ(record_boundaries.size(), 2u);
-  EXPECT_EQ(record_boundaries[0], 2u);
-  EXPECT_EQ(record_boundaries[1], 3u);
-}
 
 // Test 15: Multiple records with various edge cases
 TEST(CsvStream, MultipleRecordsWithVariousEdgeCases) {
   // Record 1: empty field at boundary (field1,)
   // Record 2: doubled quote at boundary (field2,"text")
   // Record 3: newline at boundary (field3)
+  // The quoted field is spelled with three closing quotes: open, content,
+  // an escaped quote, then the quote that closes it. It used to carry only
+  // two, on the reading that a doubled quote ends the field. It does not
+  // (RFC 4180 section 2), so that input left the field unterminated and
+  // swallowed the rest of the stream; Python reads it the same way this
+  // parser now does.
   const char * chunk1 = "field1,";
   const char * chunk2 = "\nfield2,\"text\"";
-  const char * chunk3 = "\"\nfield3\n";
+  const char * chunk3 = "\"\"\nfield3\n";
 
   std::vector<std::string> fields;
   std::vector<size_t> record_boundaries;
