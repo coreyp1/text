@@ -2513,6 +2513,29 @@ static GTEXT_YAML_Status parse_callback(
 				GTEXT_YAML_Status pair_status = close_flow_pair(p);
 				if (pair_status != GTEXT_YAML_OK) return pair_status;
 			}
+			/* A "]" closes the flow sequence a "[" opened, and there has to be
+			 * one of those.  Nothing asked, so the children of whatever
+			 * collection happened to be open were handed to
+			 * yaml_node_new_sequence() and came back as a sequence:
+			 *
+			 *     a: 1        was  ["a", 1]      - a mapping flattened
+			 *     ]
+			 *
+			 *     {a: 1]      was  ["a", 1]      - mismatched, and reshaped
+			 *     ]           was  []            - a bracket closing nothing
+			 *
+			 * Every one of those is a different document from the one that
+			 * was written, produced without a word. */
+			if (p->stack.depth == 0
+					|| p->stack.is_block[p->stack.depth - 1]
+					|| p->stack.states[p->stack.depth - 1] != STATE_SEQUENCE) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_INVALID;
+					p->error->message = "Unexpected ] without matching [";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
 			/* Get anchor and tag from saved stack state */
 			char *anchor = NULL;
 			char *tag = NULL;
@@ -2632,6 +2655,29 @@ static GTEXT_YAML_Status parse_callback(
 		}
 		
 		case GTEXT_YAML_EVENT_MAPPING_END: {
+			/* The same question for "}": it closes the flow mapping a "{"
+			 * opened.  Without asking, "[1, 2}" paired the sequence's entries
+			 * and came back as {1: 2}, and a "}" with nothing open at all
+			 * produced the empty mapping.
+			 *
+			 * A single-pair level is not a flow mapping either.  It was
+			 * opened by a ":" or a "?" inside a flow sequence and is closed
+			 * by whatever ends that entry, so a "}" cannot be the thing that
+			 * ends it: "[a: 1}" is mismatched however the pair is read. */
+			if (p->stack.depth == 0
+					|| p->stack.is_block[p->stack.depth - 1]
+					|| (p->stack.flow_flags[p->stack.depth - 1]
+						& GTEXT_YAML_FLOW_PAIR)
+					|| (p->stack.states[p->stack.depth - 1] != STATE_MAPPING_KEY
+						&& p->stack.states[p->stack.depth - 1]
+							!= STATE_MAPPING_VALUE)) {
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_INVALID;
+					p->error->message = "Unexpected } without matching {";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
 			/* Get anchor and tag from saved stack state */
 			char *anchor = NULL;
 			char *tag = NULL;

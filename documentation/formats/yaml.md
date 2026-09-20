@@ -514,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 86 test files under `tests/yaml/`, carrying 549 of the suite's
-2134 test cases across 98 binaries, all passing. They cover the scalar styles,
+**Tests.** 87 test files under `tests/yaml/`, carrying 551 of the suite's
+2136 test cases across 99 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
