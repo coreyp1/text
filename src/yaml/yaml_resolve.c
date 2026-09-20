@@ -1398,7 +1398,16 @@ static const char *resolve_tag_handle(
 	const char *tag
 ) {
 	if (!doc || !tag) return tag;
-	if (tag[0] != '!' || tag[1] == '!') return tag;
+	if (tag[0] != '!') return tag;
+	/* "!!" is a handle like any other and may be redefined: %TAG !! makes
+	   the secondary handle mean something else for that document, and then
+	   "!!int" is that tag rather than tag:yaml.org,2002:int (6.8.2.2, spec
+	   example 6.19).  This used to return early on any tag beginning "!!",
+	   so the directive had no effect and "!!int 1 - 3" was still checked as
+	   an integer and refused.
+	   Nothing changes when %TAG !! is absent: the loop below finds no
+	   handle matching, the tag comes back as written, and tag_suffix()
+	   reads "!!int" as the standard shorthand as before. */
 	if (!doc->tag_handles || doc->tag_handle_count == 0) return tag;
 
 	const char *best_prefix = NULL;
