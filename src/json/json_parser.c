@@ -1095,6 +1095,36 @@ static GTEXT_JSON_Status json_parse_object(
   return GTEXT_JSON_OK;
 }
 
+/**
+ * @brief Say what a status means, for the paths that do not say it themselves.
+ *
+ * Most failures describe themselves on the way out. Some return a status and
+ * nothing else, and the caller then had a NULL document with err.code still
+ * GTEXT_JSON_OK - a failure that reads as success to anyone who checks the
+ * code rather than the pointer. A leading-zero number and a string holding
+ * invalid UTF-8 both arrived that way.
+ */
+static const char *json_status_message(GTEXT_JSON_Status status) {
+  switch (status) {
+    case GTEXT_JSON_E_INVALID:    return "Invalid JSON";
+    case GTEXT_JSON_E_OOM:        return "Out of memory";
+    case GTEXT_JSON_E_LIMIT:      return "Resource limit exceeded";
+    case GTEXT_JSON_E_DEPTH:      return "Maximum nesting depth exceeded";
+    case GTEXT_JSON_E_INCOMPLETE: return "Incomplete JSON input";
+    case GTEXT_JSON_E_BAD_TOKEN:  return "Invalid token";
+    case GTEXT_JSON_E_BAD_NUMBER: return "Invalid number";
+    case GTEXT_JSON_E_BAD_ESCAPE: return "Invalid escape sequence";
+    case GTEXT_JSON_E_BAD_UNICODE:
+      return "Invalid Unicode: a string is not well-formed UTF-8";
+    case GTEXT_JSON_E_TRAILING_GARBAGE:
+      return "Trailing content after the JSON value";
+    case GTEXT_JSON_E_DUPKEY:     return "Duplicate key in object";
+    case GTEXT_JSON_E_NONFINITE:  return "Nonfinite numbers not allowed";
+    case GTEXT_JSON_E_STATE:      return "Invalid state for operation";
+    default:                      return "Parse error";
+  }
+}
+
 // Parse a JSON value (recursive entry point)
 static GTEXT_JSON_Status json_parse_value(
     json_parser * parser, GTEXT_JSON_Value ** out, json_context * ctx) {
@@ -1106,12 +1136,7 @@ static GTEXT_JSON_Status json_parse_value(
     if (parser->error_out) {
       parser->error_out->code = status;
       // Set appropriate error message based on error code
-      if (status == GTEXT_JSON_E_NONFINITE) {
-        parser->error_out->message = "Nonfinite numbers not allowed";
-      }
-      else {
-        parser->error_out->message = "Lexer error";
-      }
+      parser->error_out->message = json_status_message(status);
       // Use token position if available, otherwise use lexer position
       if (token.type != 0) { // Token was initialized
         parser->error_out->offset = token.pos.offset;
@@ -1657,6 +1682,14 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
     }
     if (bytes_consumed) {
       *bytes_consumed = 0;
+    }
+    /* Whoever refused the input is expected to have described it, and most
+       paths do. The ones that do not left the caller holding a NULL document
+       and an error struct that still said GTEXT_JSON_OK - see
+       json_status_message(). */
+    if (err && err->code == GTEXT_JSON_OK) {
+      err->code = status;
+      err->message = json_status_message(status);
     }
     return NULL;
   }

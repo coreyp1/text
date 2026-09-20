@@ -116,6 +116,25 @@ static size_t json_encode_utf8(uint32_t codepoint, unsigned char * out) {
   return 0; // Invalid codepoint
 }
 
+/**
+ * @brief Is this well-formed UTF-8?
+ *
+ * The shape of a sequence is not enough: the value it encodes has to be one
+ * that UTF-8 is allowed to spell that way. This used to check only that a
+ * leading byte was followed by the right number of continuation bytes, which
+ * let through everything RFC 3629 section 3 exists to forbid -
+ *
+ *   C0 AF        an overlong "/", the classic way past a filter that looks
+ *                for the character rather than the bytes
+ *   E0 80 80     an overlong NUL
+ *   ED A0 80     U+D800, a surrogate half, which UTF-8 cannot encode
+ *   F4 BF BF BF  U+13FFFF, past the last code point
+ *   F5 80 80 80  a leading byte that is never valid
+ *
+ * all of which parsed as strings with validate_utf8 on, its default. The YAML
+ * scanner's gtext_utf8_validate() had the value checks from the start; this
+ * is the same rule, written where the JSON string decoder can reach it.
+ */
 static int json_validate_utf8(const unsigned char * bytes, size_t len) {
   size_t i = 0;
   while (i < len) {
@@ -126,26 +145,41 @@ static int json_validate_utf8(const unsigned char * bytes, size_t len) {
       i++;
     }
     else if ((byte & 0xE0) == 0xC0) {
-      // 2-byte sequence
+      // 2-byte sequence: 110xxxxx 10xxxxxx
       if (i + 1 >= len || (bytes[i + 1] & 0xC0) != 0x80) {
         return 0;
       }
+      unsigned int code = ((unsigned int)(byte & 0x1F) << 6)
+                        | (unsigned int)(bytes[i + 1] & 0x3F);
+      if (code < 0x80) return 0; // overlong
       i += 2;
     }
     else if ((byte & 0xF0) == 0xE0) {
-      // 3-byte sequence
+      // 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
       if (i + 2 >= len || (bytes[i + 1] & 0xC0) != 0x80 ||
           (bytes[i + 2] & 0xC0) != 0x80) {
         return 0;
       }
+      unsigned int code = ((unsigned int)(byte & 0x0F) << 12)
+                        | ((unsigned int)(bytes[i + 1] & 0x3F) << 6)
+                        | (unsigned int)(bytes[i + 2] & 0x3F);
+      if (code < 0x800) return 0;                      // overlong
+      if (code >= 0xD800 && code <= 0xDFFF) return 0;  // surrogate half
       i += 3;
     }
     else if ((byte & 0xF8) == 0xF0) {
-      // 4-byte sequence
+      // 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
       if (i + 3 >= len || (bytes[i + 1] & 0xC0) != 0x80 ||
           (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) {
         return 0;
       }
+      unsigned int code = ((unsigned int)(byte & 0x07) << 18)
+                        | ((unsigned int)(bytes[i + 1] & 0x3F) << 12)
+                        | ((unsigned int)(bytes[i + 2] & 0x3F) << 6)
+                        | (unsigned int)(bytes[i + 3] & 0x3F);
+      // Overlong, or past U+10FFFF. The second test also covers the F5..F7
+      // leading bytes, which pass the mask above and encode nothing.
+      if (code < 0x10000 || code > 0x10FFFF) return 0;
       i += 4;
     }
     else {

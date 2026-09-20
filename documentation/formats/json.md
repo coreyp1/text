@@ -69,9 +69,13 @@ surrogate. Lone or reversed surrogates are rejected with
 rejected unless `allow_unescaped_controls` is set.
 
 **Encoding (§8.1).** Input must be UTF-8 and is validated by default
-(`validate_utf8`), through the lexer. A leading UTF-8 BOM is accepted and
-skipped by default (`allow_leading_bom`); §8.1 forbids emitting one, and the
-writer never does.
+(`validate_utf8`), through the lexer. Validation is by value and not only by
+shape: an overlong encoding, a surrogate half, and anything past U+10FFFF are
+all refused, as RFC 3629 §3 requires. They were not, until JSONTestSuite was
+scored for the first time - `C0 AF`, an overlong `/` and the classic way past
+a filter that matches on the character rather than the bytes, parsed as a
+string. A leading UTF-8 BOM is accepted and skipped by default
+(`allow_leading_bom`); §8.1 forbids emitting one, and the writer never does.
 
 **Duplicate names (§4).** The specification says names *should* be unique but
 does not require it, so every parser has to choose. This one rejects by
@@ -91,9 +95,7 @@ leaves the document unchanged; and RFC 7386 recursive merge.
 
 The worked examples in RFC 6901 section 5, RFC 6902 Appendix A and the RFC
 7386 Appendix A test table are all in the suite, in
-`tests/test-rfc-conformance.cpp`. That is the only conformance corpus this
-library has; the JSON syntax itself is still checked only against tests
-written here rather than against JSONTestSuite. Writing the three appendix
+`tests/test-rfc-conformance.cpp`. Writing the three appendix
 tables down found three divergences that the existing tests, all written
 against the implementation, agreed with: `"/"` resolved to the root rather
 than to the member named `""`, `move` applied its `add` before its `remove`
@@ -282,14 +284,22 @@ byte selecting parse options, so the extension paths are reachable rather
 than dead. It has found real bugs - a use-after-free in the object parser's
 error path among them; `tests/fuzz/README.md` records what and how.
 
-**Reach of the oracles, and where it ends.** There is **no external JSON
-conformance corpus wired up**. The fixtures are this library's own reading of
-RFC 8259, so they demonstrate the parser is self-consistent and matches that
-reading - not that the reading is right. The obvious gap is
-[JSONTestSuite](https://github.com/nst/JSONTestSuite), whose several hundred
-`y_`/`n_`/`i_` cases exist precisely to catch the disagreements a hand-written
-fixture set will not think of. Until it is run, "RFC 8259 compliant" on this
-page means "compliant as far as the cases below reach".
+**Reach of the oracles.** `make conformance-json` clones
+[JSONTestSuite](https://github.com/nst/JSONTestSuite) and scores this parser
+against its `test_parsing` cases, which exist precisely to catch the
+disagreements a hand-written fixture set will not think of. Of the 283 that
+are decidable - 95 a parser must accept, 188 it must refuse - **281 pass,
+99.3%**, and the two that do not are the duplicate-name policy rather than the
+grammar: RFC 8259 says names SHOULD be unique and leaves the behaviour
+unspecified when they are not, and this parser refuses them by default. With
+`dupkeys = GTEXT_JSON_DUPKEY_LAST_WINS` the score is **283 of 283**.
+
+Not one of the 188 must-refuse cases is accepted, which is the direction that
+matters for a parser reading input it did not write.
+
+The remaining 35 cases are marked `i_`, meaning the suite leaves the answer to
+the implementation - very deep nesting, lone surrogates, huge exponents. This
+parser accepts 14 of them. They are reported rather than scored.
 
 @anchor json-not-implemented
 ## Not implemented
@@ -337,10 +347,10 @@ page means "compliant as far as the cases below reach".
   tell; setting it now fails the parse with `GTEXT_JSON_E_INVALID`, and
   `gtext_json_stream_new()` returns NULL. The field is kept so that
   implementing NFC later is not an API change.
-- **No JSONTestSuite integration**, as above.
-- **Error messages are coarse.** Several distinct lexer failures report the
-  string `"Lexer error"`. The status code distinguishes them; the message does
-  not, and the message is what reaches a user.
+- **Error positions are not always filled in.** Every refusal now carries a
+  status and a message, but some carry line 0 and column 0 rather than the
+  place the fault was found. The message names the fault; it does not always
+  say where.
 
 ---
 

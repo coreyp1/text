@@ -119,7 +119,7 @@ streams, tag resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 2,148 tests across 102 binaries with zero failures, clean
+The test suite runs 2,153 tests across 103 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
 from `make test` output needs care: three binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
@@ -132,15 +132,18 @@ none of it did, and `make test` exited 0 even with a failing suite.
 `tests/test-rfc-conformance.cpp` holds the worked examples from RFC 6901,
 RFC 6902, RFC 7386 and RFC 4180 §2, transcribed from the specifications rather
 than from this implementation. Writing them down found four divergences that
-the existing tests agreed with. No external corpus - JSONTestSuite,
-csv-spectrum, yaml-test-suite - is wired up yet, so conformance beyond those
-tables is unmeasured.
+the existing tests agreed with. Two external corpora are wired up:
+`make conformance` scores YAML against yaml-test-suite and
+`make conformance-json` scores JSON against JSONTestSuite. csv-spectrum is
+not, so CSV conformance beyond the RFC 4180 tables is still unmeasured.
 
 **JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
-Exact number round-tripping through lexeme preservation. No external
-conformance corpus is wired up, so read
-[the JSON page](@ref format_json) before relying on the phrase "spec
-compliant".
+Exact number round-tripping through lexeme preservation. `make
+conformance-json` scores it against JSONTestSuite: **281 of the 283 decidable
+`test_parsing` cases, 99.3%**, with none of the 188 must-refuse cases
+accepted. The two misses are the duplicate-name policy, which this parser
+refuses by default where the suite expects acceptance; with
+`dupkeys = LAST_WINS` it is 283 of 283. See [the JSON page](@ref format_json).
 
 **CSV — stable.** RFC 4180 by default, with configurable dialects and
 support for ragged rows. The streaming parser gives the same answer whatever
@@ -153,9 +156,8 @@ See [the CSV page](@ref format_csv).
 **YAML — alpha.** Block and flow collections, all five scalar styles,
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
-conversion. The API may change before 1.0. The YAML test suite has never been
-run against this parser, so conformance to 1.2.2 is unmeasured rather than
-partial.
+conversion. The API may change before 1.0. `make conformance` scores it
+against yaml-test-suite: **365 of the 366 checkable cases, 99.7%**.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Fifteen are fixed so far, and what they have in
