@@ -17,6 +17,15 @@
  * Expectations are PyYAML's. js-yaml disagrees on three of them, all the
  * same mistake - it keeps the white space that precedes a break - and spec
  * example 7.5 (suite case NP9H) settles those in PyYAML's favour.
+ *
+ * Every continuation line here is indented, which is not decoration. A
+ * continuation line needs s-indent(n) in front of it (6.5) and the flow node
+ * sits one level in from the mapping that owns it, so under "k:" at column 0
+ * a continuation line needs at least one space. This table was written
+ * without it, because both references accept the unindented form; suite case
+ * QB6E says it is an error, and test-yaml-scalar-continuation-indent.cpp is
+ * where that rule lives. The indentation is stripped by the fold, so what
+ * each row tests is unchanged.
  */
 #include <gtest/gtest.h>
 #include <string.h>
@@ -52,31 +61,31 @@ struct Case {
 };
 
 const Case kCases[] = {
-	{"k: \"a\nb\"\n", "{\"k\": \"a b\"}"},  /* one break folds to a space */
-	{"k: \"a\n\nb\"\n", "{\"k\": \"a\\nb\"}"},  /* two breaks fold to one line feed */
-	{"k: \"a\n\n\nb\"\n", "{\"k\": \"a\\n\\nb\"}"},  /* three breaks fold to two line feeds */
+	{"k: \"a\n b\"\n", "{\"k\": \"a b\"}"},  /* one break folds to a space */
+	{"k: \"a\n\n b\"\n", "{\"k\": \"a\\nb\"}"},  /* two breaks fold to one line feed */
+	{"k: \"a\n\n\n b\"\n", "{\"k\": \"a\\n\\nb\"}"},  /* three breaks fold to two line feeds */
 	{"k: \"a\n   b\"\n", "{\"k\": \"a b\"}"},  /* the indentation opening the next line is not content */
 	{"k: \"a   \n   b\"\n", "{\"k\": \"a b\"}"},  /* nor is the white space before the break */
-	{"k: \"a\t\nb\"\n", "{\"k\": \"a b\"}"},  /* a tab before the break goes the same way */
+	{"k: \"a\t\n b\"\n", "{\"k\": \"a b\"}"},  /* a tab before the break goes the same way */
 	{"k: \"a\n   \n   b\"\n", "{\"k\": \"a\\nb\"}"},  /* a line of only white space is an empty line */
-	{"k: \"a\n\"\n", "{\"k\": \"a \"}"},  /* a break with nothing after it still folds */
-	{"k: 'a\nb'\n", "{\"k\": \"a b\"}"},  /* single quotes fold identically */
-	{"k: 'a\n\nb'\n", "{\"k\": \"a\\nb\"}"},  /* single quotes, two breaks */
+	{"k: \"a\n \"\n", "{\"k\": \"a \"}"},  /* a break with nothing after it still folds */
+	{"k: 'a\n b'\n", "{\"k\": \"a b\"}"},  /* single quotes fold identically */
+	{"k: 'a\n\n b'\n", "{\"k\": \"a\\nb\"}"},  /* single quotes, two breaks */
 	{"k: 'a   \n   b'\n", "{\"k\": \"a b\"}"},  /* single quotes drop the white space too */
-	{"k: 'a''b\nc'\n", "{\"k\": \"a'b c\"}"},  /* an escaped quote is content, so the run of white space restarts after it */
-	{"k: \"a\\\nb\"\n", "{\"k\": \"ab\"}"},  /* a backslash escapes the break away entirely */
-	{"k: \"a  \\\nb\"\n", "{\"k\": \"a  b\"}"},  /* white space before an escaped break is content (spec example 7.5) */
-	{"k: \"a\\\n\nb\"\n", "{\"k\": \"a\\nb\"}"},  /* an empty line after an escaped break still folds to a line feed */
-	{"k: \"a\\tb\nc\"\n", "{\"k\": \"a\\tb c\"}"},  /* a tab written as an escape is content */
-	{"k: \"a\\t\nb\"\n", "{\"k\": \"a\\t b\"}"},  /* so an escaped tab survives a break the literal tab would not */
+	{"k: 'a''b\n c'\n", "{\"k\": \"a'b c\"}"},  /* an escaped quote is content, so the run of white space restarts after it */
+	{"k: \"a\\\n b\"\n", "{\"k\": \"ab\"}"},  /* a backslash escapes the break away entirely */
+	{"k: \"a  \\\n b\"\n", "{\"k\": \"a  b\"}"},  /* white space before an escaped break is content (spec example 7.5) */
+	{"k: \"a\\\n\n b\"\n", "{\"k\": \"a\\nb\"}"},  /* an empty line after an escaped break still folds to a line feed */
+	{"k: \"a\\tb\n c\"\n", "{\"k\": \"a\\tb c\"}"},  /* a tab written as an escape is content */
+	{"k: \"a\\t\n b\"\n", "{\"k\": \"a\\t b\"}"},  /* so an escaped tab survives a break the literal tab would not */
 	{"k: \"\n  a\"\n", "{\"k\": \" a\"}"},  /* a break at the very start of the scalar */
-	{"k: \"a\r\nb\"\n", "{\"k\": \"a b\"}"},  /* CRLF is one break */
-	{"k: \"a\rb\"\n", "{\"k\": \"a b\"}"},  /* a lone CR is one break */
-	{"k: \"a\n\r\nb\"\n", "{\"k\": \"a\\nb\"}"},  /* CR and CRLF mixed count as two breaks */
+	{"k: \"a\r\n b\"\n", "{\"k\": \"a b\"}"},  /* CRLF is one break */
+	{"k: \"a\r b\"\n", "{\"k\": \"a b\"}"},  /* a lone CR is one break */
+	{"k: \"a\n\r\n b\"\n", "{\"k\": \"a\\nb\"}"},  /* CR and CRLF mixed count as two breaks */
 	{"k: \"a b\"\n", "{\"k\": \"a b\"}"},  /* no break, nothing to fold */
 	{"k: \"a \tb\"\n", "{\"k\": \"a \\tb\"}"},  /* interior white space is content */
 	{"k: \"a\n b\n c\"\n", "{\"k\": \"a b c\"}"},  /* three lines fold to two spaces */
-	{"k: \"a\n\nb\n\nc\"\n", "{\"k\": \"a\\nb\\nc\"}"},  /* alternating breaks */
+	{"k: \"a\n\n b\n\n c\"\n", "{\"k\": \"a\\nb\\nc\"}"},  /* alternating breaks */
 };
 
 }  // namespace

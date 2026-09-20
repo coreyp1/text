@@ -53,7 +53,11 @@ TEST(YamlLineBreaks, BlockScalarCrNormalized) {
 }
 
 TEST(YamlLineBreaks, QuotedScalarCrLfNormalized) {
-	const char *yaml = "key: \"line1\r\nline2\"\r\n";
+	/* The continuation line is indented because it has to be: a quoted
+	   scalar's later lines need s-indent(n) and the value node sits one
+	   level in from the mapping (6.5), which suite case QB6E enforces. What
+	   this test is about - CRLF normalising to one break - is unaffected. */
+	const char *yaml = "key: \"line1\r\n line2\"\r\n";
 	GTEXT_YAML_Error err;
 	memset(&err, 0, sizeof(err));
 

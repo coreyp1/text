@@ -279,16 +279,25 @@ static bool line_starts_forbidden_marker(
   return d[3] == ' ' || d[3] == '\t' || d[3] == '\n' || d[3] == '\r';
 }
 
-static bool scan_folded_breaks(
+/**
+ * @brief What a fold across one or more line breaks turned out to be.
+ */
+typedef enum {
+  FOLD_OK,          /* folded; *p and *out_breaks are updated */
+  FOLD_NEED_MORE,   /* not enough input yet to tell which of these it is */
+  FOLD_FORBIDDEN,   /* a document marker opened a continuation line */
+  FOLD_DEDENTED     /* a continuation line is not indented past the node */
+} fold_result;
+
+static fold_result scan_folded_breaks(
     const GTEXT_YAML_Scanner *s,
     size_t *p,
-    size_t *out_breaks,
-    bool *out_forbidden)
+    size_t *out_breaks)
 {
   size_t breaks = 0;
-  *out_forbidden = false;
+  size_t indent = 0;
   for (;;) {
-    if (s->cursor + *p >= s->input.len) { *out_breaks = breaks; return false; }
+    if (s->cursor + *p >= s->input.len) { *out_breaks = breaks; return FOLD_NEED_MORE; }
     int bc = (unsigned char)s->input.data[s->cursor + *p];
     if (bc == '\r') {
       (*p)++;
@@ -307,21 +316,32 @@ static bool scan_folded_breaks(
        more is safe. */
     if (s->cursor + *p + 3 >= s->input.len && !s->finished) {
       *out_breaks = breaks;
-      return false;
+      return FOLD_NEED_MORE;
     }
     if (line_starts_forbidden_marker(s, *p)) {
-      *out_forbidden = true;
       *out_breaks = breaks;
-      return true;
+      return FOLD_FORBIDDEN;
     }
+    indent = 0;
     while (s->cursor + *p < s->input.len
         && (s->input.data[s->cursor + *p] == ' '
          || s->input.data[s->cursor + *p] == '\t')) {
       (*p)++;
+      indent++;
     }
   }
+  /* The loop leaves *p on the first content of the last continuation line,
+     and `indent` is that line's indentation.  s-flow-folded(n) puts
+     s-indent(n) in front of it (6.5), so a line at or left of the node the
+     scalar belongs to is not part of the scalar at all.  Empty lines are not
+     measured - the loop goes round again on them, and only the line that
+     ends the fold is left in `indent`. */
+  if (breaks > 0 && (int)indent <= s->node_indent) {
+    *out_breaks = breaks;
+    return FOLD_DEDENTED;
+  }
   *out_breaks = breaks;
-  return true;
+  return FOLD_OK;
 }
 
 /**
@@ -1577,15 +1597,17 @@ block_scalar_collected:
          * space before the break is not content, one break folds to a space,
          * and a run of n breaks folds to n-1 line feeds. */
         size_t breaks = 0;
-        bool forbidden = false;
         size_t p = look;
         scalar.len = ws_start;
-        if (!scan_folded_breaks(s, &p, &breaks, &forbidden)) { want_more = true; break; }
-        if (forbidden) {
+        fold_result fr = scan_folded_breaks(s, &p, &breaks);
+        if (fr == FOLD_NEED_MORE) { want_more = true; break; }
+        if (fr != FOLD_OK) {
           gtext_yaml_dynbuf_free(&scalar);
           if (err) {
             err->code = GTEXT_YAML_E_INVALID;
-            err->message = "Document marker inside a multi-line scalar";
+            err->message = (fr == FOLD_FORBIDDEN)
+              ? "Document marker inside a multi-line scalar"
+              : "Multi-line scalar not indented past the node it belongs to";
             err->offset = off;
             err->line = line;
             err->col = col;
@@ -1657,14 +1679,16 @@ block_scalar_collected:
              * backslash stays as content - spec example 7.5 keeps the tab
              * there.  Empty lines after it still fold to line feeds. */
             size_t breaks = 0;
-            bool forbidden = false;
             size_t p = look + 1;
-            if (!scan_folded_breaks(s, &p, &breaks, &forbidden)) { want_more = true; break; }
-            if (forbidden) {
+            fold_result fr = scan_folded_breaks(s, &p, &breaks);
+            if (fr == FOLD_NEED_MORE) { want_more = true; break; }
+            if (fr != FOLD_OK) {
               gtext_yaml_dynbuf_free(&scalar);
               if (err) {
                 err->code = GTEXT_YAML_E_INVALID;
-                err->message = "Document marker inside a multi-line scalar";
+                err->message = (fr == FOLD_FORBIDDEN)
+                  ? "Document marker inside a multi-line scalar"
+                  : "Multi-line scalar not indented past the node it belongs to";
                 err->offset = off;
                 err->line = line;
                 err->col = col;
