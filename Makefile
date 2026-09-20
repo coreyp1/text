@@ -546,7 +546,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage fuzz fuzz-clean check-symbols check-allocators check-headers
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance fuzz fuzz-clean check-symbols check-allocators check-headers
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1241,6 +1241,10 @@ fuzz: fuzz-run-json fuzz-run-yaml fuzz-run-csv
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 fuzz-clean:
 	-@rm -rf $(FUZZ_DIR)
+
+conformance: ## Score the parser against yaml-test-suite (clones it on first use)
+conformance:
+	@PREFIX="$(PREFIX)" tools/conformance/run.sh
 
 coverage: ## Build instrumented, run the tests, and report line coverage
 # Cleans first because the object files would otherwise be reused without the

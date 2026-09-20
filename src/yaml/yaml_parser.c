@@ -3550,6 +3550,13 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 		state->failed = true;
 		return false;
 	}
+	/* The same check gtext_yaml_parse() makes: a document that ended inside a
+	 * flow collection is broken, not empty.  This path had been left out, so
+	 * gtext_yaml_parse_all() still accepted what gtext_yaml_parse() refused. */
+	if (check_flow_contexts_closed(p) != GTEXT_YAML_OK) {
+		state->failed = true;
+		return false;
+	}
 	
 	/* Resolve aliases */
 	GTEXT_YAML_Status status = resolve_aliases(p);

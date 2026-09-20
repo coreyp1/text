@@ -170,6 +170,20 @@ TEST(YamlFlowCollections, RefusesInputEndingInsideAFlowCollection) {
 	EXPECT_EQ(Render("[unclosed\n"), std::string(""));
 	/* The "#" opens a comment that runs past the "]". */
 	EXPECT_EQ(Render("key: [a #b, c]\n"), std::string(""));
+	/* gtext_yaml_parse_all() makes the same check. It had been left out, so
+	   the multi-document entry point still accepted what the single-document
+	   one refused - found by running yaml-test-suite, where every case goes
+	   through parse_all. */
+	{
+		size_t count = 0;
+		GTEXT_YAML_Error all_err;
+		memset(&all_err, 0, sizeof(all_err));
+		const char *bad = "{bad\n";
+		GTEXT_YAML_Document **docs =
+			gtext_yaml_parse_all(bad, strlen(bad), &count, nullptr, &all_err);
+		EXPECT_EQ(docs, nullptr);
+	}
+
 	/* An empty document still has a NULL root, and that is not an error. */
 	GTEXT_YAML_Error err;
 	memset(&err, 0, sizeof(err));
