@@ -541,8 +541,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 90 test files under `tests/yaml/`, carrying 563 of the suite's
-2154 test cases across 104 binaries, all passing. They cover the scalar styles,
+**Tests.** 92 test files under `tests/yaml/`, carrying 582 of the suite's
+2172 test cases across 106 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -612,14 +612,14 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **365
-pass, 99.7%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **all
+366 pass**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
-The first run scored 191 of 368, 51.9%. A hundred and forty-five cases have
-been fixed since, in ten batches: quoted-scalar line folding and directives; a
+The first run scored 191 of 368, 51.9%. A hundred and seventy-five cases
+have been fixed since, in twelve batches: quoted-scalar line folding and directives; a
 group of structural refusals - a second top-level node, a root block
 scalar's indentation, a folded scalar's blank lines, and the block scalar
 header; the rule that `:`, `-` and `?` are indicators only where nothing
@@ -637,7 +637,11 @@ a directive may stand; and a group about where a line may begin - only a
 comment may follow a `...`, a comment needs white space in front of it, and
 a flow collection's continuation lines need indenting past the node that
 owns them; and the empty node, which was being dropped rather than made
-null.
+null; and a group about properties - a scanner error that kept its message,
+an explicit key in a flow sequence, an empty key in a flow collection, a
+document marker ending a block scalar, and the chunk size no longer changing
+what a document means; and a node's anchors and tags, where two of a kind
+with nothing between them name two nodes or none.
 
 The denominator is 366 rather than 368 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
@@ -645,13 +649,11 @@ and the harness judged whether the parser had refused the input before it
 tried to decode that, so refusing one scored as a defect and accepting it
 was skipped.
 
-The failures that remain group into a few shapes, largest first:
-
-- **1 document that should be refused is accepted**: a node may carry two
-  anchors, and the second one silently replaces the first. The other half
-  of the same case is valid - two anchors on two different nodes - and
-  telling them apart needs two properties pending at once, where the
-  stream has one slot.
+Nothing the harness can check remains outstanding. The last one to go was a
+node carrying two anchors: the second silently replaced the first, which
+lost the outer anchor from the valid half of the same shape - two anchors on
+two different nodes - as well as accepting the invalid half. Telling them
+apart needs two properties pending at once, where the stream had one slot.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

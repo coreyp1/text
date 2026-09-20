@@ -133,9 +133,10 @@ none of it did, and `make test` exited 0 even with a failing suite.
 RFC 6902, RFC 7386 and RFC 4180 §2, transcribed from the specifications rather
 than from this implementation. Writing them down found four divergences that
 the existing tests agreed with. Two external corpora are wired up:
-`make conformance` scores YAML against yaml-test-suite and
-`make conformance-json` scores JSON against JSONTestSuite. csv-spectrum is
-not, so CSV conformance beyond the RFC 4180 tables is still unmeasured.
+`make conformance` scores YAML against yaml-test-suite,
+`make conformance-json` scores JSON against JSONTestSuite, and
+`make conformance-csv` scores CSV against csv-spectrum; `make
+conformance-all` runs the three of them.
 
 **JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
 Exact number round-tripping through lexeme preservation. `make
@@ -157,10 +158,11 @@ See [the CSV page](@ref format_csv).
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. `make conformance` scores it
-against yaml-test-suite: **365 of the 366 checkable cases, 99.7%**.
+against yaml-test-suite: **all 366 checkable cases, 100%**.
 
 Comparison against other implementations keeps finding defects here, so treat
-this module as the least settled of the three. Fifteen are fixed so far, and what they have in
+this module as the least settled of the three. Every one found so far is
+fixed, and what they have in
 common is worth stating plainly: most did not fail on valid input, they
 quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
 were truncated. Tags were dropped from block-style collections. A mapping key
@@ -283,15 +285,15 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **99.7%** of the 366 cases that can be checked by
+this parser against it: **100%** of the 366 cases that can be checked by
 value or by refusal. For calibration, the same harness scores **js-yaml at
-82.0%** and **PyYAML at 77.3%** - neither reference scores 100% here either,
-and this parser is now close to eleven points ahead of the better of the two.
-The remaining 38 cases assert an event stream the harness does not emit.
+82.0%** and **PyYAML at 77.3%** - neither reference scores anything like
+100% here, which is what makes the number readable. The remaining 38 cases
+assert an event stream the harness does not emit.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and forty-five cases have been fixed since, in ten
-batches:
+had suggested. A hundred and seventy-five cases have been fixed since, in
+twelve batches:
 quoted-scalar line folding and directives; a group of structural refusals -
 a second top-level node no longer silently replaces the first, a root block
 scalar is no longer required to be indented past column 0, a blank line
@@ -313,8 +315,13 @@ stand; and a group about where a line may begin - only a comment may follow
 a `...`, a comment needs white space in front of it wherever it appears,
 and a flow collection's continuation lines need indenting past the node
 that owns them; and the empty node, which was being dropped rather than
-made null. The largest group still failing is the
-36 documents that should be refused and are not.
+made null; and a group about properties - a scanner error that kept its
+message, an explicit key in a flow sequence, an empty key in a flow
+collection, a document marker ending a block scalar, and the chunk size no
+longer changing what a document means; and a node's anchors and tags, where
+two of a kind with nothing between them name two nodes or none.
+
+Nothing the harness can check is still failing.
 
 The denominator moved from 368 to 366 along the way, and that was a harness
 bug rather than progress: three suite cases carry an explicit null where the
