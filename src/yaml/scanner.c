@@ -280,6 +280,84 @@ static bool line_starts_forbidden_marker(
 }
 
 /**
+ * @brief Is the whole of a block scalar in the buffer?
+ *
+ * A block scalar is taken whole or not at all.  Its header is consumed
+ * before its body is read, and this scanner cannot rewind, so a body that
+ * turns out to be incomplete has nothing to go back to: the loop settled for
+ * the lines already in hand and ended the scalar wherever the caller's chunk
+ * boundary fell.  "literal: |" over "  some" over "  text" fed a byte at a
+ * time came back as "some text" - one line, folded - instead of
+ * "some\ntext\n".
+ *
+ * What ends a block scalar is a non-empty line indented no further than the
+ * node that owns it, or a document marker at column 1 (8.1.1, 9.1.2).  Both
+ * are conservative here: finding either means the block certainly ended at
+ * or before that line, so all of it is in hand.  Finding neither before the
+ * buffer runs out means it may still go on.
+ *
+ * This walks the block on each feed, so a large block scalar delivered in
+ * many small pieces is rescanned each time.  Correctness first; it is skipped
+ * entirely once the input is finished, which is the case gtext_yaml_parse()
+ * takes.
+ */
+static bool block_scalar_complete(const GTEXT_YAML_Scanner *s)
+{
+  const int parent = s->node_indent;
+  size_t p = s->cursor;
+
+  /* The header runs to the end of its line. */
+  while (p < s->input.len
+      && s->input.data[p] != '\n' && s->input.data[p] != '\r') {
+    p++;
+  }
+  if (p >= s->input.len) return false;
+  if (s->input.data[p] == '\r') {
+    p++;
+    if (p >= s->input.len) return false;
+    if (s->input.data[p] == '\n') p++;
+  } else {
+    p++;
+  }
+
+  for (;;) {
+    if (p >= s->input.len) return false;
+    size_t sp = p;
+    size_t spaces = 0;
+    while (sp < s->input.len && s->input.data[sp] == ' ') { sp++; spaces++; }
+    if (sp >= s->input.len) return false;
+    const char lc = s->input.data[sp];
+    if (lc != '\n' && lc != '\r') {
+      if ((int)spaces <= parent) return true;
+      if (spaces == 0 && s->input.len - sp >= 4) {
+        const char m = s->input.data[sp];
+        if ((m == '-' || m == '.')
+            && s->input.data[sp + 1] == m && s->input.data[sp + 2] == m) {
+          const char after = s->input.data[sp + 3];
+          if (after == ' ' || after == '\t'
+              || after == '\n' || after == '\r') {
+            return true;
+          }
+        }
+      }
+    }
+    while (sp < s->input.len
+        && s->input.data[sp] != '\n' && s->input.data[sp] != '\r') {
+      sp++;
+    }
+    if (sp >= s->input.len) return false;
+    if (s->input.data[sp] == '\r') {
+      sp++;
+      if (sp >= s->input.len) return false;
+      if (s->input.data[sp] == '\n') sp++;
+      p = sp;
+    } else {
+      p = sp + 1;
+    }
+  }
+}
+
+/**
  * @brief Has the whole of a "&", "*" or "!" property arrived?
  *
  * The scanner hands the indicator back as one token and the name after it as
@@ -303,6 +381,12 @@ static bool line_starts_forbidden_marker(
  * before the first anchor could be handed over.  Deferring is always safe,
  * which is why no test can tell the two apart.
  */
+static bool ends_a_property_name(char ch)
+{
+  return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
+      || ch == ',' || ch == '[' || ch == ']' || ch == '{' || ch == '}';
+}
+
 static bool property_token_complete(const GTEXT_YAML_Scanner *s)
 {
   size_t p = s->cursor + 1; /* past the indicator itself */
@@ -313,14 +397,32 @@ static bool property_token_complete(const GTEXT_YAML_Scanner *s)
     }
     return false;
   }
-  for (; p < s->input.len; p++) {
-    const char ch = s->input.data[p];
-    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
-        || ch == ',' || ch == '[' || ch == ']' || ch == '{' || ch == '}') {
-      return true;
+  while (p < s->input.len && !ends_a_property_name(s->input.data[p])) p++;
+  if (p >= s->input.len) return false;
+
+  /* A bare "!" is the non-specific tag, and the caller only finds that out by
+     reading the token after it: "!" then a scalar is a tagged node, while "!"
+     then another "!" is the start of "!!str".  That second read has to
+     succeed, because the "!" is already gone by the time it happens and
+     there is nowhere to put it back - which is how "! a" fed a byte at a
+     time lost its tag and came back as a plain "a" (suite cases 52DL and
+     S4JQ).  So the node after it has to be here too.
+
+     Only for a bare "!".  Waiting for the node after every tag changes no
+     answer - deferring is always safe - and costs one more token of delay,
+     so the rule stays where the need is. */
+  if (s->input.data[s->cursor] == '!' && p == s->cursor + 1) {
+    size_t q = p;
+    while (q < s->input.len) {
+      const char wc = s->input.data[q];
+      if (wc != ' ' && wc != '\t' && wc != '\r' && wc != '\n') break;
+      q++;
     }
+    if (q >= s->input.len) return false;
+    while (q < s->input.len && !ends_a_property_name(s->input.data[q])) q++;
+    return q < s->input.len;
   }
-  return false;
+  return true;
 }
 
 /**
@@ -1099,6 +1201,12 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   /* Special-case block scalars '|' and '>' to parse them into a scalar token. */
   if (c == '|' || c == '>') {
     int style = c; /* '|' literal, '>' folded */
+    /* Ask for the whole block before taking any of it - see
+       block_scalar_complete().  Nothing has been consumed yet, so the next
+       call re-scans from the same place. */
+    if (!s->finished && !block_scalar_complete(s)) {
+      return GTEXT_YAML_E_INCOMPLETE;
+    }
     /* consume the indicator */
     scanner_consume(s);
     /* The indentation of the line the header sits on. An indentation

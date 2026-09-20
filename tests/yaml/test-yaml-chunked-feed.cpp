@@ -22,15 +22,31 @@
  * an ordinary scalar: "First occurrence: &anchor Foo" lost its anchor and
  * gained a scalar "anchor". Neither half is taken now until both are there.
  *
+ * Block scalars needed a different answer. Their header is consumed before
+ * the body is read, so a body that turns out to be incomplete has nothing to
+ * go back to - the loop settled for the lines already in hand, and
+ * "literal: |" over "  some" over "  text" came back as the single folded
+ * line "some text". The whole block is checked for before any of it is taken.
+ * So is the node after a bare "!", which is the only thing that says whether
+ * the "!" was the non-specific tag or the start of a longer one.
+ *
  * What this pins is the invariant, not the event stream: for each document,
  * feeding it whole and feeding it in n-byte pieces must produce the same
  * events. A future change that improves the parse improves both sides at
  * once.
+ *
+ * Two of the tests below ask a different question, because the first one
+ * cannot see the answer. Deferring is always safe - a scanner that simply
+ * waited for finish() and then parsed everything at once would satisfy every
+ * comparison above and stream nothing at all, which is the one thing this
+ * API is for. So they feed all but the last few bytes and ask what has come
+ * out yet.
  */
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
 #include <sstream>
+#include <algorithm>
 
 extern "C" {
 #include <ghoti.io/text/yaml.h>
@@ -98,8 +114,7 @@ std::string Events(const std::string &input, size_t chunk) {
 }
 
 /* Documents whose tokens straddle a chunk boundary in at least one of the
- * sizes below.  Block scalars are deliberately absent: their body is still
- * cut at a buffer boundary, which the notes in scanner.c record. */
+ * sizes below. */
 const char *kDocuments[] = {
 	"name: Mark McGwire\n",
 	"a: one two three\n",
@@ -147,6 +162,29 @@ const char *kDocuments[] = {
 	"a: b :",
 	"a: b:",
 	"- one two ",
+
+	/* Block scalars.  These could not be fixed the way the others were: the
+	 * header is consumed before the body is read, so a body that turns out
+	 * to be incomplete has nothing to go back to, and the loop settled for
+	 * the lines already in hand - "literal: |" over "  some" over "  text"
+	 * came back as the single folded line "some text".  The whole block is
+	 * checked for before any of it is taken. */
+	"literal: |\n  some\n  text\n",
+	"folded: >\n  some\n  text\n",
+	"a: |+\n  x\n\n",
+	"a: |-\n  x\n",
+	"a: |2\n    x\n",
+	"- |\n detected\n",
+	"--- |\nabc\n...\n",
+	"a: |\n  one\n\n  two\n",
+
+	/* The non-specific tag is handed over on its own, and what it applies to
+	 * is only known from the token after it - so that token has to have
+	 * arrived as well, or the "!" is gone with nothing to show for it. */
+	"---\n! a\n",
+	"- ! 12\n",
+	"!\nfoo\n",
+	"a: !foo b\n",
 };
 
 } // namespace
@@ -194,6 +232,98 @@ TEST(YamlChunkedFeed, TheLastTokenSurvivesTheEndOfInput) {
 			<< "whole feed lost it: " << c.input << " -> " << whole;
 		EXPECT_EQ(Events(c.input, 1), whole) << "input: " << c.input;
 	}
+}
+
+/* The two shapes the block-scalar and tag halves were wrong in. */
+TEST(YamlChunkedFeed, ABlockScalarSurvivesAChunkBoundary) {
+	const std::string input = "literal: |\n  some\n  text\n";
+	EXPECT_NE(Events(input, 0).find("'some\ntext\n'"), std::string::npos);
+	EXPECT_EQ(Events(input, 1), Events(input, 0));
+}
+
+TEST(YamlChunkedFeed, ANonSpecificTagSurvivesAChunkBoundary) {
+	const std::string input = "---\n! a\n";
+	EXPECT_NE(Events(input, 0).find("<!>"), std::string::npos);
+	EXPECT_EQ(Events(input, 1), Events(input, 0));
+}
+
+/* Events have to come out as the input arrives, not all at the end.
+ *
+ * Deferring is always safe - the scanner can ask for more input as often as
+ * it likes and still be right once the stream is finished - so nothing about
+ * *what* this parser emits can tell a parser that streams from one that
+ * quietly buffers the whole document and emits it on finish(). The
+ * difference is the whole point of the API: a caller feeding a large
+ * document should not need it all in memory at once.
+ *
+ * So this asks a different question: with all but the last few bytes fed,
+ * has the first block scalar been emitted yet? The checks that let the
+ * scanner commit early - a line dedenting out of the block, a document
+ * marker - are what make the answer yes. */
+TEST(YamlChunkedFeed, EventsArriveBeforeTheInputEnds) {
+	const std::string doc = "a: |\n  one\n  two\nb: |\n  three\n  four\n";
+	const size_t hold_back = 6;
+	ASSERT_GT(doc.size(), hold_back);
+
+	GTEXT_YAML_Reader *reader = gtext_yaml_reader_new(nullptr);
+	ASSERT_NE(reader, nullptr);
+	std::string seen;
+	for (size_t off = 0; off < doc.size() - hold_back; off += 4) {
+		const size_t n = std::min<size_t>(4, doc.size() - hold_back - off);
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		ASSERT_EQ(gtext_yaml_reader_feed(reader, doc.data() + off, n, &err),
+			GTEXT_YAML_OK);
+		for (;;) {
+			GTEXT_YAML_Event ev;
+			memset(&ev, 0, sizeof(ev));
+			memset(&err, 0, sizeof(err));
+			if (gtext_yaml_reader_next(reader, &ev, &err) != GTEXT_YAML_OK) break;
+			if (ev.type == GTEXT_YAML_EVENT_SCALAR) {
+				seen += std::string(ev.data.scalar.ptr, ev.data.scalar.len);
+				seen += "|";
+			}
+		}
+	}
+	EXPECT_NE(seen.find("one\ntwo\n"), std::string::npos)
+		<< "nothing was emitted until the input ended; saw: " << seen;
+	gtext_yaml_reader_free(reader);
+}
+
+/* The same question for a stream of documents, where a block scalar is ended
+ * by the "..." that closes its document rather than by a dedent. This is the
+ * shape streaming is actually for - a long series of documents down a pipe -
+ * and without the marker check each one would wait for the end of the whole
+ * stream. */
+TEST(YamlChunkedFeed, ADocumentEndsEarlyEnoughToEmit) {
+	const std::string doc =
+		"--- |\nfirst\n...\n--- |\nsecond\n...\n--- |\nthird\n...\n";
+	const size_t hold_back = 8;
+	ASSERT_GT(doc.size(), hold_back);
+
+	GTEXT_YAML_Reader *reader = gtext_yaml_reader_new(nullptr);
+	ASSERT_NE(reader, nullptr);
+	std::string seen;
+	for (size_t off = 0; off < doc.size() - hold_back; off += 4) {
+		const size_t n = std::min<size_t>(4, doc.size() - hold_back - off);
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		ASSERT_EQ(gtext_yaml_reader_feed(reader, doc.data() + off, n, &err),
+			GTEXT_YAML_OK);
+		for (;;) {
+			GTEXT_YAML_Event ev;
+			memset(&ev, 0, sizeof(ev));
+			memset(&err, 0, sizeof(err));
+			if (gtext_yaml_reader_next(reader, &ev, &err) != GTEXT_YAML_OK) break;
+			if (ev.type == GTEXT_YAML_EVENT_SCALAR) {
+				seen += std::string(ev.data.scalar.ptr, ev.data.scalar.len);
+				seen += "|";
+			}
+		}
+	}
+	EXPECT_NE(seen.find("first\n"), std::string::npos)
+		<< "the first document waited for the whole stream; saw: " << seen;
+	gtext_yaml_reader_free(reader);
 }
 
 int main(int argc, char **argv) {
