@@ -179,7 +179,7 @@ with nothing between them are refused, a scalar with no key to hold it is
 refused, and `key: a : b` is refused rather than rearranged into
 `{key: "a", b: null}`.
 
-Ten more came out of running yaml-test-suite. Quoted scalars now fold
+Twelve more came out of running yaml-test-suite. Quoted scalars now fold
 their line breaks, which plain and block scalars already did - a wrapped
 `"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
 longer stands as a document of its own, and on its own with no document to
@@ -199,7 +199,11 @@ a malformed block header - `|0`, `|10`, `|+-`, `| junk` - was read as
 something rather than refused. And a `:` that begins a node is now an
 ordinary plain character where it does not end a key, so `- ::vector` and
 `{x: :x}` parse instead of being refused for having no key in front of the
-colon.
+colon. Tabs in leading white space were refused outright; indentation is
+counted in spaces and a tab after it is separation, so a tab may sit between
+the indentation and a value but not between it and a block mapping key. And
+a line of a space and a tab was not recognised as blank when a plain scalar
+looked past it, so `foo: 1` over such a line gave foo the string `"1 "`.
 
 A 153-document comparison backs this, checked against two implementations
 rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
