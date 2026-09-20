@@ -85,6 +85,10 @@ from the core schema. From the 1.1 type repository, with the limits noted:
 - `!!set` validates that mapping values are null. `!!omap` and `!!pairs`
   validate that entries are single-pair mappings, and `!!omap` enforces
   unique keys. Distinct `GTEXT_YAML_Node_Type` values exist for all three.
+  `gtext_yaml_to_json()` renders them as the structures they already are - a
+  set as an object with null values, an omap or pairs as an array of
+  single-pair objects, which keeps an omap's order and a pairs' duplicate
+  keys. Only the tag is lost, as it is for every tagged node.
 
 Custom application tags are supported behind `enable_custom_tags`, with
 constructor, representer and JSON-converter callbacks.
@@ -149,7 +153,7 @@ semantically equal to the input, not textually equal.
 | Merge keys | yes, default on | |
 | `!!binary` | decoded | via a separate accessor |
 | `!!timestamp` | validated | not parsed into a time type |
-| `!!set` / `!!omap` / `!!pairs` | validated, own node types | |
+| `!!set` / `!!omap` / `!!pairs` | validated, own node types | convert to JSON structurally |
 | UTF-16 / UTF-32 input | yes, transcoded | |
 | Duplicate keys | `ERROR` default | `GTEXT_YAML_E_DUPKEY` |
 | Depth | 256 default | `GTEXT_YAML_E_DEPTH` |
@@ -176,12 +180,11 @@ or item it is. So the tag stayed on the key or the first item and the
 collection came out untagged - standard and application tags alike, at the
 document root and nested, for block sequences and block mappings.
 
-It mattered beyond the tag itself. `gtext_yaml_to_json()` refuses `!!set`,
-`!!omap` and `!!pairs` so that a YAML-specific collection cannot silently
-become a JSON array; with the tag gone that refusal did not happen, and
-`!!omap\n- a: 1` converted to `[{"a":1}]` without complaint. Block style is
-the common style in real YAML, so this was the usual case rather than a
-corner.
+It mattered beyond the tag itself. The node's *type* follows the tag, and so
+does the validation attached to it: `!!set` checks that every value is null,
+and with the tag sitting on the first key instead, `gtext_yaml_node_type()`
+reported a plain mapping and that check never ran. Block style is the common
+style in real YAML, so this was the usual case rather than a corner.
 
 Two shapes decide it, and they differ in nothing but a line break:
 
@@ -511,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 74 test files under `tests/yaml/`, carrying 523 of the suite's
-2108 test cases across 86 binaries, all passing. They cover the scalar styles,
+**Tests.** 75 test files under `tests/yaml/`, carrying 527 of the suite's
+2112 test cases across 87 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -582,8 +585,8 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **344
-pass, 94.0%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **347
+pass, 94.8%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
@@ -617,16 +620,12 @@ was skipped.
 
 The failures that remain group into a few shapes, largest first:
 
-- **17 documents that should be refused are accepted.** Still the largest
-  group, and still not one defect: a document marker inside a quoted scalar
-  is not seen, an implicit key may run over two lines, a node may carry two
-  anchors, and a tag handle defined in one document is still in scope in
-  the next.
+- **9 documents that should be refused are accepted.** Still the largest
+  group, and still not one defect: an implicit key may run over two lines,
+  a node may carry two anchors, a tag may contain a comma, and a tag handle
+  defined in one document is still in scope in the next.
 - **Block scalars nested inside a mapping can swallow a sibling key**, which
   the indentation work above fixed at the top level but not at depth.
-- **`!!set` and `!!omap` cannot be converted to JSON**, so a document
-  using either is refused by the conformance harness rather than by the
-  parser.
 - **A scanner error loses its message.** Every one surfaces as the
   parser's generic "Parse error", because the stream layer drops the
   `GTEXT_YAML_Error` the scanner filled in. Parser-level errors carry

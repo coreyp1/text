@@ -39,20 +39,21 @@ its message and arrives as the generic "Parse error".
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **94.0%** of the 366 cases that can be checked by value or
+parser. It passes **94.8%** of the 366 cases that can be checked by value or
 by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
 Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
-hundred and fifty-four cases since came from quoted-scalar line folding,
+hundred and fifty-seven cases since came from quoted-scalar line folding,
 directives, a group of structural refusals, the rule that `:`, `-` and `?`
 are indicators only where nothing plain-safe follows them, tabs in leading
 white space, a group of positional rules, a group around documents and
 anchors, the tag property in its three spellings, a group of closed lists,
 a group about where a line may begin, the empty node, the indentation a
 node's properties have to clear, what may be written on the "---" line, and
-the document markers a multi-line scalar may not contain. There are no
-benchmarks.
+the document markers a multi-line scalar may not contain, how far in a
+scalar's continuation lines have to be, and rendering `!!set` and `!!omap` as
+the JSON they already are. There are no benchmarks.
 
-**Verified:** the suite runs 2108 tests across 86 binaries with zero
+**Verified:** the suite runs 2112 tests across 87 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
 that has found two scanner hangs, a use-after-free and several leaks.
 
@@ -807,8 +808,8 @@ jobs:
 
 ## 13. Testing
 
-The YAML module is covered by 74 test files, part of a suite that runs
-2108 tests across 86 binaries with zero failures. They cover:
+The YAML module is covered by 75 test files, part of a suite that runs
+2112 tests across 87 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -842,7 +843,7 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **94.0%** of the
+The parser targets YAML 1.2.2 and hits **94.8%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
 harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference
@@ -953,4 +954,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 523 YAML test cases, of 2108 across the suite, all passing
+**Test count:** 527 YAML test cases, of 2112 across the suite, all passing

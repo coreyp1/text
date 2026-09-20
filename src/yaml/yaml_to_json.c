@@ -227,27 +227,6 @@ static bool node_is_alias(const GTEXT_YAML_Node * n)
 }
 
 /**
- * @brief Check if a node has a non-convertible tag.
- *
- * JSON doesn't support custom tags or YAML-specific types like set, omap, pairs.
- * Only basic scalar types are allowed.
- *
- * @param n Node to check
- * @return true if node has incompatible tag, false otherwise
- */
-static bool node_has_incompatible_tag(const GTEXT_YAML_Node * n)
-{
-	GTEXT_YAML_Node_Type type = gtext_yaml_node_type(n);
-
-	/* These types are YAML-specific and cannot be represented in JSON */
-	if (type == GTEXT_YAML_SET || type == GTEXT_YAML_OMAP || type == GTEXT_YAML_PAIRS) {
-		return true;
-	}
-
-	return false;
-}
-
-/**
  * @brief Recursively convert a YAML node to a JSON value.
  *
  * @param yaml_node YAML node to convert
@@ -329,15 +308,6 @@ static GTEXT_YAML_Status convert_node(
 			}
 			return status;
 		}
-	}
-
-	/* Check for incompatible tags */
-	if (node_has_incompatible_tag(yaml_node)) {
-		if (out_err) {
-			out_err->code = GTEXT_YAML_E_INVALID;
-			out_err->message = "cannot convert: YAML-specific type (set/omap/pairs) not compatible with JSON";
-		}
-		return GTEXT_YAML_E_INVALID;
 	}
 
 	type = gtext_yaml_node_type(yaml_node);
@@ -503,6 +473,11 @@ static GTEXT_YAML_Status convert_node(
 		break;
 	}
 
+	/* !!omap and !!pairs are sequences of single-pair mappings and are
+	   stored as sequences, so a JSON array is what they already are: it
+	   keeps their order, and for !!pairs their duplicate keys too. */
+	case GTEXT_YAML_OMAP:
+	case GTEXT_YAML_PAIRS:
 	case GTEXT_YAML_SEQUENCE: {
 		*out_json = gtext_json_new_array();
 		if (!*out_json) {
@@ -554,6 +529,8 @@ static GTEXT_YAML_Status convert_node(
 		break;
 	}
 
+	/* !!set is a mapping whose values are all null, and is stored as one. */
+	case GTEXT_YAML_SET:
 	case GTEXT_YAML_MAPPING: {
 		*out_json = gtext_json_new_object();
 		if (!*out_json) {
@@ -705,17 +682,6 @@ static GTEXT_YAML_Status convert_node(
 		if (out_err) {
 			out_err->code = GTEXT_YAML_E_INVALID;
 			out_err->message = "cannot convert: node is an alias (anchors/aliases not supported in JSON)";
-		}
-		status = GTEXT_YAML_E_INVALID;
-		break;
-
-	case GTEXT_YAML_SET:
-	case GTEXT_YAML_OMAP:
-	case GTEXT_YAML_PAIRS:
-		/* Already checked above, but handle explicitly for completeness */
-		if (out_err) {
-			out_err->code = GTEXT_YAML_E_INVALID;
-			out_err->message = "cannot convert: YAML-specific type not compatible with JSON";
 		}
 		status = GTEXT_YAML_E_INVALID;
 		break;

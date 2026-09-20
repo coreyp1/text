@@ -397,25 +397,36 @@ TEST(YamlToJson, CustomTagConverter) {
 }
 
 /**
- * @test YamlToJsonIncompatibleTags
- * @brief Test that YAML-specific types like OMAP are rejected
- * Note: This test uses flow-style !!omap which produces a GTEXT_YAML_OMAP node.
- * Block-style !!omap won't be detected due to parser behavior.
+ * @test YamlToJsonOmapConvertsToAnArray
+ * @brief An !!omap is a sequence of single-pair mappings, so JSON has it.
+ *
+ * This used to assert a refusal. The refusal was there so that "a
+ * YAML-specific collection cannot silently become a JSON array", but there
+ * is nothing silent about it: an !!omap is stored as a sequence of
+ * single-pair mappings and a JSON array is exactly that, order included.
+ * The only thing lost is the tag, which JSON drops for every tagged node
+ * anyway - "!foo 5" has always converted to 5 without complaint.
+ *
+ * The conversions that do change the data still refuse by default, each
+ * behind its own option: aliases, merge keys, non-string keys and
+ * out-of-range integers. See YamlToJsonRefusals below.
  */
-TEST(YamlToJson, IncompatibleTags) {
+TEST(YamlToJson, OmapConvertsToAnArray) {
 	const char * yaml_input = "!!omap [{a: 1}, {b: 2}]";
 	GTEXT_YAML_Document * yaml_doc = gtext_yaml_parse(yaml_input, strlen(yaml_input), NULL, NULL);
 	ASSERT_NE(yaml_doc, nullptr);
-	
+
 	GTEXT_JSON_Value * json_val = NULL;
 	GTEXT_YAML_Error err;
 	memset(&err, 0, sizeof(err));
 	GTEXT_YAML_Status status = gtext_yaml_to_json(yaml_doc, &json_val, &err);
-	
-	/* Should reject due to OMAP type */
-	EXPECT_NE(status, GTEXT_YAML_OK);
-	EXPECT_EQ(json_val, nullptr);
-	
+
+	EXPECT_EQ(status, GTEXT_YAML_OK) << (err.message ? err.message : "?");
+	ASSERT_NE(json_val, nullptr);
+	EXPECT_EQ(gtext_json_typeof(json_val), GTEXT_JSON_ARRAY);
+	EXPECT_EQ(gtext_json_array_size(json_val), 2u);
+
+	gtext_json_free(json_val);
 	gtext_yaml_error_free(&err);
 	gtext_yaml_free(yaml_doc);
 }
@@ -1044,41 +1055,108 @@ TEST(YamlToJsonKeys, NonStringKeysNeedCoercion) {
 	gtext_yaml_free(d);
 }
 
-TEST(YamlToJsonRefusals, YamlSpecificCollectionsAreRefused) {
-	// !!set, !!omap and !!pairs have no JSON spelling.  Converting them to
-	// something plausible would lose the distinction silently.
-	//
-	// Both styles now, since block-style tags survive; the block spellings are
-	// in BlockStyleCollectionsKeepTheirTag below.
-	const char * docs[] = {
-	    "!!set {a: ~, b: ~}",
-	    "!!omap [{a: 1}, {b: 2}]",
-	    "!!pairs [{a: 1}, {a: 2}]",
+// !!set, !!omap and !!pairs convert to what they already are: a set is a
+// mapping whose values are all null, and an omap or pairs is a sequence of
+// single-pair mappings.  Nothing about the data is lost on the way - a JSON
+// array is ordered, so an omap keeps its order, and pairs keeps its
+// duplicate keys.  Only the tag goes, and JSON drops the tag of every tagged
+// node: "!foo 5" has always converted to 5 without complaint.
+//
+// This file used to assert a refusal here.  The refusal was documented as
+// stopping "a YAML-specific collection silently becoming a JSON array", but
+// it was the one hardcoded refusal in a converter whose other four - for
+// aliases, merge keys, non-string keys and out-of-range integers - each sit
+// behind an option and each guard a real change to the data.  This one
+// guarded none.  The three cases below are the JSON that yaml-test-suite
+// gives for spec examples 2.25 and 2.26.
+TEST(YamlToJsonRefusals, YamlSpecificCollectionsConvertStructurally) {
+	struct Case {
+		const char * src;
+		GTEXT_JSON_Type type;
+		size_t size;
+	};
+	const Case cases[] = {
+	    {"!!set {a: ~, b: ~}", GTEXT_JSON_OBJECT, 2},
+	    {"!!omap [{a: 1}, {b: 2}]", GTEXT_JSON_ARRAY, 2},
+	    {"!!pairs [{a: 1}, {a: 2}]", GTEXT_JSON_ARRAY, 2},
 	};
 
-	for (const char * src : docs) {
-		SCOPED_TRACE(src);
-		GTEXT_YAML_Parse_Options po = gtext_yaml_parse_options_default();
-		GTEXT_YAML_Error err;
-		memset(&err, 0, sizeof(err));
-		GTEXT_YAML_Document * d = gtext_yaml_parse(src, strlen(src), &po, &err);
-		if (!d) {
-			// Refused at parse time is also a refusal; the point is that it
-			// never silently becomes JSON.
-			gtext_yaml_error_free(&err);
-			continue;
-		}
+	for (const Case & c : cases) {
+		SCOPED_TRACE(c.src);
+		GTEXT_YAML_Document * d = parse_yaml_or_die(c.src);
+		ASSERT_NE(d, nullptr);
 
 		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
 		GTEXT_JSON_Value * out = nullptr;
-		EXPECT_NE(
-		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK);
-		if (out) {
-			gtext_json_free(out);
-		}
+		ASSERT_EQ(
+		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK)
+		    << (err.message ? err.message : "?");
+		ASSERT_NE(out, nullptr);
+		EXPECT_EQ(gtext_json_typeof(out), c.type);
+		EXPECT_EQ(c.type == GTEXT_JSON_OBJECT ? gtext_json_object_size(out)
+		                                      : gtext_json_array_size(out),
+		    c.size);
+
+		gtext_json_free(out);
 		gtext_yaml_error_free(&err);
 		gtext_yaml_free(d);
 	}
+}
+
+// A set's values are null, not the empty string or a missing key.
+TEST(YamlToJsonRefusals, ASetsValuesAreNull) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("!!set {a: ~, b: ~}");
+	ASSERT_NE(d, nullptr);
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	ASSERT_EQ(gtext_yaml_to_json(d, &out, &err), GTEXT_YAML_OK);
+	ASSERT_NE(out, nullptr);
+	const GTEXT_JSON_Value * a = gtext_json_object_get(out, "a", 1);
+	ASSERT_NE(a, nullptr);
+	EXPECT_EQ(gtext_json_typeof(a), GTEXT_JSON_NULL);
+	gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+// !!pairs exists to carry duplicate keys, and the array keeps both.  A JSON
+// object could not: this is why omap and pairs convert to arrays and not to
+// objects.
+TEST(YamlToJsonRefusals, PairsKeepsItsDuplicateKeys) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("!!pairs [{a: 1}, {a: 2}]");
+	ASSERT_NE(d, nullptr);
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	ASSERT_EQ(gtext_yaml_to_json(d, &out, &err), GTEXT_YAML_OK);
+	ASSERT_NE(out, nullptr);
+	ASSERT_EQ(gtext_json_array_size(out), 2u);
+	for (size_t i = 0; i < 2; ++i) {
+		const GTEXT_JSON_Value * e = gtext_json_array_get(out, i);
+		ASSERT_NE(e, nullptr);
+		ASSERT_EQ(gtext_json_object_size(e), 1u);
+		EXPECT_STREQ(gtext_json_object_key(e, 0, nullptr), "a");
+	}
+	gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
+}
+
+// A set whose key is not a scalar still has nowhere to go: JSON object keys
+// are strings.  That refusal is the non-string-key rule and is unchanged.
+TEST(YamlToJsonRefusals, ASetWithACollectionKeyIsStillRefused) {
+	GTEXT_YAML_Document * d = parse_yaml_or_die("--- !!set\n? [1, 2]\n");
+	ASSERT_NE(d, nullptr);
+	GTEXT_JSON_Value * out = nullptr;
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_NE(gtext_yaml_to_json(d, &out, &err), GTEXT_YAML_OK);
+	if (out) gtext_json_free(out);
+	gtext_yaml_error_free(&err);
+	gtext_yaml_free(d);
 }
 
 TEST(YamlToJsonRefusals, AliasesAreRefusedUnlessAllowed) {
@@ -1186,14 +1264,24 @@ TEST(YamlToJsonRefusals, BlockStyleCollectionsKeepTheirTag) {
 		EXPECT_NE(gtext_yaml_node_tag(root), nullptr)
 		    << "the document's tag was dropped";
 
+		/* The node's own type is the direct evidence that the tag reached
+		   the collection rather than its first entry. This used to be read
+		   off a JSON refusal instead, which stopped being a signal once
+		   !!omap and !!pairs began converting - and was always indirect. */
+		const GTEXT_YAML_Node_Type t = gtext_yaml_node_type(root);
+		EXPECT_TRUE(t == GTEXT_YAML_OMAP || t == GTEXT_YAML_PAIRS)
+		    << "the tag did not reach the collection";
+
 		GTEXT_YAML_To_JSON_Options o = gtext_yaml_to_json_options_default();
 		GTEXT_YAML_Error err;
 		memset(&err, 0, sizeof(err));
 		GTEXT_JSON_Value * out = nullptr;
-		EXPECT_NE(
+		EXPECT_EQ(
 		    gtext_yaml_to_json_with_options(d, &out, &o, &err), GTEXT_YAML_OK)
-		    << "a YAML-specific collection converted to JSON silently";
+		    << (err.message ? err.message : "?");
 		if (out) {
+			EXPECT_EQ(gtext_json_typeof(out), GTEXT_JSON_ARRAY);
+			EXPECT_EQ(gtext_json_array_size(out), 2u);
 			gtext_json_free(out);
 		}
 		gtext_yaml_error_free(&err);
