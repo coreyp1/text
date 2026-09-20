@@ -248,12 +248,45 @@ static GTEXT_YAML_Status scanner_tab_indent_error(
  * Returns false if the input ran out inside the run, with *p left at the end
  * so the caller can take the usual incomplete-or-unterminated path: the fold
  * cannot be decided until the line after the breaks has arrived. */
+/**
+ * @brief Does a document marker begin at @p p, at the start of a line?
+ *
+ * c-forbidden is "---" or "..." at the start of a line, followed by white
+ * space, a break, or end of input (9.1.2).  A multi-line scalar may not
+ * contain one: the marker ends the document wherever it appears, so a quoted
+ * scalar spanning it has no closing quote.
+ *
+ * The three characters have to be followed by white space to count, which is
+ * what separates the two halves of suite case 9MQT: "...x" on its own line is
+ * ordinary content, "... x" is forbidden.
+ */
+static bool line_starts_forbidden_marker(
+    const GTEXT_YAML_Scanner *s,
+    size_t p)
+{
+  const char *d = NULL;
+  char c = 0;
+  if (s->cursor + p + 2 >= s->input.len) return false;
+  d = s->input.data + s->cursor + p;
+  c = d[0];
+  if ((c != '-' && c != '.') || d[1] != c || d[2] != c) return false;
+  /* c-forbidden allows end of input after the marker, and this is also the
+     bounds check for reading the byte below.  No test separates the two
+     answers: the only callers are inside a quoted scalar, which is
+     unterminated when the input stops here, so the document is refused
+     either way. */
+  if (s->cursor + p + 3 >= s->input.len) return true;
+  return d[3] == ' ' || d[3] == '\t' || d[3] == '\n' || d[3] == '\r';
+}
+
 static bool scan_folded_breaks(
     const GTEXT_YAML_Scanner *s,
     size_t *p,
-    size_t *out_breaks)
+    size_t *out_breaks,
+    bool *out_forbidden)
 {
   size_t breaks = 0;
+  *out_forbidden = false;
   for (;;) {
     if (s->cursor + *p >= s->input.len) { *out_breaks = breaks; return false; }
     int bc = (unsigned char)s->input.data[s->cursor + *p];
@@ -266,6 +299,21 @@ static bool scan_folded_breaks(
     else if (bc == '\n') { (*p)++; }
     else break;
     breaks++;
+    /* Now at column 1 of the continuation line, which is the only place a
+       document marker can be.  Deciding takes four bytes, not three: "..."
+       is only a marker when what follows it is white space or the end of
+       input, so "...x" cannot be told from "... x" until that byte is here.
+       This is lookahead - the cursor has taken nothing yet - so asking for
+       more is safe. */
+    if (s->cursor + *p + 3 >= s->input.len && !s->finished) {
+      *out_breaks = breaks;
+      return false;
+    }
+    if (line_starts_forbidden_marker(s, *p)) {
+      *out_forbidden = true;
+      *out_breaks = breaks;
+      return true;
+    }
     while (s->cursor + *p < s->input.len
         && (s->input.data[s->cursor + *p] == ' '
          || s->input.data[s->cursor + *p] == '\t')) {
@@ -1529,9 +1577,21 @@ block_scalar_collected:
          * space before the break is not content, one break folds to a space,
          * and a run of n breaks folds to n-1 line feeds. */
         size_t breaks = 0;
+        bool forbidden = false;
         size_t p = look;
         scalar.len = ws_start;
-        if (!scan_folded_breaks(s, &p, &breaks)) { want_more = true; break; }
+        if (!scan_folded_breaks(s, &p, &breaks, &forbidden)) { want_more = true; break; }
+        if (forbidden) {
+          gtext_yaml_dynbuf_free(&scalar);
+          if (err) {
+            err->code = GTEXT_YAML_E_INVALID;
+            err->message = "Document marker inside a multi-line scalar";
+            err->offset = off;
+            err->line = line;
+            err->col = col;
+          }
+          return GTEXT_YAML_E_INVALID;
+        }
         if (breaks == 1) {
           char sp = ' ';
           if (!gtext_yaml_dynbuf_append(&scalar, &sp, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
@@ -1597,8 +1657,20 @@ block_scalar_collected:
              * backslash stays as content - spec example 7.5 keeps the tab
              * there.  Empty lines after it still fold to line feeds. */
             size_t breaks = 0;
+            bool forbidden = false;
             size_t p = look + 1;
-            if (!scan_folded_breaks(s, &p, &breaks)) { want_more = true; break; }
+            if (!scan_folded_breaks(s, &p, &breaks, &forbidden)) { want_more = true; break; }
+            if (forbidden) {
+              gtext_yaml_dynbuf_free(&scalar);
+              if (err) {
+                err->code = GTEXT_YAML_E_INVALID;
+                err->message = "Document marker inside a multi-line scalar";
+                err->offset = off;
+                err->line = line;
+                err->col = col;
+              }
+              return GTEXT_YAML_E_INVALID;
+            }
             char lf = '\n';
             for (size_t i = 1; i < breaks; ++i) {
               if (!gtext_yaml_dynbuf_append(&scalar, &lf, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
