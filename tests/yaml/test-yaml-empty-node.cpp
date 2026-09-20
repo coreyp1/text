@@ -54,6 +54,15 @@ const Case kCases[] = {
 	{"--- !!seq\n- a\n", "[\"a\"]"},  /* even after a document marker */
 	{"x: !custom\n  - 1\n", "{\"x\": [1]}"},  /* and one on a key's line introduces the indented value */
 	{"!!map\na: 1\n", "{\"a\": 1}"},  /* likewise for a mapping */
+	/* A block sequence may stand at the column of the key that owns it, so
+	   a "-" there takes the tag for the sequence rather than leaving it on
+	   an empty value - spec example 8.22. */
+	{"sequence: !!seq\n- entry\n- !!seq\n - nested\nmapping: !!map\n foo: bar\n",
+	 "{\"sequence\": [\"entry\", [\"nested\"]], \"mapping\": {\"foo\": \"bar\"}}"},
+	/* A line of nothing but properties introduces what follows, however
+	   many of them there are - suite case 9KAX. */
+	{"&a4 !!map\n&a5 !!str key5: value4\n", "{\"key5\": \"value4\"}"},
+	{"---\n&a1\n!!str\nscalar1\n", "\"scalar1\""},
 };
 
 }  // namespace

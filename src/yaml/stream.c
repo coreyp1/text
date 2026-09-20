@@ -91,12 +91,17 @@ struct GTEXT_YAML_Stream {
      position the property was written in. */
   int pending_prop_line_start;
   bool pending_prop_opens_line;
-  /* The line the stream is on and the column its first token stood at. A
-     document marker counts as opening the line for a property after it:
-     "--- !shape" tags the root node, whose content may begin at column 0. */
+  bool pending_prop_line_dash;
+  /* The line the stream is on, the column its first token stood at, whether
+     everything on it so far has been a property or a document marker, and
+     whether it opened with a "-". A line of nothing but properties
+     introduces whatever follows it, however that is indented; a "-" line
+     is a sequence entry, which matters because a block sequence may sit at
+     its owning key's column but not at a sibling entry's. */
   int cur_line;
   int cur_line_start;
-  bool cur_line_is_doc_marker;
+  bool cur_line_only_props;
+  bool cur_line_opens_with_dash;
   bool pending_alias; /* True if alias indicator seen and name is pending */
   bool sync_mode; /* If true, call scanner_finish after each feed */
   bool document_started; /* True if we've emitted DOCUMENT_START */
@@ -147,7 +152,38 @@ static bool stream_props_left_behind(
   if (!s->pending_anchor && !s->pending_tag) return false;
   if (tok->line == s->pending_prop_line) return false;
   if (s->pending_prop_opens_line) return false;
-  return s->cur_line_start <= s->pending_prop_line_start;
+  if (s->cur_line_start > s->pending_prop_line_start) return false;
+  /* A block sequence may stand at the column of the key that owns it, so a
+     "-" there is the value position rather than a sibling - unless the
+     property's own line was a sequence entry, in which case it is the next
+     entry and the one before it was empty:
+
+         sequence: !!seq      the "-" is sequence's value, so the tag is
+         - entry              the sequence's
+
+         - &a                 the "-" is the next entry, so the anchor
+         - b                  belongs to the empty one above it */
+  if (tok->type == GTEXT_YAML_TOKEN_INDICATOR && tok->u.c == '-'
+      && s->cur_line_start == s->pending_prop_line_start
+      && !s->pending_prop_line_dash) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Note that a "-" has taken the pending properties for its sequence.
+ *
+ * From here the properties introduce that sequence, so nothing later on the
+ * line can leave them behind - without this the entry's own scalar looked
+ * like a line that had, and "sequence: !!seq" over "- entry" gained an empty
+ * first entry.
+ */
+static void stream_props_claimed_by_sequence(GTEXT_YAML_Stream *s) {
+  if (!s->pending_anchor && !s->pending_tag) return;
+  if (s->cur_line_start != s->pending_prop_line_start) return;
+  if (s->pending_prop_line_dash) return;
+  s->pending_prop_opens_line = true;
 }
 
 static GTEXT_YAML_Status stream_flush_empty_node(
@@ -372,9 +408,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
     if (tok.line != s->cur_line) {
       s->cur_line = tok.line;
       s->cur_line_start = tok.col;
-      s->cur_line_is_doc_marker =
-        tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
-        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END;
+      s->cur_line_only_props = true;
+      s->cur_line_opens_with_dash =
+        tok.type == GTEXT_YAML_TOKEN_INDICATOR && tok.u.c == '-';
+    }
+    if (!(tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
+        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END
+        || tok.type == GTEXT_YAML_TOKEN_COMMENT
+        || (tok.type == GTEXT_YAML_TOKEN_INDICATOR
+            && (tok.u.c == '&' || tok.u.c == '!')))) {
+      s->cur_line_only_props = false;
     }
 
 process_token:
@@ -494,12 +537,11 @@ process_token:
       if ((tok.u.c == '-' || tok.u.c == ':' || tok.u.c == '?'
            || tok.u.c == ',' || tok.u.c == ']' || tok.u.c == '}')
           && (s->pending_anchor || s->pending_tag)
-          && (tok.line == s->pending_prop_line
-              || (!s->pending_prop_opens_line
-                  && s->cur_line_start <= s->pending_prop_line_start))) {
+          && stream_props_left_behind(s, &tok)) {
         GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
         if (flush != GTEXT_YAML_OK) return flush;
       }
+      if (tok.u.c == '-') stream_props_claimed_by_sequence(s);
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
       /* indicator event */
@@ -578,8 +620,8 @@ process_token:
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
         s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line =
-          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
+        s->pending_prop_opens_line = s->cur_line_only_props;
+        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
         
         continue;
       } else if (tok.u.c == '!') {
@@ -646,8 +688,8 @@ process_token:
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
         s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line =
-          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
+        s->pending_prop_opens_line = s->cur_line_only_props;
+        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
         continue;
       } else if (tok.u.c == '*') {
         /* Process alias immediately; if name incomplete, defer to next feed */
@@ -748,9 +790,16 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
     if (tok.line != s->cur_line) {
       s->cur_line = tok.line;
       s->cur_line_start = tok.col;
-      s->cur_line_is_doc_marker =
-        tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
-        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END;
+      s->cur_line_only_props = true;
+      s->cur_line_opens_with_dash =
+        tok.type == GTEXT_YAML_TOKEN_INDICATOR && tok.u.c == '-';
+    }
+    if (!(tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
+        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END
+        || tok.type == GTEXT_YAML_TOKEN_COMMENT
+        || (tok.type == GTEXT_YAML_TOKEN_INDICATOR
+            && (tok.u.c == '&' || tok.u.c == '!')))) {
+      s->cur_line_only_props = false;
     }
 
 process_token_finish:
@@ -852,12 +901,11 @@ process_token_finish:
       if ((tok.u.c == '-' || tok.u.c == ':' || tok.u.c == '?'
            || tok.u.c == ',' || tok.u.c == ']' || tok.u.c == '}')
           && (s->pending_anchor || s->pending_tag)
-          && (tok.line == s->pending_prop_line
-              || (!s->pending_prop_opens_line
-                  && s->cur_line_start <= s->pending_prop_line_start))) {
+          && stream_props_left_behind(s, &tok)) {
         GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
         if (flush != GTEXT_YAML_OK) return flush;
       }
+      if (tok.u.c == '-') stream_props_claimed_by_sequence(s);
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
 
@@ -932,8 +980,8 @@ process_token_finish:
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
         s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line =
-          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
+        s->pending_prop_opens_line = s->cur_line_only_props;
+        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
         
         continue;
       }
@@ -1000,8 +1048,8 @@ process_token_finish:
         s->pending_prop_line = tok.line;
         s->pending_prop_col = tok.col;
         s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line =
-          (s->cur_line_start == tok.col) || s->cur_line_is_doc_marker;
+        s->pending_prop_opens_line = s->cur_line_only_props;
+        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
         continue;
       }
       

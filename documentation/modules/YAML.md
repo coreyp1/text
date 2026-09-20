@@ -39,7 +39,7 @@ its message and arrives as the generic "Parse error".
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **91.8%** of the 366 cases that can be checked by value or
+parser. It passes **92.1%** of the 366 cases that can be checked by value or
 by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
 Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
 hundred and thirty-two cases since came from quoted-scalar line folding,
@@ -840,7 +840,7 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **91.8%** of the
+The parser targets YAML 1.2.2 and hits **92.1%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
 harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference
