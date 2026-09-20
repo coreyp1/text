@@ -849,7 +849,24 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       s->last_indicator = 0;
       return GTEXT_YAML_OK;
     }
-    if (c == '\t' && s->indent_ws && tab_stands_for_indentation(s)) {
+    /* A tab is separation, never indentation (6.1), and the check applies
+       wherever indentation is what is called for.  That is a line's leading
+       white space, and also the gap after a block entry indicator: a nested
+       entry reaches its sequence through s-indent(m) in s-l+block-indented,
+       which is m spaces, so "-" TAB "-" has no indentation between the two
+       and the second one is not nested at all.  It was building one anyway
+       (suite cases Y79Y/4 and Y79Y/5).
+
+       "-" TAB "-1" is unaffected: the second "-" is not an indicator there,
+       it starts the scalar -1, and an ordinary node after an entry
+       indicator is reached across s-separate, where a tab is fine.
+
+       Flow context needs no test of its own.  A "-" inside "[" or "{" is
+       refused by the parser when the indicator reaches it, which is before
+       the scanner gets as far as the tab. */
+    if (c == '\t'
+        && (s->indent_ws || s->last_indicator == '-')
+        && tab_stands_for_indentation(s)) {
       return scanner_tab_indent_error(s, err, 0);
     }
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -1560,8 +1577,12 @@ block_scalar_collected:
     tok->line = line;
     tok->col = col;
     
-    /* Track if this is an anchor, alias, or tag indicator */
-    if (c == '&' || c == '*' || c == '!') {
+    /* Track if this is an anchor, alias, or tag indicator.  A block entry
+       "-" is recorded too, for the tab rule above: what may follow it
+       depends on whether the next thing is another entry indicator.  Every
+       reader of this field tests for one particular character, so the extra
+       value reaches only the code that asks for it. */
+    if (c == '&' || c == '*' || c == '!' || c == '-') {
       s->last_indicator = c;
     } else {
       s->last_indicator = 0;

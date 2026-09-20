@@ -7,6 +7,14 @@
  * ( s-indent(n) ns-l-block-map-entry(n) )+ with nothing permitted in
  * between.
  *
+ * The gap after a block entry indicator is the same kind of place. A nested
+ * entry reaches its sequence through s-indent(m) in s-l+block-indented(n,c),
+ * which is m spaces, so "-" TAB "-" has no indentation between the two and
+ * the second one is not nested at all. An ordinary node there is a different
+ * matter - it is reached across s-separate, where a tab is fine - so
+ * "-" TAB "foo" and even "-" TAB "-1" are well formed, the second "-" in the
+ * last one being the start of the scalar rather than an indicator.
+ *
  * Every tab in leading white space used to be refused outright, which took
  * six valid documents in yaml-test-suite with it: a line holding only a tab,
  * a tab in front of a flow collection at the root, and a tab between one
@@ -47,6 +55,11 @@ const Case kValid[] = {
 	{"\t{a: 1}\n", "{\"a\": 1}"},  /* nor in a flow mapping */
 	{"foo:\n \t\"a: b\"\n", "{\"foo\": \"a: b\"}"},  /* nor one inside a quoted scalar */
 	{"foo:\n \t'a: b'\n", "{\"foo\": \"a: b\"}"},  /* either kind of quote */
+	{"-\tfoo\n", "[\"foo\"]"},  /* an entry's node is reached across separation */
+	{"-\t\"x\"\n", "[\"x\"]"},  /* whatever the node is */
+	{"-\t-1\n", "[-1]"},  /* the second "-" starts the scalar, it is not an indicator */
+	{"- - a\n", "[[\"a\"]]"},  /* a space does indent the nested entry */
+	{"- ? a\n  : b\n", "[{\"a\": \"b\"}]"},  /* and an explicit key after a space */
 };
 
 const char *const kInvalid[] = {
@@ -55,6 +68,10 @@ const char *const kInvalid[] = {
 	"\t- a\n",  /* and a sequence entry */
 	"a:\n \t- 1\n",  /* an entry one space in and then a tab */
 	"- [\n\tfoo,\n foo\n ]\n",  /* inside a flow collection the entry still needs s-indent(n) first */
+	"-\t-\n",  /* a tab cannot indent a nested entry */
+	"- \t-\n",  /* nor can a space and then a tab */
+	"-\t- a\n",  /* the nested entry having content changes nothing */
+	"-\t?\n",  /* an explicit key indicator is an entry too */
 };
 
 }  // namespace
