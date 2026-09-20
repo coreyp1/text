@@ -29,15 +29,15 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** five of the 366 checkable cases. One document that
-yaml-test-suite says should be refused is accepted instead - a node may
-carry two anchors, and the second silently replaces the first. One valid
-document is refused: a multi-line plain scalar under an explicit key. The
-remaining three differ in the value they produce.
+**Still unsupported:** one of the 366 checkable cases. A node may carry
+two anchors, which yaml-test-suite says should be refused and is accepted
+instead - the second silently replaces the first. Telling that apart from
+the valid document in the same case needs two properties pending at once,
+and the stream has one slot for them.
 
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **98.6%** of the 366 cases that can be checked by value or
+parser. It passes **99.7%** of the 366 cases that can be checked by value or
 by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
 Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
 hundred and seventy cases since came from quoted-scalar line folding,
@@ -52,7 +52,7 @@ scalar's continuation lines have to be, and rendering `!!set` and `!!omap` as
 the JSON they already are, and the line a flow pair's key and colon share.
 There are no benchmarks.
 
-**Verified:** the suite runs 2140 tests across 100 binaries with zero
+**Verified:** the suite runs 2143 tests across 102 binaries with zero
 failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
 that has found two scanner hangs, a use-after-free and several leaks.
 
@@ -808,7 +808,7 @@ jobs:
 ## 13. Testing
 
 The YAML module is covered by 82 test files, part of a suite that runs
-2140 tests across 100 binaries with zero failures. They cover:
+2143 tests across 102 binaries with zero failures. They cover:
 
 - ✅ All scalar styles (plain, quoted, literal, folded)
 - ✅ Escape sequences and Unicode handling
@@ -842,7 +842,7 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **98.6%** of the
+The parser targets YAML 1.2.2 and hits **99.7%** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked by value or by refusal, measured by `make conformance`. The same
 harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference
@@ -953,4 +953,4 @@ Part of the ghoti.io text library.
 
 **Last Updated:** February 11, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 555 YAML test cases, of 2140 across the suite, all passing
+**Test count:** 558 YAML test cases, of 2143 across the suite, all passing

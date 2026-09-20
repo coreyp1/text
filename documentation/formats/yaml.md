@@ -514,8 +514,8 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 88 test files under `tests/yaml/`, carrying 555 of the suite's
-2140 test cases across 100 binaries, all passing. They cover the scalar styles,
+**Tests.** 90 test files under `tests/yaml/`, carrying 558 of the suite's
+2143 test cases across 102 binaries, all passing. They cover the scalar styles,
 collections, anchors and aliases including the cycle and exponential-expansion
 cases, merge keys, the tag types, directives, multi-document streams, UTF-8
 and the other encodings, the DOM accessors and mutation, cloning, the writer,
@@ -585,8 +585,8 @@ found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **361
-pass, 98.6%**. The other 38 assert an event stream the harness does not emit.
+field, checked by value, and those marked `fail`, checked by refusal - **365
+pass, 99.7%**. The other 38 assert an event stream the harness does not emit.
 The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
@@ -621,12 +621,10 @@ was skipped.
 The failures that remain group into a few shapes, largest first:
 
 - **1 document that should be refused is accepted**: a node may carry two
-  anchors, and the second one silently replaces the first.
-- **1 valid document is refused**: a multi-line plain scalar under an
-  explicit key.
-- **3 differ in the value they produce**, in binary content, in the
-  white space a folded scalar keeps, and in how a directive carries across
-  a document boundary.
+  anchors, and the second one silently replaces the first. The other half
+  of the same case is valid - two anchors on two different nodes - and
+  telling them apart needs two properties pending at once, where the
+  stream has one slot.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

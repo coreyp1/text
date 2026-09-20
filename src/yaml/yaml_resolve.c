@@ -559,44 +559,6 @@ static bool base64_decode(
 	return true;
 }
 
-static const char *base64_encode(
-	GTEXT_YAML_Document *doc,
-	const unsigned char *data,
-	size_t len,
-	size_t *out_len
-) {
-	static const char alphabet[] =
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	if (!doc || (!data && len != 0)) return NULL;
-	size_t enc_len = ((len + 2) / 3) * 4;
-	char *out = (char *)yaml_context_alloc(doc->ctx, enc_len + 1, 1);
-	if (!out) return NULL;
-
-	size_t idx = 0;
-	for (size_t i = 0; i < len; i += 3) {
-		unsigned int b0 = data[i];
-		unsigned int b1 = (i + 1 < len) ? data[i + 1] : 0;
-		unsigned int b2 = (i + 2 < len) ? data[i + 2] : 0;
-
-		out[idx++] = alphabet[(b0 >> 2) & 0x3F];
-		out[idx++] = alphabet[((b0 & 0x03) << 4) | ((b1 >> 4) & 0x0F)];
-		if (i + 1 < len) {
-			out[idx++] = alphabet[((b1 & 0x0F) << 2) | ((b2 >> 6) & 0x03)];
-		} else {
-			out[idx++] = '=';
-		}
-		if (i + 2 < len) {
-			out[idx++] = alphabet[b2 & 0x3F];
-		} else {
-			out[idx++] = '=';
-		}
-	}
-
-	out[idx] = '\0';
-	if (out_len) *out_len = enc_len;
-	return out;
-}
-
 static bool yaml_use_1_1(const GTEXT_YAML_Document *doc, const GTEXT_YAML_Parse_Options *opts) {
 	if (opts && opts->yaml_1_1) return true;
 	if (doc && doc->yaml_version_major == 1 && doc->yaml_version_minor == 1) return true;
@@ -1659,20 +1621,25 @@ static GTEXT_YAML_Status resolve_scalar(
 				}
 				return GTEXT_YAML_E_INVALID;
 			}
-			size_t encoded_len = 0;
-			const char *encoded = base64_encode(doc, data, data_len, &encoded_len);
-			if (!encoded) {
-				if (error) {
-					error->code = GTEXT_YAML_E_OOM;
-					error->message = "Out of memory encoding binary scalar";
-				}
-				return GTEXT_YAML_E_OOM;
-			}
+			/* The decoded bytes are what "!!binary" means, and they are kept
+			   here for gtext_yaml_node_as_binary().  The scalar's own text is
+			   left exactly as it was written.
+			
+			   It used to be replaced with a canonical re-encoding, which threw
+			   away the line breaks the author had put in: base64 in a literal
+			   block scalar is written in short lines on purpose, and
+
+			       generic: !!binary |
+			         R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5
+			         OTk6enp56enmlpaWNjY6Ojo4SEhP...
+
+			   came back as one unbroken run.  Re-encoding also silently
+			   rewrites input that decodes to the same bytes but was not
+			   spelled the same way, which is not this parser's business to
+			   do.  Suite case 565N. */
 			node->as.scalar.has_binary = true;
 			node->as.scalar.binary_data = data;
 			node->as.scalar.binary_len = data_len;
-			node->as.scalar.value = encoded;
-			node->as.scalar.length = encoded_len;
 			node->type = GTEXT_YAML_STRING;
 			node->as.scalar.type = GTEXT_YAML_STRING;
 			return GTEXT_YAML_OK;

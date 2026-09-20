@@ -1258,7 +1258,13 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       }
       if (!detected) {
         if (!s->finished) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_INCOMPLETE; }
-        block_indent = 0;
+        /* Nothing but empty lines, so there is no first non-empty line to
+           detect the indentation from.  The widest of them is the answer:
+           every line is then indentation and the block is a run of breaks,
+           which is what both references give.  Zero made those spaces
+           content instead, so "- |+" over a line of three spaces came back
+           as ["   \n"] where it is ["\n"] (suite case JEF9). */
+        block_indent = widest_empty;
       } else if ((int)block_indent <= parent_indent) {
         /* The content of a block scalar is indented further than the node
            that owns it. A first non-empty line at or left of the parent means
@@ -1300,6 +1306,33 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
         }
         break; /* dedent ends the block scalar */
       }
+
+      /* "---" and "..." at column 1 end the document wherever they stand, and
+         no block scalar reaches past one (9.1.2, 9.2).  The dedent test above
+         cannot see that when the block's own indentation is zero, which is
+         what "--- |" at the document level gives: the marker then looked like
+         ordinary content and the scalar ran on through it, swallowing every
+         document after it.  Spec example 9.5 - two documents - came back as
+         one scalar holding the whole rest of the stream.
+
+         Telling a marker from content needs the three characters and the
+         one after them, and this scanner cannot rewind, so ask before
+         taking the line - but only while what is in the buffer could still
+         become a marker. A line that begins with anything else is already
+         decided, and asking anyway waits for bytes that may never come:
+         the empty last line of "|+" over "  a" over "  b" over "" is one
+         byte at the end of the input, and deferring on it dropped the very
+         break that keep chomping is for. */
+      if (spaces == 0 && !s->finished) {
+        const size_t avail = s->input.len - s->cursor;
+        const char first = s->input.data[s->cursor];
+        if (avail < 4 && (first == '-' || first == '.')) {
+          size_t run = 0;
+          while (run < avail && s->input.data[s->cursor + run] == first) run++;
+          if (run == avail) GTEXT_YAML_BLOCK_NEED_MORE();
+        }
+      }
+      if (spaces == 0 && line_starts_forbidden_marker(s, 0)) break;
 
       size_t take = 0;
       size_t scan = s->cursor;
@@ -1631,8 +1664,27 @@ block_scalar_collected:
       /* A ":" belongs to the node its key began, which is not the start of
          the line when the mapping is a sequence entry: in "- x: 1" the key
          sits at column 2 while the line begins at 0.  A "-" belongs where it
-         stands, which nested sequences likewise put past the line's start. */
-      s->node_indent = (c == ':') ? s->last_scalar_col : (col - 1);
+         stands, which nested sequences likewise put past the line's start.
+
+         Unless the ":" opens its own line, with no key in front of it: an
+         explicit key's value is written that way, and
+         c-l-block-map-explicit-value(n) puts it at s-indent(n) - the
+         mapping's indentation, not the key's (8.2.2).  Taking the key's
+         column there measured the value's continuation lines against the
+         wrong node, so in
+
+             ? a
+               true
+             : null
+               d
+
+         the "  d" was not indented past what it was compared with and did
+         not fold into "null d".  It arrived as a scalar of its own and was
+         refused for being deeper than its mapping with no key to hold it
+         (suite case JTV5). */
+      s->node_indent = (c == ':' && (col - 1) != s->line_indent)
+        ? s->last_scalar_col
+        : (col - 1);
       /* "?" opens an explicit key, whose value arrives on a later line at the
          same column ("? a" over ": 1").  Without this the key's scalar folded
          across that break and swallowed its own ":". */
