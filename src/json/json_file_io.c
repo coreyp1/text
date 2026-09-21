@@ -87,7 +87,7 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_parse_file(const char * path,
   effective.in_situ_mode = false;
 
   GTEXT_JSON_Value * value = gtext_json_parse(data, len, &effective, err);
-  free(data);
+  gtext_file_free(data);
   return value;
 }
 

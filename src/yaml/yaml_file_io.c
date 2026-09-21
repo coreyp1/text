@@ -3,46 +3,83 @@
  *
  * YAML file I/O helpers.
  *
+ * The reading and writing themselves live in src/text_file_io.c, which is a
+ * seam onto ghoti.io-cutil's file module. This file used to carry its own copy
+ * of all of it - a whole-file reader, a temporary-file creator with a
+ * `#ifdef _MSC_VER` arm, and a rename wrapper - which is how the copy came to
+ * differ from the one JSON and CSV share:
+ *
+ * - it read with fseek/ftell/fread, so a pipe, a FIFO, /dev/stdin or anything
+ *   under /proc was refused with "Failed to seek file". That is the one
+ *   difference a caller could see, and there is a test for it;
+ * - it never applied GTEXT_YAML_Parse_Options::max_total_bytes to the file,
+ *   so an over-large document was read into memory in full and refused
+ *   afterwards by the parser. The answer was the same either way -
+ *   GTEXT_YAML_E_LIMIT - which is why nothing caught it: what was wrong was
+ *   that the limit had already been spent by the time it was applied;
+ * - its temporary-file creator did not remove the file it had just created if
+ *   fdopen() failed, where the shared one does. That path is close to
+ *   unreachable, so this is a difference between two copies rather than a bug
+ *   anyone met.
+ *
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef _MSC_VER
-#define _XOPEN_SOURCE 600
-#endif
-
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _MSC_VER
-#include <fcntl.h>
-#include <io.h>
-#include <sys/stat.h>
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 #include <ghoti.io/text/macros.h>
 #include <ghoti.io/text/yaml/yaml_core.h>
 #include <ghoti.io/text/yaml/yaml_dom.h>
 #include <ghoti.io/text/yaml/yaml_writer.h>
 
+#include "../text_file_io_internal.h"
 #include "yaml_internal.h"
 
-static void set_io_error(GTEXT_YAML_Error *err, const char *message) {
-  if (!err) {
-    return;
-  }
-  err->code = GTEXT_YAML_E_INVALID;
-  err->message = message;
-}
+/**
+ * @brief Turn a shared file status into a YAML status, and describe it.
+ *
+ * The distinctions the shared layer draws are the ones worth keeping: a limit
+ * is not an I/O error and running out of memory is not a malformed document.
+ * Before this, every one of them arrived as GTEXT_YAML_E_INVALID.
+ */
+static GTEXT_YAML_Status yaml_file_error(
+    gtext_file_status status, GTEXT_YAML_Error * err) {
+  GTEXT_YAML_Status code;
+  const char * message;
 
-static int file_write_fn(void * user, const char * bytes, size_t len) {
-  FILE * file = (FILE *)user;
-  size_t written = fwrite(bytes, 1, len, file);
-  return written == len ? 0 : 1;
+  switch (status) {
+  case GTEXT_FILE_E_OPEN:
+    code = GTEXT_YAML_E_INVALID;
+    message = "Failed to open file";
+    break;
+  case GTEXT_FILE_E_READ:
+    code = GTEXT_YAML_E_INVALID;
+    message = "Failed to read file contents";
+    break;
+  case GTEXT_FILE_E_WRITE:
+    code = GTEXT_YAML_E_WRITE;
+    message = "Failed to write YAML file";
+    break;
+  case GTEXT_FILE_E_OOM:
+    code = GTEXT_YAML_E_OOM;
+    message = "Out of memory reading file";
+    break;
+  case GTEXT_FILE_E_LIMIT:
+    code = GTEXT_YAML_E_LIMIT;
+    message = "File exceeds max_total_bytes";
+    break;
+  default:
+    code = GTEXT_YAML_E_INVALID;
+    message = "File operation failed";
+    break;
+  }
+  if (err) {
+    err->code = code;
+    err->message = message;
+  }
+  return code;
 }
 
 static const char *detect_input_newline(const char *buffer, size_t len) {
@@ -72,61 +109,20 @@ static void set_document_newline(GTEXT_YAML_Document *doc, const char *newline) 
   doc->input_newline = newline;
 }
 
-static int replace_file_path(const char *source, const char *dest) {
-#ifdef _MSC_VER
-  return MoveFileExA(source, dest, MOVEFILE_REPLACE_EXISTING) ? 0 : 1;
-#else
-  return rename(source, dest);
-#endif
-}
-
-static int create_temp_file(const char *path, char **out_path, FILE **out_file) {
-  if (!path || !out_path || !out_file) {
-    return 1;
-  }
-
-  size_t path_len = strlen(path);
-  const char *suffix = ".tmpXXXXXX";
-  size_t suffix_len = strlen(suffix);
-  char *temp_path = (char *)malloc(path_len + suffix_len + 1);
-  if (!temp_path) {
-    return 1;
-  }
-  snprintf(temp_path, path_len + suffix_len + 1, "%s%s", path, suffix);
-
-#ifdef _MSC_VER
-  if (_mktemp_s(temp_path, path_len + suffix_len + 1) != 0) {
-    free(temp_path);
-    return 1;
-  }
-  int fd = _open(temp_path, _O_CREAT | _O_EXCL | _O_BINARY | _O_WRONLY, _S_IREAD | _S_IWRITE);
-  if (fd < 0) {
-    free(temp_path);
-    return 1;
-  }
-  FILE *file = _fdopen(fd, "wb");
-  if (!file) {
-    _close(fd);
-    free(temp_path);
-    return 1;
-  }
-#else
-  int fd = mkstemp(temp_path);
-  if (fd < 0) {
-    free(temp_path);
-    return 1;
-  }
-  FILE *file = fdopen(fd, "wb");
-  if (!file) {
-    close(fd);
-    free(temp_path);
-    return 1;
-  }
-#endif
-
-  *out_path = temp_path;
-  *out_file = file;
-  return 0;
+/**
+ * @brief Read a whole YAML file, applying the caller's size limit while it is
+ *        still a limit rather than a diagnosis.
+ */
+static gtext_file_status yaml_file_slurp(const char * path,
+    const GTEXT_YAML_Parse_Options * options,
+    GTEXT_YAML_Parse_Options * out_effective, char ** out_data,
+    size_t * out_len) {
+  /* The same resolution the parser itself does, rather than a second copy of
+   * the rule. A max_total_bytes of 0 means no limit here exactly as it does
+   * everywhere else in this library, so it passes straight through. */
+  *out_effective = gtext_yaml_parse_options_effective(options);
+  return gtext_file_read_all(
+      path, out_effective->max_total_bytes, out_data, out_len);
 }
 
 GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_file(
@@ -142,55 +138,21 @@ GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_file(
     return NULL;
   }
 
-  FILE * file = fopen(path, "rb");
-  if (!file) {
-    set_io_error(out_err, "Failed to open file");
+  GTEXT_YAML_Parse_Options effective;
+  char * buffer = NULL;
+  size_t len = 0;
+  gtext_file_status fs =
+      yaml_file_slurp(path, options, &effective, &buffer, &len);
+  if (fs != GTEXT_FILE_OK) {
+    yaml_file_error(fs, out_err);
     return NULL;
   }
 
-  if (fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to seek file");
-    return NULL;
-  }
-
-  long size = ftell(file);
-  if (size < 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to read file size");
-    return NULL;
-  }
-
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to rewind file");
-    return NULL;
-  }
-
-  size_t len = (size_t)size;
-  char * buffer = (char *)malloc(len + 1);
-  if (!buffer) {
-    fclose(file);
-    if (out_err) {
-      out_err->code = GTEXT_YAML_E_OOM;
-      out_err->message = "Out of memory reading file";
-    }
-    return NULL;
-  }
-
-  size_t read_bytes = fread(buffer, 1, len, file);
-  fclose(file);
-  if (read_bytes != len) {
-    free(buffer);
-    set_io_error(out_err, "Failed to read file contents");
-    return NULL;
-  }
-
-  buffer[len] = '\0';
   const char *newline = detect_input_newline(buffer, len);
-  GTEXT_YAML_Document * doc = gtext_yaml_parse(buffer, len, options, out_err);
+  GTEXT_YAML_Document * doc =
+      gtext_yaml_parse(buffer, len, &effective, out_err);
   set_document_newline(doc, newline);
-  free(buffer);
+  gtext_file_free(buffer);
   return doc;
 }
 
@@ -209,55 +171,20 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_file_all(
     return GTEXT_YAML_E_INVALID;
   }
 
-  FILE * file = fopen(path, "rb");
-  if (!file) {
-    set_io_error(out_err, "Failed to open file");
-    return GTEXT_YAML_E_INVALID;
+  GTEXT_YAML_Parse_Options effective;
+  char * buffer = NULL;
+  size_t len = 0;
+  gtext_file_status fs =
+      yaml_file_slurp(path, options, &effective, &buffer, &len);
+  if (fs != GTEXT_FILE_OK) {
+    return yaml_file_error(fs, out_err);
   }
 
-  if (fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to seek file");
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  long size = ftell(file);
-  if (size < 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to read file size");
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
-    set_io_error(out_err, "Failed to rewind file");
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  size_t len = (size_t)size;
-  char * buffer = (char *)malloc(len + 1);
-  if (!buffer) {
-    fclose(file);
-    if (out_err) {
-      out_err->code = GTEXT_YAML_E_OOM;
-      out_err->message = "Out of memory reading file";
-    }
-    return GTEXT_YAML_E_OOM;
-  }
-
-  size_t read_bytes = fread(buffer, 1, len, file);
-  fclose(file);
-  if (read_bytes != len) {
-    free(buffer);
-    set_io_error(out_err, "Failed to read file contents");
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  buffer[len] = '\0';
   const char *newline = detect_input_newline(buffer, len);
   size_t count = 0;
-  GTEXT_YAML_Document ** docs = gtext_yaml_parse_all(buffer, len, &count, options, out_err);
-  free(buffer);
+  GTEXT_YAML_Document ** docs =
+      gtext_yaml_parse_all(buffer, len, &count, &effective, out_err);
+  gtext_file_free(buffer);
   if (!docs) {
     return out_err ? out_err->code : GTEXT_YAML_E_INVALID;
   }
@@ -269,6 +196,25 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_file_all(
   *out_docs = docs;
   *out_count = count;
   return GTEXT_YAML_OK;
+}
+
+/** Context for the atomic write callback. */
+typedef struct {
+  const GTEXT_YAML_Document * doc;
+  const GTEXT_YAML_Write_Options * opts;
+  GTEXT_YAML_Status status;
+} yaml_file_write_ctx;
+
+static int yaml_file_emit(
+    void * ctx, gtext_file_write_cb write, void * write_user) {
+  yaml_file_write_ctx * state = (yaml_file_write_ctx *)ctx;
+
+  GTEXT_YAML_Sink sink;
+  sink.write = write;
+  sink.user = write_user;
+
+  state->status = gtext_yaml_write_document(state->doc, &sink, state->opts);
+  return state->status == GTEXT_YAML_OK ? 0 : 1;
 }
 
 GTEXT_API GTEXT_YAML_Status gtext_yaml_write_file(
@@ -299,45 +245,25 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_file(
     use_opts = &local_opts;
   }
 
-  char *temp_path = NULL;
-  FILE *file = NULL;
-  if (create_temp_file(path, &temp_path, &file) != 0) {
-    set_io_error(out_err, "Failed to create temporary file");
-    return GTEXT_YAML_E_INVALID;
-  }
+  yaml_file_write_ctx ctx;
+  ctx.doc = doc;
+  ctx.opts = use_opts;
+  ctx.status = GTEXT_YAML_OK;
 
-  GTEXT_YAML_Sink sink;
-  sink.write = file_write_fn;
-  sink.user = file;
-
-  GTEXT_YAML_Status status = gtext_yaml_write_document(doc, &sink, use_opts);
-  if (status == GTEXT_YAML_OK && fflush(file) != 0) {
-    status = GTEXT_YAML_E_WRITE;
-  }
-
-  if (fclose(file) != 0 && status == GTEXT_YAML_OK) {
-    status = GTEXT_YAML_E_WRITE;
-  }
-
-  if (status != GTEXT_YAML_OK) {
-    remove(temp_path);
-    free(temp_path);
-    if (out_err) {
-      out_err->code = status;
-      out_err->message = status == GTEXT_YAML_E_WRITE
-          ? "Failed to write YAML file"
-          : "Failed to serialize YAML document";
+  gtext_file_status fs = gtext_file_write_atomic(path, yaml_file_emit, &ctx);
+  if (fs != GTEXT_FILE_OK) {
+    /* A failure inside the serializer is the more specific answer, and it is
+     * the one the caller can act on; the shared layer only knows that the
+     * callback said no. */
+    if (ctx.status != GTEXT_YAML_OK) {
+      if (out_err) {
+        out_err->code = ctx.status;
+        out_err->message = "Failed to serialize YAML document";
+      }
+      return ctx.status;
     }
-    return status;
+    return yaml_file_error(fs, out_err);
   }
 
-  if (replace_file_path(temp_path, path) != 0) {
-    remove(temp_path);
-    free(temp_path);
-    set_io_error(out_err, "Failed to replace output file");
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  free(temp_path);
   return GTEXT_YAML_OK;
 }

@@ -106,7 +106,13 @@ with events. Write options control formatting, escaping and canonical output.
 `gtext_json_parse_file()` / `gtext_json_write_file()` and the CSV and YAML
 equivalents. Reads are incremental, so a pipe or `/dev/stdin` works and the
 size limit applies before the file is in memory; writes are atomic, going to a
-temporary file beside the destination and replacing it only once complete.
+temporary file in the destination's own directory, committed to disk, and
+renamed over it only once complete. The plumbing is ghoti.io-cutil's file
+module rather than this library's - opening, growing a buffer and replacing a
+file by rename are not text-format problems, and there is no version of them
+worth keeping three copies of. That sentence was not true of YAML until it
+stopped keeping its own: it read with `fseek`/`ftell`, so it could not read a
+pipe at all.
 
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
 JSON Schema 2020-12, which answers all 1301 assertions in

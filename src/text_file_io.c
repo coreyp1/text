@@ -3,31 +3,50 @@
  *
  * Shared file I/O helpers, internal to the library.
  *
+ * This is a thin mapping onto ghoti.io-cutil's file module. It used to be the
+ * implementation as well - a whole-file reader, a temporary-file creator with
+ * a `#ifdef _MSC_VER` arm, and a rename wrapper - and src/yaml/yaml_file_io.c
+ * carried a second, slightly different copy of the same three things. Reading
+ * a file and replacing one atomically are not text-format problems; cutil owns
+ * them now for the same reason it owns the allocator, and what is left here is
+ * the part that genuinely belongs to this library: turning cutil's result
+ * codes into the status each format maps onto its own.
+ *
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef _MSC_VER
-#define _XOPEN_SOURCE 600
-#endif
-
-#include <errno.h>
-#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
-#ifdef _MSC_VER
-#include <fcntl.h>
-#include <io.h>
-#include <sys/stat.h>
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
+#include <ghoti.io/cutil/file.h>
+#include <ghoti.io/cutil/path.h>
 
 #include "text_file_io_internal.h"
 
-/** Starting size for the read buffer, and the floor for each growth step. */
-#define GTEXT_FILE_READ_CHUNK (64 * 1024)
+/**
+ * @brief Map a cutil file result onto this library's status.
+ *
+ * GCU_FILE_ERR_IO covers open, read, write, rename and sync alike, so the
+ * caller says which of those it was doing: the distinction between "could not
+ * open it" and "it failed part way through" is one the formats' error
+ * messages make, and it is not recoverable from the result code alone.
+ */
+static gtext_file_status gtext_file_map(
+    GCU_File_Result result, gtext_file_status io_status) {
+  switch (result) {
+    case GCU_FILE_OK:
+      return GTEXT_FILE_OK;
+    case GCU_FILE_ERR_OOM:
+      return GTEXT_FILE_E_OOM;
+    case GCU_FILE_ERR_LIMIT:
+      return GTEXT_FILE_E_LIMIT;
+    case GCU_FILE_ERR_INVALID:
+    case GCU_FILE_ERR_IO:
+    case GCU_FILE_RESULT_COUNT:
+    default:
+      return io_status;
+  }
+}
 
 GTEXT_INTERNAL_API gtext_file_status gtext_file_read_all(
     const char * path, size_t max_bytes, char ** out_data, size_t * out_len) {
@@ -37,145 +56,30 @@ GTEXT_INTERNAL_API gtext_file_status gtext_file_read_all(
   *out_data = NULL;
   *out_len = 0;
 
-  FILE * file = fopen(path, "rb");
-  if (!file) {
-    return GTEXT_FILE_E_OPEN;
+  /* GCU_FILE_UNLIMITED is 0, which is the same "no limit" spelling this
+   * library's callers already use, so max_bytes passes straight through. */
+  void * data = NULL;
+  GCU_File_Result result =
+      gcu_file_read(path, max_bytes, NULL, &data, out_len);
+  if (result != GCU_FILE_OK) {
+    return gtext_file_map(result, GTEXT_FILE_E_OPEN);
   }
 
-  size_t capacity = GTEXT_FILE_READ_CHUNK;
-  size_t used = 0;
-  char * buffer = (char *)malloc(capacity);
-  if (!buffer) {
-    fclose(file);
-    return GTEXT_FILE_E_OOM;
-  }
-
-  for (;;) {
-    if (used == capacity) {
-      // Double, but never past the caller's ceiling plus the terminator.
-      if (capacity > SIZE_MAX / 2) {
-        free(buffer);
-        fclose(file);
-        return GTEXT_FILE_E_OOM;
-      }
-      size_t next = capacity * 2;
-      char * grown = (char *)realloc(buffer, next);
-      if (!grown) {
-        free(buffer);
-        fclose(file);
-        return GTEXT_FILE_E_OOM;
-      }
-      buffer = grown;
-      capacity = next;
-    }
-
-    size_t want = capacity - used;
-    size_t got = fread(buffer + used, 1, want, file);
-    used += got;
-
-    if (max_bytes > 0 && used > max_bytes) {
-      free(buffer);
-      fclose(file);
-      return GTEXT_FILE_E_LIMIT;
-    }
-
-    if (got < want) {
-      if (ferror(file)) {
-        free(buffer);
-        fclose(file);
-        return GTEXT_FILE_E_READ;
-      }
-      break; // End of file.
-    }
-  }
-
-  fclose(file);
-
-  // Room for the terminator, which is not counted in the length.
-  //
-  // There is always room.  The loop above is left only by its break, which is
-  // taken when fread returned fewer bytes than the space remaining, so `used`
-  // is then strictly less than `capacity`; and whenever the two are equal at
-  // the top of the loop the buffer is doubled before reading again.  A
-  // `used == capacity` reallocation used to stand here for the case that
-  // cannot arise, which is why coverage reported those lines as never
-  // executed.
-  buffer[used] = '\0';
-
-  *out_data = buffer;
-  *out_len = used;
+  *out_data = (char *)data;
   return GTEXT_FILE_OK;
 }
 
+GTEXT_INTERNAL_API void gtext_file_free(char * data) {
+  gcu_file_free(NULL, data);
+}
+
+/** Write one buffer to the stream cutil opened for the temporary file. */
 static int gtext_file_fwrite(void * user, const char * bytes, size_t len) {
   FILE * file = (FILE *)user;
   if (len == 0) {
     return 0;
   }
   return fwrite(bytes, 1, len, file) == len ? 0 : 1;
-}
-
-/**
- * @brief Create a temporary file beside @p path, so the later rename is on the
- *        same filesystem and therefore atomic.
- */
-static int gtext_file_temp_create(
-    const char * path, char ** out_path, FILE ** out_file) {
-  size_t path_len = strlen(path);
-  static const char suffix[] = ".tmpXXXXXX";
-  size_t total = path_len + sizeof suffix;
-
-  char * temp_path = (char *)malloc(total);
-  if (!temp_path) {
-    return 1;
-  }
-  memcpy(temp_path, path, path_len);
-  memcpy(temp_path + path_len, suffix, sizeof suffix);
-
-#ifdef _MSC_VER
-  if (_mktemp_s(temp_path, total) != 0) {
-    free(temp_path);
-    return 1;
-  }
-  int fd = _open(temp_path, _O_CREAT | _O_EXCL | _O_BINARY | _O_WRONLY,
-      _S_IREAD | _S_IWRITE);
-  if (fd < 0) {
-    free(temp_path);
-    return 1;
-  }
-  FILE * file = _fdopen(fd, "wb");
-  if (!file) {
-    _close(fd);
-    remove(temp_path);
-    free(temp_path);
-    return 1;
-  }
-#else
-  int fd = mkstemp(temp_path);
-  if (fd < 0) {
-    free(temp_path);
-    return 1;
-  }
-  FILE * file = fdopen(fd, "wb");
-  if (!file) {
-    close(fd);
-    remove(temp_path);
-    free(temp_path);
-    return 1;
-  }
-#endif
-
-  *out_path = temp_path;
-  *out_file = file;
-  return 0;
-}
-
-static int gtext_file_replace(const char * source, const char * dest) {
-#ifdef _MSC_VER
-  return MoveFileExA(source, dest, MOVEFILE_REPLACE_EXISTING) ? 0 : 1;
-#else
-  return rename(source, dest);
-#endif
 }
 
 GTEXT_INTERNAL_API gtext_file_status gtext_file_write_atomic(const char * path,
@@ -185,34 +89,50 @@ GTEXT_INTERNAL_API gtext_file_status gtext_file_write_atomic(const char * path,
     return GTEXT_FILE_E_WRITE;
   }
 
-  char * temp_path = NULL;
-  FILE * file = NULL;
-  if (gtext_file_temp_create(path, &temp_path, &file) != 0) {
+  /*
+   * The temporary file goes in the destination's own directory, because the
+   * commit is a rename and a rename across filesystems is a copy - which is
+   * not atomic, and is the whole point of doing this. A path with no
+   * directory part yields ".", which is where the destination is too.
+   */
+  size_t directory_len = 0;
+  if (gcu_path_dirname(GCU_PATH_NATIVE, path, NULL, 0, &directory_len)
+      != GCU_PATH_OK) {
+    return GTEXT_FILE_E_OPEN;
+  }
+  char * directory = (char *)malloc(directory_len + 1);
+  if (!directory) {
+    return GTEXT_FILE_E_OOM;
+  }
+  if (gcu_path_dirname(
+          GCU_PATH_NATIVE, path, directory, directory_len + 1, NULL)
+      != GCU_PATH_OK) {
+    free(directory);
     return GTEXT_FILE_E_OPEN;
   }
 
-  int failed = emit(user, gtext_file_fwrite, file);
-
-  // The content is only safe once it has left stdio and reached the file.
-  if (!failed && fflush(file) != 0) {
-    failed = 1;
-  }
-  if (fclose(file) != 0) {
-    failed = 1;
+  GCU_File_Temp temp;
+  GCU_File_Result result =
+      gcu_file_temp_create(&temp, directory, "gtext", NULL);
+  free(directory);
+  if (result != GCU_FILE_OK) {
+    return gtext_file_map(result, GTEXT_FILE_E_OPEN);
   }
 
+  int failed = emit(user, gtext_file_fwrite, gcu_file_temp_stream(&temp));
   if (failed) {
-    remove(temp_path);
-    free(temp_path);
+    gcu_file_temp_abort(&temp);
     return GTEXT_FILE_E_WRITE;
   }
 
-  if (gtext_file_replace(temp_path, path) != 0) {
-    remove(temp_path);
-    free(temp_path);
-    return GTEXT_FILE_E_WRITE;
-  }
-
-  free(temp_path);
-  return GTEXT_FILE_OK;
+  /*
+   * GCU_FILE_SYNC_FULL, which commits the bytes before the rename rather than
+   * leaving them to writeback. This is stronger than what the hand-written
+   * version did - it flushed stdio and renamed - and it is the promise the
+   * header here already made: the file these parsers are usually pointed at is
+   * a configuration file, and "the old one survived, but the new one is empty"
+   * is not a way for one of those to come back from a power loss.
+   */
+  result = gcu_file_temp_commit(&temp, path, GCU_FILE_SYNC_FULL);
+  return gtext_file_map(result, GTEXT_FILE_E_WRITE);
 }

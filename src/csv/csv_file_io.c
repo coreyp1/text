@@ -81,7 +81,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_file(const char * path,
   effective.in_situ_mode = false;
 
   GTEXT_CSV_Table * table = gtext_csv_parse_table(data, len, &effective, err);
-  free(data);
+  gtext_file_free(data);
   return table;
 }
 

@@ -8,6 +8,14 @@
  * differences between them are in the parsing, not the plumbing. Keeping the
  * plumbing here means a fix to it reaches all three rather than one.
  *
+ * The plumbing itself now lives in ghoti.io-cutil, which grew a file module
+ * for this. What is left here is the seam: cutil's result codes turned into a
+ * status the formats map onto their own, and the write-through-a-callback
+ * shape the three writers stream into. YAML did not use this header and
+ * carried its own copy of all of it, which is how it came to read with
+ * fseek/ftell - so it could not read a pipe, and applied its own
+ * max_total_bytes only after the file was already in memory.
+ *
  * Copyright 2026 by Corey Pennycuff
  */
 
@@ -48,13 +56,28 @@ typedef enum {
  * whole class of caller mistake.
  *
  * @param path      File to read.
- * @param max_bytes Refuse anything larger, or 0 for no limit.
- * @param out_data  Receives the buffer; the caller frees it.
+ * @param max_bytes Refuse anything larger, or 0 for no limit. The limit is a
+ *                  promise rather than a truncation: an over-large file is
+ *                  refused, not shortened.
+ * @param out_data  Receives the buffer; the caller releases it with
+ *                  gtext_file_free(), not free().
  * @param out_len   Receives the length in bytes, terminator excluded.
  * @return GTEXT_FILE_OK, or the reason it failed.
  */
 GTEXT_INTERNAL_API gtext_file_status gtext_file_read_all(
     const char * path, size_t max_bytes, char ** out_data, size_t * out_len);
+
+/**
+ * @brief Release a buffer from gtext_file_read_all().
+ *
+ * A named function rather than free(), because the buffer comes from cutil
+ * and is released through cutil's allocator. Today that is the default one
+ * and free() would happen to work, which is exactly the kind of coincidence
+ * that stops being true without anything failing to compile.
+ *
+ * @param data The buffer. NULL is accepted and ignored.
+ */
+GTEXT_INTERNAL_API void gtext_file_free(char * data);
 
 /**
  * @brief Callback that writes one buffer, returning 0 on success.
@@ -64,11 +87,12 @@ typedef int (*gtext_file_write_cb)(void * user, const char * bytes, size_t len);
 /**
  * @brief Write a file atomically: fully replaced, or not touched at all.
  *
- * The content goes to a temporary file beside the destination, is flushed and
- * closed, and only then replaces it by rename. A caller interrupted half way
- * through - or a full disk - leaves the previous file intact rather than
- * truncated, which matters for exactly the configuration files these parsers
- * are usually pointed at.
+ * The content goes to a temporary file in the destination's own directory - so
+ * that the rename stays on one filesystem, and is therefore atomic - is
+ * committed to the disk, and only then replaces the destination. A caller
+ * interrupted half way through, or a full disk, or a power loss, leaves the
+ * previous file intact rather than truncated, which matters for exactly the
+ * configuration files these parsers are usually pointed at.
  *
  * @param path    Destination path.
  * @param emit    Called once with a sink to write through.

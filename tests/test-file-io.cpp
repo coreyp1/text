@@ -16,12 +16,18 @@ extern "C" {
 #include <ghoti.io/text/csv.h>
 #include <ghoti.io/text/json.h>
 #include <ghoti.io/text/yaml.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 }
 
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -230,6 +236,114 @@ TEST(YamlFileIo, StillRoundTrips) {
 	ASSERT_NE(name, nullptr);
 	EXPECT_STREQ(gtext_yaml_node_as_string(name), "ghoti");
 	gtext_yaml_free(again);
+	gtext_yaml_error_free(&err);
+}
+
+
+// ---------------------------------------------------------------------------
+// What YAML gained by sharing the plumbing
+//
+// YAML had file I/O before JSON and CSV did, and kept its own copy of it: a
+// reader built on fseek/ftell/fread, a temporary-file creator, and a rename
+// wrapper, each slightly different from the one the other two share.
+//
+// Only the first of the three below fails against the previous implementation.
+// The other two hold either way, and are here as guards on the new path rather
+// than as evidence of a fixed bug - which is worth saying, because the
+// difference the second one is really about is one no test can see from
+// outside: whether the limit is applied before the bytes are in memory or
+// after.
+// ---------------------------------------------------------------------------
+
+TEST(YamlFileIo, ReadsFromSomethingWithNoSize) {
+	// fseek/ftell on a FIFO does not report a length, so the old reader
+	// refused one outright - and /dev/stdin, a process substitution and
+	// everything under /proc are the same shape. JSON and CSV read all of
+	// them, because they read incrementally.
+#ifdef _WIN32
+	GTEST_SKIP() << "no mkfifo";
+#else
+	std::string path = "build/test-file-io-yaml-fifo";
+	remove(path.c_str());
+	ASSERT_EQ(mkfifo(path.c_str(), 0600), 0) << strerror(errno);
+
+	// Opened for writing after the reader is running, so the reader blocks on
+	// open rather than seeing an empty stream.
+	std::thread writer([&path] {
+		std::ofstream out(path, std::ios::binary);
+		out << "name: ghoti\nitems:\n  - one\n";
+	});
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document *doc = gtext_yaml_parse_file(path.c_str(), nullptr, &err);
+	writer.join();
+	remove(path.c_str());
+
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "unknown");
+	const GTEXT_YAML_Node *name =
+	    gtext_yaml_mapping_get(gtext_yaml_document_root(doc), "name");
+	ASSERT_NE(name, nullptr);
+	EXPECT_STREQ(gtext_yaml_node_as_string(name), "ghoti");
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+#endif
+}
+
+TEST(YamlFileIo, SizeLimitIsEnforcedWhileReading) {
+	// max_total_bytes was in GTEXT_YAML_Parse_Options all along and the file
+	// reader never looked at it: the whole document was read into memory and
+	// only then measured by the parser, which is the one moment a limit is no
+	// longer a limit. The *answer* was right before and is right now, so this
+	// asserts the answer and nothing more; the change it accompanies is that
+	// the bytes are no longer read first.
+	TempPath in("yaml-big.yaml");
+	std::string big = "items:\n";
+	for (int i = 0; i < 400; i++) {
+		big += "  - aaaaaaaaaabbbbbbbbbb\n";
+	}
+	in.write(big);
+
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.max_total_bytes = 64;
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_yaml_parse_file(in.c_str(), &opts, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_YAML_E_LIMIT);
+	gtext_yaml_error_free(&err);
+
+	// The multi-document entry point reads the same way and had the same gap.
+	GTEXT_YAML_Document **docs = nullptr;
+	size_t count = 0;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(
+	    gtext_yaml_parse_file_all(in.c_str(), &opts, &docs, &count, &err),
+	    GTEXT_YAML_E_LIMIT);
+	EXPECT_EQ(docs, nullptr);
+	gtext_yaml_error_free(&err);
+}
+
+TEST(YamlFileIo, AFailedWriteLeavesTheDestinationAlone) {
+	// The same property FileIo.WriteIsAtomic asserts for CSV, which YAML
+	// reached by its own route and now reaches by the shared one. It held
+	// before too: this is the guard that says sharing the plumbing did not
+	// cost YAML anything.
+	TempPath existing("yaml-atomic.yaml");
+	existing.write("original: content\n");
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document *doc =
+	    gtext_yaml_parse_file(existing.c_str(), nullptr, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "unknown");
+
+	EXPECT_NE(gtext_yaml_write_file(
+	              "build/no-such-directory/out.yaml", doc, nullptr, &err),
+	    GTEXT_YAML_OK);
+	EXPECT_EQ(existing.read(), "original: content\n");
+
+	gtext_yaml_free(doc);
 	gtext_yaml_error_free(&err);
 }
 
