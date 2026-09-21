@@ -383,11 +383,24 @@ the address, name, mailbox, URI and pointer formats here. Under that policy a
 name in the vocabulary it cannot check is refused rather than ignored, which
 is `idn-hostname` and `regex` with no provider.
 
-One gap inside a format it does check: a `hostname` label beginning `xn--` is
-an A-label, and checking one properly means decoding the punycode and
-applying IDNA2008 to the result. That needs Unicode tables this library does
-not carry, so such a label is checked as the LDH label it also is and no
-further.
+`hostname` and `idn-hostname` are IDNA2008 - RFC 5890 to 5893 - and an
+`xn--` label is decoded and checked as the U-label it encodes, including the
+round trip RFC 5891 section 4.4 requires. 2020-12 section 7.3.3 defines
+`hostname` to include Punycode-produced names, so the LDH rule alone is not
+the keyword.
+
+The tables behind that are generated from the Unicode Character Database by
+`tools/idna/gen_tables.py` and committed, so a build needs neither the
+network nor Python; `make check-idna-tables` fails if the two have drifted
+apart, and `make check-idna-oracle` compares the derived property against an
+independent implementation.
+
+What is not done is UTS #46's mapping and normalisation step. A name is taken
+as written: fullwidth digits are not mapped to ASCII, a zero-width space is
+not dropped, and a label that is not already in Normalization Form C is not
+put into it. Each is a refusal of something a browser would accept, which is
+the safe direction to be wrong in but is still wrong; it costs four of the
+suite's 866 format assertions.
 
 `pattern` and `patternProperties` are implemented, but only against a
 regular-expression engine the caller supplies through

@@ -10032,8 +10032,10 @@ TEST(JsonSchemaFormat, AnUnknownNameIsIgnoredAndAKnownOneIsNot) {
 
 	// A name the vocabulary defines but this library cannot check is refused
 	// instead, because the caller asked for the constraint and would
-	// otherwise get a schema that silently does not carry it.
-	const char * src = "{\"format\":\"idn-hostname\"}";
+	// otherwise get a schema that silently does not carry it. With no
+	// provider supplied, `regex` is the one such name left: every other
+	// format in the vocabulary is checked here.
+	const char * src = "{\"format\":\"regex\"}";
 	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
 	GTEXT_JSON_Error perr;
 	memset(&perr, 0, sizeof(perr));
@@ -10047,7 +10049,7 @@ TEST(JsonSchemaFormat, AnUnknownNameIsIgnoredAndAKnownOneIsNot) {
 	EXPECT_EQ(gtext_json_schema_compile_with_options(sv, &opts, &serr), nullptr);
 	EXPECT_EQ(serr.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
 	ASSERT_NE(serr.context_snippet, nullptr);
-	EXPECT_STREQ(serr.context_snippet, "idn-hostname");
+	EXPECT_STREQ(serr.context_snippet, "regex");
 	gtext_json_error_free(&serr);
 
 	// ...and it compiles under the annotation policy, where it constrains

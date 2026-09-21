@@ -2058,14 +2058,11 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
         size_t name_len = value->as.string.len;
         if (json_format_is_known(name, name_len)) {
           /* `regex` is the caller's engine, so whether it can be checked
-           * depends on whether one was supplied; `idn-hostname` needs IDNA
-           * tables this library does not carry. */
+           * depends on whether one was supplied. Every other name in the
+           * vocabulary is checked here. */
           int checkable = 1;
           if (name_len == 5 && memcmp(name, "regex", 5) == 0) {
             checkable = cc->schema->has_regex_provider;
-          }
-          else if (name_len == 12 && memcmp(name, "idn-hostname", 12) == 0) {
-            checkable = 0;
           }
           if (!checkable) {
             if (!cc->opts->allow_unsupported_keywords) {

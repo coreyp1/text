@@ -305,7 +305,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers
+TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -577,7 +577,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1284,6 +1284,55 @@ conformance-json:
 conformance-csv: ## Score the CSV parser against csv-spectrum (clones it on first use)
 conformance-csv:
 	@PREFIX="$(PREFIX)" tools/conformance/run-csv.sh
+
+UCD_VERSION := $(shell cat tools/idna/UCD_VERSION 2>/dev/null)
+UCD_DIR := third_party/ucd/$(UCD_VERSION)
+IDNA_TABLES := src/idna/tables
+
+check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		printf "check-idna-tables: skipped (no python3)\n"; \
+		exit 0; \
+	fi; \
+	if ! python3 tools/idna/test_gen.py >/dev/null 2>&1; then \
+		printf "\033[0;31m\n### The IDNA generator's own tests fail ###\033[0m\n" >&2; \
+		python3 tools/idna/test_gen.py >&2 || true; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$(UCD_DIR)" ]; then \
+		printf "check-idna-tables: generator tests pass; table diff skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
+		exit 0; \
+	fi; \
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	mkdir -p "$$tmp/out"; \
+	cp $(IDNA_TABLES)/tables_internal.h "$$tmp/out/"; \
+	if ! python3 tools/idna/gen_tables.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
+		printf "\033[0;31m\n### The IDNA generator failed ###\033[0m\n" >&2; \
+		cat "$$tmp/err" >&2; \
+		exit 1; \
+	fi; \
+	if ! diff -ru $(IDNA_TABLES) "$$tmp/out" >"$$tmp/diff" 2>&1; then \
+		printf "\033[0;31m\n### The committed IDNA tables are stale ###\033[0m\n" >&2; \
+		head -40 "$$tmp/diff" >&2; \
+		printf "\nThe table under $(IDNA_TABLES) is committed so that a build needs\n" >&2; \
+		printf "neither the network nor Python, which means it can drift from the\n" >&2; \
+		printf "generator that is supposed to produce it. Regenerate with:\n" >&2; \
+		printf "  tools/idna/gen_tables.py\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mIDNA tables are byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
+
+check-idna-oracle: ## Compare the derived IDNA property against an independent implementation
+	@if ! python3 -c "import idna" >/dev/null 2>&1; then \
+		printf "check-idna-oracle: skipped (no python3 idna package)\n"; \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(UCD_DIR)" ]; then \
+		printf "check-idna-oracle: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
+		exit 0; \
+	fi; \
+	python3 tools/idna/oracle.py
 
 conformance-json-schema: ## Score the schema engine against JSON-Schema-Test-Suite (clones it on first use)
 conformance-json-schema:

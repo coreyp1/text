@@ -29,6 +29,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../idna/idna_internal.h"
 #include "json_internal.h"
 
 /*
@@ -830,7 +831,13 @@ GTEXT_INTERNAL_API int json_format_check(
     return result == GCHRON_OK || result == GCHRON_ERR_RANGE;
   }
   if (JSON_FORMAT_IS("hostname")) {
-    return json_format_hostname(value, value_len);
+    /* Not the LDH rule alone: 2020-12 section 7.3.3 defines `hostname` as
+     * RFC 1123 section 2.1 *including* names produced by Punycode, so an
+     * `xn--` label has to be decoded and checked like any other. */
+    return gtext_idna_hostname_valid(value, value_len, 0);
+  }
+  if (JSON_FORMAT_IS("idn-hostname")) {
+    return gtext_idna_hostname_valid(value, value_len, 1);
   }
   if (JSON_FORMAT_IS("ipv4")) {
     return json_format_ipv4(value, value_len);
@@ -868,10 +875,9 @@ GTEXT_INTERNAL_API int json_format_check(
   if (JSON_FORMAT_IS("uri-template")) {
     return json_format_uri_template(value, value_len);
   }
-  /* `regex` and `idn-hostname` reach here only if the compiler let them
-   * through, which it does not: the first needs the caller's engine and is
-   * checked in json_schema.c where the provider is, and the second needs
-   * IDNA tables this library does not carry and is refused. */
+  /* `regex` reaches here only if the compiler let it through, which it does
+   * not: it needs the caller's engine and is checked in json_schema.c, where
+   * the provider is. */
   return 1;
 
 #undef JSON_FORMAT_IS

@@ -272,12 +272,22 @@ typedef enum {
    * requires that and because nothing was promised about it.
    *
    * Checked: date-time, date, time, duration (ghoti.io-chron's grammars),
-   * email, idn-email, hostname, ipv4, ipv6, uri, uri-reference, iri,
-   * iri-reference, uuid, uri-template, json-pointer, relative-json-pointer,
-   * and regex when a regular-expression provider was supplied.
+   * email, idn-email, hostname, idn-hostname, ipv4, ipv6, uri,
+   * uri-reference, iri, iri-reference, uuid, uri-template, json-pointer,
+   * relative-json-pointer, and regex when a regular-expression provider was
+   * supplied.
    *
-   * Refused: idn-hostname, which needs IDNA tables this library does not
-   * carry, and regex when no provider was supplied.
+   * Refused: regex when no provider was supplied, which is the only name in
+   * the vocabulary this library cannot answer on its own.
+   *
+   * `hostname` and `idn-hostname` are IDNA2008 (RFC 5890 to 5893), including
+   * decoding an `xn--` label and checking what it decodes to - 2020-12
+   * section 7.3.3 defines `hostname` to include Punycode-produced names, so
+   * the LDH rule alone is not the keyword. What is *not* done is UTS #46's
+   * mapping and normalisation step: a name is taken as written, so fullwidth
+   * digits are not mapped to ASCII and a label not already in Normalization
+   * Form C is not put into it. Both are refusals of something a browser
+   * would accept.
    */
   GTEXT_JSON_FORMAT_ASSERT
 } GTEXT_JSON_Format_Policy;

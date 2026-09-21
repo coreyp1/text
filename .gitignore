@@ -25,3 +25,7 @@ slow-unit-*
 leak-*
 timeout-*
 oom-*
+
+# Third-party data the generators read; the generated tables are committed,
+# the data they came from is not (tools/idna/fetch.sh).
+third_party
