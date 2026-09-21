@@ -1252,7 +1252,7 @@ $$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.cpp $$(FUZZ_OBJECTS)
 	@mkdir -p $$(@D) $$(FUZZ_CORPUS)
 	@printf "\n### Building $1 ###\n"
 	$$(FUZZ_CXX) $$(FUZZ_BIN_FLAGS) -std=c++20 -w $$(INCLUDE) \
-		-o $$@ $$< $$(FUZZ_OBJECTS) $$(CUTIL_LIBS) $$(FUZZ_RPATH)
+		-o $$@ $$< $$(FUZZ_OBJECTS) $$(CUTIL_LIBS) $$(CHRON_LIBS) $$(FUZZ_RPATH)
 
 fuzz-run-$2: ## Run the $2 fuzzer for $$(FUZZ_TIME) seconds
 fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
