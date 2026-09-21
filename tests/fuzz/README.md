@@ -204,6 +204,15 @@ this harness's own defects were already listed above; this is the third, and
 it is the one that cost the most, because every find there began with reverse
 engineering a dozen bytes. It prints now.
 
+Two more again: a directive written straight after a document's content,
+where 9.2 wants a `...` first - loud for `%TAG`, and silent for `%YAML` after
+a plain scalar, which folded the directive into the scalar and turned `a` into
+`a %YAML 1.2`. And a quoted `"<<"` taken for a merge key, where both
+references read the two-character string: `{"<<": 1}` was refused and
+`{"<<": {a: 1}}` was *merged*, the key vanishing into the mapping around it.
+Only a plain scalar is resolved by its contents (10.3.2), for the fourth time
+in this file.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -284,7 +293,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — thirty library defects and three of its own,
+has already earned that — thirty-two library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

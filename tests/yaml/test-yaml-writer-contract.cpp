@@ -797,6 +797,51 @@ TEST(YamlWriterContract, TheStreamingWriterKeepsTheVersionDirective) {
 	gtext_yaml_free(back);
 }
 
+/* A directive may only follow a document that has been ended *explicitly*:
+   l-yaml-stream reaches a directive document through l-document-suffix, which
+   is c-document-end (9.2). The writer wrote only the line break, which leaves
+   the "%" standing after content.
+
+   Both ways that goes wrong are bad, and the quieter one is worse. A "%TAG"
+   there produces a stream this parser refuses - correctly, "Directive after
+   content, with no '...' to close the document". A "%YAML 1.2" after a plain
+   scalar *folds into the scalar*: "a" over "%YAML 1.2" comes back as the one
+   string "a %YAML 1.2", with nothing reported at all. */
+TEST(YamlWriterContract, ADirectiveClosesTheDocumentBeforeIt) {
+	std::string out;
+	ASSERT_TRUE(pipe_through("a\n...\n%YAML 1.2\n---\nb\n", &out));
+	EXPECT_NE(out.find("..."), std::string::npos)
+		<< "wrote " << out << " which leaves the directive after content";
+
+	/* And the values survive, which is the half that failed silently. */
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Document *back =
+		gtext_yaml_parse(out.data(), out.size(), &opts, &err);
+	ASSERT_NE(back, nullptr) << "wrote " << out << ": "
+		<< (err.message ? err.message : "");
+	gtext_yaml_error_free(&err);
+	const char *first = gtext_yaml_node_as_string(gtext_yaml_document_root(back));
+	EXPECT_STREQ(first ? first : "", "a") << "wrote " << out;
+	gtext_yaml_free(back);
+
+	/* A %TAG there is the loud half: the handle it declares has to reach its
+	   own document, and the stream has to be readable at all. */
+	ASSERT_TRUE(pipe_through(
+		"a\n...\n%TAG !e! tag:x,2000:\n---\n!e!f b\n", &out));
+	memset(&err, 0, sizeof(err));
+	back = gtext_yaml_parse(out.data(), out.size(), &opts, &err);
+	EXPECT_NE(back, nullptr) << "wrote " << out << ": "
+		<< (err.message ? err.message : "");
+	gtext_yaml_error_free(&err);
+	if (back) gtext_yaml_free(back);
+
+	/* A directive with no document before it still needs no "...". */
+	ASSERT_TRUE(pipe_through("%YAML 1.2\n---\na\n", &out));
+	EXPECT_EQ(out.find("..."), std::string::npos) << "wrote " << out;
+}
+
 /* The two event APIs look like two ends of a pipe and are not one.
  *
  * gtext_yaml_writer_event() takes *composed* events - MAPPING_START, the

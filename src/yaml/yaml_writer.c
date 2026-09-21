@@ -2781,6 +2781,17 @@ static GTEXT_YAML_Status writer_emit_directive(
 
   const char *newline = writer_newline(&writer->opts);
   if (writer->wrote_doc && !writer->doc_separated) {
+    /* A directive may only follow a document that has been ended
+       *explicitly*: l-yaml-stream reaches a directive document through
+       l-document-suffix, which is c-document-end (9.2).  Writing only the
+       break left the "%" standing after content, and the two ways that goes
+       wrong are both bad.  "%TAG" after a document produced a stream this
+       parser refuses - correctly, "Directive after content, with no '...' to
+       close the document".  "%YAML 1.2" after a *plain* scalar was worse: it
+       folded into the scalar, so "a" over "%YAML 1.2" came back as the one
+       string "a %YAML 1.2" and nothing was reported at all. */
+    if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
+    if (writer_write_string(writer, "...") != 0) return GTEXT_YAML_E_WRITE;
     if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
     writer->doc_separated = true;
   }

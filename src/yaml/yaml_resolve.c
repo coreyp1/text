@@ -929,10 +929,23 @@ static bool is_merge_key(const GTEXT_YAML_Node *key) {
 	key = deref_alias(key);
 	if (!key) return false;
 	if (key->type != GTEXT_YAML_STRING) return false;
-	if (key->as.scalar.value && strcmp(key->as.scalar.value, "<<") == 0) return true;
 
+	/* An explicit "!!merge" tag says so whatever the style. */
 	const char *suffix = tag_suffix(key->as.scalar.tag);
 	if (suffix && strcmp(suffix, "merge") == 0) return true;
+
+	/* Otherwise the key is a merge key because its *contents* resolve to
+	   tag:yaml.org,2002:merge - and only a plain scalar is resolved by its
+	   contents (10.3.2).  '"<<"' is the two-character string, which is what
+	   both references say, and taking it for a merge key was the usual two
+	   faults at once: '{"<<": 1}' was refused for a merge value that is not a
+	   mapping, and '{"<<": {a: 1}}' was *merged* - the key vanished and its
+	   contents were spliced into the mapping around it, with nothing
+	   reported. */
+	if (key->as.scalar.scalar_style != GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+		return false;
+	}
+	if (key->as.scalar.value && strcmp(key->as.scalar.value, "<<") == 0) return true;
 
 	return false;
 }

@@ -1135,6 +1135,32 @@ and the event-pipe path did not, so every find there began with reverse
 engineering a dozen bytes. It prints now. That is a harness defect, and the
 count in `tests/fuzz/README.md` says so.
 
+### A directive that did not close the document before it, and a quoted `<<`
+
+- **A directive was written straight after a document's content.** A directive
+  may only follow a document that has been ended *explicitly*: `l-yaml-stream`
+  reaches a directive document through `l-document-suffix`, which is
+  `c-document-end` (9.2). The writer wrote only the line break. A `%TAG` there
+  produced a stream this parser refuses - correctly, *"Directive after
+  content, with no `...` to close the document"* - and a `%YAML 1.2` after a
+  **plain** scalar was worse: it folded into the scalar, so `a` over
+  `%YAML 1.2` came back as the one string `a %YAML 1.2` with nothing reported
+  at all.
+- **A quoted `"<<"` was taken for a merge key.** A key is a merge key because
+  its *contents* resolve to `tag:yaml.org,2002:merge`, and only a plain scalar
+  is resolved by its contents (10.3.2). Both PyYAML and js-yaml read `"<<"` as
+  the two-character string. Taking it for a merge key was the usual two faults
+  at once: `{"<<": 1}` was refused for a merge value that is not a mapping,
+  and `{"<<": {a: 1}}` was **merged** - the key vanished and its contents were
+  spliced into the mapping around it, silently. An explicit `!!merge` tag
+  still says so whatever the style, because then it is the tag and not the
+  contents doing the resolving.
+
+That last one is the fourth time this rule has been the answer here, after the
+JSON fast path, the writer's quoting whitelist and the DOM constructor. It is
+worth stating once more as a place to look: **anything this library decides
+from a scalar's text has to ask what style it was written in first.**
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

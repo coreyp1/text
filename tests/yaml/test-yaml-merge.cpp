@@ -3,6 +3,8 @@
 
 extern "C" {
 #include <ghoti.io/text/yaml.h>
+
+#include "yaml_render.h"
 }
 
 TEST(YamlMerge, SingleMapping) {
@@ -186,6 +188,47 @@ TEST(YamlMerge, InvalidMergeValue) {
 	GTEXT_YAML_Document *doc = gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
 	EXPECT_EQ(doc, nullptr);
 	EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID);
+}
+
+/* A key is a merge key because its *contents* resolve to
+   tag:yaml.org,2002:merge - and only a plain scalar is resolved by its
+   contents (10.3.2). '"<<"' is the two-character string, which is what both
+   PyYAML and js-yaml say, and taking it for a merge key was the usual two
+   faults at once: '{"<<": 1}' was refused for a merge value that is not a
+   mapping, and '{"<<": {a: 1}}' was *merged* - the key vanished and its
+   contents were spliced into the mapping around it, with nothing reported.
+
+   An explicit !!merge tag still says so whatever the style, because then it
+   is the tag and not the contents doing the resolving. */
+TEST(YamlMerge, AQuotedMergeKeyIsAnOrdinaryString) {
+	struct Case { const char *yaml; const char *expected; };
+	const Case cases[] = {
+		{ "{\"<<\": 1}", "{\"<<\": 1}" },
+		{ "{'<<': 1}", "{\"<<\": 1}" },
+		{ "{\"<<\": {a: 1}}", "{\"<<\": {\"a\": 1}}" },
+		{ "a: &x {p: 1}\nb: {\"<<\": *x}\n",
+		  "{\"a\": {\"p\": 1}, \"b\": {\"<<\": {\"p\": 1}}}" },
+
+		/* Plain, and it merges. */
+		{ "a: &x {p: 1}\nb: {<<: *x}\n",
+		  "{\"a\": {\"p\": 1}, \"b\": {\"p\": 1}}" },
+		/* Tagged, and it merges whatever the style. */
+		{ "a: &x {p: 1}\nb: {!!merge \"<<\": *x}\n",
+		  "{\"a\": {\"p\": 1}, \"b\": {\"p\": 1}}" },
+		/* A plain "<<" whose value is not a mapping is still an error. */
+		{ "{<<: 1}", nullptr },
+	};
+	for (const Case &c : cases) {
+		const std::string got = Render(c.yaml);
+		if (c.expected) {
+			EXPECT_EQ(got, std::string(c.expected))
+				<< "input: " << ::testing::PrintToString(std::string(c.yaml));
+		} else {
+			EXPECT_EQ(got, std::string(""))
+				<< "should have been refused, input: "
+				<< ::testing::PrintToString(std::string(c.yaml));
+		}
+	}
 }
 
 int main(int argc, char **argv) {
