@@ -290,9 +290,17 @@ and a property in front of a key not counting as part of the key, so
 `&a {}: 1` over `b: 2` put the second entry outside the mapping the first had
 opened.
 
+**One is open, and it is the largest thing here.** An event's offset indexes
+the decoded character stream; the parser's positional helpers index the raw
+input the caller handed in. For UTF-8 those are the same bytes, and for
+UTF-16 they are not - so a block mapping with two entries does not parse in
+UTF-16 at all. One of those helpers scans backwards and had no bound check,
+making the mismatch a heap-buffer-overflow; that half is fixed, and the rest
+is written down under *Known defects* because closing it is a design decision
+rather than a patch.
+
 Comparison against other implementations keeps finding defects here, so treat
-this module as the least settled of the three. Every one found so far is
-fixed. What they have in
+this module as the least settled of the three. What the rest have in
 common is worth stating plainly: most did not fail on valid input, they
 quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
 were truncated. Tags were dropped from block-style collections. A mapping key

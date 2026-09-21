@@ -1455,10 +1455,18 @@ static bool sequence_supply_empty_entry(parser_state *p) {
  */
 static bool colon_begins_its_line(const parser_state *p, size_t offset) {
 	const char *buffer = NULL;
-	size_t i = offset;
+	size_t i = 0;
 
 	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
 	buffer = p->ctx->input_buffer;
+	/* An offset past the end of the buffer means the end of it, and the
+	   question - what stands between here and the start of the line - is the
+	   same one.  This scans *backwards* from the offset, so without the clamp
+	   the first read is off the end of the allocation: ASan called it a
+	   heap-buffer-overflow, 22 bytes before whatever the allocator had put
+	   next.  The five other helpers that index this buffer have all had this
+	   line since they were written; this one never did. */
+	i = offset > p->ctx->input_buffer_len ? p->ctx->input_buffer_len : offset;
 	while (i > 0) {
 		char c = buffer[i - 1];
 		if (c == '\n' || c == '\r') return true;

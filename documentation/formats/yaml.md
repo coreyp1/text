@@ -628,12 +628,41 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-None open at the moment. The writer fuzzer is the thing most likely to change
-that - see `tests/fuzz/README.md`, which records what it has found and says
-plainly that it has never yet run its full time without finding something.
+One is open, and it is the largest thing on this page.
 
-The `---` defect that stood here is fixed, along with the four that came out
-behind it; they are described under *Running it backwards* below.
+**A block mapping with two entries does not parse in UTF-16.**
+
+```
+FF FE  "a: 1\nb: 2\n" in UTF-16LE   ->  "Mapping key beside a node already
+                                          on this line"
+```
+
+The same bytes as UTF-8 parse. So do `a:` over `: 1`, and a nested mapping,
+and most other shapes with more than one entry.
+
+The cause is a mismatch of coordinates. An event's `offset` indexes the
+**decoded character stream**; the six helpers in `yaml_parser.c` that ask
+*"what stands between here and the start of the line?"* index
+`ctx->input_buffer`, which is the **raw input the caller handed in**. For
+UTF-8 those are the same bytes, which is why nothing noticed - the suite has
+no UTF-16 case at all, so `make conformance` cannot see it either.
+
+It is not a one-line fix. The scanner decodes into its own buffer and
+*compacts* it as it consumes (`memmove` in `scanner_feed`), so that buffer is
+a sliding window rather than something an absolute offset can index. Closing
+this properly means either keeping the decoded stream whole, translating
+offsets, or moving these positional questions into the scanner, which is the
+only layer that has the line in front of it. That is a design decision, not a
+patch, and it is written down here rather than guessed at.
+
+**The memory-safety half of it is fixed.** `colon_begins_its_line()` scans
+*backwards* from the offset and was the one of those six helpers with no
+bound check, so an offset past the end of the buffer made its first read land
+outside the allocation - ASan reported a heap-buffer-overflow 22 bytes before
+whatever the allocator had put next. It clamps now, like its five siblings.
+The reproducing bytes are a test in `tests/yaml/test-yaml-encoding.cpp` and a
+tracked seed under `tests/fuzz/corpus/yaml-writer/`; reverting the clamp makes
+both report it.
 
 ## Not implemented
 

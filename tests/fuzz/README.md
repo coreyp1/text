@@ -260,7 +260,16 @@ the shape the fuzzer built does not, and came back as "Unterminated flow
 collection" on a document whose brackets balance. The array grows now, and
 `max_depth` is the only limit.
 
-Nothing is open at the moment.
+And then the one that is still open, which is also the biggest. An event's
+offset indexes the *decoded* character stream; the parser's positional helpers
+index the raw input the caller handed in. For UTF-8 those are the same bytes.
+For UTF-16 they are not, and a block mapping with two entries does not parse
+at all - `a: 1` over `b: 2` is refused. One of those helpers scans backwards
+and had no bound check, so the mismatch was a **heap-buffer-overflow**, which
+is what ASan caught here. The clamp is in and its bytes are the first seed in
+`corpus/yaml-writer/` worth tracking, because it no longer traps; the offsets
+are on the YAML format page under *Known defects*, where the fix is a design
+decision rather than a patch.
 
 **This target is not yet quiet, and the notes above say so rather than
 pretending otherwise.** Every run of it so far has found something, each fix
@@ -340,7 +349,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — forty-two library defects and three of its own,
+has already earned that — forty-three library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

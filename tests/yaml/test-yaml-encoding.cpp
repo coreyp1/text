@@ -153,3 +153,77 @@ TEST(YamlEncoding, WriterRoundTripUtf16Le) {
   gtext_yaml_sink_buffer_free(&sink);
   gtext_yaml_free(doc);
 }
+
+/* Event offsets index the *decoded* character stream; the parser's positional
+   helpers index the raw input buffer the caller handed in. For UTF-8 those
+   are the same bytes and nobody noticed. For UTF-16 they are not, and every
+   question of the form "what stands between here and the start of the line?"
+   is answered from the wrong place - so a block mapping with two entries does
+   not parse at all.
+
+   One of those helpers also had no bound check, so the mismatch was a
+   heap-buffer-overflow: it scans *backwards* from the offset, and an offset
+   past the end of the buffer made the first read land off the allocation.
+   ASan called it 22 bytes before whatever the allocator had put next. The
+   clamp is in; the offsets are not, and are recorded on the YAML format page
+   under Known defects.
+
+   This test says what is wrong rather than what is right, and is written to
+   keep passing when it is fixed. */
+TEST(YamlEncoding, Utf16BlockMappingsDoNotParseYet) {
+  const char *documents[] = {
+    "a: 1\nb: 2\n",
+    "a:\n: 1\n",
+    "outer:\n  x: 1\n  b: 2\n",
+  };
+  for (const char *utf8 : documents) {
+    const std::string in8(utf8);
+    std::string in16;
+    in16.push_back('\xff');
+    in16.push_back('\xfe');
+    for (char ch : in8) { in16.push_back(ch); in16.push_back('\0'); }
+
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+    GTEXT_YAML_Document *a =
+      gtext_yaml_parse(in8.data(), in8.size(), &opts, &err);
+    ASSERT_NE(a, nullptr) << "utf-8: " << (err.message ? err.message : "");
+    gtext_yaml_error_free(&err);
+    gtext_yaml_free(a);
+
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Document *b =
+      gtext_yaml_parse(in16.data(), in16.size(), &opts, &err);
+    if (b) {
+      /* It got fixed. Good - delete this test's excuse and keep the assert. */
+      gtext_yaml_free(b);
+      gtext_yaml_error_free(&err);
+      continue;
+    }
+    EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID)
+      << "utf-16 of <<" << utf8 << ">>: " << (err.message ? err.message : "");
+    gtext_yaml_error_free(&err);
+  }
+}
+
+/* What the clamp guarantees regardless: no read outside the buffer. Only
+   meaningful under ASan, which is why `make test-asan` is a separate run. */
+TEST(YamlEncoding, Utf16DoesNotReadOutsideTheInputBuffer) {
+  static const unsigned char bytes[] = {
+    0xff, 0xfe, 0x22, 0x7c, 0x0a, 0x2a, 0x2d, 0x2d, 0x2d, 0x0a, 0x0a, 0x0a,
+    0x0a, 0x0a, 0x0a, 0x5d, 0x2d, 0x2d, 0x2d, 0x0a, 0x7c, 0x7c, 0x0a, 0x0a,
+    0x0a, 0x0a, 0x0a, 0x00, 0x74, 0xc4, 0x65, 0x00, 0x0d, 0x09, 0x3e, 0x0d,
+    0x0d, 0x0a, 0x2d, 0x2d, 0x0a, 0x0a, 0x0a, 0x0a, 0x5d, 0x2d, 0x2d, 0x2d,
+    0x0a, 0x2d, 0x2d, 0x0a, 0x50, 0x00, 0x02, 0x0d, 0x3a, 0x00,
+  };
+  const std::string in(reinterpret_cast<const char *>(bytes), sizeof(bytes));
+  GTEXT_YAML_Error err;
+  memset(&err, 0, sizeof(err));
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+  GTEXT_YAML_Document *doc =
+    gtext_yaml_parse(in.data(), in.size(), &opts, &err);
+  if (doc) gtext_yaml_free(doc);
+  gtext_yaml_error_free(&err);
+  SUCCEED();  /* reaching here with no sanitizer report is the assertion */
+}
