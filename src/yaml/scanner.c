@@ -92,8 +92,17 @@ struct GTEXT_YAML_Scanner {
   const char *pending_error_message;
   
   /* Context stack for tracking block vs flow context */
-  yaml_context_type context_stack[MAX_CONTEXT_DEPTH];
+  /* Grown as it is needed, because a fixed array here is a second limit
+     nobody set and nobody can see.  It used to be 32 entries and the push
+     was *dropped* when they ran out while the matching pop still counted -
+     so past 32 nested flow collections the scanner believed it was back in
+     block context with the brackets still open, and mis-scanned what
+     followed rather than refusing it.  A depth limit is max_depth's job:
+     it defaults to 256 and the stream layer and the parser both enforce
+     it. */
+  yaml_context_type *context_stack;
   int context_depth;      /* current depth in context stack */
+  int context_capacity;
   
   /* Track last indicator character for tag/anchor/alias parsing */
   int last_indicator;
@@ -1164,11 +1173,23 @@ static yaml_context_type scanner_current_context(GTEXT_YAML_Scanner *s)
   return s->context_stack[s->context_depth - 1];
 }
 
-static void scanner_push_context(GTEXT_YAML_Scanner *s, yaml_context_type ctx)
+/* False only when the stack cannot grow, which is an allocation failure and
+   is reported as one.  Dropping the entry instead is what made this a defect:
+   the pop that matched it still counted down. */
+static bool scanner_push_context(GTEXT_YAML_Scanner *s, yaml_context_type ctx)
 {
-  if (s->context_depth < MAX_CONTEXT_DEPTH) {
-    s->context_stack[s->context_depth++] = ctx;
+  if (s->context_depth >= s->context_capacity) {
+    int cap = s->context_capacity ? s->context_capacity * 2 : MAX_CONTEXT_DEPTH;
+    yaml_context_type *grown;
+    if (cap <= s->context_capacity) return false;
+    grown = (yaml_context_type *)realloc(
+      s->context_stack, (size_t)cap * sizeof(*grown));
+    if (!grown) return false;
+    s->context_stack = grown;
+    s->context_capacity = cap;
   }
+  s->context_stack[s->context_depth++] = ctx;
+  return true;
 }
 
 static void scanner_pop_context(GTEXT_YAML_Scanner *s)
@@ -1224,6 +1245,7 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s)
   gtext_yaml_dynbuf_free(&s->input);
   gtext_yaml_dynbuf_free(&s->raw_prefix);
   free(s->token_payload);
+  free(s->context_stack);
   free(s);
 }
 
@@ -2169,10 +2191,16 @@ block_scalar_collected:
     }
 
     /* Update context stack for flow collection boundaries */
-    if (c == '[') {
-      scanner_push_context(s, YAML_CONTEXT_FLOW_SEQUENCE);
-    } else if (c == '{') {
-      scanner_push_context(s, YAML_CONTEXT_FLOW_MAPPING);
+    if (c == '[' || c == '{') {
+      if (!scanner_push_context(s, c == '['
+            ? YAML_CONTEXT_FLOW_SEQUENCE
+            : YAML_CONTEXT_FLOW_MAPPING)) {
+        if (err) {
+          err->code = GTEXT_YAML_E_OOM;
+          err->message = "out of memory tracking flow context";
+        }
+        return GTEXT_YAML_E_OOM;
+      }
     } else if (c == ']' || c == '}') {
       scanner_pop_context(s);
     }

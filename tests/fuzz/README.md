@@ -251,6 +251,15 @@ nesting into flow nesting, which *is* counted - and that is a trick worth
 remembering: running a document through a writer changes its spelling cheaply,
 and a limit that only some spellings reach is not a limit.
 
+And then a second limit nobody set: the scanner tracked flow context in a
+fixed 32-entry array, and when it ran out the push was *dropped* while the
+matching pop still counted down - so past 32 nested flow collections it
+believed it was back in block context with the brackets still open. Plain
+nesting survives that, because one dropped push and one clamped pop cancel;
+the shape the fuzzer built does not, and came back as "Unterminated flow
+collection" on a document whose brackets balance. The array grows now, and
+`max_depth` is the only limit.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -331,7 +340,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — forty-one library defects and three of its own,
+has already earned that — forty-two library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

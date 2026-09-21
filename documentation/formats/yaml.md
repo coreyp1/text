@@ -944,6 +944,34 @@ second.
   an event it had no code for - and the second is the worse of the two. See
   below.
 
+### What the writer fuzzer has found, by kind
+
+The sections that follow are in the order the harness found them, which is
+also the order in which each fix uncovered the next. Read as a list they are
+long; read as a set they fall into four groups, and the groups are the useful
+part:
+
+- **The writer inventing structure for events that describe none.** An
+  `INDICATOR` answered with OK, a directive written with no code for it, a
+  second root node glued to the first, a directive that did not close the
+  document before it. The cure is always the same: refuse, at the first event
+  that cannot be written.
+- **A tag taken as a label rather than an assertion.** `!!binary (((`,
+  `!!int ""`, a shorthand whose handle no `%TAG` declared. A tag says what a
+  node *is*, the reader checks it, and the DOM constructor did not.
+- **Something decided from a scalar's text without asking its style.** The
+  quoting whitelist, the DOM constructor, `is_merge_key()`, explicit tags, and
+  the JSON fast path before them. Only a plain scalar is resolved by its
+  contents (10.3.2); this is the one to look for first.
+- **A rule applied to one spelling of a document and not the others.** The
+  nesting limit that reached flow collections only, the indicator run that did
+  not ask what followed it, the property that was part of its key in one place
+  and not the next. A writer is a cheap spelling-changer, which is why it
+  keeps finding these.
+
+Most of them are in the *reader*. That is not what the harness was built for,
+and it is the strongest thing that can be said for building it.
+
 ### Three places that asked the wrong node where it stood
 
 The writer fuzzer's next run found a *parser* defect, and then two more behind
@@ -1295,6 +1323,30 @@ running a document through a writer is a cheap way to change its spelling.
 
 The test that was here asked "if it failed, did it fail with `E_DEPTH`?",
 which passes when nothing fails at all.
+
+### A second limit nobody set, in the scanner
+
+The scanner tracked flow context in a fixed 32-entry array, and when it ran
+out the push was **dropped** while the matching pop still counted down. Past
+32 nested flow collections the scanner believed it was back in block context
+with the brackets still open, and mis-scanned what followed rather than
+refusing it.
+
+It does not fail on every shape. `[[[ ... a: 1 ... ]]]` forty deep comes back
+right, because one dropped push and one clamped pop cancel out - which is why
+it took a fuzzer and a particular shape to reach:
+
+```yaml
+[{: [{[[[[[[[[[[[[[[{":": [[[[[[[[[[[[[[~]]]]]]]]]]]]]]}]]]]]]]]]]]]]]: }]}, ~]
+```
+
+At thirteen it parsed and at fourteen it did not, because thirty-three
+brackets are open at the deepest point. The error was *"Unterminated flow
+collection"* on a document whose brackets balance.
+
+The array grows now. A nesting limit is `max_depth`'s job - it defaults to 256
+and both the stream layer and the parser enforce it - and a fixed array
+somewhere else is a second limit nobody set and nobody can see.
 
 ### A built scalar with white space at either end
 
