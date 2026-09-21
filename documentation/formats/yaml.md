@@ -1195,6 +1195,23 @@ standing at the start of its line, so the collection was taken for the next
 entry's key and the value it really was went missing. The two tests are
 separate functions now, because they are separate questions.
 
+### Base64 is exempt from the whitelist, not from the plain style
+
+The writer's quoting whitelist is bypassed for `!!binary`, because `/` and `=`
+are ordinary in base64 and quoting every binary scalar would be noise. The
+bypass was total, and it should not have been: a line break folds to a space
+(6.5), and white space at either end is separation the scanner takes off
+before the content begins.
+
+So a binary scalar with a break in its text - which is how base64 is written
+by hand, in short lines - went out plain across two lines and came back with
+the break folded into a space. The *bytes* were the same, since base64 ignores
+white space, which is why nothing measuring values noticed. The text was not,
+and the text is what `gtext_yaml_node_as_string()` returns and what this
+library keeps as written rather than re-encoding (suite case 565N).
+
+Single-line base64 still goes out plain, which is what the bypass is for.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

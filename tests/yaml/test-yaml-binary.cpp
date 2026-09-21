@@ -183,6 +183,65 @@ TEST(YamlBinary, TheConstructorDecodesAndRefusesWhatIsNotBase64) {
 	gtext_yaml_free(doc);
 }
 
+/* Base64 is exempt from the writer's quoting whitelist, because "/" and "="
+   are ordinary in it and quoting every binary scalar would be noise. It is
+   not exempt from what the plain style cannot carry: a line break folds to a
+   space (6.5), and white space at either end is separation the scanner takes
+   off.
+
+   A binary scalar built with a break in its text - which is how base64 is
+   written by hand, in short lines - went out plain across two lines and came
+   back with the break folded into a space. The bytes were the same, since
+   base64 ignores white space; the text was not, and the text is what
+   as_string() returns and what this library keeps as written (565N). */
+TEST(YamlBinary, AMultiLineBinaryKeepsItsBreaks) {
+	const char *text = "R0lGODlhDAAM\nAIQAAP//9/X1\n";
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	GTEXT_YAML_Node *node =
+		gtext_yaml_node_new_scalar(doc, text, "!!binary", nullptr);
+	ASSERT_NE(node, nullptr);
+	gtext_yaml_document_set_root(doc, node);
+
+	GTEXT_YAML_Sink sink;
+	ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+	GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+	ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts), GTEXT_YAML_OK);
+	const std::string out(gtext_yaml_sink_buffer_data(&sink),
+		gtext_yaml_sink_buffer_size(&sink));
+	gtext_yaml_sink_buffer_free(&sink);
+	gtext_yaml_free(doc);
+
+	GTEXT_YAML_Error err = {};
+	GTEXT_YAML_Document *back =
+		gtext_yaml_parse(out.data(), out.size(), nullptr, &err);
+	ASSERT_NE(back, nullptr) << "wrote " << out << ": "
+		<< (err.message ? err.message : "");
+	const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+	EXPECT_STREQ(gtext_yaml_node_as_string(r), text) << "wrote " << out;
+
+	/* And the bytes, which survived either way. */
+	const unsigned char *data = nullptr;
+	size_t len = 0;
+	EXPECT_TRUE(gtext_yaml_node_as_binary(r, &data, &len));
+	EXPECT_EQ(len, (size_t)18);
+	gtext_yaml_free(back);
+
+	/* Single-line base64 still goes out plain: "/" and "=" are why the
+	   whitelist is bypassed in the first place. */
+	doc = gtext_yaml_document_new(nullptr, nullptr);
+	node = gtext_yaml_node_new_scalar(
+		doc, "R0lGODlhDAAMAIQAAP//9/X1", "!!binary", nullptr);
+	ASSERT_NE(node, nullptr);
+	gtext_yaml_document_set_root(doc, node);
+	ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+	ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts), GTEXT_YAML_OK);
+	const std::string plain(gtext_yaml_sink_buffer_data(&sink),
+		gtext_yaml_sink_buffer_size(&sink));
+	gtext_yaml_sink_buffer_free(&sink);
+	gtext_yaml_free(doc);
+	EXPECT_EQ(plain.find('"'), std::string::npos) << "wrote " << plain;
+}
+
 TEST(YamlBinary, WriterEmitsCanonicalBase64) {
 	const char *yaml = "!!binary SGVsbG8=";
 	GTEXT_YAML_Error err = {};

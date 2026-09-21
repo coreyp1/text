@@ -213,6 +213,16 @@ references read the two-character string: `{"<<": 1}` was refused and
 Only a plain scalar is resolved by its contents (10.3.2), for the fourth time
 in this file.
 
+Then three more, two of which were regressions of the fixes above. A "-",
+"?" or ":" is an indicator only where white space follows it - "- x" is an
+entry holding x, "-: 1" a mapping whose key is the plain scalar "-" - and both
+the scanner's `line_node_col` and the parser's "does this begin its own line?"
+test had been skipping them without asking. And base64, which is exempt from
+the writer's quoting whitelist because "/" and "=" are ordinary in it, was
+exempt from the plain style's own limits too: a binary scalar written over two
+lines came back with its break folded into a space. The bytes were the same,
+which is why nothing measuring values noticed; the text was not.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -293,7 +303,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — thirty-two library defects and three of its own,
+has already earned that — thirty-five library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

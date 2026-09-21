@@ -1076,6 +1076,28 @@ static bool scalar_needs_quotes(const char *value, size_t len) {
   return false;
 }
 
+/* What the plain style cannot carry, whatever the whitelist above says: a
+   line break folds to a space (6.5), and white space at either end is
+   separation the scanner takes off before the content begins.
+
+   Base64 is exempt from the whitelist, because "/" and "=" are ordinary in it
+   and quoting every binary scalar would be noise.  It is not exempt from
+   this.  A binary scalar built with a break in its text - which is how base64
+   is written by hand, in short lines - went out plain across two lines and
+   came back with the break folded into a space.  The bytes were the same,
+   since base64 ignores white space; the text was not, and the text is what
+   gtext_yaml_node_as_string() returns and what this library keeps as written
+   (suite case 565N). */
+static bool plain_style_cannot_carry(const char *value, size_t len) {
+  if (!value || len == 0) return false;
+  if (value[0] == ' ' || value[0] == '\t') return true;
+  if (value[len - 1] == ' ' || value[len - 1] == '\t') return true;
+  for (size_t i = 0; i < len; i++) {
+    if (value[i] == '\n' || value[i] == '\r') return true;
+  }
+  return false;
+}
+
 static GTEXT_YAML_Status write_escaped_scalar(
     yaml_writer_state * state, const char * value, size_t len) {
   static const char hex[] = "0123456789ABCDEF";
@@ -1430,7 +1452,8 @@ static GTEXT_YAML_Scalar_Style plan_scalar_style(
   }
 
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
-    if (!is_binary && scalar_needs_quotes(value, len)) {
+    if (is_binary ? plain_style_cannot_carry(value, len)
+                  : scalar_needs_quotes(value, len)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     }
     /* A string whose text spells a number, a bool or a null has to be
