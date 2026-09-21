@@ -355,12 +355,25 @@ than no list, because it is read as current. What remains unimplemented is:
   works; a named anchor is refused
 - **Vocabularies**: `$vocabulary` is ignored, along with `$schema`, since only
   one dialect is implemented
-- **`format`, and the `content*` family**: `format` is an annotation in
-  2020-12 unless a vocabulary makes it an assertion, and `contentEncoding`,
-  `contentMediaType` and `contentSchema` need the payload decoded
-
 A schema using any of those is refused at compile time rather than validated
 with the keyword ignored.
+
+`format` and the `content*` family are no longer on that list. All four are
+annotations in 2020-12, so a validator that ignores them is conformant and
+one that refuses them - as this did - is not. The three content keywords are
+ignored. `format` is ignored by default and enforced when
+`GTEXT_JSON_Schema_Options::format` is set to `GTEXT_JSON_FORMAT_ASSERT`,
+which checks `date-time`, `date`, `time` and `duration` through
+ghoti.io-chron, `regex` through the caller's regular-expression provider, and
+the address, name, mailbox, URI and pointer formats here. Under that policy a
+name in the vocabulary it cannot check is refused rather than ignored, which
+is `idn-hostname` and `regex` with no provider.
+
+One gap inside a format it does check: a `hostname` label beginning `xn--` is
+an A-label, and checking one properly means decoding the punycode and
+applying IDNA2008 to the result. That needs Unicode tables this library does
+not carry, so such a label is checked as the LDH label it also is and no
+further.
 
 `pattern` and `patternProperties` are implemented, but only against a
 regular-expression engine the caller supplies through

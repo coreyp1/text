@@ -40,6 +40,9 @@ static void json_schema_node_free(json_schema_node * node) {
     free(node->required_keys);
   }
 
+  // Free the asserted format's name
+  free(node->format_name);
+
   // Free items schema
   json_schema_node_free(node->items_schema);
 
@@ -104,9 +107,10 @@ static void json_schema_node_free(json_schema_node * node) {
     free(node->dep_required);
   }
 
-  /* The provider's compiled patterns. `regex_provider` is set on a node only
-   * when one of them was compiled, so a schema compiled without a provider
-   * frees nothing here and needs no branch anywhere else. */
+  /* The provider's compiled patterns. `regex_provider` is set on a node that
+   * compiled one, and on a node asserting `"format": "regex"`, which needs
+   * the engine at validation time rather than at compile time; both inner
+   * checks below are for the second case. */
   if (node->regex_provider) {
     if (node->pattern_regex) {
       node->regex_provider->free_fn(
@@ -218,11 +222,20 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
  * prevent.  A schema using one is refused at compile time instead.
  */
 static const char * const json_schema_unsupported_keywords[] = {
-    /* Applicators. */
     "$recursiveRef", "$dynamicRef", "unevaluatedItems",
-    "unevaluatedProperties",
-    /* Assertions. */
-    "format", "contentEncoding", "contentMediaType", "contentSchema", NULL};
+    "unevaluatedProperties", NULL};
+
+/*
+ * `format`, `contentEncoding`, `contentMediaType` and `contentSchema` were in
+ * that list and should not have been: 2020-12 defines all four as
+ * annotations, so a validator that ignores them is conformant and one that
+ * refuses a schema for carrying them is not.  The three content keywords are
+ * ignored outright.  `format` is ignored under the default policy and
+ * enforced under GTEXT_JSON_FORMAT_ASSERT, which is handled by name in
+ * json_schema_compile_node() - the same shape as `pattern`, and for the same
+ * reason: whether it can be enforced is a property of what the caller asked
+ * for rather than of this library.
+ */
 
 /*
  * `pattern` and `patternProperties` are deliberately not in that list.
@@ -1139,6 +1152,57 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     // gets, and for the same reason: a `pattern` that is read and ignored
     // makes a schema that looks like it constrains its data not do so, with
     // nothing to tell the caller.
+    else if (json_matches(key, key_len, "format")) {
+      /*
+       * An annotation under the default policy, so nothing is kept and the
+       * keyword constrains nothing - which is what 2020-12 requires.
+       *
+       * Under GTEXT_JSON_FORMAT_ASSERT a name the vocabulary defines but this
+       * library cannot check is refused rather than ignored: the caller asked
+       * for the constraint and would otherwise get a schema that does not
+       * carry it, with no way to find out.  A name outside the vocabulary is
+       * ignored, because the specification requires that.
+       */
+      if (cc->opts->format == GTEXT_JSON_FORMAT_ASSERT
+          && value->type == GTEXT_JSON_STRING) {
+        const char * name = value->as.string.data;
+        size_t name_len = value->as.string.len;
+        if (json_format_is_known(name, name_len)) {
+          /* `regex` is the caller's engine, so whether it can be checked
+           * depends on whether one was supplied; `idn-hostname` needs IDNA
+           * tables this library does not carry. */
+          int checkable = 1;
+          if (name_len == 5 && memcmp(name, "regex", 5) == 0) {
+            checkable = cc->schema->has_regex_provider;
+          }
+          else if (name_len == 12 && memcmp(name, "idn-hostname", 12) == 0) {
+            checkable = 0;
+          }
+          if (!checkable) {
+            if (!cc->opts->allow_unsupported_keywords) {
+              return json_schema_reject_keyword(name, name_len, err);
+            }
+          }
+          else {
+            free(node->format_name);
+            node->format_name = (char *)malloc(name_len + 1);
+            if (!node->format_name) {
+              if (err) {
+                *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                    .message = "Out of memory recording format"};
+              }
+              return GTEXT_JSON_E_OOM;
+            }
+            memcpy(node->format_name, name, name_len);
+            node->format_name[name_len] = '\0';
+            node->format_name_len = name_len;
+            node->regex_provider = cc->schema->has_regex_provider
+                ? &cc->schema->regex_provider
+                : NULL;
+          }
+        }
+      }
+    }
     else if (json_matches(key, key_len, "pattern")) {
       if (!cc->schema->has_regex_provider) {
         if (!cc->opts->allow_unsupported_keywords) {
@@ -2101,6 +2165,41 @@ static GTEXT_JSON_Status json_schema_validate_depth(
       }
     }
 
+    /* `format`, when the caller asked for it to assert. A node only carries
+     * a name if the compiler decided it could be checked, so there is no
+     * "unknown format" branch here - an unknown one was ignored and a known
+     * but uncheckable one was refused. */
+    if (node->format_name) {
+      int ok;
+      if (node->format_name_len == 5
+          && memcmp(node->format_name, "regex", 5) == 0) {
+        /* The instance is itself a pattern, so the question is whether the
+         * caller's engine will take it. Compiled and discarded: nothing here
+         * will ever match against it. */
+        char message[256];
+        size_t offset = 0;
+        void * compiled = NULL;
+        const GTEXT_JSON_Regex_Provider * provider = node->regex_provider;
+        ok = provider->compile_fn(provider->ctx, instance->as.string.data,
+                 byte_len, &compiled, message, sizeof(message), &offset)
+            == 0;
+        if (ok) {
+          provider->free_fn(provider->ctx, compiled);
+        }
+      }
+      else {
+        ok = json_format_check(node->format_name, node->format_name_len,
+            instance->as.string.data, byte_len);
+      }
+      if (!ok) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+              .message = "String does not match format"};
+        }
+        return GTEXT_JSON_E_SCHEMA;
+      }
+    }
+
     /* `pattern` searches: the expression need only match somewhere in the
      * string (JSON Schema core section 6.4), so a validator that anchored
      * would reject instances the specification accepts.  The anchoring is the
@@ -2444,8 +2543,15 @@ static GTEXT_JSON_Status json_schema_validate_depth(
 
 GTEXT_API GTEXT_JSON_Schema_Options gtext_json_schema_options_default(void) {
   GTEXT_JSON_Schema_Options opts;
-  opts.allow_unsupported_keywords = false;
-  opts.regex = NULL;
+  /*
+   * Zeroed wholesale rather than field by field, because every default here
+   * is the zero value - no relaxation, no provider, `format` an annotation -
+   * and because assigning them one at a time is the kind of correct that
+   * stops being correct the moment somebody adds a field.  It was that
+   * spelling when `format` was added, and a caller's stack would have decided
+   * whether `format` asserted.
+   */
+  memset(&opts, 0, sizeof(opts));
   return opts;
 }
 

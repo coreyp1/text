@@ -9191,8 +9191,6 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
 	    {"unevaluatedProperties", "{\"unevaluatedProperties\":false}"},
 	    {"unevaluatedItems", "{\"unevaluatedItems\":false}"},
-	    {"format", "{\"type\":\"string\",\"format\":\"email\"}"},
-	    {"contentEncoding", "{\"contentEncoding\":\"base64\"}"},
 	};
 
 	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
@@ -9764,6 +9762,204 @@ TEST(JsonSchemaKeywords, MultipleOfIsAskedInDecimal) {
 	EXPECT_TRUE(schema_accepts("{\"multipleOf\":1e2}", "3e2"));
 	EXPECT_FALSE(schema_accepts("{\"multipleOf\":1e2}", "350"));
 	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.5}", "1.5"));
+}
+
+/* Compile with a chosen format policy and say whether the instance passes. */
+static bool format_accepts(const char * format, const char * instance_src,
+    GTEXT_JSON_Format_Policy policy = GTEXT_JSON_FORMAT_ASSERT) {
+	std::string schema_src =
+	    std::string("{\"format\":\"") + format + "\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * sv =
+	    gtext_json_parse(schema_src.c_str(), schema_src.size(), &po, &perr);
+	GTEXT_JSON_Value * iv =
+	    gtext_json_parse(instance_src, strlen(instance_src), &po, &perr);
+	EXPECT_NE(sv, nullptr);
+	EXPECT_NE(iv, nullptr);
+	if (!sv || !iv) {
+		return false;
+	}
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.format = policy;
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	GTEXT_JSON_Schema * sc =
+	    gtext_json_schema_compile_with_options(sv, &opts, &serr);
+	EXPECT_NE(sc, nullptr)
+	    << "schema did not compile: " << schema_src << " - "
+	    << (serr.message ? serr.message : "");
+	bool ok = false;
+	if (sc) {
+		ok = gtext_json_schema_validate(sc, iv, nullptr) == GTEXT_JSON_OK;
+	}
+	gtext_json_schema_free(sc);
+	gtext_json_error_free(&serr);
+	gtext_json_free(iv);
+	gtext_json_free(sv);
+	return ok;
+}
+
+TEST(JsonSchemaFormat, IsAnAnnotationUnlessAsked) {
+	// 2020-12 says a validator MUST NOT assert on `format` unless it has been
+	// asked to, so the default accepts what the format plainly is not. This
+	// engine used to refuse the schema outright, which is not conformant
+	// either.
+	EXPECT_TRUE(schema_accepts("{\"format\":\"email\"}", "\"not an email\""));
+	EXPECT_TRUE(schema_accepts("{\"format\":\"ipv4\"}", "\"999.999.999.999\""));
+	EXPECT_TRUE(format_accepts(
+	    "email", "\"not an email\"", GTEXT_JSON_FORMAT_ANNOTATION));
+
+	// The content keywords are annotations in 2020-12 too, and were refused
+	// alongside it.
+	EXPECT_TRUE(schema_accepts("{\"contentEncoding\":\"base64\"}", "\"!!\""));
+	EXPECT_TRUE(
+	    schema_accepts("{\"contentMediaType\":\"application/json\"}", "\"x\""));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"contentSchema\":{\"type\":\"integer\"}}", "\"x\""));
+}
+
+TEST(JsonSchemaFormat, AssertsOnlyStrings) {
+	// Every format applies to strings and says nothing about anything else,
+	// which is what the suite's format.json checks for all nineteen names.
+	EXPECT_TRUE(format_accepts("ipv4", "12"));
+	EXPECT_TRUE(format_accepts("ipv4", "13.7"));
+	EXPECT_TRUE(format_accepts("ipv4", "{}"));
+	EXPECT_TRUE(format_accepts("ipv4", "[]"));
+	EXPECT_TRUE(format_accepts("ipv4", "false"));
+	EXPECT_TRUE(format_accepts("ipv4", "null"));
+}
+
+TEST(JsonSchemaFormat, AnUnknownNameIsIgnoredAndAKnownOneIsNot) {
+	// A vendor's own name belongs to nobody, and the specification requires
+	// that it be ignored.
+	EXPECT_TRUE(format_accepts("phone-number", "\"nonsense\""));
+
+	// A name the vocabulary defines but this library cannot check is refused
+	// instead, because the caller asked for the constraint and would
+	// otherwise get a schema that silently does not carry it.
+	const char * src = "{\"format\":\"idn-hostname\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(sv, nullptr);
+
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.format = GTEXT_JSON_FORMAT_ASSERT;
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	EXPECT_EQ(gtext_json_schema_compile_with_options(sv, &opts, &serr), nullptr);
+	EXPECT_EQ(serr.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+	ASSERT_NE(serr.context_snippet, nullptr);
+	EXPECT_STREQ(serr.context_snippet, "idn-hostname");
+	gtext_json_error_free(&serr);
+
+	// ...and it compiles under the annotation policy, where it constrains
+	// nothing and so cannot be silently weaker than promised.
+	EXPECT_NE(gtext_json_schema_compile(sv, nullptr), nullptr);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaFormat, TemporalFormatsComeFromChron) {
+	EXPECT_TRUE(format_accepts("date-time", "\"1963-06-19T08:30:06.283185Z\""));
+	EXPECT_FALSE(format_accepts("date-time", "\"1990-02-31T15:59:60.123-08:00\""));
+	// A leap second is a real reading of a real clock; a leap second in the
+	// wrong minute is not.
+	EXPECT_TRUE(format_accepts("date-time", "\"1998-12-31T23:59:60Z\""));
+	EXPECT_FALSE(format_accepts("date-time", "\"1998-12-31T23:58:60Z\""));
+
+	EXPECT_TRUE(format_accepts("date", "\"1963-06-19\""));
+	EXPECT_FALSE(format_accepts("date", "\"1998-1-20\""));
+
+	// `time` is RFC 3339's full-time, so the offset is not optional.
+	EXPECT_TRUE(format_accepts("time", "\"08:30:06Z\""));
+	EXPECT_FALSE(format_accepts("time", "\"08:30:06\""));
+
+	EXPECT_TRUE(format_accepts("duration", "\"P4DT12H30M5S\""));
+	EXPECT_TRUE(format_accepts("duration", "\"P2W\""));
+	EXPECT_FALSE(format_accepts("duration", "\"P1Y2D\""));
+	EXPECT_FALSE(format_accepts("duration", "\"PT\""));
+}
+
+TEST(JsonSchemaFormat, AddressesAndNames) {
+	EXPECT_TRUE(format_accepts("ipv4", "\"192.168.0.1\""));
+	EXPECT_FALSE(format_accepts("ipv4", "\"127.0.0.0.1\""));
+	EXPECT_FALSE(format_accepts("ipv4", "\"087.10.0.1\""));
+	EXPECT_FALSE(format_accepts("ipv4", "\"256.0.0.0\""));
+
+	EXPECT_TRUE(format_accepts("ipv6", "\"::42:ff:1\""));
+	EXPECT_TRUE(format_accepts("ipv6", "\"::ffff:192.168.0.1\""));
+	// The elision stands for at least one group, and may appear once.
+	EXPECT_FALSE(format_accepts("ipv6", "\"1:2:3:4:5:6:7:8::\""));
+	EXPECT_FALSE(format_accepts("ipv6", "\"1::2::3\""));
+	// A colon after the elision leaves a group missing, which the earlier
+	// character-by-character version walked straight past.
+	EXPECT_FALSE(format_accepts("ipv6", "\"1:2:3:4:5:::8\""));
+
+	EXPECT_TRUE(format_accepts("hostname", "\"www.example.com\""));
+	EXPECT_FALSE(format_accepts("hostname", "\"-a-host-name-that-starts-with--\""));
+	EXPECT_FALSE(format_accepts("hostname", "\"www.example.com.\""));
+
+	EXPECT_TRUE(format_accepts("uuid", "\"2eb8aa08-aa98-11ea-b4aa-73b441d16380\""));
+	EXPECT_FALSE(format_accepts("uuid", "\"2eb8aa08-aa98-11ea-b4aa\""));
+}
+
+TEST(JsonSchemaFormat, MailboxesAndPointers) {
+	EXPECT_TRUE(format_accepts("email", "\"joe.bloggs@example.com\""));
+	EXPECT_FALSE(format_accepts("email", "\"2962\""));
+	// RFC 5322's atext is not RFC 3986's sub-delims, and reusing the latter
+	// let all three of these through.
+	EXPECT_FALSE(format_accepts("email", "\"te,st@example.com\""));
+	EXPECT_FALSE(format_accepts("email", "\"te;st@example.com\""));
+	EXPECT_FALSE(format_accepts("email", "\"te(st@example.com\""));
+	EXPECT_TRUE(format_accepts("email", "\"te.st@example.com\""));
+	EXPECT_FALSE(format_accepts("email", "\".test@example.com\""));
+
+	EXPECT_TRUE(format_accepts("json-pointer", "\"/foo/bar~0/baz~1/%a\""));
+	EXPECT_FALSE(format_accepts("json-pointer", "\"/~-1\""));
+	EXPECT_TRUE(format_accepts("json-pointer", "\"\""));
+	EXPECT_FALSE(format_accepts("json-pointer", "\"foo\""));
+
+	EXPECT_TRUE(format_accepts("relative-json-pointer", "\"1\""));
+	EXPECT_TRUE(format_accepts("relative-json-pointer", "\"0#\""));
+	EXPECT_TRUE(format_accepts("relative-json-pointer", "\"1/0\""));
+	EXPECT_FALSE(format_accepts("relative-json-pointer", "\"01/a\""));
+	EXPECT_FALSE(format_accepts("relative-json-pointer", "\"/foo/bar\""));
+}
+
+TEST(JsonSchemaFormat, UrisAreParsedAsAGrammar) {
+	EXPECT_TRUE(format_accepts("uri", "\"http://foo.bar/?baz=qux#quux\""));
+	EXPECT_FALSE(format_accepts("uri", "\"//foo.bar/?baz=qux#quux\""));
+	// Every byte in each of these is legal somewhere in a URI, which is why
+	// checking the character set alone accepted all three.
+	EXPECT_FALSE(format_accepts("uri", "\"http://example.com:abc/path\""));
+	EXPECT_FALSE(format_accepts("uri", "\"https://[@example.org/test.txt\""));
+	EXPECT_FALSE(format_accepts("uri", "\"http:/[::1]\""));
+
+	EXPECT_TRUE(format_accepts("uri-reference", "\"/abc\""));
+	EXPECT_TRUE(format_accepts("uri-reference", "\"./this:that\""));
+	// A relative-path reference whose first segment carries a colon would be
+	// read as a scheme, so the grammar forbids it there and only there.
+	EXPECT_FALSE(format_accepts("uri-reference", "\"1:b\""));
+	EXPECT_FALSE(format_accepts("uri-reference", "\"//a@b@example.com/\""));
+
+	// A host that merely looks like a dotted quad is still a reg-name.
+	EXPECT_TRUE(format_accepts("uri", "\"http://192.168.00.1/\""));
+	// Inside the brackets IPv6address is the only production on offer.
+	EXPECT_FALSE(format_accepts("uri", "\"http://[::ffff:192.168.00.1]/\""));
+
+	EXPECT_TRUE(format_accepts("iri", "\"http://\\u00e9.example/\""));
+	EXPECT_FALSE(format_accepts("uri", "\"http://\\u00e9.example/\""));
+
+	EXPECT_TRUE(format_accepts("uri-template", "\"http://example.com/{p}/x{?q,r}\""));
+	EXPECT_TRUE(format_accepts("uri-template", "\"{v:1000}\""));
+	EXPECT_FALSE(format_accepts("uri-template", "\"{v:10000}\""));
+	EXPECT_FALSE(format_accepts("uri-template", "\"{v:01}\""));
+	EXPECT_FALSE(format_accepts("uri-template", "\"{v:0}\""));
+	EXPECT_FALSE(format_accepts("uri-template", "\"http://example.com/dictionary/{term:1}/{term\""));
+	EXPECT_FALSE(format_accepts("uri-template", "\"{foo,}\""));
 }
 
 TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {

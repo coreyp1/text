@@ -40,11 +40,17 @@ optional = sorted(glob.glob(os.path.join(root, 'optional', '*.json')))
 formats = sorted(glob.glob(os.path.join(root, 'optional', 'format', '*.json')))
 
 
-def run(files):
+def run(files, assert_formats=False):
     """Every assertion in `files`, as (passed, wrong, unreachable, records)."""
     if not files:
         return 0, 0, 0, []
-    out = subprocess.run([runner] + files, capture_output=True, timeout=600)
+    env = dict(os.environ)
+    if assert_formats:
+        env['JSS_FORMAT_ASSERT'] = '1'
+    else:
+        env.pop('JSS_FORMAT_ASSERT', None)
+    out = subprocess.run([runner] + files, capture_output=True, timeout=600,
+                         env=env)
     if out.returncode != 0:
         sys.exit("runner failed: %s" % out.stderr.decode('utf-8', 'replace'))
     records = [line.split('\t')
@@ -55,8 +61,8 @@ def run(files):
     return passed, wrong, unreachable, records
 
 
-def report(title, files):
-    passed, wrong, unreachable, records = run(files)
+def report(title, files, assert_formats=False):
+    passed, wrong, unreachable, records = run(files, assert_formats)
     total = passed + wrong + unreachable
     if total == 0:
         return 0, 0, []
@@ -90,7 +96,10 @@ def report(title, files):
 
 total, passed, wrongs = report("required", required)
 report("optional", optional)
-report("optional/format", formats)
+# `format` asserts nothing by default, which is what 2020-12 requires and what
+# the required format.json checks.  These files measure it as an assertion, so
+# they are the one section run with the policy that turns it on.
+report("optional/format (format asserting)", formats, assert_formats=True)
 
 print("\nSuite commit: %s" % os.environ.get('JSS_COMMIT', '(unpinned)'))
 if os.environ.get('JSS_REPORT'):

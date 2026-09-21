@@ -17,6 +17,9 @@
  * Genuinely unknown keywords - vendor extensions, and the annotation
  * keywords title, description, default, examples, $comment, readOnly,
  * writeOnly and deprecated - are ignored, as JSON Schema requires. So are
+ * contentEncoding, contentMediaType and contentSchema, which 2020-12 defines
+ * as annotations rather than assertions, and format, which is an annotation
+ * unless GTEXT_JSON_Schema_Options::format asks for it to be asserted. So are
  * $schema, $id, $defs, definitions, $anchor and $vocabulary, which cannot
  * change which instances are valid while $ref is unsupported.
  *
@@ -82,7 +85,8 @@
  *   to be collected across applicators, which nothing here does yet
  * - $recursiveRef, $dynamicRef - the 2019-09 and 2020-12 dynamic-scope
  *   references
- * - format, contentEncoding, contentMediaType, contentSchema
+ * - idn-hostname as a `format`, when format assertion is asked for: it needs
+ *   IDNA tables this library does not carry
  *
  * Note on $ref depth: a schema that refers to itself without consuming any
  * instance, such as {"$ref":"#"}, compiles successfully and fails validation
@@ -194,6 +198,42 @@ typedef struct {
 } GTEXT_JSON_Regex_Provider;
 
 /**
+ * @brief What the `format` keyword does
+ */
+typedef enum {
+  /**
+   * `format` is an annotation and asserts nothing.
+   *
+   * This is the specification's default and the default here. An
+   * implementation that refuses a schema for carrying `format`, as this one
+   * did, is not conformant: 2020-12 says a validator MUST NOT assert on it
+   * unless it has been asked to.
+   */
+  GTEXT_JSON_FORMAT_ANNOTATION = 0,
+
+  /**
+   * Assert every format this library can check.
+   *
+   * A format name in the 2020-12 vocabulary that it cannot check is refused
+   * at compile time with GTEXT_JSON_E_SCHEMA_UNSUPPORTED, rather than
+   * ignored - the caller asked for the constraint, and handing back a schema
+   * that silently does not carry it is the failure the strict-keyword check
+   * exists to prevent. A name outside the vocabulary - a vendor's own
+   * `"format": "phone-number"` - is ignored, because the specification
+   * requires that and because nothing was promised about it.
+   *
+   * Checked: date-time, date, time, duration (ghoti.io-chron's grammars),
+   * email, idn-email, hostname, ipv4, ipv6, uri, uri-reference, iri,
+   * iri-reference, uuid, uri-template, json-pointer, relative-json-pointer,
+   * and regex when a regular-expression provider was supplied.
+   *
+   * Refused: idn-hostname, which needs IDNA tables this library does not
+   * carry, and regex when no provider was supplied.
+   */
+  GTEXT_JSON_FORMAT_ASSERT
+} GTEXT_JSON_Format_Policy;
+
+/**
  * @brief Options controlling schema compilation
  */
 typedef struct {
@@ -223,6 +263,13 @@ typedef struct {
    * patterns are released when the schema is freed.
    */
   const GTEXT_JSON_Regex_Provider * regex;
+
+  /**
+   * Whether `format` asserts anything. Default:
+   * GTEXT_JSON_FORMAT_ANNOTATION, which is what the specification requires
+   * of a validator that has not been asked otherwise.
+   */
+  GTEXT_JSON_Format_Policy format;
 } GTEXT_JSON_Schema_Options;
 
 /**

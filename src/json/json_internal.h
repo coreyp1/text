@@ -137,6 +137,22 @@ typedef struct {
 } json_number;
 
 /**
+ * @brief Is `name` one of the formats 2020-12's vocabulary defines?
+ *
+ * A name in the vocabulary is one a caller asking for assertion can expect to
+ * be checked; a name outside it belongs to nobody and is ignored.
+ */
+GTEXT_INTERNAL_API int json_format_is_known(const char * name, size_t len);
+
+/**
+ * @brief Does `value` satisfy the named format?
+ *
+ * @return 1 if it does or the format is not one this checks, 0 if it does not
+ */
+GTEXT_INTERNAL_API int json_format_check(
+    const char * name, size_t name_len, const char * value, size_t value_len);
+
+/**
  * @brief A JSON number as an exact decimal: mantissa * 10^exponent
  *
  * JSON numbers are decimal text. Keywords that ask an arithmetic question
@@ -1019,6 +1035,14 @@ typedef struct json_schema_node {
   struct json_schema_node * additional_properties;
   /// Applies to each property name, as a string instance.
   struct json_schema_node * property_names;
+
+  /**
+   * The `format` this node asserts, or NULL. Owned, and set only under
+   * GTEXT_JSON_FORMAT_ASSERT - in the default annotation policy the keyword
+   * constrains nothing and nothing is kept.
+   */
+  char * format_name;
+  size_t format_name_len;
 
   // dependentSchemas
   json_schema_dep_schema * dep_schemas;

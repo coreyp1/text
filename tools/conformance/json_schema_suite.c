@@ -133,6 +133,11 @@ static const char * description_of(const GTEXT_JSON_Value * value) {
   return text;
 }
 
+/* Set from JSS_FORMAT_ASSERT, which the scorer sets for the optional/format
+ * files - those measure `format` as an assertion, and the default policy
+ * asserts nothing, so running them without it measures nothing. */
+static int assert_formats = 0;
+
 static void run_group(const char * file, const GTEXT_JSON_Value * group,
     const GTEXT_JSON_Regex_Provider * provider) {
   const GTEXT_JSON_Value * schema_doc =
@@ -145,6 +150,9 @@ static void run_group(const char * file, const GTEXT_JSON_Value * group,
 
   GTEXT_JSON_Schema_Options options = gtext_json_schema_options_default();
   options.regex = provider;
+  if (assert_formats) {
+    options.format = GTEXT_JSON_FORMAT_ASSERT;
+  }
   GTEXT_JSON_Error error;
   memset(&error, 0, sizeof(error));
   GTEXT_JSON_Schema * schema =
@@ -234,6 +242,8 @@ int main(int argc, char ** argv) {
   grx.free_fn = schema_regex_free;
   provider = &grx;
 #endif
+
+  assert_formats = (getenv("JSS_FORMAT_ASSERT") != NULL);
 
   GTEXT_JSON_Parse_Options parse_options = gtext_json_parse_options_default();
 
