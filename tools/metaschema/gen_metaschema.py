@@ -108,8 +108,35 @@ def load(directory, relative, uri):
     return raw
 
 
+# Every generated source carries the same licence notice as a hand-written
+# one. It is emitted here rather than added afterwards, so that regenerating
+# does not quietly drop it.
+LICENSE_NOTICE = """\
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Text.
+ *
+ * Ghoti.io Text is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Text is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+"""
+
+
 def emit(handle, documents):
     handle.write(
+        LICENSE_NOTICE + "\n"
         "/**\n"
         " * @file\n"
         " *\n"
@@ -125,8 +152,6 @@ def emit(handle, documents):
         " * than fetched because the alternative is a validator that opens a\n"
         " * connection during a compile, to a URI taken from the document it was\n"
         " * asked to compile.\n"
-        " *\n"
-        " * Copyright 2026 by Corey Pennycuff\n"
         " */\n"
         "\n"
         "#include \"metaschema_internal.h\"\n")

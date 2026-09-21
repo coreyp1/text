@@ -1,3 +1,23 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Text.
+ *
+ * Ghoti.io Text is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Text is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 /**
  * @file csv_writer_internal.h
  * @brief Internal helper functions for CSV writer operations
@@ -5,8 +25,6 @@
  * This header contains documentation for static helper functions used
  * internally within csv_writer.c. These functions are not part of the
  * public API and are only visible within csv_writer.c.
- *
- * Copyright 2026 by Corey Pennycuff
  */
 
 #ifndef GHOTI_IO_GTEXT_SRC_CSV_CSV_WRITER_INTERNAL_H

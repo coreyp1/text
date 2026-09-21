@@ -1,3 +1,23 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Text.
+ *
+ * Ghoti.io Text is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Text is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 /**
  * @file
  *
@@ -15,8 +35,6 @@
  * carried its own copy of all of it, which is how it came to read with
  * fseek/ftell - so it could not read a pipe, and applied its own
  * max_total_bytes only after the file was already in memory.
- *
- * Copyright 2026 by Corey Pennycuff
  */
 
 #ifndef GHOTI_IO_GTEXT_TEXT_FILE_IO_INTERNAL_H
