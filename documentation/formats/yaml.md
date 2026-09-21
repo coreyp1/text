@@ -735,17 +735,35 @@ wrong.
 | `%YAML 1.2` then a bare node | `l-directive-document`, 9.2 | accepted |
 | `a: *x` before `b: &x 1` | an alias names a *preceding* anchor, 7.1 | resolved forward |
 | `!<> 1` | `c-verbatim-tag` needs `ns-uri-char+` | accepted |
+| a NUL, ESC, DEL or C1 control anywhere | `c-printable`, 5.1 | accepted as content |
+| `x<BOM>y` in a plain or block scalar | `nb-char` excludes it, 5.4 | accepted |
+| a BOM before a later document | `l-document-prefix`, 5.2 | refused |
 
-All eleven are fixed and pinned in `tests/data/yaml/spec-1.2.2.corpus`, which
+All of them are fixed and pinned in `tests/data/yaml/spec-1.2.2.corpus`, which
 `make test` scores - not `make conformance`, which needs the network on first
 use and is not what anybody runs before committing. Prefer upstreaming a case
 to yaml-test-suite over adding one there.
 
-Two further differences are recorded but not treated as defects, because both
-references behave as this parser does. NEL (U+0085), LS and PS are folded as
-line breaks, though 1.2's `b-char` is LF and CR alone; and a byte order mark
-before a second document is refused, though `l-document-prefix` permits one.
-The suite contains no BOM case at all.
+The last three of those arrived by a different route, and it is worth saying
+how. NEL, LS and PS were written down as a fourth divergence - "folded as
+line breaks, though 1.2's `b-char` is LF and CR alone" - and they were
+nothing of the kind. A terminal renders U+0085 as nothing and U+2028 as a
+space, and the output had been read off a screen rather than out of the
+bytes. The parser had always kept all three as ordinary content, which is
+what 1.2 asks for.
+
+Checking that properly is what turned up `c-printable`, which was not
+enforced at all. A NUL, an ESC, a DEL or a C1 control travelled through as
+scalar content in every style, quoted or not, and the NUL was the worst of
+them: `a: x\0y` came back as `{"a": "x"}` with the rest of the scalar gone.
+Both PyYAML and js-yaml refuse every one. The gate now runs over the decoded
+character stream as bytes arrive, before any token is cut, so no style can be
+missed - and it holds a sequence a feed cut in half rather than judging it
+from its first byte. Escapes are untouched: `"\u0001"` is six printable
+characters in the stream whatever it builds.
+
+**Read the bytes, not the terminal.** Two items on a list of thirteen were
+there because a screen could not draw the difference.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

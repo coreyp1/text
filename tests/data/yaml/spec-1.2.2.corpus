@@ -20,9 +20,15 @@
 #   @end
 #
 # Only those five words, at column 0, are special. Outside a case, a line
-# starting with "#" is a comment. Inside @yaml, "\t" is a tab and "\\" a
-# backslash - written as escapes because a literal tab in a test fixture is
-# the first thing an editor eats, and half of these cases are about tabs.
+# starting with "#" is a comment.
+#
+# Inside @yaml and @json alike: "\t" is a tab, "\0" a NUL, "\xNN" and
+# "\uNNNN" a code point, and "\\" a single backslash. Nearly every case here
+# turns on a character that is invisible, or that an editor would eat, or
+# that cannot go in a text file at all, so none of them is written literally.
+# A backslash the expectation really contains is "\\" - which comes up in
+# expected JSON, where the writer spells a tab inside a string as the two
+# characters "\t".
 
 # ---------------------------------------------------------------------------
 # 10.3.2  Core schema resolution
@@ -286,4 +292,135 @@ b: !!str *x
 !<tag:yaml.org,2002:str> 1
 @json
 "1"
+@end
+
+# ---------------------------------------------------------------------------
+# 5.1  c-printable
+#
+#   c-printable ::= #x9 | #xA | #xD | [#x20-#x7E] | #x85 | [#xA0-#xD7FF]
+#                 | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+#
+# Every production bottoms out in it, so a character outside it cannot appear
+# in a document in any style, quoted or not. Nothing enforced it at all, and
+# the NUL was the worst of them: "a: x\0y" came back as {"a": "x"} with the
+# rest of the scalar simply gone. PyYAML and js-yaml refuse all of these. The
+# suite contains no case with a non-printable character anywhere in it.
+# ---------------------------------------------------------------------------
+
+@case a NUL is not a character a stream may contain
+@yaml
+a: x\0y
+@error Character not allowed in a YAML stream
+@end
+
+@case nor an ESC - and a quoted scalar is no exception
+@yaml
+a: "x\x1by"
+@error Character not allowed in a YAML stream
+@end
+
+@case nor DEL, which falls outside [#x20-#x7E]
+@yaml
+a: x\x7fy
+@error Character not allowed in a YAML stream
+@end
+
+@case nor a C1 control, which falls below #xA0
+@yaml
+a: x\x9fy
+@error Character not allowed in a YAML stream
+@end
+
+@case tab, NEL, LS and PS are printable - and 1.2 breaks on LF and CR alone
+@yaml
+a: "x\ty"
+b: x\x85y
+c: x\u2028y
+@json
+{"a":"x\\ty","b":"x\x85y","c":"x\u2028y"}
+@end
+
+@case an escape still builds whatever it names: the stream stays printable
+@yaml
+a: "\\u0001"
+b: "\\e"
+@json
+{"a":"\\u0001","b":"\\u001B"}
+@end
+
+# ---------------------------------------------------------------------------
+# 5.2  The byte order mark
+#
+# l-document-prefix ::= c-byte-order-mark? l-comment*, and the stream admits
+# a prefix before every document rather than only the first - which was all
+# that was accepted, because the mark is eaten by encoding detection and
+# nothing downstream knew it existed. Elsewhere U+FEFF is excluded from
+# nb-char (5.4), so it cannot stand in a plain or block scalar; the quoted
+# styles are built from nb-json, which does admit it.
+# ---------------------------------------------------------------------------
+
+@case a mark may open the stream
+@yaml
+\ufeffa: 1
+@json
+{"a":1}
+@end
+
+@case a mark may open a later document, before its "---"
+@yaml
+a: 1
+...
+\ufeff---
+b: 2
+@json
+{"a":1}
+{"b":2}
+@end
+
+@case ...and before a "---" that no "..." preceded
+@yaml
+a: 1
+\ufeff---
+b: 2
+@json
+{"a":1}
+{"b":2}
+@end
+
+@case ...and before a bare document that a "..." closed off
+@yaml
+a: 1
+...
+\ufeffb: 2
+@json
+{"a":1}
+{"b":2}
+@end
+
+@case a mark is not nb-char, so it cannot stand in a plain scalar
+@yaml
+a: x\ufeffy
+@error Byte order mark in scalar content
+@end
+
+@case nor in a block scalar
+@yaml
+a: |
+  x\ufeffy
+@error Byte order mark in scalar content
+@end
+
+@case but a quoted scalar is built from nb-json, which admits it
+@yaml
+a: "x\ufeffy"
+b: 'x\ufeffy'
+@json
+{"a":"x\ufeffy","b":"x\ufeffy"}
+@end
+
+@case a mark inside an open document is refused, and says which fault it is
+@yaml
+a: 1
+\ufeffb: 2
+@error Byte order mark inside a document
 @end

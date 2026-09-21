@@ -48,16 +48,64 @@ std::string corpus_path() {
 	return std::string(dir ? dir : "tests/data/yaml") + "/spec-1.2.2.corpus";
 }
 
-/* "\t" is a tab and "\\" a backslash; everything else is itself. Half these
- * cases are about tabs, and a literal tab in a fixture is the first thing an
- * editor eats. */
+void append_utf8(std::string *out, unsigned int cp) {
+	if (cp < 0x80) {
+		*out += (char)cp;
+	} else if (cp < 0x800) {
+		*out += (char)(0xC0 | (cp >> 6));
+		*out += (char)(0x80 | (cp & 0x3F));
+	} else if (cp < 0x10000) {
+		*out += (char)(0xE0 | (cp >> 12));
+		*out += (char)(0x80 | ((cp >> 6) & 0x3F));
+		*out += (char)(0x80 | (cp & 0x3F));
+	} else {
+		*out += (char)(0xF0 | (cp >> 18));
+		*out += (char)(0x80 | ((cp >> 12) & 0x3F));
+		*out += (char)(0x80 | ((cp >> 6) & 0x3F));
+		*out += (char)(0x80 | (cp & 0x3F));
+	}
+}
+
+int hexval(char c) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+/* Escapes, in both the input and the expected output: "\t" a tab, "\0" a
+ * NUL, "\xNN" and "\uNNNN" a code point, "\\" a backslash. Most of these
+ * cases turn on a character that is invisible, or that an editor would eat,
+ * or that cannot go in a source file at all - so none of them is written
+ * literally. A backslash the expectation really contains is "\\": JSON
+ * escapes are the one place that comes up, as in "\\t" for the two
+ * characters the writer emits for a tab inside a string.
+ *
+ * An escape this does not know is left alone, backslash and all. */
 std::string unescape(const std::string &in) {
 	std::string out;
 	for (size_t i = 0; i < in.size(); i++) {
 		if (in[i] != '\\' || i + 1 >= in.size()) { out += in[i]; continue; }
 		switch (in[i + 1]) {
 		case 't': out += '\t'; i++; break;
+		case '0': out += '\0'; i++; break;
 		case '\\': out += '\\'; i++; break;
+		case 'x':
+		case 'u': {
+			const size_t digits = in[i + 1] == 'x' ? 2 : 4;
+			if (i + 1 + digits >= in.size()) { out += in[i]; break; }
+			unsigned int cp = 0;
+			bool ok = true;
+			for (size_t k = 0; k < digits; k++) {
+				int v = hexval(in[i + 2 + k]);
+				if (v < 0) { ok = false; break; }
+				cp = (cp << 4) | (unsigned)v;
+			}
+			if (!ok) { out += in[i]; break; }
+			append_utf8(&out, cp);
+			i += 1 + digits;
+			break;
+		}
 		default: out += in[i]; break;
 		}
 	}
@@ -119,7 +167,7 @@ bool load_corpus(std::vector<Case> *out, std::string *why) {
 
 		switch (state) {
 		case IN_YAML: cur.yaml += unescape(line); cur.yaml += "\n"; break;
-		case IN_JSON: cur.want_json += line; cur.want_json += "\n"; break;
+		case IN_JSON: cur.want_json += unescape(line); cur.want_json += "\n"; break;
 		case OUTSIDE:
 			if (!line.empty() && line[0] != '#') {
 				*why = "stray text at line " + std::to_string(lineno)
@@ -200,8 +248,8 @@ TEST(YamlSpecCorpus, TheCorpusLoads) {
 	ASSERT_TRUE(load_corpus(&cases, &why)) << why;
 	/* A floor, not a count: adding a case must not mean editing this line,
 	 * but an empty or truncated corpus has to be loud. */
-	EXPECT_GE(cases.size(), 30u)
-		<< "the corpus has shrunk; it held 33 cases when written";
+	EXPECT_GE(cases.size(), 40u)
+		<< "the corpus has shrunk; it held 45 cases when written";
 }
 
 TEST(YamlSpecCorpus, EveryCaseHoldsToTheSpecification) {

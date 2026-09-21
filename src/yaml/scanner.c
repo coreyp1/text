@@ -27,11 +27,21 @@ typedef enum {
 
 struct GTEXT_YAML_Scanner {
   GTEXT_YAML_DynBuf input; /* buffered input */
+  /* How far into input[] the c-printable check has got.  It runs as bytes
+     arrive rather than as tokens are cut, so it sees every character
+     regardless of which production would have consumed it, and it stops
+     short of a UTF-8 sequence split across two feeds. */
+  size_t printable_checked;
   size_t cursor;          /* next byte index to consume */
   size_t offset;          /* total bytes consumed previously (for offsets) */
   int line;
   int col;
   int finished;           /* whether finish() was called */
+  /* Whether a document is open, so that the scanner knows where a
+     l-document-prefix may stand.  A byte order mark is legal only there
+     (5.2): at the start of the stream, before a "---", and after a "..." has
+     closed the document before.  Anywhere else it is not even nb-char. */
+  int document_open;
   int indent_ws;          /* 1 if still in indentation whitespace on this line */
   int line_indent;        /* column of the first non-space on this line, 0-based */
   int node_indent;        /* indentation of the block node being built, -1 at the root */
@@ -785,6 +795,110 @@ static int scanner_decode_utf32(
   return 1;
 }
 
+/**
+ * @brief Is this code point one a YAML stream may contain at all?
+ *
+ * c-printable (5.1). Everything in the grammar bottoms out in it, so a
+ * character outside it is not "content this production will not take" - it
+ * cannot appear anywhere in a document, in any style, quoted or not.
+ *
+ * Note what is *in*: tab, NEL (#x85) and, through [#xA0-#xD7FF], LS and PS.
+ * NEL, LS and PS were line breaks in YAML 1.1 and are ordinary characters in
+ * 1.2 (5.4 leaves b-char as LF and CR alone), which this scanner already had
+ * right. What is out is the C0 controls other than tab, LF and CR; DEL; the
+ * C1 controls #x80-#x84 and #x86-#x9F; the surrogates; and #xFFFE/#xFFFF.
+ *
+ * The byte order mark is c-printable and is *not* checked here. Where it may
+ * stand is a question about position rather than about the character, and
+ * 5.2 answers it somewhere this function cannot see.
+ */
+static int scanner_char_printable(unsigned int cp)
+{
+  if (cp == 0x9 || cp == 0xA || cp == 0xD) return 1;
+  if (cp >= 0x20 && cp <= 0x7E) return 1;
+  if (cp == 0x85) return 1;
+  if (cp >= 0xA0 && cp <= 0xD7FF) return 1;
+  if (cp >= 0xE000 && cp <= 0xFFFD) return 1;
+  if (cp >= 0x10000 && cp <= 0x10FFFF) return 1;
+  return 0;
+}
+
+/**
+ * @brief Refuse any character 5.1 does not admit, wherever it appears.
+ *
+ * Nothing enforced c-printable at all, so a NUL, an ESC or a lone C1 control
+ * travelled through as ordinary scalar content. The NUL was the worst of
+ * them: "a: x\0y" came back as {"a": "x"} - the rest of the scalar simply
+ * gone, which is the silent-data-loss shape rather than a refusal.
+ *
+ * Checked here, where every byte of every encoding has already been decoded
+ * to UTF-8 and before any token is cut, because the alternative is one check
+ * per scalar style and one of them would have been missed. Walks only the
+ * bytes this feed added, and stops before a sequence the feed cut in half so
+ * the next feed can finish it - the chunk size must not change what a
+ * document means.
+ */
+static int scanner_check_printable(GTEXT_YAML_Scanner *s, int final)
+{
+  const unsigned char *b = (const unsigned char *)s->input.data;
+  size_t i = s->printable_checked;
+
+  while (i < s->input.len) {
+    unsigned char c = b[i];
+    unsigned int cp = 0;
+    size_t need = 0;
+
+    if (c < 0x80) { cp = c; need = 1; }
+    else if ((c >> 5) == 0x6) { cp = c & 0x1Fu; need = 2; }
+    else if ((c >> 4) == 0xE) { cp = c & 0x0Fu; need = 3; }
+    else if ((c >> 3) == 0x1E) { cp = c & 0x07u; need = 4; }
+    else {
+      /* A stray continuation or an invalid lead byte. gtext_utf8_validate()
+         is the authority on well-formedness and runs over the assembled
+         scalar; leave it to say so rather than guessing at a code point. */
+      i++;
+      continue;
+    }
+
+    if (i + need > s->input.len) {
+      if (!final) break;   /* the rest arrives with the next feed */
+      i++;                 /* truncated at end of input; not ours to report */
+      continue;
+    }
+    for (size_t k = 1; k < need; k++) {
+      cp = (cp << 6) | (b[i + k] & 0x3Fu);
+    }
+
+    if (!scanner_char_printable(cp)) {
+      scanner_set_error(s, GTEXT_YAML_E_INVALID,
+          "Character not allowed in a YAML stream");
+      s->printable_checked = i;
+      return 0;
+    }
+    i += need;
+  }
+
+  s->printable_checked = i;
+  return 1;
+}
+
+/**
+ * @brief Does this scalar carry a byte order mark in its content?
+ *
+ * nb-char is "c-printable - b-char - c-byte-order-mark" (5.4), so a U+FEFF
+ * cannot stand in a plain or block scalar. The quoted styles are built from
+ * nb-json instead - "#x9 | [#x20-#x10FFFF]", which does include it - so they
+ * do not ask this.
+ */
+static int scalar_has_bom(const char *data, size_t len)
+{
+  const unsigned char *b = (const unsigned char *)data;
+  for (size_t i = 0; i + 2 < len; i++) {
+    if (b[i] == 0xEF && b[i + 1] == 0xBB && b[i + 2] == 0xBF) return 1;
+  }
+  return 0;
+}
+
 static int scanner_decode_bytes(
     GTEXT_YAML_Scanner *s,
     const unsigned char *data,
@@ -796,24 +910,24 @@ static int scanner_decode_bytes(
       scanner_set_error(s, GTEXT_YAML_E_OOM, "out of memory buffering input");
       return 0;
     }
-    return 1;
+    return scanner_check_printable(s, final);
   }
 
+  int ok;
   if (s->encoding == GTEXT_YAML_ENCODING_UTF16LE) {
-    return scanner_decode_utf16(s, data, len, 0, final);
+    ok = scanner_decode_utf16(s, data, len, 0, final);
+  } else if (s->encoding == GTEXT_YAML_ENCODING_UTF16BE) {
+    ok = scanner_decode_utf16(s, data, len, 1, final);
+  } else if (s->encoding == GTEXT_YAML_ENCODING_UTF32LE) {
+    ok = scanner_decode_utf32(s, data, len, 0, final);
+  } else if (s->encoding == GTEXT_YAML_ENCODING_UTF32BE) {
+    ok = scanner_decode_utf32(s, data, len, 1, final);
+  } else {
+    scanner_set_error(s, GTEXT_YAML_E_INVALID, "unsupported input encoding");
+    return 0;
   }
-  if (s->encoding == GTEXT_YAML_ENCODING_UTF16BE) {
-    return scanner_decode_utf16(s, data, len, 1, final);
-  }
-  if (s->encoding == GTEXT_YAML_ENCODING_UTF32LE) {
-    return scanner_decode_utf32(s, data, len, 0, final);
-  }
-  if (s->encoding == GTEXT_YAML_ENCODING_UTF32BE) {
-    return scanner_decode_utf32(s, data, len, 1, final);
-  }
-
-  scanner_set_error(s, GTEXT_YAML_E_INVALID, "unsupported input encoding");
-  return 0;
+  if (!ok) return 0;
+  return scanner_check_printable(s, final);
 }
 
 static int scanner_determine_encoding(GTEXT_YAML_Scanner *s, int final)
@@ -986,6 +1100,9 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_finish(GTEXT_YAML_Scanner *s)
   } else if (s->decode_pending_len > 0) {
     scanner_set_error(s, GTEXT_YAML_E_INVALID, "truncated encoded input");
   }
+  /* A sequence the last feed cut in half was left unchecked in case more was
+     coming.  Nothing is, so finish the walk. */
+  (void)scanner_check_printable(s, 1);
 }
 
 GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner *s, GTEXT_YAML_Token *tok, GTEXT_YAML_Error *err)
@@ -1035,6 +1152,60 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       tok->col = s->col;
       s->last_indicator = 0;
       return GTEXT_YAML_OK;
+    }
+
+    /* A byte order mark standing where l-document-prefix may (5.2):
+       "l-document-prefix ::= c-byte-order-mark? l-comment*", and the stream
+       admits one before every document, not only the first. Only the first
+       was accepted, because the mark is eaten by encoding detection and
+       nothing else knew about it - so a stream that marked each of its
+       documents was refused at the second.
+
+       It has to open a line, and either no document is open or a "---" is
+       about to open one. Everywhere else U+FEFF is not nb-char at all, and
+       the scalar scanners refuse it. */
+    if (c == 0xEF && s->col == 1) {
+      if (s->cursor + 3 > s->input.len) {
+        if (!s->finished) return GTEXT_YAML_E_INCOMPLETE;
+      } else {
+        const unsigned char *b = (const unsigned char *)s->input.data + s->cursor;
+        if (b[1] == 0xBB && b[2] == 0xBF) {
+          /* With a document already open the mark is legal only if a "---"
+             reopens one, so the three bytes after it have to be in hand
+             before this can be decided.  Reading them out of a buffer that
+             had not received them yet made the answer depend on where the
+             caller's chunk boundaries fell. */
+          if (s->document_open && s->cursor + 6 > s->input.len
+              && !s->finished) {
+            return GTEXT_YAML_E_INCOMPLETE;
+          }
+          bool marker_follows = (s->cursor + 6 <= s->input.len)
+            && memcmp(s->input.data + s->cursor + 3, "---", 3) == 0;
+          if (!s->document_open || marker_follows) {
+            /* Stepped over rather than consumed: the mark is a prefix, not
+               content, so it must not move the column.  scanner_consume()
+               would leave a following "---" starting at column 4, where the
+               document-marker test does not look, and it came back as the
+               plain scalar "--- b" instead. */
+            s->cursor += 3;
+            s->offset += 3;
+            continue;
+          }
+          /* A mark inside an open document, where no "---" follows. Said
+             plainly here; left to fall through it became whatever the
+             scalar scanners made of it, which was a mapping key starting
+             with an invisible character and an error about something
+             else. */
+          if (err) {
+            err->code = GTEXT_YAML_E_INVALID;
+            err->message = "Byte order mark inside a document";
+            err->offset = s->offset;
+            err->line = s->line;
+            err->col = s->col;
+          }
+          return GTEXT_YAML_E_INVALID;
+        }
+      }
     }
     /* A tab is separation, never indentation (6.1), and the check applies
        wherever indentation is what is called for.  That is a line's leading
@@ -1158,6 +1329,15 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
   size_t off = s->offset;
   int line = s->line, col = s->col;
+
+  /* Past the white space and comments, so whatever comes next is content -
+     a directive, a marker, an indicator or a scalar. From here a document is
+     open, and the next byte order mark is only legal if a "---" reopens one.
+     The marker handler below overrides this: "---" leaves it set and "..."
+     clears it.
+     Comments never reach here, which is right - l-document-prefix admits
+     them after the mark. */
+  s->document_open = 1;
 
   /* Buffer state (debug prints removed) */
 
@@ -1649,6 +1829,18 @@ block_scalar_collected:
 
   gtext_yaml_dynbuf_free(&scalar);
 
+    if (scalar_has_bom(out, out_len)) {
+      free(out);
+      if (err) {
+        err->code = GTEXT_YAML_E_INVALID;
+        err->message = "Byte order mark in scalar content";
+        err->offset = off;
+        err->line = line;
+        err->col = col;
+      }
+      return GTEXT_YAML_E_INVALID;
+    }
+
     s->last_scalar_col = col - 1; /* col is 1-based */
       tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (style == '>')
@@ -1722,6 +1914,9 @@ block_scalar_collected:
              open for a plain scalar to be measured against. */
           s->node_indent = -1;
           s->last_json_like = false;
+          /* "---" opens a document and "..." closes one; either way the
+             next byte order mark question is answered from here. */
+          s->document_open = (c == '-');
           tok->type = (c == '-') ? GTEXT_YAML_TOKEN_DOCUMENT_START : GTEXT_YAML_TOKEN_DOCUMENT_END;
           tok->offset = off;
           tok->line = line;
@@ -2625,6 +2820,18 @@ scan_plain_scalar:
     if (err) {
       err->code = GTEXT_YAML_E_INVALID;
       err->message = "invalid UTF-8 in scalar";
+      err->offset = off;
+      err->line = line;
+      err->col = col;
+    }
+    gtext_yaml_dynbuf_free(&scalar);
+    return GTEXT_YAML_E_INVALID;
+  }
+
+  if (scalar_has_bom(scalar.data, scalar.len)) {
+    if (err) {
+      err->code = GTEXT_YAML_E_INVALID;
+      err->message = "Byte order mark in scalar content";
       err->offset = off;
       err->line = line;
       err->col = col;

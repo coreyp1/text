@@ -365,9 +365,14 @@ resolved; YAML 1.1 integer forms (`1_000`, `0b101`, `0O14`) resolved under
 1.2 without even a warning; tabs were refused where `s-separate-in-line`
 allows them in `%YAML` and `%TAG`; a second `%TAG` for one handle, a
 `%YAML 2.0`, a directive with no `---` after it, a forward alias reference
-and an empty `!<>` were all accepted. Every one of them is a shape that
-appears in none of the suite's 406 documents, which is exactly why the score
-stayed at 395 while they were wrong. They now live in
+and an empty `!<>` were all accepted. Checking those turned up three more:
+`c-printable` was not enforced at all, so a NUL, an ESC or a C1 control
+passed through as scalar content - and `a: x\0y` came back as `{"a": "x"}`
+with the rest of the scalar silently gone - while the byte order mark was
+allowed inside scalars, where `nb-char` excludes it, and refused before a
+second document, where `l-document-prefix` permits it. Every one of the
+fourteen is a shape that appears in none of the suite's 406 documents, which
+is exactly why the score stayed at 395 while they were wrong. They now live in
 `tests/data/yaml/spec-1.2.2.corpus`, checked by `make test` rather than
 behind `make conformance`, because the point of them is to be asked often.
 

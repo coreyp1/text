@@ -128,9 +128,13 @@ what to do next.
 
 Name the limit of the corpus as well. 395 of 395 is a measurement over 406
 documents; it is not a statement about the grammar those documents sample.
-Reading the spec afterwards turned up eleven divergences, and a scan showed
+Reading the spec afterwards turned up fourteen divergences, and a scan showed
 that not one of them appears in any of the 406 - which is precisely why the
-score did not move. A corpus can only ever report on the questions it asks,
+score did not move. Three of the fourteen were found only while checking the
+others, and two items on the first list turned out not to be divergences at
+all: the characters in question render as nothing on a terminal, and the
+output had been read off a screen instead of out of the bytes. Print the
+bytes. A corpus can only ever report on the questions it asks,
 so when the score stops moving, go and read the specification.
 
 Name the limit of the oracle too, not only the oracle. That harness checked

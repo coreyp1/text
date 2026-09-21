@@ -186,6 +186,24 @@ const char *kDocuments[] = {
 	"- ! 12\n",
 	"!\nfoo\n",
 	"a: !foo b\n",
+
+	/* Characters that take more than one byte, which the c-printable gate
+	 * (5.1) has to decode to judge - and it judges them as the bytes arrive,
+	 * so a sequence a feed cuts in half must be held over rather than read
+	 * as whatever its first byte looks like.  U+0085, U+2028 and U+2029 are
+	 * printable and are not line breaks in 1.2; the emoji is four bytes. */
+	"a: x\xc2\x85y\n",
+	"a: x\xe2\x80\xa8y\n",
+	"a: x\xe2\x80\xa9y\n",
+	"a: \xf0\x9f\x98\x80\n",
+	"a: \xc2\xa0" "b\n",
+
+	/* A byte order mark opening a later document (5.2).  Three bytes, and
+	 * the decision needs the three after them as well to see whether a "---"
+	 * follows, so this is the longest lookahead in the prefix. */
+	"a: 1\n...\n\xef\xbb\xbf---\nb: 2\n",
+	"a: 1\n\xef\xbb\xbf---\nb: 2\n",
+	"a: 1\n...\n\xef\xbb\xbf" "b: 2\n",
 };
 
 } // namespace

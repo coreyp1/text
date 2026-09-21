@@ -110,9 +110,12 @@ shrink back.
 instead of running the suite: case-insensitive matching of the core schema's
 resolution table, YAML 1.1 integer forms resolving under 1.2, tabs refused in
 directive separation, a repeated `%TAG` handle, `%YAML 2.0`, a directive with
-no `---` after it, a forward alias reference and an empty `!<>`. None of the
-eleven shapes appears in any of the suite's 406 documents, which is why the
-score did not move while they were wrong. They are fixed and pinned in
+no `---` after it, a forward alias reference and an empty `!<>`. Three more
+came out of checking those: `c-printable` (5.1) was not enforced anywhere, so
+a NUL truncated the scalar it stood in, and the byte order mark was accepted
+inside scalars and refused before a later document - each the wrong way
+round. None of the fourteen shapes appears in any of the suite's 406
+documents, which is why the score did not move while they were wrong. They are fixed and pinned in
 `tests/data/yaml/spec-1.2.2.corpus`, scored by `make test` so they are asked
 on every build rather than only when somebody runs the conformance target.
 See \ref format_yaml "the YAML format page" for the table.
