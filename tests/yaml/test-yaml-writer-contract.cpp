@@ -780,6 +780,45 @@ TEST(YamlWriterContract, ADocumentTakesOneRootNode) {
 	EXPECT_NE(out.find('b'), std::string::npos) << "wrote: " << out;
 }
 
+/* A block scalar ends its own last line, and with "+" chomping that break is
+   part of the value (8.1.1.2). The break DOCUMENT_START writes before the
+   next "---" was written unconditionally, so it landed on top of the one the
+   block had already written and the value gained a line feed.
+
+   Clip and strip chomping collapse a trailing break, which is why this only
+   ever showed on "+" - and only where a second document follows, since with
+   nothing after it there is no "---" to separate from. Both halves are why
+   no corpus of single documents could ask. */
+TEST(YamlWriterContract, AKeptTrailingBreakIsNotDoubledByTheSeparator) {
+	struct Case { const char *in; const char *first; };
+	const Case cases[] = {
+		{ "|+\n a\n\n---\nx\n", "a\n\n" },
+		{ "|+\n\n|\n\n---\nx\n", "\n|\n\n" },
+		{ ">+\n a\n\n---\nx\n", "a\n\n" },
+		/* Clip and strip were right before and stay right. */
+		{ "|\n a\n---\nx\n", "a\n" },
+		{ "|-\n a\n\n---\nx\n", "a" },
+	};
+	for (const Case &c : cases) {
+		std::string out;
+		ASSERT_TRUE(pipe_through(c.in, &out))
+			<< "input: " << ::testing::PrintToString(std::string(c.in));
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(out.data(), out.size(), &opts, &err);
+		ASSERT_NE(back, nullptr) << "wrote " << out << ": "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+		const char *got =
+			gtext_yaml_node_as_string(gtext_yaml_document_root(back));
+		EXPECT_STREQ(got ? got : "", c.first) << "wrote "
+			<< ::testing::PrintToString(out);
+		gtext_yaml_free(back);
+	}
+}
+
 /* %YAML travels the same way, and has to survive the trip rather than being
    quietly dropped. */
 TEST(YamlWriterContract, TheStreamingWriterKeepsTheVersionDirective) {

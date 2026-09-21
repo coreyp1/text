@@ -3137,7 +3137,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
         return GTEXT_YAML_E_STATE;
       }
       if (writer->wrote_doc && !writer->doc_separated) {
-        if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
+        /* Through the separator, which knows whether a block scalar has
+           already ended its own last line.  Writing the break unconditionally
+           put a second one there, and with "+" chomping a break is part of
+           the value: "|+" over "  a" over a blank line came back with one
+           line feed too many.  Clip and strip chomping collapse the extra
+           break, which is why this only ever showed on "+" - and only with a
+           document after it to write the "---". */
+        if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
       }
       if (writer_write_string(writer, "---") != 0) return GTEXT_YAML_E_WRITE;
       if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;

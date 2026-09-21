@@ -1212,6 +1212,30 @@ library keeps as written rather than re-encoding (suite case 565N).
 
 Single-line base64 still goes out plain, which is what the bypass is for.
 
+### A kept trailing break, doubled by the document separator
+
+A block scalar ends its own last line, and with `+` chomping that break is
+part of the value (8.1.1.2). The break `DOCUMENT_START` writes before the next
+`---` was written unconditionally, so it landed on top of the one the block
+had already written and the value gained a line feed:
+
+```yaml
+|+
+  a
+            # "a\n\n"
+---
+x
+```
+
+came back as `a\n\n\n`. Clip and strip chomping collapse a trailing break,
+which is why this only ever showed on `+` - and only where a second document
+follows, since with nothing after it there is no `---` to separate from. Two
+conditions at once, neither of them rare on its own.
+
+The writer has a `writer_write_separator()` that knows whether a block scalar
+has already terminated the line; the document separator was the one place not
+going through it.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

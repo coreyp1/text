@@ -223,6 +223,12 @@ exempt from the plain style's own limits too: a binary scalar written over two
 lines came back with its break folded into a space. The bytes were the same,
 which is why nothing measuring values noticed; the text was not.
 
+And a kept trailing break doubled by the document separator: a block scalar
+ends its own last line, `+` chomping keeps that break as part of the value,
+and the break written before the next `---` landed on top of it. Only on `+`,
+and only with a second document after it - two conditions at once, neither of
+them rare on its own.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -303,7 +309,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — thirty-five library defects and three of its own,
+has already earned that — thirty-six library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.
