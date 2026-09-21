@@ -445,7 +445,12 @@ GTEXT_CSV_Status csv_stream_unescape_field_with_unescape(
   }
 
   if (!input_is_field_buffer) {
-    // Input is not in field buffer - safe to grow
+    // Reached by no test, by none of the CSV fuzzer's 5,164,660 executions and
+    // by no csv-spectrum case.  Every caller that arrives here with
+    // unescaping to do has already buffered the field, so input_data is the
+    // field buffer; this is the branch for one that has not.  Kept for the
+    // same reason as the guard above it - the invariant is maintained in
+    // another file.
     GTEXT_CSV_Status status =
         csv_field_buffer_grow(&stream->field, needed_size);
     if (status != GTEXT_CSV_OK) {

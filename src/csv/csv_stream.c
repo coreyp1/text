@@ -316,6 +316,12 @@ static GTEXT_CSV_Status csv_stream_feed_settled(GTEXT_CSV_Stream * stream,
     // Field should have been buffered at the end of the previous chunk, but it
     // wasn't. This is a bug in the previous chunk processing. We can't recover
     // the field data, but we can at least ensure the parser doesn't crash.
+    // Reached by no test, by none of the CSV fuzzer's 5,164,660 executions
+    // and by no csv-spectrum case - a probe placed here fired on nothing.
+    // It is kept rather than deleted because, unlike the dead branch removed
+    // from csv_stream_buffer.c, no argument shows it cannot happen: it rests
+    // on the previous chunk having buffered the field, which is decided in
+    // another file.  Crashing would be the alternative.
     if (!stream->field.buffer) {
       GTEXT_CSV_Status status =
           csv_field_buffer_grow(&stream->field, CSV_FIELD_BUFFER_INITIAL_SIZE);

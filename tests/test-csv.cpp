@@ -13754,3 +13754,105 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// The field buffer starts at CSV_FIELD_BUFFER_INITIAL_SIZE (64) bytes and is
+// reused for every field of the stream.  Stabilising a field that does not fit
+// takes the grow arm in csv_stream_unescape_field_no_unescape(); the arm
+// beside it, for a buffer not yet allocated at all, is the one every existing
+// test took.
+//
+// That arm was reached by none of this suite and by 190,933 of the CSV
+// fuzzer's 5,164,660 executions, which is how it was found: tools/coverage.sh
+// lists reallocation lines no test executes, on the grounds that a growth path
+// nothing reaches is untested rather than working.
+TEST(CsvFieldBufferGrowth, AFieldLongerThanTheInitialBufferIsKeptWhole) {
+	// 63 bytes fits and 64 does not, so the pair brackets the growth point.
+	// Both must come back byte-for-byte; a test at only one side would pass
+	// against a grow that returned the wrong length.
+	for (size_t n : {size_t{63}, size_t{64}, size_t{65}, size_t{200}}) {
+		const std::string tail(n, 'y');
+		const std::string doc = "x," + tail;
+
+		GTEXT_CSV_Error err{};
+		GTEXT_CSV_Table * t =
+		    gtext_csv_parse_table(doc.data(), doc.size(), nullptr, &err);
+		ASSERT_NE(t, nullptr) << "field of " << n << " bytes";
+
+		size_t len = 0;
+		const char * f = gtext_csv_field(t, 0, 1, &len);
+		ASSERT_NE(f, nullptr) << "field of " << n << " bytes";
+		EXPECT_EQ(std::string(f, len), tail) << "field of " << n << " bytes";
+
+		gtext_csv_free_table(t);
+		gtext_csv_error_free(&err);
+	}
+}
+
+TEST(CsvFieldBufferGrowth, TheGrownBufferIsReusedByLaterFields) {
+	// Growing for one field must leave the buffer usable for the next, and a
+	// later short field must not read the long field's leftovers.  The
+	// document is one record so that every field shares the one buffer.
+	const std::string big(300, 'a');
+	const std::string doc = "s," + big + ",t";
+
+	GTEXT_CSV_Error err{};
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(doc.data(), doc.size(), nullptr, &err);
+	ASSERT_NE(t, nullptr);
+	ASSERT_EQ(gtext_csv_col_count(t, 0), size_t{3});
+
+	const char * expect[] = {"s", big.c_str(), "t"};
+	for (size_t c = 0; c < 3; ++c) {
+		size_t len = 0;
+		const char * f = gtext_csv_field(t, 0, c, &len);
+		ASSERT_NE(f, nullptr) << "column " << c;
+		EXPECT_EQ(std::string(f, len), std::string(expect[c])) << "column " << c;
+	}
+
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+}
+
+TEST(CsvFieldBufferGrowth, ChunkSizeDoesNotChangeALongFieldsValue) {
+	// The same document through the streaming parser, split at every offset.
+	// The scratch buffer is overwritten between feeds, so a parser that kept
+	// a pointer into the previous chunk gives a different answer here rather
+	// than happening to read memory that is still intact.
+	const std::string big(300, 'a');
+	const std::string doc = "s," + big + ",t\n";
+
+	for (size_t cut = 0; cut <= doc.size(); ++cut) {
+		std::vector<std::string> fields;
+		auto cb = [](const GTEXT_CSV_Event * e, void * u) -> GTEXT_CSV_Status {
+			if (e->type == GTEXT_CSV_EVENT_FIELD) {
+				static_cast<std::vector<std::string> *>(u)->emplace_back(
+				    e->data ? e->data : "", e->data_len);
+			}
+			return GTEXT_CSV_OK;
+		};
+		GTEXT_CSV_Stream * s = gtext_csv_stream_new(nullptr, cb, &fields);
+		ASSERT_NE(s, nullptr);
+
+		std::vector<char> scratch(doc.size() + 1, 'Z');
+		GTEXT_CSV_Error err{};
+		std::memcpy(scratch.data(), doc.data(), cut);
+		ASSERT_EQ(gtext_csv_stream_feed(s, scratch.data(), cut, &err),
+		    GTEXT_CSV_OK) << "cut " << cut;
+		std::fill(scratch.begin(), scratch.end(), 'Z');
+		std::memcpy(scratch.data(), doc.data() + cut, doc.size() - cut);
+		ASSERT_EQ(
+		    gtext_csv_stream_feed(s, scratch.data(), doc.size() - cut, &err),
+		    GTEXT_CSV_OK) << "cut " << cut;
+		std::fill(scratch.begin(), scratch.end(), 'Z');
+		ASSERT_EQ(gtext_csv_stream_finish(s, &err), GTEXT_CSV_OK)
+		    << "cut " << cut;
+
+		ASSERT_EQ(fields.size(), size_t{3}) << "cut " << cut;
+		EXPECT_EQ(fields[0], "s") << "cut " << cut;
+		EXPECT_EQ(fields[1], big) << "cut " << cut;
+		EXPECT_EQ(fields[2], "t") << "cut " << cut;
+
+		gtext_csv_stream_free(s);
+		gtext_csv_error_free(&err);
+	}
+}

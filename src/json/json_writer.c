@@ -46,7 +46,10 @@ static int buffer_write_fn(void * user, const char * bytes, size_t len) {
       new_size = 256; // Initial size
     }
     while (new_size < needed) {
-      // Check for overflow before doubling
+      // Unreachable on any 64-bit host: new_size only exceeds SIZE_MAX/2 once
+      // the buffer is eight exbibytes, and `needed` is a length that was
+      // already written.  Kept because it is the arithmetic that makes the
+      // doubling below safe to state, not because it can fire.
       if (new_size > SIZE_MAX / 2) {
         return 1; // Overflow - cannot grow further
       }

@@ -4277,11 +4277,16 @@ static bool partial_errors_reserve(partial_state *state, size_t needed) {
 	if (!state) return false;
 	if (state->error_capacity >= needed) return true;
 
+	/* Doubling, then clamped up to whatever was actually asked for.
+	 * The loop this replaces - double until it fits, giving up above
+	 * SIZE_MAX/2 - could not iterate: both callers ask for count + 1
+	 * and count <= capacity always, so one doubling is always enough
+	 * and the body was four of the lines tools/coverage.sh reports as
+	 * never executed. Clamping is correct for any `needed`, including
+	 * a jump a future caller might ask for, so this is the more
+	 * general of the two as well as the reachable one. */
 	size_t new_capacity = state->error_capacity == 0 ? 4 : state->error_capacity * 2;
-	while (new_capacity < needed) {
-		if (new_capacity > SIZE_MAX / 2) return false;
-		new_capacity *= 2;
-	}
+	if (new_capacity < needed) new_capacity = needed;
 
 	GTEXT_YAML_Error *errors = (GTEXT_YAML_Error *)realloc(
 		state->errors, new_capacity * sizeof(*errors)
@@ -4322,11 +4327,16 @@ static bool partial_top_reserve(partial_state *state, size_t needed) {
 	if (!state) return false;
 	if (state->top_capacity >= needed) return true;
 
+	/* Doubling, then clamped up to whatever was actually asked for.
+	 * The loop this replaces - double until it fits, giving up above
+	 * SIZE_MAX/2 - could not iterate: both callers ask for count + 1
+	 * and count <= capacity always, so one doubling is always enough
+	 * and the body was four of the lines tools/coverage.sh reports as
+	 * never executed. Clamping is correct for any `needed`, including
+	 * a jump a future caller might ask for, so this is the more
+	 * general of the two as well as the reachable one. */
 	size_t new_capacity = state->top_capacity == 0 ? 4 : state->top_capacity * 2;
-	while (new_capacity < needed) {
-		if (new_capacity > SIZE_MAX / 2) return false;
-		new_capacity *= 2;
-	}
+	if (new_capacity < needed) new_capacity = needed;
 
 	GTEXT_YAML_Node **nodes = (GTEXT_YAML_Node **)realloc(
 		state->top_nodes, new_capacity * sizeof(*nodes)
@@ -4805,6 +4815,12 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 		GTEXT_YAML_Document **new_docs = (GTEXT_YAML_Document **)realloc(
 			state->documents, new_capacity * sizeof(GTEXT_YAML_Document *)
 		);
+		/* The allocation-failure arm.  It cannot be reached by input, only by
+		 * a failing malloc, and this file allocates with raw malloc/realloc
+		 * rather than through GTEXT_Allocator - so unlike the converted files
+		 * a caller-supplied failing allocator cannot reach it either.  It is
+		 * on tools/coverage.sh's list and stays there until yaml_parser.c
+		 * joins ALLOCATOR_CLEAN_SOURCES. */
 		if (!new_docs) {
 			state->failed = true;
 			if (state->error) {

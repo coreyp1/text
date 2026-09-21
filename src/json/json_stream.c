@@ -92,10 +92,14 @@ static GTEXT_JSON_Status json_stream_push(
     return status;
   }
 
-  // Verify bounds before array access (defensive check)
-  if (st->stack_size >= st->stack_capacity) {
-    return GTEXT_JSON_E_OOM; // Should not happen after grow_stack, but be safe
-  }
+  // No bounds check here: json_stream_grow_stack() returns GTEXT_JSON_OK only
+  // with stack_size < stack_capacity.  It either returned early because that
+  // was already true, or it grew - and stack_size <= stack_capacity always
+  // holds, so the size that triggered the growth was exactly the capacity and
+  // the new capacity (16 from zero, or double otherwise) is strictly larger.
+  // The check that used to stand here could not fire, unlike the guard in
+  // csv_stream_unescape_field() which rests on an invariant maintained in
+  // another file and is kept for that reason.
 
   st->stack[st->stack_size].state = state;
   st->stack[st->stack_size].is_array = is_array;
@@ -931,21 +935,14 @@ GTEXT_API GTEXT_JSON_Stream * gtext_json_stream_new(
   json_token_buffer_init(&st->token_buffer);
   // Note: buffer is allocated on-demand, not here
 
-  // Initialize stack
-  st->stack_capacity = 16;
-  st->stack = (json_stream_stack_entry *)malloc(
-      st->stack_capacity * sizeof(json_stream_stack_entry));
-  if (!st->stack) {
-    // Free token buffer if it was allocated (shouldn't be at this point, but be
-    // safe)
-    if (st->token_buffer.buffer) {
-      free(st->token_buffer.buffer);
-    }
-    free(st->input_buffer);
-    free(st);
-    return NULL;
-  }
-
+  // The stack is left NULL with capacity 0, from the calloc above, and the
+  // first json_stream_push() allocates it.  It used to be allocated here as
+  // well, which made json_stream_grow_stack()'s "capacity is zero" arm
+  // unreachable - a whole allocation path that no test could take because
+  // nothing ever arrived at it, and one of the lines tools/coverage.sh
+  // reports as never executed.  One allocation site is both simpler and the
+  // one that gets exercised; a stream whose input never nests now does not
+  // allocate a stack at all.
   return st;
 }
 

@@ -42,7 +42,9 @@ static GTEXT_CSV_Status buffer_write_fn(
       new_size = 256; // Initial size
     }
     while (new_size < needed) {
-      // Check for overflow before doubling
+      // Unreachable on any 64-bit host, as in json_writer.c: the buffer would
+      // have to be eight exbibytes first.  Kept as the statement of what makes
+      // the doubling safe.
       if (new_size > SIZE_MAX / 2) {
         return GTEXT_CSV_E_OOM; // Overflow - cannot grow further
       }

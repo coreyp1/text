@@ -392,6 +392,9 @@ static GTEXT_CSV_Status csv_ensure_index_to_entry_capacity(
   }
   while (new_capacity < required_capacity) {
     size_t next_capacity = new_capacity * 2;
+    // Unreachable: doubling only fails to increase once new_capacity is at
+    // 2^63 entries, which no table of columns reaches.  Kept because the
+    // clamp below is the correct answer if it ever does.
     if (next_capacity <= new_capacity) {
       // Overflow - use required capacity directly
       new_capacity = required_capacity;
@@ -499,6 +502,11 @@ static bool csv_find_header_entry_by_index(const GTEXT_CSV_Table * table,
 }
 
 static GTEXT_CSV_Status csv_rebuild_index_to_entry(GTEXT_CSV_Table * table) {
+  // The no-header arm is reached by no test, by none of the CSV fuzzer's
+  // 5,164,660 executions and by no csv-spectrum case: every caller rebuilds
+  // the index only after establishing a header.  Kept because it is the
+  // correct answer for a table that has none, and because the alternative is
+  // leaving a stale reverse mapping in place.
   if (!table->has_header || !table->header_map) {
     // Clear reverse mapping if no header map
     table->index_to_entry = NULL;
@@ -588,7 +596,10 @@ static GTEXT_CSV_Status csv_table_event_callback(
       size_t new_capacity = ctx->current_field_capacity == 0
           ? 16
           : ctx->current_field_capacity * 2;
-      // Check for overflow in multiplication
+      // Check for overflow in multiplication.  Unreachable: the doubling only
+      // wraps at 2^63 fields in one record.  The second operand is the line
+      // tools/coverage.sh reports, because the first is never true and short
+      // circuits before it.
       if (new_capacity < ctx->current_field_capacity &&
           ctx->current_field_capacity > 0) {
         ctx->status = GTEXT_CSV_E_OOM;
