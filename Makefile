@@ -577,7 +577,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1285,8 +1285,12 @@ conformance-csv: ## Score the CSV parser against csv-spectrum (clones it on firs
 conformance-csv:
 	@PREFIX="$(PREFIX)" tools/conformance/run-csv.sh
 
-conformance-all: ## Score all three parsers against their external corpora
-conformance-all: conformance conformance-json conformance-csv
+conformance-json-schema: ## Score the schema engine against JSON-Schema-Test-Suite (clones it on first use)
+conformance-json-schema:
+	@PREFIX="$(PREFIX)" tools/conformance/run-json-schema.sh
+
+conformance-all: ## Score every parser against its external corpus
+conformance-all: conformance conformance-json conformance-csv conformance-json-schema
 
 coverage: ## Build instrumented, run the tests, and report line coverage
 # Cleans first because the object files would otherwise be reused without the
