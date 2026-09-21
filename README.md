@@ -223,6 +223,14 @@ specification, and `tests/data/yaml/spec-1.2.2.corpus` holds the cases that
 say so - divergences found by reading the grammar, none of which appears
 anywhere in the suite.
 
+**The writer is well behind the parser.** `make conformance-roundtrip` writes
+every suite document the parser accepts back out and re-reads it: 255 of 282
+survive by value (90.4%), and only 234 in block style. A resolved tag is
+written as bare text and lost; a non-scalar key is written as a sequence entry
+and the structure with it; a single-quoted scalar is chosen for content single
+quotes cannot hold. None of that is visible to `make conformance`, because
+yaml-test-suite is a corpus of inputs and tests no writer at all.
+
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is
 fixed, and what they have in

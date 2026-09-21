@@ -5,6 +5,13 @@
 #   tools/conformance/run.sh              # this library
 #   tools/conformance/run.sh js           # js-yaml, if it can be found
 #   tools/conformance/run.sh py           # PyYAML, if it is installed
+#   tools/conformance/run.sh roundtrip    # parse -> write -> parse, this library
+#
+# The suite is a corpus of inputs and tests no writer at all.  The roundtrip
+# mode runs it backwards - every document the parser accepts is written out
+# again and re-read - which costs nothing and measures the half of the module
+# the suite cannot see.  YTS_RT_BLOCK asks for block style instead of the
+# default flow; YTS_RT_MIN sets a floor on the by-value figure.
 #
 # The suite is cloned into build/yaml-test-suite on first use and checked out at
 # the commit named in tools/conformance/YAML_SUITE_COMMIT.  YTS_MIN sets a floor
@@ -64,6 +71,24 @@ ours)
 	YTS_EVENTS=$events
 	export YTS_EVENTS
 	set -- "$runner"
+	;;
+roundtrip)
+	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
+	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
+	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
+	generated=$(dirname "$(dirname "$archive")")/generated
+	runner=$suite/../yts-runner
+	rt=$suite/../yts-roundtrip
+	for pair in "yaml_test_suite.c $runner" "yaml_roundtrip.c $rt"; do
+		set -- $pair
+		cc -O1 -o "$2" "$root/tools/conformance/$1" \
+			-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
+			-Wl,-rpath,"$PREFIX/lib/ghoti.io"
+	done
+	exec python3 "$root/tools/conformance/yaml_roundtrip.py" "$suite" "$runner" "$rt"
 	;;
 js)
 	js=$(find / -maxdepth 8 -type d -name js-yaml 2>/dev/null | head -1)

@@ -969,6 +969,20 @@ All tests pass with zero memory leaks (valgrind-verified).
 
 ## 14. Future Enhancements
 
+### Known gaps
+
+**The writer is the weaker half of the module, and it is not finished.**
+`make conformance-roundtrip` writes every suite document this parser accepts
+back out and re-reads it: 255 of 282 survive by value in the default flow
+style (90.4%), 234 in block style (83.0%). A by-value failure is data lost,
+not a style difference. The list, in rough order of severity, is on
+\ref format_yaml "the YAML format page"; the headline items are a resolved
+tag written as bare text, a non-scalar key written as a sequence entry, and a
+single-quoted scalar chosen for content single quotes cannot hold.
+
+None of this is visible to `make conformance`, because yaml-test-suite is a
+corpus of inputs and tests no writer at all.
+
 ### Planned Features
 
 - **Comment preservation on write**: comments can be retained in the DOM

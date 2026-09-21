@@ -577,7 +577,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1291,6 +1291,10 @@ fuzz-clean:
 conformance: ## Score the YAML parser against yaml-test-suite (clones it on first use)
 conformance:
 	@PREFIX="$(PREFIX)" tools/conformance/run.sh
+
+conformance-roundtrip: ## Round-trip yaml-test-suite through the YAML writer
+conformance-roundtrip:
+	@PREFIX="$(PREFIX)" tools/conformance/run.sh roundtrip
 
 conformance-json: ## Score the JSON parser against JSONTestSuite (clones it on first use)
 conformance-json:

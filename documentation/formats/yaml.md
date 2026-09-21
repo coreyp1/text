@@ -765,6 +765,54 @@ characters in the stream whatever it builds.
 **Read the bytes, not the terminal.** Two items on a list of thirteen were
 there because a screen could not draw the difference.
 
+## The writer is the weaker half
+
+Everything above measures the parser. yaml-test-suite is a corpus of inputs
+and tests no writer at all, so `make conformance-roundtrip` runs it backwards:
+every document the parser accepts is written out again and re-read.
+
+|  | by value | by event |
+| --- | ---: | ---: |
+| default (flow) style | **255 of 282, 90.4%** | 231, 81.9% |
+| block style | **234 of 282, 83.0%** | 210, 74.5% |
+
+*By value* asks whether the JSON is the same - a failure there is data lost or
+corrupted. *By event* also asks that anchors, tags and the text of every
+scalar survive; the gap between the two is the writer choosing its own
+spelling, which is deliberate. The first column is the one that has to reach
+100%, and it does not. Note also that block style, the one a human would pick,
+is the weaker of the two.
+
+What is known to be wrong, in rough order of severity:
+
+- **A resolved tag is written as bare text.** `!<tag:example.com,2000:app/foo>`
+  comes out as `tag:example.com,2000:app/foo` with no `!<...>` around it, so it
+  re-reads as a mapping key, or fails on the comma. The tag is lost and the
+  output is not the document. Shorthands that were never resolved (`!!str`,
+  `!local`) survive. Seven suite documents; no `%TAG` directive is ever
+  emitted.
+- **A non-scalar key is written as a sequence entry.** `? [a, b]` over `: v` -
+  a mapping whose key is a sequence - is written `- a` / `- b: v` and re-reads
+  as `["a", {"b": "v"}]`. There is no `?`/`:` explicit-key form in the writer,
+  and the result is structural corruption rather than a refusal.
+- **A single-quoted scalar is chosen for content it cannot hold.** Single
+  quotes have no escapes, so a line break inside them folds to a space: a
+  scalar of one newline is written `'<newline>'` and comes back as a space.
+  Such content needs the double-quoted or literal style.
+- **A document with no root cannot be written at all.** An empty stream, and a
+  document that is only `...`, return an error from
+  `gtext_yaml_write_document()`.
+- **Block scalars gain a trailing blank line** and are indented past their
+  header.
+- **Comments are dropped**, which is the one already on the planned list.
+
+A separate parser defect turned up the same way: an anchored key with no value
+in a flow mapping, `{&b b, *b: 1}`, is refused as an unknown anchor. The
+sequence spelling `[&b b, *b]` and the valued spelling `{&b b: 1, c: *b}` both
+work. It is not a regression - the same input failed the same way before any
+of this work - and no suite case covers it, because it only appears when the
+writer produces it.
+
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status
 rather than being left behind in the token loop, so an unterminated quoted
