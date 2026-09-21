@@ -43,6 +43,12 @@ if PKG_CONFIG_PATH="$pc" pkg-config --exists ghoti.io-regex-0; then
 	cflags="$cflags -DGTEXT_CONFORMANCE_HAVE_REGEX $(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-regex-0)"
 	libs="$libs $(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-regex-0)"
 	echo "regular expressions: ghoti.io-regex"
+	# The floor is only meaningful with the provider: without one, `pattern`
+	# and `patternProperties` are refused and the score legitimately drops,
+	# and a gate that fired on that would be reporting a missing package as a
+	# regression.
+	: "${JSS_MIN:=99.6}"
+	export JSS_MIN
 else
 	echo "regular expressions: none installed - pattern groups will not run"
 fi

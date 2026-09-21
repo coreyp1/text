@@ -108,15 +108,26 @@ equivalents. Reads are incremental, so a pipe or `/dev/stdin` works and the
 size limit applies before the file is in memory; writes are atomic, going to a
 temporary file beside the destination and replacing it only once complete.
 
-JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and a
-core subset of JSON Schema. The schema engine refuses a schema whose keywords
-it cannot enforce rather than ignoring them, since a schema that looks like it
-constrains its data and does not is the worse failure. Two of those keywords -
-`pattern` and `patternProperties` - are regular expressions, and this library
-has no engine; they are enforced when the caller supplies one through
+JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
+JSON Schema 2020-12, which answers 1297 of the 1301 assertions in
+JSON-Schema-Test-Suite's required draft2020-12 files and gets none of them
+wrong; `make conformance-json-schema` measures it. The four it does not reach
+are behind a `$ref` to the published metaschema, which is a reference that
+leaves the document and so arrives through the caller's resolver - this
+library vendors nobody else's documents and opens no sockets of its own.
+
+The schema engine refuses a schema whose keywords it cannot enforce rather
+than ignoring them, since a schema that looks like it constrains its data and
+does not is the worse failure. Two of those keywords - `pattern` and
+`patternProperties` - are regular expressions, and this library has no engine;
+they are enforced when the caller supplies one through
 `GTEXT_JSON_Schema_Options`, which is three function pointers, and refused when
-they do not. YAML implements anchors and aliases, merge keys, multi-document
-streams, tag resolution and conversion to JSON.
+they do not. `format` is an annotation by default, as 2020-12 requires, and an
+assertion when the caller or the schema's own metaschema asks for one; the
+temporal formats are ghoti.io-chron's grammars.
+
+YAML implements anchors and aliases, merge keys, multi-document streams, tag
+resolution and conversion to JSON.
 
 ## Documentation
 
