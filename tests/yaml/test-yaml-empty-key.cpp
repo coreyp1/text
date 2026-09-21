@@ -113,7 +113,52 @@ const Case kCases[] = {
 	{"{ ? , ? }\n", nullptr},
 };
 
+/* The same arm at the *first* entry of a nested block mapping, which is
+   where it was unreachable. A later entry worked - "a:" over "  b: 1" over
+   "  : 2" - because by then the mapping was open and the ":" only had to join
+   it. The first entry has to open it, and the branch that opens one ran only
+   where no block mapping was open at all, so the ":" fell through to a guard
+   that refused it for having no key on its line.
+
+   Neither reference implements this arm anywhere: js-yaml and PyYAML both
+   refuse ": 1" at the top level too. yaml-test-suite is the authority here
+   (NHX8, UKK6, NKF9, 2JQS, S3PD, 6M2F), and none of its cases nests one.
+   The writer fuzzer is what reached it: it built {"a": {null: null}}, wrote
+   "a:" over "  :", and the parser refused the writer's own output. */
+const Case kNestedCases[] = {
+	{"a:\n  : 1\n", "{\"a\": {null: 1}}"},
+	{"a:\n  :\n", "{\"a\": {null: null}}"},
+	{"a:\n  : 1\n  b: 2\n", "{\"a\": {null: 1, \"b\": 2}}"},
+	{"a:\n  b: 1\n  : 2\n", "{\"a\": {\"b\": 1, null: 2}}"},
+	{"[]:\n  :\n", "{[]: {null: null}}"},
+	/* Two of them are two entries with the same key, so what refuses this is
+	   the duplicate-key policy and not the grammar. */
+	{"a:\n  : 1\n  : 2\n", nullptr},
+
+	/* An odd count is what says a key is outstanding, and it is what keeps
+	   this refused: "a" already has its value, so the deeper ":" belongs to
+	   nothing. */
+	{"a: 1\n  : 2\n", nullptr},
+
+	/* Still an explicit key where one is written. */
+	{"a:\n  ? x\n  : y\n", "{\"a\": {\"x\": \"y\"}}"},
+};
+
 } // namespace
+
+TEST(YamlEmptyKey, TheEmptyKeyOpensANestedMappingToo) {
+	for (const Case &c : kNestedCases) {
+		const std::string got = Render(c.input);
+		if (c.expected) {
+			EXPECT_EQ(got, std::string(c.expected))
+				<< "input: " << ::testing::PrintToString(std::string(c.input));
+		} else {
+			EXPECT_EQ(got, std::string(""))
+				<< "should have been refused, input: "
+				<< ::testing::PrintToString(std::string(c.input));
+		}
+	}
+}
 
 TEST(YamlEmptyKey, ColonWithNoKeyTakesTheEmptyNode) {
 	for (const Case &c : kCases) {

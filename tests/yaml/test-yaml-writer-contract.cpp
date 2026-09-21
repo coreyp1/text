@@ -335,6 +335,61 @@ TEST(YamlWriterContract, OuterWhiteSpaceMakesABuiltScalarAString) {
 	}
 }
 
+/* A line of exactly "---" or "..." is c-directives-end or c-document-end
+   (9.1.2), and c-forbidden keeps either out of a document's content wherever
+   it begins a line with a break, white space or end of input after it
+   (9.1.1). The whitelist is about characters and every one of these is "-" or
+   ".", all of which it admits, so the string "---" went out plain - and the
+   writer had then produced a document marker and called it OK. The reader
+   agreed with the bytes and handed back an empty document.
+
+   Quoting is value-preserving here, since neither text resolves to anything
+   but a string, so the whole family is quoted and not just the positions
+   where it would be fatal. "----" and "---x" stay plain: c-forbidden wants a
+   break or white space after the three characters, and both references read
+   those two as the strings they are. */
+TEST(YamlWriterContract, ADocumentMarkerIsNotWrittenAsAPlainScalar) {
+	struct Case { const char *text; bool quoted; };
+	const Case cases[] = {
+		{ "---", true },   { "...", true },
+		{ "--- x", true }, { "... x", true },
+		{ "----", false }, { "---x", false },
+		{ "...x", false }, { "..", false },
+		{ "--", false },
+	};
+	for (const Case &c : cases) {
+		for (int block = 0; block < 2; ++block) {
+			GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+			GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
+				doc, c.text, strlen(c.text), GTEXT_YAML_STRING,
+				nullptr, nullptr);
+			ASSERT_NE(node, nullptr) << c.text;
+			gtext_yaml_document_set_root(doc, node);
+			Written w = write_doc(doc, block != 0);
+			ASSERT_EQ(w.status, GTEXT_YAML_OK) << c.text;
+			EXPECT_EQ(w.text.find('"') != std::string::npos, c.quoted)
+				<< "wrote " << w.text << " for <<" << c.text << ">>";
+
+			/* Whatever it chose, the bytes have to read back as this string
+			   and not as a marker - which is the property that failed. */
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(w.text.c_str(), w.text.size(), &opts, &err);
+			ASSERT_NE(back, nullptr) << "wrote " << w.text;
+			gtext_yaml_error_free(&err);
+			const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+			ASSERT_NE(r, nullptr) << "wrote " << w.text
+				<< " which reads back as an empty document";
+			const char *got = gtext_yaml_node_as_string(r);
+			EXPECT_STREQ(got ? got : "", c.text) << "wrote " << w.text;
+			gtext_yaml_free(back);
+			gtext_yaml_free(doc);
+		}
+	}
+}
+
 /* But a scalar the parser resolved to a number stays plain: quoting it would
    make a string of it, which is the same fault in the other direction. */
 TEST(YamlWriterContract, AResolvedScalarIsNotQuotedIntoAString) {
@@ -622,6 +677,75 @@ TEST(YamlWriterContract, TheStreamingWriterKeepsTheDirectives) {
 	ASSERT_NE(tag, nullptr);
 	EXPECT_STREQ(tag, "tag:example.com,2000:app/foo");
 	gtext_yaml_free(back);
+}
+
+/* ...and a named handle is writable only where this writer declared it.
+
+   c-ns-shorthand-tag is a handle followed by ns-tag-char+ (6.8.2). The
+   primary "!" and the secondary "!!" are defined for every document; a named
+   "!e!" means whatever a %TAG declared and means nothing at all where none
+   did. The DOM writer emits no directives, so a named handle is undeclared
+   there by construction - and "!a!3" was going out as itself, leaving a
+   document this parser refuses for a handle no %TAG defined.
+
+   There is nothing to fall back on. "!<!a!3>" is a *different* tag - the
+   literal URI, not the handle's prefix followed by "3" - and a prefix the
+   writer invented would be worse than a refusal. So it is refused, the way an
+   unwritable anchor and "!!bogus" already are. The test above is the other
+   half of this rule: declare the handle and the same shorthand writes. */
+TEST(YamlWriterContract, ANamedTagHandleIsRefusedWhereNoTagDeclaredIt) {
+	struct Case { const char *tag; bool writable; };
+	const Case cases[] = {
+		{ "!a!3", false },   /* the fuzzer's find */
+		{ "!a!3x", false },
+		{ "!e!foo", false },
+		{ "!", true },       /* the primary handle, always defined */
+		{ "!local", true },
+		{ "!!str", true },   /* the secondary, likewise */
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node =
+			gtext_yaml_node_new_scalar(doc, "v", c.tag, nullptr);
+		ASSERT_NE(node, nullptr) << c.tag;
+		gtext_yaml_document_set_root(doc, node);
+		Written w = write_doc(doc);
+		EXPECT_EQ(w.status == GTEXT_YAML_OK, c.writable)
+			<< "tag " << c.tag << " wrote " << w.text;
+
+		/* And what it does write has to read back, which is the property
+		   that failed: the bytes were fine, the handle was not. */
+		if (w.status == GTEXT_YAML_OK) {
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(w.text.c_str(), w.text.size(), &opts, &err);
+			EXPECT_NE(back, nullptr) << "tag " << c.tag << " wrote " << w.text
+				<< " which this parser refuses: "
+				<< (err.message ? err.message : "");
+			gtext_yaml_error_free(&err);
+			if (back) gtext_yaml_free(back);
+		}
+		gtext_yaml_free(doc);
+	}
+}
+
+/* A %TAG declares its handle for the document it precedes and no further
+   (6.8.2), so the same shorthand in a second document is undeclared again. */
+TEST(YamlWriterContract, ADeclaredHandleDoesNotCarryToTheNextDocument) {
+	std::string out;
+	ASSERT_TRUE(pipe_through(
+		"%TAG !e! tag:example.com,2000:app/\n---\n!e!foo v\n", &out));
+	EXPECT_NE(out.find("%TAG !e!"), std::string::npos) << "wrote: " << out;
+
+	/* Two documents, the handle declared only for the first: the second's
+	   shorthand has no declaration and the writer must not write it. */
+	std::string ignored;
+	EXPECT_FALSE(pipe_through(
+		"%TAG !e! tag:example.com,2000:app/\n---\n!e!foo v\n"
+		"--- !e!bar w\n", &ignored))
+		<< "wrote: " << ignored;
 }
 
 /* %YAML travels the same way, and has to survive the trip rather than being

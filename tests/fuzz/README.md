@@ -152,20 +152,44 @@ correctly - no plain spelling of that text exists - and the reader read back
 the string. A plain scalar has white space at neither end (7.3.3), so text
 that carries any can only be quoted, and quoted is string.
 
-One find is open rather than fixed: the string `---` is written plain, and
-reads back as a document marker. It is recorded on the YAML format page under
-*Known defects*. It is deliberately **not** kept as a seed here - a tracked
-seed that traps would stop this target before it fuzzed anything - so a run
-that ends on that shape is a known result, not a new one.
+The run after that went five deep, one fix uncovering the next, and only the
+first was a writer defect:
+
+- the string `---` written plain, which is `c-directives-end` (9.1.2) and is
+  kept out of a document's content by `c-forbidden` (9.1.1). The writer
+  produced a document marker, called it OK, and the reader agreed with the
+  bytes and gave back an empty document. `...` was the same;
+- a block mapping's *first* entry could not have an empty key. `a:` over
+  `  : 1` was refused, while the same entry later in the same mapping worked:
+  a later entry joins a mapping already open, the first has to open one, and
+  the branch that opens one ran only where no block mapping was open at all;
+- a shorthand tag written with a handle no `%TAG` had declared. The DOM writer
+  emits no directives, so a named handle is undeclared there by construction -
+  and `!a!3` went out as itself. Refused now, since `!<!a!3>` is a different
+  tag and an invented prefix would be worse; the streaming writer tracks the
+  handles its own `%TAG` directives declare, and forgets them at each document
+  end;
+- two uninitialised pointers read off the stack by the DOM writer, because its
+  two entry points set every field of their state by hand and a field had just
+  been added. Both `memset` first now;
+- a property in front of a key not being part of the key. `&a {}` begins at
+  the `&`, and a block mapping is indented where its key is, so `&a {}: 1`
+  over `b: 2` put the second entry outside the mapping the first had opened.
+  In the scanner that blind spot was not new to flow keys at all: `outer:`
+  over `  &a x: 1` over `   c` was refused where the same lines without the
+  `&a` fold into `1 c`.
+
+Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
 pretending otherwise.** Every run of it so far has found something, each fix
 exposing the next - which is what a new harness does on a surface nothing had
 fuzzed before, and is the strongest available argument that the surface needed
-one. The most recent went nineteen thousand executions in fifteen minutes
-before it found the `---` above. The corpus under `corpus/yaml-writer/` is the
-record; a run that goes the full `FUZZ_TIME` without a find will be the first,
-and this paragraph should be updated when it happens.
+one. The best run so far went twenty-three thousand executions in twenty
+minutes before it found the property-column defect above. The corpus under
+`corpus/yaml-writer/` is the record; a run that goes the full `FUZZ_TIME`
+without a find will be the first, and this paragraph should be updated when it
+happens.
 
 ## The options byte
 
@@ -235,8 +259,8 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — twenty library defects and two of its own, listed
-above. Most of the twenty are in the *reader*, which is not what this harness
+has already earned that — twenty-five library defects and two of its own,
+listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.
 

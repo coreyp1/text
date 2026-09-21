@@ -4119,7 +4119,34 @@ static GTEXT_YAML_Status parse_callback(
 							break;
 						}
 
-						if (colon_on_question_line || !in_block_mapping) {
+						/* ...or deeper than a block mapping whose last key is
+						 * still waiting for a value, where this ":" opens the
+						 * nested mapping that value is:
+						 *
+						 *     a:
+						 *       : 1      # {"a": {null: 1}}
+						 *
+						 * The e-node arm of ns-l-block-map-implicit-entry
+						 * (8.2.2) is reachable at the *first* entry of such a
+						 * mapping as much as at any later one, and a later one
+						 * already worked - "a:" over "  b: 1" over "  : 2" is
+						 * the branch above, which needs the mapping to be open
+						 * already.  Nothing opened it for the first entry,
+						 * because the branch that opens one ran only where no
+						 * block mapping was open at all.
+						 *
+						 * An odd count is what says a key is outstanding, and
+						 * it is what keeps "a: 1" over "  : 2" refused: there
+						 * the value has landed, so the deeper ":" belongs to
+						 * nothing. */
+						const bool opens_nested_value_mapping =
+							in_block_mapping
+							&& event->col > p->stack.indents[top]
+							&& p->stack.states[top] == STATE_MAPPING_VALUE
+							&& (p->temp.count % 2) == 1;
+
+						if (colon_on_question_line || !in_block_mapping
+								|| opens_nested_value_mapping) {
 							/* The ":" opens a block mapping of its own, at
 							 * its own column: at the top of a document,
 							 * compacted onto a sequence entry as in "- :",
@@ -4185,7 +4212,18 @@ static GTEXT_YAML_Status parse_callback(
 
 					if (has_flow_key) {
 						node_get_source_location(
-							flow_key, &key_start_offset, NULL, &key_indent);
+							flow_key, &key_start_offset, NULL, NULL);
+						/* Where the *entry* begins, which is not where the
+						   collection does when a property stands in front of
+						   it: "&a {}" is a key starting at the "&".  This is
+						   the same function the scalar case uses, and taking
+						   the collection's own column instead indented the
+						   mapping to the "{" - so in "&a {}: 1" over "b: 2"
+						   the second entry fell outside the mapping the first
+						   had opened and was refused as a second top-level
+						   node.  Without the property the two columns agree,
+						   which is why it took a fuzzer to find. */
+						key_indent = line_key_col_from_offset(p, key_start_offset);
 					}
 
 					if (key_indent < 0 && !has_flow_key) {

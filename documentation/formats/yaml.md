@@ -628,31 +628,12 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-One is open, found by the writer fuzzer and not yet fixed.
+None open at the moment. The writer fuzzer is the thing most likely to change
+that - see `tests/fuzz/README.md`, which records what it has found and says
+plainly that it has never yet run its full time without finding something.
 
-**A string of `---` is written plain, and reads back as a document marker.**
-
-```
-built:  the string "---"
-wrote:  ---
-read:   null
-```
-
-`c-directives-end` is a line of exactly those three characters (9.1.2), so a
-scalar whose content is `---` has no plain spelling at the start of a
-document: it has to be quoted, and the writer does not know it. The
-`scalar_needs_quotes` whitelist is about characters, and every one of these is
-`-`, which the leading-`-` guard admits because what follows it is not white
-space. `...` is presumably the same shape, and is not yet confirmed.
-
-It is not kept as a fuzz seed, because a tracked seed that traps would stop
-`make fuzz-run-yaml-writer` before it fuzzed anything - but the harness will
-find it again in about fifteen minutes, so a run of that target ending on this
-shape is a known result and not a new one.
-
-The flow-collection-key defect that stood here is fixed; it is described under
-*Running it backwards* below, along with the two others that came out from
-behind it.
+The `---` defect that stood here is fixed, along with the four that came out
+behind it; they are described under *Running it backwards* below.
 
 ## Not implemented
 
@@ -1021,6 +1002,60 @@ zero-indented sequences, which is how the exception got written down.
 
 Every row of `tests/yaml/test-yaml-flow-collection-key.cpp` was checked
 against js-yaml, refusals included.
+
+### Five more the writer found, and only one of them in the writer
+
+The run after that went five deep, each fix uncovering the next. Only the
+first is a writer defect; the rest are the parser, reached through it.
+
+- **The string `---` was written plain.** A line of exactly those three
+  characters is `c-directives-end` (9.1.2), and `c-forbidden` keeps it out of
+  a document's content wherever it begins a line with a break, white space or
+  end of input after it (9.1.1). The whitelist deciding this is about
+  characters and every one of these is `-`, which it admits. So the writer
+  produced a document marker, called it OK, and the reader agreed with the
+  bytes and handed back an empty document. `...` was the same. `----` and
+  `---x` stay plain, because `c-forbidden` wants a break or white space after
+  the three.
+- **A block mapping's first entry could not have an empty key.** `: 1` is an
+  entry whose key is the empty node - that is the `e-node` arm of
+  `ns-l-block-map-implicit-entry` (8.2.2) - and it worked at the top level and
+  as a *later* entry of a nested mapping. It did not work as the first entry
+  of one: `a:` over `  : 1` was refused. A later entry only has to join a
+  mapping that is already open; the first has to open it, and the branch that
+  opens one ran only where no block mapping was open at all. Neither reference
+  implements this arm anywhere - js-yaml and PyYAML both refuse `: 1` at the
+  top level - and no suite case nests one, so nothing but the writer was
+  going to ask.
+- **A shorthand tag was written with a handle no `%TAG` had declared.** A
+  named handle means whatever a `%TAG` declared it to mean and means nothing
+  where none did (6.8.2). The DOM writer emits no directives, so a named
+  handle is undeclared there by construction - and `!a!3` went out as itself,
+  leaving a document this parser refuses. There is nothing to fall back on:
+  `!<!a!3>` is a *different* tag, the literal URI rather than the handle's
+  prefix followed by `3`, and a prefix the writer invented would be worse than
+  a refusal. It is refused now, the way an unwritable anchor and `!!bogus`
+  already are. The streaming writer does declare handles, and the parser's
+  own event stream reports a tag as it was written (5.3), so `!e!foo` arriving
+  beside its `%TAG !e! ...` still writes as it arrived - the writer tracks
+  what it has declared, and forgets it at each document end, because a `%TAG`
+  applies only to the document it precedes.
+- **The DOM writer read two uninitialised pointers off the stack.** Adding a
+  field to `yaml_writer_state` did it: the two DOM entry points set every
+  field by hand, which is correct exactly until the next field is added. Both
+  `memset` first now.
+- **A property in front of a key was not part of the key.** `&a {}` is a key
+  that begins at the `&`, and a block mapping is indented where its key is.
+  Both places that ask where a key stands were taking the node's own column,
+  so with an anchor the mapping was indented to the `{` and the next entry
+  fell outside it: `&a {}: 1` over `b: 2` was refused as a second top-level
+  node while `&a {}: 1` alone parsed. In the scanner the same blind spot was
+  not new to flow keys at all - `outer:` over `  &a x: 1` over `   c` was
+  refused where the same three lines without the `&a` fold into `1 c`. The
+  scanner tracks `line_node_col` now: the first character on a line that is
+  neither indentation nor one of the `-`, `?` and `:` indicators a compact
+  entry may put in front of a node. That one field replaced three, and is
+  what both the flow-key and the property questions were really asking.
 
 ### A built scalar with white space at either end
 

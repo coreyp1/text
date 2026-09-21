@@ -102,6 +102,26 @@ const Case kCases[] = {
 	{"outer:\n  {}: 1\n   c\n", "{\"outer\": {{}: \"1 c\"}}"},
 	{"outer:\n  [x]: 1\n   c\n", "{\"outer\": {[\"x\"]: \"1 c\"}}"},
 
+	/* A property in front of a key is part of the key: "&a {}" begins at the
+	   "&", not at the "{". Both places that ask where a key stands were
+	   taking the node's own column and ignoring what stood in front of it, so
+	   with an anchor the mapping was indented to the "{" and the next entry
+	   fell outside it - "&a {}: 1" over "b: 2" was refused as a second
+	   top-level node, while "&a {}: 1" alone parsed. Without the property the
+	   two columns are the same, which is what kept it hidden.
+
+	   The scanner had the same blind spot, and there it was not new to flow
+	   keys at all: "outer:" over "  &a x: 1" over "   c" was refused where
+	   the same three lines without the "&a" fold into "1 c". */
+	{"&a {}: 1\nb: 2\n", "{{}: 1, \"b\": 2}"},
+	{"!!map {}: 1\nb: 2\n", "{{}: 1, \"b\": 2}"},
+	{"b: 2\n&a {}: 1\n", "{\"b\": 2, {}: 1}"},
+	{"&a {}: 1\n", "{{}: 1}"},
+	{"outer:\n  &a {}: 1\n  b: 2\n", "{\"outer\": {{}: 1, \"b\": 2}}"},
+	{"outer:\n  &a {}: 1\n   c\n", "{\"outer\": {{}: \"1 c\"}}"},
+	{"outer:\n  &a x: 1\n   c\n", "{\"outer\": {\"x\": \"1 c\"}}"},
+	{"outer:\n  x: 1\n   c\n", "{\"outer\": {\"x\": \"1 c\"}}"},
+
 	/* The entry above has no value written, so the flow key follows a key
 	   that is still waiting for one.  These were not refused before - they
 	   were accepted with the wrong shape, the second entry nested inside the

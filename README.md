@@ -281,10 +281,18 @@ front of it was gone. A fourth was worse than a refusal: `a:` over `{}: 1` was
 at the key's own column is the next entry's key had never been given to the
 four places a completed collection is added to its parent.
 
+Five more followed from one fuzz run, and only the first was in the writer:
+the string `---` written plain, which is a document marker and read back as an
+empty document; a block mapping's *first* entry unable to have an empty key,
+where a later entry could; a shorthand tag written with a handle no `%TAG` had
+declared; two uninitialised pointers the DOM writer read off its own stack;
+and a property in front of a key not counting as part of the key, so
+`&a {}: 1` over `b: 2` put the second entry outside the mapping the first had
+opened.
+
 Comparison against other implementations keeps finding defects here, so treat
-this module as the least settled of the three. One is open and written down -
-the string `---` is written plain and reads back as a document marker - and
-the rest are fixed. What they have in
+this module as the least settled of the three. Every one found so far is
+fixed. What they have in
 common is worth stating plainly: most did not fail on valid input, they
 quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
 were truncated. Tags were dropped from block-style collections. A mapping key

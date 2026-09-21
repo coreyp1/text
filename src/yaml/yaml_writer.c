@@ -265,6 +265,13 @@ typedef struct {
      because with '+' chomping that break is part of the value.  Whoever
      would have written the separator break next skips it. */
   bool line_terminated;
+  /* The named tag handles a %TAG has declared for the document being
+     written, as the handles themselves ("!e!").  Only the streaming writer
+     can have any: the DOM writer emits no directives, so a named handle is
+     undeclared there by construction and a shorthand using one cannot be
+     written at all.  See write_tag(). */
+  const char *const *tag_handles;
+  size_t tag_handle_count;
 } yaml_writer_state;
 
 static GTEXT_YAML_Encoding writer_encoding(const GTEXT_YAML_Write_Options *opts) {
@@ -784,18 +791,65 @@ static bool tag_suffix_is_safe(const char *suffix) {
 
 /* "!", "!local", "!!str", "!handle!suffix".  Anything else - a space, a
    comma, a brace - has to go out verbatim instead. */
-static bool tag_is_writable_shorthand(const char *tag) {
+/* Whether @p tag is a shorthand this writer can spell, and if so how long
+   its handle is.
+
+   c-ns-shorthand-tag is a tag handle followed by ns-tag-char+ (6.8.2), and
+   there are three handles: the primary "!", the secondary "!!", and a named
+   "!" ns-word-char+ "!".  The first two are defined for every document; a
+   *named* one means whatever a %TAG declared it to mean, and means nothing
+   at all where none did. */
+static bool tag_is_writable_shorthand(const char *tag, size_t *handle_len) {
   if (!tag || tag[0] != '!') return false;
   const unsigned char *p = (const unsigned char *)tag + 1;
-  if (*p == '\0') return true;
+  size_t hlen = 1;
+  if (*p == '\0') {
+    if (handle_len) *handle_len = 1;
+    return true;
+  }
   if (*p == '!') {
     p++;
+    hlen = 2;
   } else {
     const unsigned char *scan = p;
     while (isalnum(*scan) || *scan == '-') scan++;
-    if (*scan == '!') p = scan + 1;
+    if (*scan == '!') {
+      p = scan + 1;
+      hlen = (size_t)(p - (const unsigned char *)tag);
+    }
   }
+  if (handle_len) *handle_len = hlen;
   return tag_suffix_is_safe((const char *)p);
+}
+
+/* Whether @p handle is a tag handle: "!", "!!", or "!" ns-word-char+ "!"
+   (6.8.2).  Not the same question as tag_is_writable_shorthand(), which
+   wants a suffix after the handle and answers no for a bare one - asking it
+   this meant no %TAG was ever recorded and every named shorthand was
+   refused, the streaming writer's own round trip included. */
+static bool tag_handle_is_writable(const char *handle) {
+  if (!handle || handle[0] != '!') return false;
+  if (handle[1] == '\0') return true;                       /* "!" */
+  if (handle[1] == '!' && handle[2] == '\0') return true;   /* "!!" */
+  const unsigned char *p = (const unsigned char *)handle + 1;
+  if (!isalnum(*p) && *p != '-') return false;
+  while (isalnum(*p) || *p == '-') p++;
+  return p[0] == '!' && p[1] == '\0';
+}
+
+/* Whether a %TAG in this document declared @p handle, which is the whole
+   handle including both "!" characters. */
+static bool writer_handle_is_declared(
+    const yaml_writer_state *state, const char *handle, size_t len) {
+  if (!state) return false;
+  for (size_t i = 0; i < state->tag_handle_count; i++) {
+    const char *declared = state->tag_handles[i];
+    if (declared && strlen(declared) == len
+        && memcmp(declared, handle, len) == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 static int hex_digit_value(unsigned char c) {
@@ -860,7 +914,24 @@ static GTEXT_YAML_Status write_tag(
     if (tag[1] == '!' && !standard_tag_suffix_is_defined(tag + 2)) {
       return GTEXT_YAML_E_INVALID;
     }
-    if (tag_is_writable_shorthand(tag)) {
+    size_t handle_len = 0;
+    if (tag_is_writable_shorthand(tag, &handle_len)) {
+      /* A named handle means whatever a %TAG declared it to mean, so a
+         shorthand using one is only writable where this writer has declared
+         it.  The DOM writer never declares any - it emits no directives - so
+         "!a!3" was going out as itself and the parser refused the writer's
+         own output for a handle no %TAG defined.  The streaming writer does
+         declare them, and the parser's own event stream reports a tag as it
+         was written (5.3), so "!e!foo" arriving beside its "%TAG !e! ..."
+         still writes as it arrived.
+
+         There is nothing to fall back on: "!<!a!3>" is a different tag, the
+         literal URI rather than the handle's prefix followed by "3", and
+         guessing a prefix would invent one. */
+      if (handle_len > 2
+          && !writer_handle_is_declared(state, tag, handle_len)) {
+        return GTEXT_YAML_E_INVALID;
+      }
       return write_str(state, tag);
     }
   } else if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0) {
@@ -975,6 +1046,24 @@ static bool scalar_needs_quotes(const char *value, size_t len) {
      sequence entry.  The string "-" was being written plain and read back as
      a sequence holding one empty node. */
   if (value[0] == '-' && (len == 1 || value[1] == ' ' || value[1] == '\t')) {
+    return true;
+  }
+  /* A line of exactly "---" or "..." is c-directives-end or c-document-end
+     (9.1.2), and c-forbidden keeps either out of a document's content
+     wherever it stands at the start of a line and a break, white space or the
+     end of input follows it (9.1.1).  A root scalar is written at the start
+     of its line, so the string "---" went out plain and came back as an empty
+     document - the writer had said OK and produced a document marker.
+
+     Quoting is value-preserving here: neither text resolves to anything but a
+     string.  So the whole family is quoted rather than only the positions
+     where it would be fatal, and the test is written against c-forbidden
+     rather than against "len == 3", which would hold only for as long as the
+     whitelist below stays narrow enough to reject everything else. */
+  if (len >= 3
+      && (memcmp(value, "---", 3) == 0 || memcmp(value, "...", 3) == 0)
+      && (len == 3 || value[3] == ' ' || value[3] == '\t'
+          || value[3] == '\n' || value[3] == '\r')) {
     return true;
   }
   for (size_t i = 0; i < len; i++) {
@@ -2053,6 +2142,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
     opts = &defaults;
   }
 
+  /* Zeroed first: this used to set every field by hand, which is correct
+     only until the next field is added.  One was, and the DOM writer read
+     two uninitialised pointers off the stack. */
+  memset(&state, 0, sizeof(state));
   state.sink = sink;
   state.opts = opts;
   writer_encoding_init(&encoding, opts);
@@ -2130,6 +2223,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
     opts = &defaults;
   }
 
+  /* Zeroed first: this used to set every field by hand, which is correct
+     only until the next field is added.  One was, and the DOM writer read
+     two uninitialised pointers off the stack. */
+  memset(&state, 0, sizeof(state));
   state.sink = sink;
   state.opts = opts;
   writer_encoding_init(&encoding, opts);
@@ -2220,8 +2317,43 @@ struct GTEXT_YAML_Writer {
      one has been written.  A directive is written before its document's
      "---", so whichever of the two comes first owes that break. */
   bool doc_separated;
+  /* The named tag handles this document's %TAG directives have declared.
+     A %TAG applies only to the document it precedes (6.8.2), so the list is
+     cleared at each DOCUMENT_END - a handle declared for one document says
+     nothing about the next. */
+  char **tag_handles;
+  size_t tag_handle_count;
+  size_t tag_handle_capacity;
   bool error;
 };
+
+/* Forget the handles the document just written declared. */
+static void writer_tag_handles_clear(GTEXT_YAML_Writer *writer) {
+  for (size_t i = 0; i < writer->tag_handle_count; i++) {
+    free(writer->tag_handles[i]);
+  }
+  writer->tag_handle_count = 0;
+}
+
+/* Remember one, so a shorthand using it can be written.  A handle this fails
+   to record is a handle write_tag() will refuse, which is the safe direction
+   to fail in. */
+static int writer_tag_handle_add(GTEXT_YAML_Writer *writer, const char *handle) {
+  if (writer->tag_handle_count == writer->tag_handle_capacity) {
+    size_t cap = writer->tag_handle_capacity ? writer->tag_handle_capacity * 2 : 4;
+    if (cap > 4096) return 1;
+    char **grown = (char **)realloc(writer->tag_handles, cap * sizeof(*grown));
+    if (!grown) return 1;
+    writer->tag_handles = grown;
+    writer->tag_handle_capacity = cap;
+  }
+  size_t len = strlen(handle);
+  char *copy = (char *)malloc(len + 1);
+  if (!copy) return 1;
+  memcpy(copy, handle, len + 1);
+  writer->tag_handles[writer->tag_handle_count++] = copy;
+  return 0;
+}
 
 #define YAML_WRITER_DEFAULT_STACK_CAPACITY 32
 
@@ -2304,6 +2436,8 @@ static void writer_view(GTEXT_YAML_Writer *writer, yaml_writer_state *state) {
   state->encoding = &writer->encoding;
   state->block_parent_indent = -1;
   state->empty_scalar_ok = false;
+  state->tag_handles = (const char *const *)writer->tag_handles;
+  state->tag_handle_count = writer->tag_handle_count;
 }
 
 static int writer_write_bytes(GTEXT_YAML_Writer *writer,
@@ -2651,6 +2785,13 @@ static GTEXT_YAML_Status writer_emit_directive(
     if (writer_write_string(writer, parts[i]) != 0) return GTEXT_YAML_E_WRITE;
   }
   if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
+
+  /* "%TAG !e! tag:example.com,2000:app/" declares "!e!" for this document,
+     and a shorthand using it is writable from here until DOCUMENT_END. */
+  if (strcmp(parts[0], "TAG") == 0 && tag_handle_is_writable(parts[1])
+      && writer_tag_handle_add(writer, parts[1]) != 0) {
+    return GTEXT_YAML_E_OOM;
+  }
   return GTEXT_YAML_OK;
 }
 
@@ -2924,6 +3065,8 @@ GTEXT_API void gtext_yaml_writer_free(GTEXT_YAML_Writer *writer) {
   if (!writer) {
     return;
   }
+  writer_tag_handles_clear(writer);
+  free(writer->tag_handles);
   free(writer->stack);
   free(writer);
 }
@@ -2968,6 +3111,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
         if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
       }
       writer->in_document = false;
+      writer_tag_handles_clear(writer);
       return GTEXT_YAML_OK;
     }
     case GTEXT_YAML_EVENT_DIRECTIVE:
