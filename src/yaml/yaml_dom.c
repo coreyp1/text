@@ -1038,6 +1038,16 @@ GTEXT_API bool gtext_yaml_document_set_root(
 	return true;
 }
 
+/* Whether @p tag is the "!!binary" of the type repository, in either of the
+   two spellings the resolver accepts. */
+static bool tag_is_binary(const char *tag) {
+	static const char yaml_prefix[] = "tag:yaml.org,2002:";
+	if (!tag || !*tag) return false;
+	if (strcmp(tag, "!!binary") == 0) return true;
+	return strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0
+		&& strcmp(tag + sizeof(yaml_prefix) - 1, "binary") == 0;
+}
+
 /**
  * @brief Create a new scalar node.
  */
@@ -1096,6 +1106,27 @@ static GTEXT_YAML_Node *dom_new_scalar(
 		default:
 			break;
 	}
+	/* "!!binary" says the text is base64 and the node's value is what it
+	   decodes to.  The resolver does this for a parsed node; the constructor
+	   did not, so a node built with perfectly good base64 answered false to
+	   gtext_yaml_node_as_binary() where the same document parsed answers with
+	   the bytes.  And text that is not base64 was taken all the same, and the
+	   writer put it after the tag - so "(((" went out as '!!binary (((' and
+	   the parser refused the writer's own output.  A tag is an assertion
+	   about the value, and this one can be false, so it is checked here the
+	   way the parser checks it on the way in. */
+	if (tag_is_binary(tag)) {
+		const unsigned char *data = NULL;
+		size_t data_len = 0;
+		if (!gtext_yaml_base64_decode(
+				doc, value, value ? length : 0, &data, &data_len)) {
+			return NULL;
+		}
+		node->as.scalar.has_binary = true;
+		node->as.scalar.binary_data = data;
+		node->as.scalar.binary_len = data_len;
+	}
+
 	/* A string whose text would resolve to something else has to go out
 	   quoted, and the writer reads the style to know it.  Everything else
 	   stays plain. */

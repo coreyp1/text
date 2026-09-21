@@ -393,6 +393,21 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
 /**
  * @brief Node factory functions (allocate from context arena).
  */
+/**
+ * @brief Decode a "!!binary" scalar's base64 text into the document's arena.
+ *
+ * Shared so the DOM constructor answers the same way the resolver does: a
+ * node tagged !!binary holds the decoded bytes, and text that is not base64
+ * is not a binary value at all.
+ */
+GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	size_t len,
+	const unsigned char **out_data,
+	size_t *out_len
+);
+
 GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_scalar(
 	yaml_context *ctx,
 	const char *value,

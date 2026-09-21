@@ -299,7 +299,17 @@ void fuzz_event_pipe(const uint8_t * data, size_t size) {
     GTEXT_YAML_Document * back =
         gtext_yaml_parse(text.data(), text.size(), &popts, &err);
     gtext_yaml_error_free(&err);
-    if (!back) __builtin_trap();   /* the writer wrote what the parser refuses */
+    if (!back) {
+      /* Printed before the trap, for the same reason must_round_trip() prints:
+         an artifact is a handful of bytes and says nothing on its own. This
+         path used to trap in silence, which made every find here a fresh
+         reverse-engineering job. */
+      fprintf(stderr, "the event pipe wrote what the parser refuses:\n"
+                      "  in    %.*s\n  wrote %.*s\n",
+              (int)size, reinterpret_cast<const char *>(data),
+              (int)text.size(), text.data());
+      __builtin_trap();
+    }
 
     /* And it must be the same document, not merely a readable one. */
     GTEXT_YAML_Document * from = gtext_yaml_parse(
@@ -310,7 +320,14 @@ void fuzz_event_pipe(const uint8_t * data, size_t size) {
       std::string a = values_of(from, &a_ok);
       std::string b = values_of(back, &b_ok);
       gtext_yaml_free(from);
-      if (a_ok && b_ok && a != b) __builtin_trap();
+      if (a_ok && b_ok && a != b) {
+        fprintf(stderr, "the event pipe wrote a different document:\n"
+                        "  in     %.*s\n  wrote  %.*s\n"
+                        "  before %s\n  after  %s\n",
+                (int)size, reinterpret_cast<const char *>(data),
+                (int)text.size(), text.data(), a.c_str(), b.c_str());
+        __builtin_trap();
+      }
     }
     gtext_yaml_free(back);
   }

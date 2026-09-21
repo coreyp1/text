@@ -71,6 +71,118 @@ TEST(YamlBinary, DecodeRejectsInvalid) {
 	EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID);
 }
 
+/* Base64 of no bytes is the empty string, so an empty !!binary value is an
+   empty byte string - which is what PyYAML gives back, and its type
+   repository is where !!binary is defined. It was refused, and that made the
+   writer's own output unreadable: an empty binary node is written
+   '!!binary ""'. The writer fuzzer is what noticed; no corpus of YAML text
+   has an empty binary in it.
+
+   White space alone decodes the same way, because the filter drops it before
+   anything counts. "a" and "aGk" stay invalid: base64 comes in groups of
+   four. */
+TEST(YamlBinary, DecodesAnEmptyValueToNoBytes) {
+	const char *documents[] = {
+		"!!binary \"\"", "!!binary", "!!binary \"  \"", "!!binary ''",
+	};
+	for (const char *yaml : documents) {
+		GTEXT_YAML_Error err = {};
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(yaml, strlen(yaml), NULL, &err);
+		ASSERT_NE(doc, nullptr) << yaml << ": "
+			<< (err.message ? err.message : "");
+		const unsigned char *data = nullptr;
+		size_t len = 1;
+		EXPECT_TRUE(gtext_yaml_node_as_binary(
+			gtext_yaml_document_root(doc), &data, &len)) << yaml;
+		EXPECT_EQ(len, (size_t)0) << yaml;
+		gtext_yaml_free(doc);
+	}
+
+	/* And what the writer produces for one reads back the same way, which is
+	   the property that failed. */
+	GTEXT_YAML_Error err = {};
+	const char *src = "!!binary \"\"";
+	GTEXT_YAML_Document *doc = gtext_yaml_parse(src, strlen(src), NULL, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+	GTEXT_YAML_Sink sink;
+	ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+	GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+	ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts), GTEXT_YAML_OK);
+	const std::string out(gtext_yaml_sink_buffer_data(&sink),
+		gtext_yaml_sink_buffer_size(&sink));
+	gtext_yaml_sink_buffer_free(&sink);
+	gtext_yaml_free(doc);
+
+	GTEXT_YAML_Error err2 = {};
+	GTEXT_YAML_Document *back =
+		gtext_yaml_parse(out.data(), out.size(), NULL, &err2);
+	ASSERT_NE(back, nullptr) << "wrote " << out << " which this parser refuses: "
+		<< (err2.message ? err2.message : "");
+	gtext_yaml_free(back);
+}
+
+/* A tag is an assertion about the value, and "!!binary" is one that can be
+   false. The constructor took any text at all and never decoded it, so a node
+   built from perfectly good base64 answered false to as_binary() where the
+   same document parsed answers with the bytes - and text that is not base64
+   was taken all the same, then written after the tag: "(((" went out as
+   '!!binary (((' and this parser refused the writer's own output.
+
+   It is checked on the way in now, the way the parser checks it, and the node
+   carries the decoded bytes either way. */
+TEST(YamlBinary, TheConstructorDecodesAndRefusesWhatIsNotBase64) {
+	struct Case { const char *text; bool ok; size_t len; };
+	const Case cases[] = {
+		{ "aGk=", true, 2 },
+		{ "", true, 0 },
+		{ "SGVsbG8=", true, 5 },
+		{ "(((", false, 0 },
+		{ "hi", false, 0 },
+		{ "a", false, 0 },
+		{ "SGVsbG8", false, 0 },
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		ASSERT_NE(doc, nullptr);
+		GTEXT_YAML_Node *node =
+			gtext_yaml_node_new_scalar(doc, c.text, "!!binary", nullptr);
+		EXPECT_EQ(node != nullptr, c.ok) << "text <<" << c.text << ">>";
+		if (node) {
+			const unsigned char *data = nullptr;
+			size_t len = 99;
+			EXPECT_TRUE(gtext_yaml_node_as_binary(node, &data, &len))
+				<< "text <<" << c.text << ">>";
+			EXPECT_EQ(len, c.len) << "text <<" << c.text << ">>";
+
+			/* And what the writer makes of it reads back. */
+			gtext_yaml_document_set_root(doc, node);
+			GTEXT_YAML_Sink sink;
+			ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+			GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+			ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts),
+				GTEXT_YAML_OK);
+			const std::string out(gtext_yaml_sink_buffer_data(&sink),
+				gtext_yaml_sink_buffer_size(&sink));
+			gtext_yaml_sink_buffer_free(&sink);
+			GTEXT_YAML_Error err = {};
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(out.data(), out.size(), nullptr, &err);
+			EXPECT_NE(back, nullptr) << "wrote " << out
+				<< " which this parser refuses: "
+				<< (err.message ? err.message : "");
+			if (back) gtext_yaml_free(back);
+		}
+		gtext_yaml_free(doc);
+	}
+
+	/* The spelled-out tag says the same thing. */
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	EXPECT_EQ(gtext_yaml_node_new_scalar(
+		doc, "(((", "tag:yaml.org,2002:binary", nullptr), nullptr);
+	gtext_yaml_free(doc);
+}
+
 TEST(YamlBinary, WriterEmitsCanonicalBase64) {
 	const char *yaml = "!!binary SGVsbG8=";
 	GTEXT_YAML_Error err = {};

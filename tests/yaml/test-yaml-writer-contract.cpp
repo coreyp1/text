@@ -756,6 +756,30 @@ TEST(YamlWriterContract, ADeclaredHandleDoesNotCarryToTheNextDocument) {
 		<< "wrote: " << ignored;
 }
 
+/* A document has exactly one root - l-bare-document is a single
+   s-l+block-node (9.2) - and a second one has nowhere to go.
+
+   The writer used to put it straight after the first. "*a: x" is not a
+   mapping: 6.9.2 stops an alias name only at a flow indicator, so the name is
+   "a:" and the "x" is a second node at document level - which is why the DOM
+   parser refuses the document. The streaming parser reports what is written
+   and leaves composing to its consumer, so the writer saw an ALIAS and then a
+   SCALAR, wrote both, and produced "*a:x" - two nodes run together with no
+   separator at all, and a document nothing can read.
+
+   That is the same habit as answering an INDICATOR with OK: inventing
+   structure for events that describe none. A second root is refused now. */
+TEST(YamlWriterContract, ADocumentTakesOneRootNode) {
+	std::string out;
+	EXPECT_FALSE(pipe_through("*a: x\n", &out)) << "wrote: " << out;
+
+	/* One root still writes, and so does one per document. */
+	EXPECT_TRUE(pipe_through("a\n", &out));
+	EXPECT_NE(out.find('a'), std::string::npos) << "wrote: " << out;
+	EXPECT_TRUE(pipe_through("--- a\n--- b\n", &out));
+	EXPECT_NE(out.find('b'), std::string::npos) << "wrote: " << out;
+}
+
 /* %YAML travels the same way, and has to survive the trip rather than being
    quietly dropped. */
 TEST(YamlWriterContract, TheStreamingWriterKeepsTheVersionDirective) {

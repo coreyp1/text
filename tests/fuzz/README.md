@@ -190,6 +190,20 @@ a flow collection at the key's own column is the next entry's key measured the
 collection rather than the entry, so `a:` over `&k [x]:` put the sequence
 where a's value goes.
 
+Three more after those: an empty `!!binary` value refused where base64 of no
+bytes is the empty string and the writer writes exactly that; `!!binary` taken
+as an assertion nobody checked, so a node built from good base64 answered
+false to `gtext_yaml_node_as_binary()` and one built from `(((` was written
+after the tag; and a document written with **two root nodes**, because
+`*a: x` is an alias named `a:` followed by a second node at document level and
+the writer put the second straight after the first, producing `*a:x`.
+
+That last one came through the event-pipe path, which had been trapping **in
+silence** - only `must_round_trip()` printed what the writer produced. Two of
+this harness's own defects were already listed above; this is the third, and
+it is the one that cost the most, because every find there began with reverse
+engineering a dozen bytes. It prints now.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -270,7 +284,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — twenty-seven library defects and two of its own,
+has already earned that — thirty library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

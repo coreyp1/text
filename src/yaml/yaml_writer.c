@@ -2317,6 +2317,14 @@ struct GTEXT_YAML_Writer {
      one has been written.  A directive is written before its document's
      "---", so whichever of the two comes first owes that break. */
   bool doc_separated;
+  /* Set once a node has been written at the root of the document being
+     written.  A document has exactly one root - l-bare-document is a single
+     s-l+block-node (9.2) - and a second one has nowhere to go: the writer
+     used to put it straight after the first, so an ALIAS and a SCALAR at
+     document level came out as "*a:x", two nodes run together with no
+     separator at all.  That is the same habit as answering an INDICATOR with
+     OK: inventing structure for events that describe none. */
+  bool root_written;
   /* The named tag handles this document's %TAG directives have declared.
      A %TAG applies only to the document it precedes (6.8.2), so the list is
      cleared at each DOCUMENT_END - a handle declared for one document says
@@ -2515,6 +2523,8 @@ static int writer_prepare_scalar(
     GTEXT_YAML_Writer *writer, bool *is_key, bool empty) {
   yaml_writer_stack_entry *top = writer_stack_top(writer);
   if (!top) {
+    if (writer->root_written) return 1;   /* a document has one root (9.2) */
+    writer->root_written = true;
     if (is_key) *is_key = false;
     return 0;
   }
@@ -2848,6 +2858,8 @@ static GTEXT_YAML_Status writer_emit_container_start(
   }
 
   if (!parent) {
+    if (writer->root_written) return GTEXT_YAML_E_STATE;
+    writer->root_written = true;
     if (writer_write_prefix(
             writer,
             event->anchor,
@@ -3098,6 +3110,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
       writer->in_document = true;
       writer->wrote_doc = true;
       writer->doc_separated = false;
+      writer->root_written = false;
       return GTEXT_YAML_OK;
     }
     case GTEXT_YAML_EVENT_DOCUMENT_END: {

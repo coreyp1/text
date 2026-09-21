@@ -384,7 +384,7 @@ static int base64_value(unsigned char c) {
 	return -1;
 }
 
-static bool base64_decode(
+GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 	GTEXT_YAML_Document *doc,
 	const char *value,
 	size_t len,
@@ -408,9 +408,28 @@ static bool base64_decode(
 	}
 	filtered[count] = '\0';
 
-	if (count == 0 || (count % 4) != 0) {
+	if ((count % 4) != 0) {
 		free(filtered);
 		return false;
+	}
+
+	if (count == 0) {
+		/* Base64 of no bytes is the empty string, so "!!binary" with an empty
+		   value - or with nothing but white space in it - is an empty byte
+		   string.  PyYAML, whose type repository defines !!binary, reads both
+		   as b''.  Refusing them made the writer's own output unreadable,
+		   since an empty binary node is written '!!binary ""'.
+
+		   The padding test below is why this has to return before it: with no
+		   characters, filtered[count - 2] reads off the front of the buffer. */
+		unsigned char *empty =
+			(unsigned char *)yaml_context_alloc(doc->ctx, 1, 1);
+		free(filtered);
+		if (!empty) return false;
+		empty[0] = '\0';
+		*out_data = empty;
+		*out_len = 0;
+		return true;
 	}
 
 	size_t padding = 0;
@@ -1695,7 +1714,7 @@ static GTEXT_YAML_Status resolve_scalar(
 		if (strcmp(suffix, "binary") == 0) {
 			const unsigned char *data = NULL;
 			size_t data_len = 0;
-			if (!base64_decode(doc, value, len, &data, &data_len)) {
+			if (!gtext_yaml_base64_decode(doc, value, len, &data, &data_len)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid base64 binary scalar";

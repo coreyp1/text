@@ -1104,6 +1104,37 @@ The correction only applies where the collection **begins its own line**.
 line's first node answers `a`; ten documents of yaml-test-suite say what
 happens if you do not draw that line.
 
+### Three more, and a harness that had been trapping in silence
+
+- **An empty `!!binary` value was refused.** Base64 of no bytes is the empty
+  string, so `!!binary ""` is an empty byte string - which is what PyYAML
+  gives back, and its type repository is where `!!binary` is defined. Refusing
+  it made the writer's own output unreadable, since that is exactly how an
+  empty binary node is written.
+- **`!!binary` was an assertion nobody checked.** A tag says what kind of
+  value a node holds, and this one can be false. The DOM constructor took any
+  text at all: a node built from good base64 answered *false* to
+  `gtext_yaml_node_as_binary()` where the same document parsed answers with
+  the bytes, and text that is not base64 was taken all the same and written
+  after the tag, so `(((` went out as `!!binary (((`. It is decoded on the way
+  in now, the way the parser decodes it, and refused when it will not decode.
+- **A document was written with two root nodes.** `l-bare-document` is a
+  single `s-l+block-node` (9.2). `*a: x` is not a mapping - 6.9.2 stops an
+  alias name only at a flow indicator, so the name is `a:` and the `x` is a
+  second node at document level, which is why the DOM parser refuses the
+  document. The streaming parser reports what is written and leaves composing
+  to its consumer, so the writer saw an `ALIAS` and then a `SCALAR`, wrote
+  both, and produced `*a:x`: two nodes run together with no separator, and a
+  document nothing can read. It is the same habit as answering an `INDICATOR`
+  with OK - inventing structure for events that describe none - and a second
+  root is refused now.
+
+The last of those was found through a path of the fuzz harness that trapped
+**in silence**: only `must_round_trip()` printed what the writer had produced,
+and the event-pipe path did not, so every find there began with reverse
+engineering a dozen bytes. It prints now. That is a harness defect, and the
+count in `tests/fuzz/README.md` says so.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's
