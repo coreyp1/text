@@ -839,6 +839,12 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 		exit 1; \
 	fi
 
+# A suite that never started reports no tests at all - a missing shared
+# library exits 127 before gtest prints a line. The row said FAIL, but the
+# failure count came from the absent "[ FAILED ] n" line and so was zero, and
+# a TOTAL of zero failures prints PASS. The run was green with a whole suite
+# unexecuted. Anything that exited non-zero counts as at least one failure,
+# and the passed tally never goes below zero when it does.
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
@@ -860,8 +866,11 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 		else \
 			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
 			[ -z "$$failures" ] && failures=$$num_tests; \
+			if [ $$failures -eq 0 ]; then failures=1; fi; \
+			if [ $$failures -gt $$num_tests ]; then passed_here=0; \
+			else passed_here=$$((num_tests - failures)); fi; \
 			total_failed=$$((total_failed + failures)); \
-			total_passed=$$((total_passed + num_tests - failures)); \
+			total_passed=$$((total_passed + passed_here)); \
 			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
 		fi; \
@@ -926,12 +935,15 @@ ifeq ($(OS_NAME), Linux)
 		else \
 			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
 			[ -z "$$failures" ] && failures=0; \
+			if [ $$exit_code -ne 0 ] && [ $$failures -eq 0 ]; then failures=1; fi; \
+			if [ $$failures -gt $$num_tests ]; then passed_here=0; \
+			else passed_here=$$((num_tests - failures)); fi; \
 			if [ $$has_leak -gt 0 ]; then \
 				total_failed=$$((total_failed + num_tests)); \
 				printf "%-30s %8d %8dms \033[0;31mLEAK\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 			else \
 				total_failed=$$((total_failed + failures)); \
-				total_passed=$$((total_passed + num_tests - failures)); \
+				total_passed=$$((total_passed + passed_here)); \
 				printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 			fi; \
 			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES/LEAKS ===\033[0m\n$$output\n"; \
@@ -1016,8 +1028,11 @@ ifeq ($(OS_NAME), Linux)
 		else \
 			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
 			[ -z "$$failures" ] && failures=$$num_tests; \
+			if [ $$failures -eq 0 ]; then failures=1; fi; \
+			if [ $$failures -gt $$num_tests ]; then passed_here=0; \
+			else passed_here=$$((num_tests - failures)); fi; \
 			total_failed=$$((total_failed + failures)); \
-			total_passed=$$((total_passed + num_tests - failures)); \
+			total_passed=$$((total_passed + passed_here)); \
 			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
 		fi; \
