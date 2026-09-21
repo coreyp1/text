@@ -121,7 +121,8 @@ optional format ones, and **all 1261, 158 and 866** of draft2019-09's, getting
 none of them wrong; `make conformance-json-schema` measures it, and the gate is
 the whole required suite rather than a floor set just under it. draft-07 and
 draft-06 answer 921 of 929 and 833 of 841, with nothing wrong and the rest
-refused for reasons ef json_module "the JSON module page" names.
+refused for reasons 
+ef json_module "the JSON module page" names.
 
 `$schema` selects a draft as well as a vocabulary set, scoped exactly as the
 base URI is, so a `$ref` into a 2019-09 or draft-07 document is read as that
@@ -170,12 +171,18 @@ resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1,494 tests across 106 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 76.8% line coverage. (Counting these
+The test suite runs 1,506 tests across 106 binaries with zero failures, clean
+under valgrind and under ASan/UBSan, at 76.9% line coverage. (Counting these
 from `make test` output needs care: several binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
-gives 2,309 instead. `make test-quiet` prints the deduplicated total, and that
-is the number quoted here.) Three libFuzzer
+gives a larger number. `make test-quiet` prints the deduplicated total, and
+that is the number quoted here.)
+
+`tools/coverage.sh` also lists, separately, the reallocation lines no test
+executes - a growth path nothing reaches is untested rather than working. That
+list is ten, down from eighteen: one was a real gap and now has tests, seven
+were dead code and are gone, and each of the ten that remain carries a comment
+saying why it cannot be reached and what it is still guarding. Three libFuzzer
 harnesses cover the three parsers; `tests/fuzz/README.md` records what they
 have found. All of it runs in CI on every push and pull request, along with a
 coverage floor and the symbol, allocator and header gates - until recently
