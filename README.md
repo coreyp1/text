@@ -115,21 +115,29 @@ stopped keeping its own: it read with `fseek`/`ftell`, so it could not read a
 pipe at all.
 
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
-JSON Schema 2020-12, which answers all 1301 assertions in
-JSON-Schema-Test-Suite's required draft2020-12 files, all 162 of its optional
-ones and all 866 of its optional format ones, and gets none of them wrong;
-`make conformance-json-schema` measures it, and the gate is the whole required
-suite rather than a floor set just under it. `$schema` selects a draft as well
-as a vocabulary set, so a `$ref` into a 2019-09 or draft-07 document is read
-as that draft.
+JSON Schema. It answers **all 1301** assertions in JSON-Schema-Test-Suite's
+required draft2020-12 files, all 162 of its optional ones and all 866 of its
+optional format ones, and **all 1261, 158 and 866** of draft2019-09's, getting
+none of them wrong; `make conformance-json-schema` measures it, and the gate is
+the whole required suite rather than a floor set just under it. draft-07 and
+draft-06 answer 921 of 929 and 833 of 841, with nothing wrong and the rest
+refused for reasons ef json_module "the JSON module page" names.
 
-The dialect describes itself, so the last four of those assertions ask a
-schema to validate another schema through a `$ref` to the published
-meta-schema. All nine of those documents are embedded, verbatim and under a
-byte-diff gate, so that reference resolves without a resolver: the dialect's
-URIs do not version, and the alternative is a validator that opens a
-connection during a compile to a URI it read out of the document it was
-handed. A caller's resolver is still asked first and still wins.
+`$schema` selects a draft as well as a vocabulary set, scoped exactly as the
+base URI is, so a `$ref` into a 2019-09 or draft-07 document is read as that
+draft. A document carrying no `$schema` is read as
+`GTEXT_JSON_Schema_Options::default_dialect`, or as 2020-12 when the caller has
+not said - absence of a `$schema` does not make a document dialect-free, and
+the drafts disagree about what keywords mean rather than only about which
+exist.
+
+The dialect describes itself, so some of those assertions ask a schema to
+validate another schema through a `$ref` to the published meta-schema. All
+sixteen of those documents - 2020-12's nine and 2019-09's seven - are embedded,
+verbatim and under a byte-diff gate, so that reference resolves without a
+resolver: the dialect's URIs do not version, and the alternative is a validator
+that opens a connection during a compile to a URI it read out of the document
+it was handed. A caller's resolver is still asked first and still wins.
 
 `format` asserts when asked to, and the address, name, mailbox, URI and
 pointer formats are grammars rather than character-class filters. `hostname`

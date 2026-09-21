@@ -345,13 +345,24 @@ The following features are planned for future releases:
 
 This list had gone stale: most of what it called planned has been
 implemented, and a list of gaps that names things which are not gaps is worse
-than no list, because it is read as current. What remains unimplemented is:
+than no list, because it is read as current. `$recursiveRef` and
+`$recursiveAnchor` were the last entry and are now implemented.
 
-- **2019-09's dynamic references**: `$recursiveRef` and `$recursiveAnchor`,
-  which 2020-12 replaced. `$dynamicRef` and `$dynamicAnchor` are implemented
+Every standard keyword in every draft this engine reads is now either enforced
+or ignored for a reason the specification gives. What remains is not keywords:
 
-A schema using either is refused at compile time rather than validated with
-the keyword ignored.
+- **the draft-07 and draft-06 meta-schemas are not vendored.** 2020-12's nine
+  documents and 2019-09's seven are embedded, so a `$ref` to either resolves
+  with no resolver and no network. The two older drafts publish a single
+  meta-schema each and neither is carried, so a draft-07 document that
+  validates another schema against its own dialect needs a resolver
+- **draft-07's location-independent identifier**: an `$id` holding only a
+  fragment, which is how that draft spells what 2019-09 calls `$anchor`. A
+  draft-07 document using one has a name this engine will not find
+- **`$ref` beside a sibling `$id`** should leave the base URI alone before
+  2019-09, because the `$ref` is the whole schema there. The resource pre-pass
+  registers the `$id` anyway, because it runs before any dialect is read
+- **draft-04 and earlier** are refused by decision, not by omission - see below
 
 ### `$schema` selects a draft
 
@@ -382,11 +393,42 @@ spells `exclusiveMinimum` as a boolean that modifies `minimum`, and `$id` as
 keyword, it produces a wrong answer about the instance, which is exactly what
 this engine refuses rather than guesses at.
 
+A document that carries no `$schema` at all is read as
+`GTEXT_JSON_Schema_Options::default_dialect`, or as 2020-12 when the caller
+has not set one. `$schema` is optional and its absence does not make a
+document dialect-free - it was written against something - so guessing the
+current draft is right but is still a guess, and this is how a caller who
+knows better says so. A `$schema` inside the document always wins, per
+resource. A `default_dialect` naming a draft this library cannot read is
+refused rather than replaced by the default.
+
 Identifiers are resolved the same way in every draft: `$id`, `$anchor` and
 `$defs` establish resources and names whatever the dialect says. draft-07 has
 no `$anchor` and spells a location-independent identifier as an `$id` holding
 only a fragment, and that spelling is not implemented - a draft-07 document
 that uses one has a name this engine will not find.
+
+### Measured, per draft
+
+`make conformance-json-schema` scores against JSON-Schema-Test-Suite at the
+commit pinned in `tools/conformance/JSON_SCHEMA_COMMIT`. `JSS_DRAFT` picks the
+directory, and the runner tells the engine which dialect that directory is
+written in - almost no schema in the suite carries a `$schema`, so an
+implementation that is not told reads every file as its own default and is
+scored on rules the draft predates.
+
+| Draft | required | optional | optional/format |
+| --- | --- | --- | --- |
+| 2020-12 | 1301 / 1301 | 162 / 162 | 866 / 866 |
+| 2019-09 | 1261 / 1261 | 158 / 158 | 866 / 866 |
+| draft-07 | 921 / 929 | - | - |
+| draft-06 | 833 / 841 | - | - |
+
+Nothing is answered wrongly in any of the four. The eight outstanding in each
+of draft-07 and draft-06 are refusals, and they are the first three entries of
+the gap list above: the un-vendored meta-schema, and `$ref` beside `$id`.
+`pattern` and `patternProperties` are measured through `ghoti.io-regex`, which
+the runner links when it is installed and says so when it does not.
 
 `$vocabulary` is implemented. A metaschema named by `$schema` and reachable
 through the resolver says which vocabularies a schema written against it

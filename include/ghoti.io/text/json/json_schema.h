@@ -103,14 +103,17 @@
  *
  * Unsupported standard keywords (rejected at compile time):
  * - pattern, patternProperties, when no provider was supplied
- * - $recursiveRef and $recursiveAnchor - 2019-09's dynamic-scope references,
- *   which 2020-12 replaced
  * - a $schema naming draft-04 or earlier. Those drafts spell
  *   exclusiveMinimum as a boolean modifying minimum, and $id as id, so
  *   reading one as a later draft gives a wrong answer about the instance
  *   rather than an unknown keyword. 2020-12, 2019-09, draft-07 and draft-06
  *   are read, each with its own keyword set, and the dialect is scoped to the
- *   resource that declares it
+ *   resource that declares it. A document with no $schema is read as
+ *   default_dialect, or as 2020-12 when that is not set
+ * - $recursiveRef with any value but "#". 2019-09 defines exactly one, and
+ *   the keyword is otherwise implemented: $recursiveRef and $recursiveAnchor
+ *   are 2019-09's spelling of $dynamicRef and $dynamicAnchor, answered by the
+ *   same dynamic-scope walk under one anonymous anchor name
  * - regex as a `format`, when format assertion is asked for and no provider
  *   was supplied. It is the only format name this library declines; every
  *   other one in the vocabulary is checked
