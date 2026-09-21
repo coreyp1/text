@@ -20,6 +20,21 @@ commit=$(cat "$root/tools/conformance/JSON_SCHEMA_COMMIT")
 suite=${JSS_SUITE:-$root/build/json-schema-test-suite}
 draft=${JSS_DRAFT:-draft2020-12}
 
+# Almost no schema in the suite carries a `$schema`: the draft it is written
+# against is the directory it sits in.  An implementation is expected to be
+# told, and one that is not reads every file as its own default - so draft7's
+# `$ref`-with-siblings and `additionalItems` cases were being scored against
+# 2020-12's rules, which is a measurement of the harness rather than of the
+# engine.
+case "$draft" in
+draft2020-12) JSS_DIALECT="https://json-schema.org/draft/2020-12/schema" ;;
+draft2019-09) JSS_DIALECT="https://json-schema.org/draft/2019-09/schema" ;;
+draft7)       JSS_DIALECT="http://json-schema.org/draft-07/schema#" ;;
+draft6)       JSS_DIALECT="http://json-schema.org/draft-06/schema#" ;;
+*)            JSS_DIALECT="" ;;
+esac
+export JSS_DIALECT
+
 if [ ! -d "$suite/.git" ]; then
 	echo "fetching JSON-Schema-Test-Suite into $suite"
 	git clone https://github.com/json-schema-org/JSON-Schema-Test-Suite.git "$suite"

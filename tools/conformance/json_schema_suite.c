@@ -213,6 +213,9 @@ static void remote_cache_clear(void) {
   remote_cache_count = 0;
 }
 
+/* JSS_DIALECT: the `$schema` a document that omits one is read as. */
+static const char * default_dialect = NULL;
+
 static void run_group(const char * file, const GTEXT_JSON_Value * group,
     const GTEXT_JSON_Regex_Provider * provider) {
   const GTEXT_JSON_Value * schema_doc =
@@ -225,6 +228,7 @@ static void run_group(const char * file, const GTEXT_JSON_Value * group,
 
   GTEXT_JSON_Schema_Options options = gtext_json_schema_options_default();
   options.regex = provider;
+  options.default_dialect = default_dialect;
   GTEXT_JSON_Schema_Resolver resolver = {NULL, remote_get};
   options.resolver = &resolver;
   if (assert_formats) {
@@ -322,6 +326,11 @@ int main(int argc, char ** argv) {
 
   assert_formats = (getenv("JSS_FORMAT_ASSERT") != NULL);
   remotes_dir = getenv("JSS_REMOTES");
+  /* Which dialect a schema with no `$schema` is written in.  Almost none of
+   * the suite's schemas carry one - the draft is the directory they sit in -
+   * so without this every file is read as 2020-12, and the older drafts are
+   * scored against rules they predate. */
+  default_dialect = getenv("JSS_DIALECT");
 
   GTEXT_JSON_Parse_Options parse_options = gtext_json_parse_options_default();
 

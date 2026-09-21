@@ -347,6 +347,18 @@ static const struct {
     {"http://json-schema.org/schema#", "draft-04"},
     {NULL, NULL}};
 
+/* The draft a dialect URI names, or 0 if this engine does not read it. */
+static json_schema_draft json_schema_draft_for_uri(
+    const char * uri, size_t len) {
+  for (size_t i = 0; json_schema_dialects[i].uri; i++) {
+    const char * known = json_schema_dialects[i].uri;
+    if (strlen(known) == len && memcmp(known, uri, len) == 0) {
+      return json_schema_dialects[i].draft;
+    }
+  }
+  return 0;
+}
+
 /*
  * The draft each keyword was introduced in.
  *
@@ -4417,12 +4429,36 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
     }
   }
 
+  /*
+   * The dialect an undeclared document is read as.  2020-12 unless the caller
+   * says otherwise; a `$schema` inside the document still wins, per resource.
+   *
+   * An unreadable name is refused rather than ignored, for the reason the
+   * whole engine refuses rather than ignores: a caller who passed a dialect
+   * this library cannot read and got a compile back would have been told the
+   * opposite of the truth.
+   */
+  json_schema_draft initial_draft = JSON_DRAFT_2020_12;
+  if (opts && opts->default_dialect) {
+    initial_draft = json_schema_draft_for_uri(
+        opts->default_dialect, strlen(opts->default_dialect));
+    if (initial_draft == 0) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+            .message = "default_dialect names a draft this implementation "
+                       "does not read"};
+      }
+      gtext_json_schema_free(schema);
+      return NULL;
+    }
+  }
+
   json_schema_compile_ctx cc = {.ctx = schema->ctx,
       .opts = opts,
       .schema = schema,
       .depth = 0,
       .vocabularies = JSON_VOCAB_DEFAULT,
-      .draft = JSON_DRAFT_2020_12,
+      .draft = initial_draft,
       .base_uri = root_base};
 
   /* The root's own `$schema` is read by compile_node like any other

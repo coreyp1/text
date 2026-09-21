@@ -390,6 +390,30 @@ typedef struct {
    * inside it means something different without it. NUL-terminated.
    */
   const char * base_uri;
+
+  /**
+   * Which dialect a document that carries no `$schema` is written in, as the
+   * `$schema` URI that would have named it, or NULL for 2020-12.
+   *
+   * `$schema` is optional, and a document that omits it does not thereby
+   * become dialect-free: it was written against something, and the drafts
+   * disagree about what keywords mean rather than only about which exist.
+   * draft-07 says a schema object containing `$ref` *is* that reference and
+   * its siblings are ignored; 2019-09 onward apply them. `additionalItems`
+   * governs the tail of a positional `items` in draft-06 through 2019-09 and
+   * does not exist in 2020-12. Reading one draft's document under another's
+   * rules gives a wrong answer about the instance, not an unknown keyword.
+   *
+   * Guessing 2020-12 is the right default - it is the current draft - but it
+   * is a guess, and a caller who knows better could not say so. This is how
+   * they say so. A `$schema` inside the document always wins, and wins per
+   * resource, so this only decides what an undeclared one means.
+   *
+   * The value is one of the dialect URIs this library reads; anything else is
+   * refused at compile time rather than silently ignored. NUL-terminated and
+   * borrowed, and need only outlive the compile call.
+   */
+  const char * default_dialect;
 } GTEXT_JSON_Schema_Options;
 
 /**

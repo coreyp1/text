@@ -12529,3 +12529,106 @@ TEST(JsonSchemaAdditionalItems, AppliesOnlyWhenItemsIsAnArray) {
 		EXPECT_FALSE(f.accepts("[1,2]"));
 	}
 }
+
+TEST(JsonSchemaDialect, AnUndeclaredDocumentIsReadAsTheCallerSays) {
+	// `$schema` is optional, and a document without one was always read as
+	// 2020-12. That is the right guess but it is a guess, and the drafts
+	// disagree about meaning rather than only about vocabulary.
+	//
+	// draft-07 says a schema object containing `$ref` *is* that reference and
+	// every sibling keyword is ignored; 2019-09 onward apply the siblings. The
+	// same document therefore has two readings, and only the caller knows
+	// which was meant.
+	const char * src =
+	    "{\"$ref\":\"#/definitions/int\",\"maxItems\":1,"
+	    "\"definitions\":{\"int\":{\"type\":\"array\"}}}";
+
+	{
+		// Default: 2020-12, so maxItems applies beside the $ref.
+		MetaFixture f(src);
+		ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+		EXPECT_TRUE(f.accepts("[1]"));
+		EXPECT_FALSE(f.accepts("[1,2]"));
+	}
+	{
+		// Told it is draft-07: the $ref is the whole schema and maxItems is
+		// not there at all, so the two-element array is valid.
+		ToyProvider provider;
+		GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+		GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+		opts.regex = &vtable;
+		opts.default_dialect = "http://json-schema.org/draft-07/schema#";
+
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Value * doc = parse_doc(src);
+		ASSERT_NE(doc, nullptr);
+		GTEXT_JSON_Schema * schema =
+		    gtext_json_schema_compile_with_options(doc, &opts, &err);
+		ASSERT_NE(schema, nullptr) << (err.message ? err.message : "");
+
+		GTEXT_JSON_Value * two = parse_doc("[1,2]");
+		ASSERT_NE(two, nullptr);
+		EXPECT_EQ(gtext_json_schema_validate(schema, two, nullptr),
+		    GTEXT_JSON_OK);
+
+		gtext_json_free(two);
+		gtext_json_schema_free(schema);
+		gtext_json_free(doc);
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(JsonSchemaDialect, ADeclaredSchemaStillWins) {
+	// The option says what an *undeclared* document means. A `$schema` inside
+	// the document is not overridden by it, or the option would be a way to
+	// misread a document that said plainly what it was.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &vtable;
+	opts.default_dialect = "http://json-schema.org/draft-07/schema#";
+
+	const char * src =
+	    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\","
+	    "\"$ref\":\"#/$defs/int\",\"maxItems\":1,"
+	    "\"$defs\":{\"int\":{\"type\":\"array\"}}}";
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * doc = parse_doc(src);
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	ASSERT_NE(schema, nullptr) << (err.message ? err.message : "");
+
+	// 2020-12's reading: maxItems applies, so this is too long.
+	GTEXT_JSON_Value * two = parse_doc("[1,2]");
+	ASSERT_NE(two, nullptr);
+	GTEXT_JSON_Error verr;
+	memset(&verr, 0, sizeof(verr));
+	EXPECT_NE(gtext_json_schema_validate(schema, two, &verr), GTEXT_JSON_OK);
+
+	gtext_json_error_free(&verr);
+	gtext_json_free(two);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	gtext_json_error_free(&err);
+}
+
+TEST(JsonSchemaDialect, AnUnreadableDefaultIsRefused) {
+	// Silently falling back to 2020-12 would tell a caller who asked for
+	// draft-04 that they got draft-04.
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.default_dialect = "http://json-schema.org/draft-04/schema#";
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * doc = parse_doc("{\"type\":\"string\"}");
+	ASSERT_NE(doc, nullptr);
+	EXPECT_EQ(gtext_json_schema_compile_with_options(doc, &opts, &err),
+	    nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+
+	gtext_json_free(doc);
+	gtext_json_error_free(&err);
+}
