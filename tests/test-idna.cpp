@@ -168,8 +168,10 @@ TEST(Idna, Lengths) {
 }
 
 TEST(Idna, LabelSeparators) {
-	// UTS #46 section 4.5: three other stops separate labels, but only for a
-	// name that admits Unicode at all.
+	// UTS #46 section 4.5: three other stops separate labels, which the
+	// mapping step delivers by turning them into FULL STOP - and only for a
+	// name that admits Unicode at all, because a plain `hostname` is not
+	// mapped.
 	EXPECT_TRUE(idn("a\xE3\x80\x82""b"));
 	EXPECT_TRUE(idn("a\xEF\xBC\x8E""b"));
 	EXPECT_TRUE(idn("a\xEF\xBD\xA1""b"));
@@ -191,4 +193,138 @@ TEST(Idna, MalformedUtf8IsNotAName) {
 int main(int argc, char ** argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
+}
+
+// ===========================================================================
+// UTS #46: what a name becomes before IDNA2008 judges it
+// ===========================================================================
+//
+// Two specifications, layered rather than merged. UTS #46 says what a name
+// *becomes* - fullwidth forms folded to their ASCII counterparts, invisible
+// characters dropped, the result normalised - and RFC 5892 still says what is
+// valid. JSON Schema defines `idn-hostname` by RFC 5890, so the validity rule
+// has to stay IDNA2008's; the mapping is what makes `１２３` and `123` the
+// same name rather than one valid name and one rejected string.
+//
+// Only for `idn-hostname`. Mapping a plain `hostname` would be answering a
+// question nobody asked.
+
+TEST(Idna, MappedToAscii) {
+	// Fullwidth digits, fullwidth letters, and a fullwidth ASCII string that
+	// becomes an ordinary LDH label.
+	EXPECT_TRUE(idn("\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93"));  // １２３
+	EXPECT_TRUE(idn("\xEF\xBD\x81\xEF\xBD\x82"));              // ａｂ
+	// The mapping is a case fold too, so a fullwidth capital arrives as
+	// lower case rather than as a capital that then has to be allowed.
+	EXPECT_TRUE(idn("\xEF\xBC\xA1\xEF\xBC\xA2"));              // ＡＢ
+
+	// A plain `hostname` gets none of it: this is one label containing a
+	// character no label may contain.
+	EXPECT_FALSE(host("\xEF\xBC\x91\xEF\xBC\x92\xEF\xBC\x93"));
+}
+
+TEST(Idna, IgnoredCharactersAreRemoved) {
+	// U+200B ZERO WIDTH SPACE is `ignored`: it leaves, and what is left is
+	// judged. `a<ZWSP>b` is the name `ab`.
+	EXPECT_TRUE(idn("a\xE2\x80\x8B""b"));
+	// U+00AD SOFT HYPHEN and U+FEFF ZERO WIDTH NO-BREAK SPACE likewise.
+	EXPECT_TRUE(idn("a\xC2\xAD""b"));
+	EXPECT_TRUE(idn("a\xEF\xBB\xBF""b"));
+	// A name that is nothing but ignored characters is not a name.
+	EXPECT_FALSE(idn("\xE2\x80\x8B"));
+	// And the removal happens before the length is measured, so this is 63
+	// characters and not 64.
+	EXPECT_TRUE(idn(std::string(63, 'a') + "\xE2\x80\x8B"));
+	EXPECT_FALSE(idn(std::string(64, 'a') + "\xE2\x80\x8B"));
+}
+
+TEST(Idna, MappingRunsBeforeTheLengthLimit) {
+	// 63 fullwidth `a`, which is 189 bytes of UTF-8 and 63 characters once
+	// mapped. A validator that measured first would call this too long.
+	std::string wide;
+	for (int i = 0; i < 63; i++) {
+		wide += "\xEF\xBD\x81";
+	}
+	EXPECT_TRUE(idn(wide));
+	EXPECT_FALSE(idn(wide + "\xEF\xBD\x81"));
+}
+
+TEST(Idna, AnAcePrefixTheMappingProduced) {
+	// `ｘｎ--nxasmq6b` is not an A-label when it arrives - `ｘ` and `ｎ` are
+	// fullwidth - and is one after the mapping step. The Punycode has to be
+	// decoded and checked, which means the mapping cannot be something done
+	// after the label kind is decided.
+	EXPECT_TRUE(idn("\xEF\xBD\x98\xEF\xBD\x8E--nxasmq6b"));
+	// The same thing with payload that does not decode is still refused, so
+	// this is not passing merely because the prefix went unnoticed.
+	EXPECT_FALSE(idn("\xEF\xBD\x98\xEF\xBD\x8E--nxasmq6b\x81"));
+}
+
+TEST(Idna, TheThreeOtherStopsAreMappedNotSpecialCased) {
+	// These used to be a hard-coded list of separators. They are separators
+	// because the mapping step turns all three into FULL STOP, which is where
+	// UTS #46 actually puts the rule - and the behaviour is unchanged.
+	EXPECT_TRUE(idn("a\xE3\x80\x82""b"));
+	EXPECT_TRUE(idn("a\xEF\xBC\x8E""b"));
+	EXPECT_TRUE(idn("a\xEF\xBD\xA1""b"));
+	EXPECT_FALSE(idn("\xE3\x80\x82"));
+	EXPECT_FALSE(idn("example\xEF\xBC\x8E"));
+}
+
+TEST(Idna, DeviationCharactersAreLeftAlone) {
+	// Nontransitional processing, which is what every current browser does.
+	// Transitional processing folds sharp s to `ss` and final sigma to
+	// sigma, which would make two different names into one - and this
+	// library carries no entry for them precisely because nothing happens.
+	//
+	// `faß` stays `faß`, a valid name in its own right, and is not the same
+	// name as `fass`.
+	EXPECT_TRUE(idn("fa\xC3\x9F"));
+	EXPECT_TRUE(idn("fass"));
+	// Greek final sigma, likewise valid and not folded to sigma.
+	EXPECT_TRUE(idn("\xCF\x83\xCF\x8C\xCE\xBB\xCE\xBF\xCF\x82"));
+}
+
+TEST(Idna, NamesAreNormalisedToNfc) {
+	// `é` written as one character and as `e` plus a combining acute are the
+	// same name. A validator that treated them as different names would be
+	// the hole spoofing walks through, and one that rejected the decomposed
+	// form would reject a name every browser accepts.
+	const std::string composed = "caf\xC3\xA9";          // café, U+00E9
+	const std::string decomposed = "cafe\xCC\x81";       // e + U+0301
+	EXPECT_TRUE(idn(composed));
+	EXPECT_TRUE(idn(decomposed));
+
+	// Both encode to the same A-label, which is the property that matters:
+	// the 63-octet limit is measured on the encoded form, so the two must
+	// agree about length as well as about validity.
+	std::string long_composed;
+	std::string long_decomposed;
+	for (int i = 0; i < 20; i++) {
+		long_composed += "\xC3\xA9";
+		long_decomposed += "e\xCC\x81";
+	}
+	EXPECT_EQ(idn(long_composed), idn(long_decomposed));
+
+	// A combining mark with nothing to combine with is still a leading
+	// combining mark after normalisation, which RFC 5892 refuses.
+	EXPECT_FALSE(idn("\xCC\x81""abc"));
+}
+
+TEST(Idna, AnALabelMustDecodeToNfc) {
+	// UTS #46 section 4.1, criterion 1. A U-label arrives normalised because
+	// the mapping step normalised the whole name; an A-label does not,
+	// because nothing looked inside its Punycode. It is refused rather than
+	// normalised - an A-label is a spelling of one exact U-label, and one
+	// that decodes to a different string than it claims is not that label.
+	//
+	// xn--e-xbb is `e` + U+0301, which is not NFC: it is `é` spelled the
+	// long way, and the A-label for `é` is xn--9ca.
+	EXPECT_FALSE(idn("xn--e-xbb"));
+	EXPECT_TRUE(idn("xn--9ca"));
+	// Not every A-label with a hyphen in its payload is suspect: xn--e-uga
+	// decodes to `óe`, which is already NFC and is accepted. Without this the
+	// test above would pass for an implementation that refused anything it
+	// found hard to decode.
+	EXPECT_TRUE(idn("xn--e-uga"));
 }

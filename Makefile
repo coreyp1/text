@@ -305,7 +305,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-metaschema
+TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -577,7 +577,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1303,6 +1303,12 @@ conformance-csv:
 UCD_VERSION := $(shell cat tools/idna/UCD_VERSION 2>/dev/null)
 UCD_DIR := third_party/ucd/$(UCD_VERSION)
 IDNA_TABLES := src/idna/tables
+# UTS #46's mapping table is not part of the UCD and versions on its own
+# schedule - there is no 17.0.0 of it - so it has its own pin. The skew is
+# harmless because the two answer different questions; tools/idna/fetch.sh
+# says why at length.
+IDNA_MAPPING_VERSION := $(shell cat tools/idna/IDNA_MAPPING_VERSION 2>/dev/null)
+IDNA_MAPPING_DIR := third_party/idna/$(IDNA_MAPPING_VERSION)
 METASCHEMA_DIR := third_party/json-schema/2020-12
 METASCHEMA_SRC := src/json/metaschema
 
@@ -1329,6 +1335,14 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 		cat "$$tmp/err" >&2; \
 		exit 1; \
 	fi; \
+	if [ ! -d "$(IDNA_MAPPING_DIR)" ]; then \
+		printf "check-idna-tables: mapping table diff skipped (no $(IDNA_MAPPING_DIR); run tools/idna/fetch.sh)\n"; \
+		cp $(IDNA_TABLES)/uts46_tables.c $(IDNA_TABLES)/nfc_tables.c "$$tmp/out/"; \
+	elif ! python3 tools/idna/gen_uts46.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
+		printf "\033[0;31m\n### The UTS #46 generator failed ###\033[0m\n" >&2; \
+		cat "$$tmp/err" >&2; \
+		exit 1; \
+	fi; \
 	if ! diff -ru $(IDNA_TABLES) "$$tmp/out" >"$$tmp/diff" 2>&1; then \
 		printf "\033[0;31m\n### The committed IDNA tables are stale ###\033[0m\n" >&2; \
 		head -40 "$$tmp/diff" >&2; \
@@ -1338,7 +1352,7 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 		printf "  tools/idna/gen_tables.py\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mIDNA tables are byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
+	printf "\033[0;32mIDNA tables are byte-identical to the generators' output (UCD $(UCD_VERSION), IDNA mapping $(IDNA_MAPPING_VERSION)).\033[0m\n"
 
 check-idna-oracle: ## Compare the derived IDNA property against an independent implementation
 	@if ! python3 -c "import idna" >/dev/null 2>&1; then \
@@ -1350,6 +1364,23 @@ check-idna-oracle: ## Compare the derived IDNA property against an independent i
 		exit 0; \
 	fi; \
 	python3 tools/idna/oracle.py
+
+check-nfc-oracle: ## Compare this library's NFC against Python's, over every sequence
+# Python's unicodedata is a normaliser written by other people from the same
+# annex, and a wrong one here is not visible from outside: a missed
+# composition exclusion or an unstable canonical sort produces a normaliser
+# that is right about almost every string. The driver links the archive, so
+# this needs a build.
+check-nfc-oracle: $(APP_DIR)/$(TARGET)
+	@if ! python3 -c "import unicodedata" >/dev/null 2>&1; then \
+		printf "check-nfc-oracle: skipped (no python3 unicodedata)\n"; \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(UCD_DIR)" ]; then \
+		printf "check-nfc-oracle: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
+		exit 0; \
+	fi; \
+	python3 tools/idna/nfc_oracle.py
 
 check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.org publishes
 # The nine documents under $(METASCHEMA_SRC) are somebody else's, embedded so

@@ -16,6 +16,10 @@ The two are built against different Unicode versions, so codepoints the
 oracle's Unicode does not know are skipped and counted. A disagreement about a
 codepoint both versions assign is a defect in one of them.
 
+The same package also carries UTS #46's mapping table, so the second half of
+this compares that against ours - two readings of one published file, by
+different people.
+
 Usage:
     tools/idna/oracle.py [--ucd DIR] [--version V]
 
@@ -26,14 +30,101 @@ import argparse
 import os
 import sys
 import unicodedata
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_tables
 
 try:
     import idna.idnadata
+    import idna.uts46data
 except ImportError:
     sys.exit("oracle.py needs the `idna` package: pip install idna")
+
+import gen_uts46
+
+
+def check_mapping(root):
+    """The UTS #46 mapping table against python-idna's copy of it.
+
+    Two readings of one published file, by different people, so a
+    disagreement is a defect in one of them - a range expanded wrongly, a
+    mapping taken from the wrong field.
+
+    The comparison is made against the *oracle's* version of the file rather
+    than the one this library pins, and that is the whole trick. The two
+    tables version independently and their contents really do change: 15.1.0
+    calls the Georgian capitals disallowed and 16.0.0 maps them to their
+    small-letter forms. Comparing across versions would report three hundred
+    of those as findings and bury a real parsing error among them. Comparing
+    this repository's parser against python-idna on the file python-idna was
+    built from asks only the question the oracle can answer.
+
+    Only mapped and ignored are compared, because they are all this library
+    records: it takes validity from RFC 5892, so `valid` and `disallowed` are
+    not questions it answers.
+    """
+    version = getattr(idna.uts46data, "__version__", None)
+    if not version:
+        print("\nUTS #46 mapping: skipped (python-idna does not say which "
+              "version of the table it carries)")
+        return 0
+
+    path = os.path.join(
+        root, "third_party", "idna", version, "IdnaMappingTable.txt")
+    if not os.path.exists(path):
+        url = ("https://www.unicode.org/Public/idna/%s/IdnaMappingTable.txt"
+               % version)
+        print("\nfetching %s for the oracle" % url)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read()
+            if not data.startswith(b"#"):
+                raise ValueError("that did not look like a mapping table")
+            with open(path, "wb") as handle:
+                handle.write(data)
+        except Exception as exc:  # network, 404, anything
+            print("UTS #46 mapping: skipped (%s)" % exc)
+            return 0
+
+    ours = gen_uts46.parse_mapping(path)
+
+    # python-idna stores (start, status[, mapping]), each entry running to the
+    # next start. Expanded rather than bisected, because the comparison is
+    # per-codepoint anyway and an off-by-one in a bisect would be a bug in the
+    # oracle rather than a finding.
+    theirs = {}
+    rows = idna.uts46data.uts46data
+    for index, row in enumerate(rows):
+        start = row[0]
+        stop = rows[index + 1][0] if index + 1 < len(rows) else start + 1
+        status = row[1]
+        if status not in ("M", "I"):
+            continue
+        target = row[2] if len(row) > 2 else ""
+        value = ("mapped", [ord(c) for c in target]) if status == "M" \
+            else ("ignored", [])
+        for cp in range(start, stop):
+            theirs[cp] = value
+
+    disagree = []
+    for cp in sorted(set(ours) | set(theirs)):
+        if ours.get(cp) != theirs.get(cp):
+            disagree.append((cp, ours.get(cp), theirs.get(cp)))
+
+    print("\noracle: UTS #46 mapping %s against python-idna %s"
+          % (version, idna.__version__))
+    print("compared %d characters" % len(set(ours) | set(theirs)))
+    if not disagree:
+        print("no disagreements")
+        return 0
+    print("%d disagreements:" % len(disagree))
+    for cp, mine, yours in disagree[:40]:
+        print("  U+%04X  ours=%-28s theirs=%s" % (cp, mine, yours))
+    if len(disagree) > 40:
+        print("  ... and %d more" % (len(disagree) - 40))
+    return 1
 
 
 def main():
@@ -87,19 +178,24 @@ def main():
           % (idna.__version__, unicodedata.unidata_version, args.version))
     print("compared %d codepoints, skipped %d the oracle's Unicode "
           "does not assign" % (compared, skipped))
+    status = 0
     if not disagree:
         print("no disagreements")
-        return 0
-    print("%d disagreements:" % len(disagree))
-    for cp, mine, yours in disagree[:40]:
-        try:
-            name = unicodedata.name(chr(cp))
-        except (ValueError, KeyError):
-            name = "?"
-        print("  U+%04X  ours=%-10s theirs=%-10s  %s" % (cp, mine, yours, name))
-    if len(disagree) > 40:
-        print("  ... and %d more" % (len(disagree) - 40))
-    return 1
+    else:
+        status = 1
+        print("%d disagreements:" % len(disagree))
+        for cp, mine, yours in disagree[:40]:
+            try:
+                name = unicodedata.name(chr(cp))
+            except (ValueError, KeyError):
+                name = "?"
+            print("  U+%04X  ours=%-10s theirs=%-10s  %s"
+                  % (cp, mine, yours, name))
+        if len(disagree) > 40:
+            print("  ... and %d more" % (len(disagree) - 40))
+
+    status |= check_mapping(root)
+    return status
 
 
 if __name__ == "__main__":

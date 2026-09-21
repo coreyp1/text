@@ -3,9 +3,10 @@
  *
  * The shape of the generated IDNA tables.
  *
- * Hand-written; only tables/idna_tables.c is generated. The enumerations here
- * are the values that file names, so a table regenerated against a newer UCD
- * fails to compile rather than silently meaning something else.
+ * Hand-written; tables/idna_tables.c, tables/uts46_tables.c and
+ * tables/nfc_tables.c are generated. The enumerations here are the values
+ * those files name, so a table regenerated against newer data fails to
+ * compile rather than silently meaning something else.
  *
  * Copyright 2026 by Corey Pennycuff
  */
@@ -84,6 +85,72 @@ extern const GTEXT_IDNA_Range gtext_idna_bidi[];
 extern const size_t gtext_idna_bidi_count;
 extern const GTEXT_IDNA_Range gtext_idna_virama[];
 extern const size_t gtext_idna_virama_count;
+
+/**
+ * @brief What UTS #46's mapping step does to a character
+ *
+ * Only two, because only two change the string. `valid` and `disallowed`
+ * are absent because RFC 5892 decides validity here; `deviation` is absent
+ * because nontransitional processing - which is what this library and every
+ * current browser do - leaves all four deviations alone.
+ */
+typedef enum {
+  GTEXT_UTS46_MAPPED = 0, ///< Replace with `length` codepoints from the pool
+  GTEXT_UTS46_IGNORED = 1 ///< Remove
+} GTEXT_UTS46_Status;
+
+/** One character the mapping step changes. */
+typedef struct {
+  uint32_t cp;
+  uint32_t offset; ///< Into gtext_uts46_pool
+  uint8_t length;  ///< 0 when ignored
+  uint8_t status;  ///< A GTEXT_UTS46_Status
+} GTEXT_UTS46_Entry;
+
+/**
+ * Sorted by codepoint. A character that is not here is one the mapping step
+ * leaves alone, which is the overwhelming majority of them.
+ */
+extern const GTEXT_UTS46_Entry gtext_uts46_map[];
+extern const size_t gtext_uts46_map_count;
+extern const uint32_t * const gtext_uts46_pool;
+
+/** A run of codepoints sharing a combining class. */
+typedef struct {
+  uint32_t lo;
+  uint32_t hi;
+  uint8_t value;
+} GTEXT_NFC_Range;
+
+/**
+ * One canonical decomposition, already expanded as far as it goes, so that
+ * the runtime never has to decompose a decomposition.
+ */
+typedef struct {
+  uint32_t cp;
+  uint32_t offset; ///< Into gtext_nfc_decomposition_pool
+  uint8_t length;  ///< At most 4, which UAX #15 gives as the maximum
+} GTEXT_NFC_Decomposition;
+
+/** A starter and a following character that canonically compose. */
+typedef struct {
+  uint32_t first;
+  uint32_t second;
+  uint32_t composite;
+} GTEXT_NFC_Composition;
+
+/** Canonical_Combining_Class, zero being the default and so absent. */
+extern const GTEXT_NFC_Range gtext_nfc_ccc[];
+extern const size_t gtext_nfc_ccc_count;
+
+/** Sorted by codepoint. */
+extern const GTEXT_NFC_Decomposition gtext_nfc_decomposition[];
+extern const size_t gtext_nfc_decomposition_count;
+extern const uint32_t * const gtext_nfc_decomposition_pool;
+
+/** Sorted by (first, second). */
+extern const GTEXT_NFC_Composition gtext_nfc_composition[];
+extern const size_t gtext_nfc_composition_count;
 
 #ifdef __cplusplus
 }

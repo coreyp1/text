@@ -31,9 +31,25 @@
 #include <string.h>
 
 #include "idna_internal.h"
+#include "nfc_internal.h"
 #include "tables/tables_internal.h"
 
 #define IDNA_MAX_LABEL_CODEPOINTS 256
+
+/*
+ * How many codepoints a name may have once UTS #46 has mapped it.
+ *
+ * Not an arbitrary ceiling. Punycode never emits fewer characters than it was
+ * given - a basic codepoint is copied and a non-basic one costs at least one
+ * delta character - so a name of more than 253 codepoints cannot encode to the
+ * 253 octets a domain name is allowed. Anything past this bound is already
+ * invalid, and stopping here rather than after the encoding keeps the working
+ * buffers small enough to live on the stack.
+ */
+#define IDNA_MAX_MAPPED_CODEPOINTS 256
+
+/* UAX #15 gives four characters as the largest canonical expansion of one. */
+#define IDNA_MAX_DECOMPOSED_CODEPOINTS (IDNA_MAX_MAPPED_CODEPOINTS * 4)
 #define IDNA_MAX_NAME_OCTETS 253
 #define IDNA_MAX_LABEL_OCTETS 63
 
@@ -650,6 +666,25 @@ static int idna_label_codepoints(const char * s, size_t len, uint32_t * cps,
     if (all_ascii) {
       return 0;
     }
+    /*
+     * UTS #46 section 4.1, criterion 1: the decoded label must already be in
+     * NFC. A U-label reaches this function normalised, because the mapping
+     * step normalised the whole name before it was split; an A-label does
+     * not, because its bytes were Punycode and nothing looked inside them.
+     * It is refused rather than normalised - an A-label is a spelling of one
+     * exact U-label, and one that decodes to a different string than it
+     * claims is not that label.
+     */
+    uint32_t normalized[IDNA_MAX_DECOMPOSED_CODEPOINTS];
+    size_t normalized_len = 0;
+    if (!gtext_nfc(cps, *out_len, normalized, sizeof(normalized) / sizeof(normalized[0]),
+            &normalized_len)) {
+      return 0;
+    }
+    if (normalized_len != *out_len
+        || memcmp(normalized, cps, *out_len * sizeof(uint32_t)) != 0) {
+      return 0;
+    }
     *was_a_label = 1;
     return 1;
   }
@@ -676,23 +711,189 @@ static int idna_label_codepoints(const char * s, size_t len, uint32_t * cps,
 // ===========================================================================
 
 /*
- * UTS #46 section 4.5 treats three other stops as label separators, and the
- * suite requires it: `a。b` is two labels. This much of UTS #46 is three
- * codepoints and no table, which is why it is here when the rest of that
- * specification's mapping step is not.
+ * The only label separator, U+002E FULL STOP.
+ *
+ * UTS #46 section 4.5 treats three others as separators too - `a。b` is two
+ * labels - and they used to be listed here because the mapping step was not
+ * implemented. They are not listed any more: the mapping step maps all three
+ * to FULL STOP before the name is ever split, which is where that rule
+ * actually lives. The generator checks that it still does.
  */
-static int idna_is_separator(uint32_t cp, int allow_unicode) {
-  if (cp == '.') {
-    return 1;
-  }
-  /* Only for `idn-hostname`. A plain `hostname` is ASCII, so `example．com`
-   * is one label containing a character no label may contain rather than two
-   * labels either side of a separator - and it is invalid either way, but
-   * for the reason that is actually true of it. */
-  return allow_unicode && (cp == 0x3002 || cp == 0xFF0E || cp == 0xFF61);
+static int idna_is_separator(uint32_t cp) {
+  return cp == '.';
 }
 
+/* Write one codepoint as UTF-8. Returns how many bytes, or 0 if it does not
+ * fit or is not encodable. */
+static size_t idna_utf8_put(uint32_t cp, char * out, size_t cap) {
+  if (cp < 0x80) {
+    if (cap < 1) {
+      return 0;
+    }
+    out[0] = (char)cp;
+    return 1;
+  }
+  if (cp < 0x800) {
+    if (cap < 2) {
+      return 0;
+    }
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    if (cap < 3 || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      return 0;
+    }
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  if (cp <= 0x10FFFF) {
+    if (cap < 4) {
+      return 0;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+  }
+  return 0;
+}
+
+/* What UTS #46's mapping step does to `cp`, or 0 if it leaves it alone. */
+static const GTEXT_UTS46_Entry * idna_uts46_lookup(uint32_t cp) {
+  size_t lo = 0;
+  size_t hi = gtext_uts46_map_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (cp < gtext_uts46_map[mid].cp) {
+      hi = mid;
+    }
+    else if (cp > gtext_uts46_map[mid].cp) {
+      lo = mid + 1;
+    }
+    else {
+      return &gtext_uts46_map[mid];
+    }
+  }
+  return NULL;
+}
+
+/*
+ * UTS #46 section 4, step 1: map.
+ *
+ * Nontransitional processing, which is what every current browser does. The
+ * difference is the four deviation characters - sharp s, final sigma and the
+ * two zero-width joiners - which transitional processing folds away and this
+ * leaves alone, so that `faß.example` is not silently the same name as
+ * `fass.example`. They need no table entry precisely because nothing happens
+ * to them.
+ *
+ * A character the table does not mention is left alone, which is both the
+ * table's own rule and what makes the version skew between the mapping table
+ * and the UCD harmless: a character too new for the mapping table is one the
+ * mapping step would not have touched.
+ */
+static int idna_uts46_map(const char * text, size_t len, uint32_t * out,
+    size_t cap, size_t * out_len) {
+  size_t at = 0;
+  size_t written = 0;
+  while (at < len) {
+    size_t before = at;
+    uint32_t cp = idna_utf8_next(text, len, &at);
+    if (cp == 0 && at == before) {
+      return 0; // malformed UTF-8
+    }
+    const GTEXT_UTS46_Entry * entry = idna_uts46_lookup(cp);
+    if (!entry) {
+      if (written >= cap) {
+        return 0;
+      }
+      out[written++] = cp;
+      continue;
+    }
+    if (entry->status == GTEXT_UTS46_IGNORED) {
+      continue;
+    }
+    if (written + entry->length > cap) {
+      return 0;
+    }
+    for (size_t i = 0; i < entry->length; i++) {
+      out[written++] = gtext_uts46_pool[entry->offset + i];
+    }
+  }
+  *out_len = written;
+  return 1;
+}
+
+static int idna_hostname_valid_mapped(
+    const char * text, size_t len, int allow_unicode);
+
+/*
+ * UTS #46 steps 1 and 2 - map, then normalise - and then IDNA2008.
+ *
+ * The two specifications are layered, not merged. UTS #46 says what a name
+ * *becomes*; RFC 5892, derived in tools/idna/gen_tables.py from the UCD,
+ * still says what is valid. That layering is what JSON Schema section 7.3.4.3
+ * asks for, since it defines `idn-hostname` by RFC 5890 and not by UTS #46 -
+ * and it is why the two data sets may be different Unicode versions without
+ * the answer depending on which.
+ *
+ * Only for `idn-hostname`. A plain `hostname` is ASCII and mapping it would
+ * be answering a question nobody asked: `EXAMPLE.COM` is already a host name,
+ * and `ｅxample.com` is not one that a case fold should rescue.
+ */
 GTEXT_INTERNAL_API int gtext_idna_hostname_valid(
+    const char * text, size_t len, int allow_unicode) {
+  if (len == 0 || len > 4 * IDNA_MAX_NAME_OCTETS) {
+    return 0;
+  }
+  if (!allow_unicode) {
+    return idna_hostname_valid_mapped(text, len, allow_unicode);
+  }
+
+  uint32_t mapped[IDNA_MAX_MAPPED_CODEPOINTS];
+  size_t mapped_len = 0;
+  if (!idna_uts46_map(
+          text, len, mapped, IDNA_MAX_MAPPED_CODEPOINTS, &mapped_len)) {
+    return 0;
+  }
+  if (mapped_len == 0) {
+    return 0; // every character was ignored, leaving no name at all
+  }
+
+  /*
+   * Normalised as one string rather than label by label, which is what the
+   * specification says and happens to be the same thing: FULL STOP is a
+   * starter that composes with nothing, so no composition can cross it.
+   */
+  uint32_t normalized[IDNA_MAX_DECOMPOSED_CODEPOINTS];
+  size_t normalized_len = 0;
+  if (!gtext_nfc(mapped, mapped_len, normalized,
+          IDNA_MAX_DECOMPOSED_CODEPOINTS, &normalized_len)) {
+    return 0;
+  }
+  if (normalized_len == 0 || normalized_len > IDNA_MAX_MAPPED_CODEPOINTS) {
+    return 0;
+  }
+
+  char utf8[IDNA_MAX_MAPPED_CODEPOINTS * 4];
+  size_t utf8_len = 0;
+  for (size_t i = 0; i < normalized_len; i++) {
+    size_t wrote =
+        idna_utf8_put(normalized[i], utf8 + utf8_len, sizeof(utf8) - utf8_len);
+    if (wrote == 0) {
+      return 0;
+    }
+    utf8_len += wrote;
+  }
+  return idna_hostname_valid_mapped(utf8, utf8_len, allow_unicode);
+}
+
+static int idna_hostname_valid_mapped(
     const char * text, size_t len, int allow_unicode) {
   if (len == 0 || len > 4 * IDNA_MAX_NAME_OCTETS) {
     return 0;
@@ -712,7 +913,7 @@ GTEXT_INTERNAL_API int gtext_idna_hostname_valid(
     if (cp == 0 && at == before) {
       return 0;
     }
-    if (!idna_is_separator(cp, allow_unicode)) {
+    if (!idna_is_separator(cp)) {
       continue;
     }
     if (count >= IDNA_MAX_NAME_OCTETS) {

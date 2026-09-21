@@ -452,18 +452,63 @@ round trip RFC 5891 section 4.4 requires. 2020-12 section 7.3.3 defines
 `hostname` to include Punycode-produced names, so the LDH rule alone is not
 the keyword.
 
-The tables behind that are generated from the Unicode Character Database by
-`tools/idna/gen_tables.py` and committed, so a build needs neither the
-network nor Python; `make check-idna-tables` fails if the two have drifted
-apart, and `make check-idna-oracle` compares the derived property against an
-independent implementation.
+`idn-hostname` additionally runs UTS #46's mapping and normalisation step
+before any of that, in its nontransitional form:
 
-What is not done is UTS #46's mapping and normalisation step. A name is taken
-as written: fullwidth digits are not mapped to ASCII, a zero-width space is
-not dropped, and a label that is not already in Normalization Form C is not
-put into it. Each is a refusal of something a browser would accept, which is
-the safe direction to be wrong in but is still wrong; it costs four of the
-suite's 866 format assertions.
+- fullwidth and other compatibility forms are folded to their ASCII
+  counterparts, so `１２３` is the name `123` and `ｘｎ--nxasmq6b` is an
+  A-label that then has to decode;
+- ignorable characters - a zero-width space, a soft hyphen, a variation
+  selector - are removed, before the length is measured rather than after;
+- the result is put into Normalization Form C, so a name spelled with a
+  combining acute is the same name as one spelled with the precomposed
+  character. An `xn--` label is *refused* if it decodes to something that is
+  not already NFC, rather than normalised, because an A-label is the spelling
+  of one exact U-label;
+- the four deviation characters - sharp s, final sigma and the two zero-width
+  joiners - are left alone, which is what every current browser does and what
+  keeps `faß.example` from silently being `fass.example`.
+
+The three other full stops UTS #46 treats as label separators are separators
+because the mapping turns all of them into FULL STOP, not because they are
+listed anywhere in this library.
+
+The two specifications stay layered rather than merged: UTS #46 says what a
+name *becomes*, and RFC 5892 still says what is valid, because 2020-12
+section 7.3.4.3 defines the format by RFC 5890. That layering is also why the
+two data sets may be different Unicode versions without the answer depending
+on which - only the characters the mapping table *changes* are taken from it.
+
+### The tables, and what checks them
+
+Four generated files under `src/idna/tables/`, all committed so that a build
+needs neither the network nor Python:
+
+- `idna_tables.c`, the RFC 5892 derived property and the narrow tables the
+  contextual and bidi rules read, from `tools/idna/gen_tables.py`;
+- `uts46_tables.c`, the characters UTS #46's mapping step changes, and
+- `nfc_tables.c`, the combining classes, canonical decompositions and
+  composition pairs, both from `tools/idna/gen_uts46.py`.
+
+The UCD version is pinned in `tools/idna/UCD_VERSION` and the mapping table's
+in `tools/idna/IDNA_MAPPING_VERSION`, because the two version on different
+schedules - there is no 17.0.0 of the mapping table.
+
+Three gates:
+
+- `make check-idna-tables` regenerates and diffs, so a committed table cannot
+  drift from the generator that is supposed to produce it;
+- `make check-idna-oracle` compares the derived property against python-idna's
+  - a different author's reading of the same RFC - and this library's reading
+  of the mapping table against python-idna's, *on the version python-idna was
+  built from*, so that a genuine change between table versions is not reported
+  as a finding;
+- `make check-nfc-oracle` compares this library's normalisation against
+  CPython's over three and a half million sequences: every codepoint alone,
+  every starter-and-mark pair, starter-and-two-marks across the combining
+  classes, and Hangul in every combination. A wrong normaliser is right about
+  almost every string, which is exactly why it needs an oracle rather than a
+  test suite.
 
 `pattern` and `patternProperties` are implemented, but only against a
 regular-expression engine the caller supplies through

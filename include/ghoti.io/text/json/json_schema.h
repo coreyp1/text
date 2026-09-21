@@ -316,11 +316,21 @@ typedef enum {
    * `hostname` and `idn-hostname` are IDNA2008 (RFC 5890 to 5893), including
    * decoding an `xn--` label and checking what it decodes to - 2020-12
    * section 7.3.3 defines `hostname` to include Punycode-produced names, so
-   * the LDH rule alone is not the keyword. What is *not* done is UTS #46's
-   * mapping and normalisation step: a name is taken as written, so fullwidth
-   * digits are not mapped to ASCII and a label not already in Normalization
-   * Form C is not put into it. Both are refusals of something a browser
-   * would accept.
+   * the LDH rule alone is not the keyword.
+   *
+   * `idn-hostname` additionally runs UTS #46's mapping and normalisation step
+   * first, nontransitional: fullwidth forms are folded to their ASCII
+   * counterparts, ignorable characters such as a zero-width space are
+   * removed, and the result is put into Normalization Form C, so that a name
+   * spelled with a combining acute is the same name as one spelled with the
+   * precomposed character. The four deviation characters - sharp s, final
+   * sigma and the two zero-width joiners - are left alone, which is what
+   * every current browser does.
+   *
+   * The two specifications stay layered rather than merged: UTS #46 says what
+   * the name becomes, and RFC 5892 still says what is valid, because 2020-12
+   * section 7.3.4.3 defines this format by RFC 5890. A plain `hostname` is
+   * not mapped at all.
    */
   GTEXT_JSON_FORMAT_ASSERT
 } GTEXT_JSON_Format_Policy;
