@@ -172,7 +172,10 @@ resolution and conversion to JSON.
 ## Status
 
 The test suite runs 1,534 tests across 109 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 76.9% line coverage. (Counting these
+under valgrind and under ASan/UBSan, at 76.9% line coverage. The UBSan half of
+that only became a claim worth making once `-fno-sanitize-recover=undefined`
+was added: without it UBSan prints a diagnostic and runs on past the defect,
+the process exits 0, and the run reports itself clean whatever it found. (Counting these
 from `make test` output needs care: several binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
 gives a larger number. `make test-quiet` prints the deduplicated total, and

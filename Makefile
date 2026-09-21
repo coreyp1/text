@@ -266,7 +266,13 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 --suppressions=tools/valgrind.supp
 
 # Sanitizer flags (ASan + UBSan)
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+#
+# -fno-sanitize-recover=undefined is what makes the second half of that a
+# gate.  ASan aborts on a finding, so `|| exit 1` in the loop below catches
+# it; UBSan by default prints a diagnostic and *runs on past the defect*, the
+# process exits 0, and the run is reported as clean.  A gate that cannot fail
+# is not a gate.
+ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
 
 # Sanitizer build directory
 ASAN_BUILD_DIR := $(BUILD_DIR)-asan
@@ -989,7 +995,7 @@ ifeq ($(OS_NAME), Linux)
 		printf "### Running %s tests (ASan+UBSan) ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 || exit 1; \
+		LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 $$test_exe --gtest_brief=1 || exit 1; \
 	done
 	@printf "\033[0;32m\n"
 	@printf "###########################################\n"
@@ -1014,7 +1020,7 @@ ifeq ($(OS_NAME), Linux)
 	printf "\033[1;33m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
 	for test_exe in $(ASAN_TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
-		output=$$(LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1 $$test_exe --gtest_brief=1 2>&1); \
+		output=$$(LD_PRELOAD= LD_LIBRARY_PATH="$(ASAN_APP_DIR)" ASAN_OPTIONS=detect_leaks=1:allocator_may_return_null=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 $$test_exe --gtest_brief=1 2>&1); \
 		exit_code=$$?; \
 		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
 		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
@@ -1226,7 +1232,10 @@ cloc: ## Count the lines of code used in the project
 FUZZ_CC ?= clang
 FUZZ_CXX ?= clang++
 FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
-FUZZ_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
+# -fno-sanitize-recover=undefined for the same reason as ASAN_UBSAN_FLAGS: a
+# fuzzer steers by crashes, and a UBSan finding that only prints is an input
+# libFuzzer will never save as an artifact.
+FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 # The fuzzers link cutil like everything else, so they need the same rpath the
