@@ -217,7 +217,7 @@ See [the CSV page](@ref format_csv).
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. `make conformance` scores it
-against yaml-test-suite: **all 366 checkable cases, 100%**.
+against yaml-test-suite: **377 of the 395 checkable cases, 95.4%**.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is
@@ -344,11 +344,12 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **100%** of the 366 cases that can be checked by
-value or by refusal. For calibration, the same harness scores **js-yaml at
-82.0%** and **PyYAML at 77.3%** - neither reference scores anything like
-100% here, which is what makes the number readable. The remaining 38 cases
-assert an event stream the harness does not emit.
+this parser against it: **95.4%** of the 395 cases that can be checked by
+value, by event stream, or by refusal. For calibration, the same harness
+scores **js-yaml at 82.0%** and **PyYAML at 77.3%** on the value cases -
+neither reference scores anything like 100% here, which is what makes the
+number readable. Eleven cases carry no expectation the harness can use and
+are counted separately rather than folded into the rate.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
 had suggested. A hundred and seventy-five cases have been fixed since, in
@@ -380,7 +381,15 @@ collection, a document marker ending a block scalar, and the chunk size no
 longer changing what a document means; and a node's anchors and tags, where
 two of a kind with nothing between them name two nodes or none.
 
-Nothing the harness can check is still failing.
+**The skipped tenth of the corpus was where the failures were.** For as long
+as the harness checked only value and refusal, it reported 100% - and the
+thirty-eight cases it skipped were the ones asserting an event stream, which
+is exactly the shape this parser is weakest on. `gtext_yaml_stream_walk()`
+made twenty-nine of them askable, and sixteen are refused outright: block
+mappings with an empty key, a key on its own line, or an explicit `?` key
+beside a compact nested collection. Two more are answered inexactly. The
+score fell from 100% of 366 to 95.4% of 395, which is not a regression - it
+is the first honest reading.
 
 The denominator moved from 368 to 366 along the way, and that was a harness
 bug rather than progress: three suite cases carry an explicit null where the

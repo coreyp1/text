@@ -9,9 +9,20 @@ or a line beginning with "FAIL" if it refuses the input. tools/conformance/
 carries one for this library; the reference implementations are driven through
 the same interface so the scores are comparable.
 
-Of the suite's cases, those carrying a "json" field are checked by value and
-those marked "fail" by refusal. The rest assert an event stream, which this
-harness does not emit, and are skipped and counted.
+A case is checked against every expectation it carries, and passes only if it
+answers all of them:
+
+- "fail" says the input must be refused.
+- "json" gives the value, which the runner above is compared against.
+- "tree" gives the event stream.  Set YTS_EVENTS to a command that reads a
+  YAML stream on stdin and writes the suite's event notation, and those are
+  checked too; without it they are skipped and counted.  The reference
+  implementations are driven through the JSON interface only, so a comparison
+  run leaves YTS_EVENTS unset and scores fewer cases - which the corpus line
+  says out loud.
+
+Nine cases carry no expectation of any kind.  They are counted and skipped;
+there is nothing to be right about.
 """
 SUITE = sys.argv[1]
 RUNNER = sys.argv[2:]
@@ -19,6 +30,7 @@ if not RUNNER:
     sys.exit("usage: yaml_test_suite.py <suite-dir> <runner-command...>")
 which = os.path.basename(RUNNER[-1])
 env = dict(os.environ)
+EVENTS = os.environ.get('YTS_EVENTS')
 
 def unescape(src):
     """The suite writes characters that are hard to read as marks (ReadMe.md,
@@ -36,15 +48,24 @@ def unescape(src):
     src = src.replace('∎', '')
     return src
 
-def run(src):
+def run(cmd, src):
     try:
-        r = subprocess.run(RUNNER, input=src.encode(), capture_output=True,
+        r = subprocess.run(cmd, input=src.encode(), capture_output=True,
                            env=env, timeout=10)
     except subprocess.TimeoutExpired:
         return None, 'TIMEOUT'
     if r.returncode != 0:
         return None, 'CRASH rc=%d %s' % (r.returncode, r.stderr.decode()[:100])
     return r.stdout.decode('utf-8', 'replace'), None
+
+
+def event_lines(text):
+    """One event per line, with the indentation the suite adds for reading.
+
+    Every event begins with "+", "-" or "=", and a scalar's own leading spaces
+    come after the style character, so stripping the indent cannot eat any of
+    the value."""
+    return [l.lstrip(' ') for l in text.splitlines() if l.strip()]
 
 def expected_docs(js):
     dec = json.JSONDecoder(); out = []; i = 0
@@ -65,7 +86,7 @@ for f in sorted(glob.glob(SUITE + '/src/*.yaml')):
         if case.get('yaml') is None:
             results['skip-no-yaml'] += 1; continue
         src = unescape(case['yaml'])
-        out, errkind = run(src)
+        out, errkind = run(RUNNER, src)
         if errkind:
             results['crash'] += 1
             failures.append((label, name, errkind, '', '')); continue
@@ -77,33 +98,79 @@ for f in sorted(glob.glob(SUITE + '/src/*.yaml')):
                 results['fail-missed'] += 1
                 failures.append((label, name, 'should be rejected', '', out.strip()[:90]))
             continue
-        if 'json' not in case:
+
+        # A case is judged on every expectation it carries.  `verdict` holds
+        # the first thing that went wrong, and stays None while nothing has;
+        # `asked` says whether anything could be judged at all.
+        verdict = None
+        asked = False
+
+        if 'json' in case:
+            # Decode the expectation before judging the answer. Three cases
+            # carry an explicit null here, and checking `rejected` first
+            # scored those as defects when an implementation refused them and
+            # skipped them when it did not - a case with no expectation cannot
+            # be a failure either way.
+            try: want = expected_docs(case['json'])
+            except Exception:
+                # The expectation itself does not parse, so the case cannot be
+                # judged on it.  Terminal, so that every case lands in exactly
+                # one bucket and the buckets still sum to the corpus.
+                results['skip-bad-expect'] += 1; continue
+            asked = True
+            if rejected:
+                verdict = 'json-rejected'
+                failures.append((label, name, 'rejected a valid document',
+                                 '', out.strip()[:90]))
+            else:
+                got = []; bad = False
+                for line in out.splitlines():
+                    if not line.strip(): continue
+                    try: got.append(json.loads(line))
+                    except Exception: bad = True
+                if bad:
+                    verdict = 'json-unparsable'
+                    failures.append((label, name, 'emitted invalid JSON',
+                                     '', out.strip()[:90]))
+                elif got != want:
+                    verdict = 'json-mismatch'
+                    failures.append((label, name, 'value mismatch',
+                                     json.dumps(want)[:85],
+                                     json.dumps(got)[:85]))
+
+        if 'tree' in case and EVENTS:
+            asked = True
+            ev_out, ev_err = run([EVENTS], src)
+            if ev_err:
+                if verdict is None:
+                    verdict = 'crash'
+                    failures.append((label, name, ev_err, '', ''))
+            elif ev_out.startswith('FAIL'):
+                if verdict is None:
+                    verdict = 'tree-rejected'
+                    failures.append((label, name, 'rejected a valid document',
+                                     '', ev_out.strip()[:90]))
+            else:
+                want_ev = event_lines(unescape(case['tree']))
+                got_ev = event_lines(ev_out)
+                if got_ev != want_ev and verdict is None:
+                    k = 0
+                    while (k < min(len(got_ev), len(want_ev))
+                           and got_ev[k] == want_ev[k]):
+                        k += 1
+                    verdict = 'tree-mismatch'
+                    failures.append((label, name, 'event %d differs' % k,
+                                     (want_ev[k:k + 1] or ['(nothing)'])[0][:85],
+                                     (got_ev[k:k + 1] or ['(nothing)'])[0][:85]))
+        elif 'tree' in case and 'json' not in case:
             results['skip-tree-only'] += 1; continue
-        # Decode the expectation before judging the answer. Three cases carry
-        # an explicit null here, and checking `rejected` first scored those as
-        # defects when an implementation refused them and skipped them when it
-        # did not - a case with no expectation cannot be a failure either way.
-        try: want = expected_docs(case['json'])
-        except Exception:
-            results['skip-bad-expect'] += 1; continue
-        if rejected:
-            results['json-rejected'] += 1
-            failures.append((label, name, 'rejected a valid document', '', out.strip()[:90]))
-            continue
-        got = []; bad = False
-        for line in out.splitlines():
-            if not line.strip(): continue
-            try: got.append(json.loads(line))
-            except Exception: bad = True
-        if bad:
-            results['json-unparsable'] += 1
-            failures.append((label, name, 'emitted invalid JSON', '', out.strip()[:90]))
-        elif got == want:
-            results['json-ok'] += 1
+
+        if not asked:
+            # Neither a value nor an event stream, and not marked "fail".
+            # The suite asserts nothing here; nothing can be got wrong.
+            results['skip-no-expect'] += 1
         else:
-            results['json-mismatch'] += 1
-            failures.append((label, name, 'value mismatch',
-                             json.dumps(want)[:85], json.dumps(got)[:85]))
+            results[verdict or 'ok'] += 1
 
 # Two denominators, both printed, because they answer different questions and
 # only one of them is the corpus.
@@ -124,7 +191,7 @@ for f in sorted(glob.glob(SUITE + '/src/*.yaml')):
 checked = sum(v for k, v in results.items() if not k.startswith('skip'))
 total = sum(results.values())
 skipped = total - checked
-passed = results['fail-ok'] + results['json-ok']
+passed = results['fail-ok'] + results['ok']
 print("=== yaml-test-suite: %s ===" % which)
 for k, v in sorted(results.items()): print("  %-18s %d" % (k, v))
 pct_checked = 100.0 * passed / checked if checked else 0.0

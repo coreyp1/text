@@ -652,6 +652,9 @@ static GTEXT_YAML_Node *json_to_yaml_node(
 			size_t count = gtext_json_array_size(json);
 			node = yaml_node_new_sequence(ctx, count, NULL, NULL);
 			if (!node) return NULL;
+			/* JSON writes its collections the way YAML writes flow ones, and
+			   this path is only taken for input that is JSON. */
+			node->as.sequence.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 			node->as.sequence.count = count;
 			for (size_t i = 0; i < count; i++) {
 				const GTEXT_JSON_Value *child = gtext_json_array_get(json, i);
@@ -664,6 +667,7 @@ static GTEXT_YAML_Node *json_to_yaml_node(
 			size_t count = gtext_json_object_size(json);
 			node = yaml_node_new_mapping(ctx, count, NULL, NULL);
 			if (!node) return NULL;
+			node->as.mapping.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 			node->as.mapping.count = count;
 			for (size_t i = 0; i < count; i++) {
 				size_t key_len = 0;
@@ -1848,6 +1852,12 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	if (!p || p->stack.depth == 0) return GTEXT_YAML_OK;
 
 	state = p->stack.states[p->stack.depth - 1];
+	/* Read before stack_pop() below, which is the only other place this
+	   level's style is still known. */
+	const GTEXT_YAML_Flow_Style flow_style = p->stack.is_block[p->stack.depth - 1]
+		? GTEXT_YAML_FLOW_STYLE_BLOCK
+		: GTEXT_YAML_FLOW_STYLE_FLOW;
+
 	stack_get_and_clear_metadata(
 		p,
 		&anchor,
@@ -1875,6 +1885,7 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 			return GTEXT_YAML_E_OOM;
 		}
 		
+		node->as.sequence.flow_style = flow_style;
 		node->as.sequence.count = p->temp.count;
 		for (size_t i = 0; i < p->temp.count; i++) {
 			node->as.sequence.children[i] = p->temp.items[i];
@@ -1896,6 +1907,7 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 			return GTEXT_YAML_E_OOM;
 		}
 		
+		node->as.mapping.flow_style = flow_style;
 		node->as.mapping.count = pair_count;
 		for (size_t i = 0; i < pair_count; i++) {
 			node->as.mapping.pairs[i].key = p->temp.items[i * 2];
@@ -2306,6 +2318,7 @@ static GTEXT_YAML_Status parse_callback(
 			/* Start of a document */
 			if (!p->document_started) {
 				p->document_started = true;
+				if (p->doc) p->doc->explicit_start = event->explicit_marker;
 				/* This is the first (or only) document, parse it */
 			} else {
 				/* We've already started a document, this is a second one */
@@ -2737,6 +2750,8 @@ static GTEXT_YAML_Status parse_callback(
 
 			parser_attach_leading_comment(p, node);
 			
+			/* Only "]" reaches here, and it closes a flow sequence. */
+			node->as.sequence.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 			/* Copy children into node */
 			for (size_t i = 0; i < p->temp.count; i++) {
 				node->as.sequence.children[i] = p->temp.items[i];
@@ -2886,6 +2901,8 @@ static GTEXT_YAML_Status parse_callback(
 
 			parser_attach_leading_comment(p, node);
 			
+			/* Only "}" reaches here, and it closes a flow mapping. */
+			node->as.mapping.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 			/* Copy pairs into node */
 			for (size_t i = 0; i < pair_count; i++) {
 				node->as.mapping.pairs[i].key = p->temp.items[i * 2];
@@ -2947,6 +2964,7 @@ static GTEXT_YAML_Status parse_callback(
 				GTEXT_YAML_Status close_status = close_block_contexts(p, -1);
 				if (close_status != GTEXT_YAML_OK) return close_status;
 				
+				if (p->doc) p->doc->explicit_end = event->explicit_marker;
 				/* First document is complete */
 				p->first_document_complete = true;
 				p->document_count = 1;
@@ -3131,6 +3149,7 @@ static GTEXT_YAML_Status parse_callback(
 					}
 
 					parser_attach_leading_comment(p, node);
+					node->as.sequence.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 					
 					/* Set the count */
 					node->as.sequence.count = p->temp.count;
@@ -3236,6 +3255,7 @@ static GTEXT_YAML_Status parse_callback(
 
 					parser_attach_leading_comment(p, node);
 					
+					node->as.mapping.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
 					/* Set the count */
 					node->as.mapping.count = pair_count;
 					node_set_source_location(node, source_offset, source_line, source_col);
@@ -4954,6 +4974,9 @@ static GTEXT_YAML_Status multidoc_callback(
 		 * one before it: adopt it rather than closing it and emitting a null. */
 		if (state->current_parser && state->current_from_directive) {
 			state->current_from_directive = false;
+			if (state->current_doc) {
+				state->current_doc->explicit_start = event->explicit_marker;
+			}
 			return GTEXT_YAML_OK;
 		}
 
@@ -4968,6 +4991,7 @@ static GTEXT_YAML_Status multidoc_callback(
 		if (!multidoc_start_document(state, state->input, state->input_length)) {
 			return GTEXT_YAML_E_OOM;
 		}
+		state->current_doc->explicit_start = event->explicit_marker;
 		
 		/* Don't pass DOCUMENT_START to the single-doc parser callback */
 		/* as it's already marked as started */
@@ -4976,6 +5000,9 @@ static GTEXT_YAML_Status multidoc_callback(
 	
 	if (type == GTEXT_YAML_EVENT_DOCUMENT_END) {
 		if (multidoc_bare_directive(state)) return GTEXT_YAML_E_INVALID;
+		if (state->current_doc) {
+			state->current_doc->explicit_end = event->explicit_marker;
+		}
 		/* Finalize current document */
 		if (!multidoc_finalize_document(state)) {
 			return GTEXT_YAML_E_OOM;

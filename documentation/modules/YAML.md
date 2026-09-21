@@ -32,17 +32,31 @@ the PyYAML comparison are on \ref format_yaml "the YAML format page".
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
 parser, at the commit pinned in `tools/conformance/YAML_SUITE_COMMIT`. Of the
-suite's **406 cases it checks 366** - those carrying a `json` field, by value,
-and those marked `fail`, by refusal - and **all 366 pass**. The same harness
-scores js-yaml at 82.0% and PyYAML at 77.3%, which is the calibration that
-makes the figure readable: neither reference scores 100% either.
+suite's **406 cases it checks 395** - those carrying a `json` field, by value,
+those carrying a `tree`, by event stream, and those marked `fail`, by refusal
+- and **377 pass, 95.4% of what was checked**. The same harness scores
+js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
+calibration that makes the figure readable: neither reference scores 100%
+either.
 
-The remaining 40 cases are not a pass and not a failure - they were never
-asked. Thirty-eight assert an event stream this harness does not emit, and
-two carry an expectation it cannot decode. Conformance to 1.2.2 is therefore
-partial in a way the percentage alone does not show, which is why the runner
-now prints both denominators and `YTS_MIN_CORPUS` can floor the second.
-Emitting the event stream is the single largest thing that would close it.
+The eleven cases left over are not a pass and not a failure - they were never
+asked. Nine carry no expectation of any kind, and two carry one the harness
+cannot decode.
+
+**What the event stream found.** Until `gtext_yaml_stream_walk()` existed, the
+thirty-eight cases asserting an event stream were skipped, and the score was
+"all 366 checked cases pass". Twenty-nine of those thirty-eight can now be
+asked, and **sixteen of them are refused outright** - documents this parser
+calls invalid and the suite says are valid. They are one cluster: a block
+mapping whose key is empty, written on its own line, or written as an
+explicit `?` key next to a compact nested collection. Two more are answered
+but not exactly: an anchor on a block mapping in `26DV`, and a `%21` left
+undecoded in a `%TAG` suffix in `6CK3`.
+
+That is the honest shape of it. The skipped tenth of the corpus was not
+uninteresting; it was where the failures were, and the harness reported 100%
+for as long as it never asked. `YTS_MIN_CORPUS` floors the second denominator
+so the corpus cannot quietly shrink back.
 
 **Recently closed:** a node carrying two anchors, which was the last case the
 harness could check and this parser could not answer. The second anchor
@@ -858,13 +872,15 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and answers **all 366** of the
+The parser targets YAML 1.2.2 and answers **377 of the 395**
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
-checked by value or by refusal, measured by `make conformance`. That is 366 of
-the suite's 406: the other 40 assert an event stream the harness does not emit
-or carry an expectation it cannot decode, and are neither passed nor failed.
-The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither
-reference reaches 100% on the cases it does check.
+checked - by value, by event stream, or by refusal - measured by
+`make conformance`. That is 395 of the suite's 406; the other eleven carry no
+expectation, or one the harness cannot decode, and are neither passed nor
+failed. The eighteen failures are listed above and are almost all one shape:
+a block mapping with an empty or explicit key. The same harness scores
+js-yaml at 82.0% and PyYAML at 77.3% on the value cases, so neither reference
+reaches 100% on the cases it does check.
 
 That number arrived late and corrected an impression. Fifteen defects had
 been found and fixed by hand-comparison against PyYAML and js-yaml, and a

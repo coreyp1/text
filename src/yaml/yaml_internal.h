@@ -209,6 +209,12 @@ typedef struct {
 /* Sequence node (array of child nodes) */
 typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_SEQUENCE */
+	/* How the collection was written: FLOW for "[a, b]", BLOCK for "- a",
+	   AUTO for a node that was built rather than parsed.  The two spellings
+	   mean the same thing to a reader of the value and are not the same
+	   document, so a writer that has to reproduce the input - or a caller
+	   asking what it was given - needs the distinction kept. */
+	GTEXT_YAML_Flow_Style flow_style;
 	const char *tag;            /* Optional tag, NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
 	const char *leading_comment; /* Optional leading comment */
@@ -235,6 +241,7 @@ typedef struct {
 
 typedef struct {
 	GTEXT_YAML_Node_Type type;  /* GTEXT_YAML_MAPPING */
+	GTEXT_YAML_Flow_Style flow_style; /* As for a sequence, above. */
 	const char *tag;            /* Optional tag, NULL if none */
 	const char *anchor;         /* Optional anchor name, NULL if none */
 	const char *leading_comment; /* Optional leading comment */
@@ -280,6 +287,11 @@ struct GTEXT_YAML_Document {
 	size_t node_count;          /* Total nodes allocated (statistics) */
 	size_t document_index;      /* Index in multi-document stream (0-based) */
 	bool has_directives;        /* True if %YAML or %TAG directives present */
+	/* Whether "---" opened this document and "..." closed it.  Every document
+	   has a start and an end; only some of them were written down, and the
+	   difference is not recoverable from the tree. */
+	bool explicit_start;
+	bool explicit_end;
 	bool has_merge_keys;        /* True if merge keys (<<) were used */
 	int yaml_version_major;     /* YAML version from %YAML directive (0 if none) */
 	int yaml_version_minor;

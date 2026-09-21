@@ -177,6 +177,34 @@ GTEXT_API size_t gtext_yaml_document_index(const GTEXT_YAML_Document * doc);
  * @return true if merge keys were used, false otherwise
  */
 GTEXT_API bool gtext_yaml_document_has_merge_keys(const GTEXT_YAML_Document * doc);
+
+/**
+ * @brief Return true if "---" opened this document.
+ *
+ * Every document has a start; only some streams write one down.  A stream
+ * that is a single bare document has none, and a document after the first
+ * always does, because that is what separates them.
+ *
+ * @param doc Document to query
+ * @return true if the document began with an explicit "---"
+ */
+GTEXT_API bool gtext_yaml_document_has_explicit_start(
+	const GTEXT_YAML_Document * doc
+);
+
+/**
+ * @brief Return true if "..." closed this document.
+ *
+ * A document may also be closed by the "---" that opens the next one, or by
+ * the end of the input; neither is written as a suffix and neither sets this.
+ *
+ * @param doc Document to query
+ * @return true if the document ended with an explicit "..."
+ */
+GTEXT_API bool gtext_yaml_document_has_explicit_end(
+	const GTEXT_YAML_Document * doc
+);
+
 /**
  * @brief Return the node type for @p n.
  *
@@ -394,6 +422,24 @@ GTEXT_API bool gtext_yaml_node_scalar_style(
 GTEXT_API bool gtext_yaml_node_set_scalar_style(
 	GTEXT_YAML_Node *n,
 	GTEXT_YAML_Scalar_Style style
+);
+
+/**
+ * @brief Get how a collection node was written.
+ *
+ * Writes `GTEXT_YAML_FLOW_STYLE_BLOCK` for "- a" and "a: 1",
+ * `GTEXT_YAML_FLOW_STYLE_FLOW` for "[a]" and "{a: 1}", and
+ * `GTEXT_YAML_FLOW_STYLE_AUTO` for a collection built through the DOM API,
+ * which was never written in either.
+ *
+ * @param n Sequence or mapping node to query (including !!set, !!omap, !!pairs)
+ * @param out Where to write the style
+ * @return false, writing nothing, if @p n is NULL, not a collection, or
+ *         @p out is NULL
+ */
+GTEXT_API bool gtext_yaml_node_flow_style(
+	const GTEXT_YAML_Node * n,
+	GTEXT_YAML_Flow_Style * out
 );
 
 /**

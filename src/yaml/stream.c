@@ -461,6 +461,11 @@ static GTEXT_YAML_Status stream_emit_document_start(
     ev.offset = tok->offset;
     ev.line = tok->line;
     ev.col = tok->col;
+    /* Taken from the token rather than from a flag at each call site: the
+       marker was written exactly when the token that produced this event is
+       the marker itself.  Every other caller hands over the content token
+       that implied the boundary, or nothing at all at end of input. */
+    ev.explicit_marker = tok->type == GTEXT_YAML_TOKEN_DOCUMENT_START;
   }
 
   if (s->cb) {
@@ -486,6 +491,11 @@ static GTEXT_YAML_Status stream_emit_document_end(
     ev.offset = tok->offset;
     ev.line = tok->line;
     ev.col = tok->col;
+    /* Taken from the token rather than from a flag at each call site: the
+       marker was written exactly when the token that produced this event is
+       the marker itself.  Every other caller hands over the content token
+       that implied the boundary, or nothing at all at end of input. */
+    ev.explicit_marker = tok->type == GTEXT_YAML_TOKEN_DOCUMENT_END;
   }
 
   if (s->cb) {

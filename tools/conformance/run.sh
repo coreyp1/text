@@ -52,6 +52,17 @@ ours)
 	cc -O1 -o "$runner" "$root/tools/conformance/yaml_test_suite.c" \
 		-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
 		-Wl,-rpath,"$PREFIX/lib/ghoti.io"
+	# The second runner answers the cases that assert an event stream rather
+	# than a value - a tenth of the corpus, which nothing asked until it
+	# existed.  Only this library has one; the reference implementations below
+	# are driven through the JSON interface alone, so a comparison run scores
+	# fewer cases and the corpus line says so.
+	events=$suite/../yts-events
+	cc -O1 -o "$events" "$root/tools/conformance/yaml_event_suite.c" \
+		-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
+		-Wl,-rpath,"$PREFIX/lib/ghoti.io"
+	YTS_EVENTS=$events
+	export YTS_EVENTS
 	set -- "$runner"
 	;;
 js)

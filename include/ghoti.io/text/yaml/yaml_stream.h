@@ -153,6 +153,19 @@ typedef struct {
 	int prop_line;
 	int prop_col;
 	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style (SCALAR events) */
+	/* DOCUMENT_START and DOCUMENT_END only: the marker was written.
+	 *
+	 * Both events fire for every document, whether or not the stream says so
+	 * in as many characters - a bare "a: 1" is a document, and a stream that
+	 * runs out of input ends the one that was open.  The two that were
+	 * written are not the same fact as the two that were inferred, and only
+	 * the writer's are recoverable afterwards, so the event carries which it
+	 * is: true for a DOCUMENT_START produced by "---" and for a DOCUMENT_END
+	 * produced by "...", false for either supplied by the stream.
+	 *
+	 * "---" closing a document that had no "..." is an inferred end followed
+	 * by a written start, and reports itself that way. */
+	bool explicit_marker;
 	size_t offset;
 	int line;
 	int col;
