@@ -126,6 +126,13 @@ a hand-built corpus agreed at 152 of 153 documents, and yaml-test-suite at
 is the other half of the point: a score nobody here chose is also a list of
 what to do next.
 
+Name the limit of the corpus as well. 395 of 395 is a measurement over 406
+documents; it is not a statement about the grammar those documents sample.
+Reading the spec afterwards turned up eleven divergences, and a scan showed
+that not one of them appears in any of the 406 - which is precisely why the
+score did not move. A corpus can only ever report on the questions it asks,
+so when the score stops moving, go and read the specification.
+
 Name the limit of the oracle too, not only the oracle. That harness checked
 366 cases for a long time and skipped 38 of them, and the skipped ones were
 not a random sample: the suite gives a case an event stream instead of a JSON

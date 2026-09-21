@@ -183,7 +183,15 @@ typedef enum {
   GTEXT_YAML_WARNING_YAML11_BOOL,
   GTEXT_YAML_WARNING_YAML11_OCTAL,
   GTEXT_YAML_WARNING_YAML11_SEXAGESIMAL,
-  GTEXT_YAML_WARNING_DUPLICATE_KEY
+  GTEXT_YAML_WARNING_DUPLICATE_KEY,
+  /**
+   * A "%YAML" directive naming a 1.x version this parser does not implement,
+   * such as "%YAML 1.7". Section 6.8.1 has the processor go on and parse the
+   * document as its own version while saying so, on the grounds that the
+   * minor versions are meant to stay compatible. A *major* version it does
+   * not know is refused outright instead, and is an error rather than this.
+   */
+  GTEXT_YAML_WARNING_YAML_VERSION
 } GTEXT_YAML_Warning_Code;
 
 /**

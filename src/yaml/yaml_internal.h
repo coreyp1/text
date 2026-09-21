@@ -156,6 +156,23 @@ GTEXT_INTERNAL_API void yaml_context_free(yaml_context *ctx);
 GTEXT_INTERNAL_API void yaml_context_set_input_buffer(yaml_context *ctx, const char *buf, size_t len);
 GTEXT_INTERNAL_API void *yaml_context_alloc(yaml_context *ctx, size_t size, size_t align);
 
+/**
+ * @brief Report a non-fatal issue, honoring the mask and warnings_as_errors.
+ *
+ * Shared because the parser has one of its own to report - a "%YAML" naming
+ * a minor version it does not implement - and the resolver's copy already
+ * had the mask, the callback and the promote-to-error rule right.
+ *
+ * Returns GTEXT_YAML_E_INVALID when opts->warnings_as_errors is set, having
+ * filled in @p error; GTEXT_YAML_OK otherwise, masked or not.
+ */
+GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_emit_warning(
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Warning_Code code,
+	const char *message,
+	GTEXT_YAML_Error *error
+);
+
 /* ============================================================================
  * Phase 4: DOM Node Structures
  * ============================================================================ */

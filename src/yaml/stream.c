@@ -22,6 +22,14 @@
   inclusion point due to include-path differences. */
 typedef struct GTEXT_YAML_Scanner GTEXT_YAML_Scanner;
 
+/* The white space a directive's parts are separated by is s-separate-in-line
+   (6.8), which is s-white+ - and s-white is s-space *or s-tab* (5.5).  This
+   split recognised only the space, so "%YAML<tab>1.2" and "%TAG !e!<tab>pfx"
+   were read as one run-on word and refused. */
+static bool directive_is_space(char c) {
+  return c == ' ' || c == '\t';
+}
+
 static void directive_split(
   const char *line,
   size_t len,
@@ -39,28 +47,28 @@ static void directive_split(
   if (arg1_cap > 0) arg1[0] = '\0';
   if (arg2_cap > 0) arg2[0] = '\0';
 
-  while (i < len && line[i] == ' ') i++;
+  while (i < len && directive_is_space(line[i])) i++;
 
   out = 0;
-  while (i < len && line[i] != ' ') {
+  while (i < len && !directive_is_space(line[i])) {
     if (out + 1 < name_cap) name[out++] = line[i];
     i++;
   }
   if (name_cap > 0) name[out < name_cap ? out : name_cap - 1] = '\0';
 
-  while (i < len && line[i] == ' ') i++;
+  while (i < len && directive_is_space(line[i])) i++;
 
   out = 0;
-  while (i < len && line[i] != ' ') {
+  while (i < len && !directive_is_space(line[i])) {
     if (out + 1 < arg1_cap) arg1[out++] = line[i];
     i++;
   }
   if (arg1_cap > 0) arg1[out < arg1_cap ? out : arg1_cap - 1] = '\0';
 
-  while (i < len && line[i] == ' ') i++;
+  while (i < len && directive_is_space(line[i])) i++;
 
   out = 0;
-  while (i < len && line[i] != ' ') {
+  while (i < len && !directive_is_space(line[i])) {
     if (out + 1 < arg2_cap) arg2[out++] = line[i];
     i++;
   }

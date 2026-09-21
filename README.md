@@ -218,7 +218,10 @@ anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. `make conformance` scores it
 against yaml-test-suite: **395 of the 395 checkable cases**, out of the 406
-the suite ships.
+the suite ships. Passing all of a corpus is not the same as conforming to the
+specification, and `tests/data/yaml/spec-1.2.2.corpus` holds the cases that
+say so - divergences found by reading the grammar, none of which appears
+anywhere in the suite.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is
@@ -351,6 +354,22 @@ scores **js-yaml at 82.0%** and **PyYAML at 77.3%** on the value cases -
 neither reference scores anything like 100% here, which is what makes the
 number readable. Eleven cases carry no expectation the harness can use and
 are counted separately rather than folded into the rate.
+
+**A corpus is not a specification.** Scoring 395 of 395 says what it says:
+of those 406 documents, every judgeable one is answered correctly. It is not
+a claim about YAML 1.2.2, and reading it as one would be the same mistake
+this page has now recorded three times. Eleven divergences were found
+afterwards by reading the spec instead of running the suite - the core
+schema's resolution table matched case-insensitively, so `tRue` and `nULL`
+resolved; YAML 1.1 integer forms (`1_000`, `0b101`, `0O14`) resolved under
+1.2 without even a warning; tabs were refused where `s-separate-in-line`
+allows them in `%YAML` and `%TAG`; a second `%TAG` for one handle, a
+`%YAML 2.0`, a directive with no `---` after it, a forward alias reference
+and an empty `!<>` were all accepted. Every one of them is a shape that
+appears in none of the suite's 406 documents, which is exactly why the score
+stayed at 395 while they were wrong. They now live in
+`tests/data/yaml/spec-1.2.2.corpus`, checked by `make test` rather than
+behind `make conformance`, because the point of them is to be asked often.
 
 The first run scored 51.9%, a long way from the 99% the hand-built corpus
 had suggested. A hundred and seventy-five cases have been fixed since, in

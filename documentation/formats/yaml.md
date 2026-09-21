@@ -60,10 +60,19 @@ null.
 
 Under 1.2 defaults, `yes` resolves to the **string** `"yes"` and `0755` to
 the **string** `"0755"` - correct for 1.2, which removed 1.1's `y|yes|on`
-booleans and leading-zero octals. Enabling 1.1 compatibility restores them,
-along with sexagesimals (`190:20:30`), and each emits a warning
+booleans and leading-zero octals. So do `1_000`, `0b101` and `0O14`: digit
+separators, binary literals and the upper-case base prefixes are all 1.1's,
+and 10.3.2 admits only `[-+]? [0-9]+`, `0o [0-7]+` and `0x [0-9a-fA-F]+`.
+Enabling 1.1 compatibility restores all of them, along with sexagesimals
+(`190:20:30`), and the older ones emit a warning
 (`GTEXT_YAML_WARNING_YAML11_BOOL`, `_OCTAL`, `_SEXAGESIMAL`) so that a
 document relying on the old rules is visible rather than silent.
+
+Each row of the table is a list of spellings rather than a word matched
+without regard to case, so `tRue`, `nULL` and `.Nan` are strings. `%YAML 1.7`
+is parsed as 1.2 with a `GTEXT_YAML_WARNING_YAML_VERSION`; `%YAML 2.0` is
+refused, since 6.8.1 has a processor decline a major version it does not
+implement.
 
 **Anchors and aliases (§6.9, §7.1).** `&anchor` and `*alias`, with cycle
 detection and a total-expansion limit that bounds the billion-laughs attack.
@@ -703,6 +712,40 @@ own line is an error, and one on the line above belongs to what that line
 opens. A tag written that way used to be dropped without a word and an anchor
 carried on to the next node; both are now refused, and the message says an
 alias may carry no property rather than reporting a second one.
+
+## Where the suite ends
+
+Passing all 395 checkable cases is a statement about 406 documents, not about
+the grammar. Eleven divergences from YAML 1.2.2 were found afterwards by
+reading the specification rather than running the suite, and a scan of all
+406 case inputs confirmed that **none of the eleven shapes appears anywhere in
+the corpus** - which is why the score stayed where it was while they were
+wrong.
+
+| Divergence | Rule | Was |
+| --- | --- | --- |
+| `tRue`, `fAlse`, `nULL`, `.Nan` | 10.3.2 lists spellings, not words | resolved case-insensitively |
+| `1_000`, `1_0.5` | digit separators are 1.1 | resolved under 1.2, no warning |
+| `0b101` | binary is 1.1 | resolved under 1.2, no warning |
+| `0O14`, `0X1f` | 1.2 writes `0o`/`0x` lower case | resolved |
+| `%YAML<tab>1.2` | `s-separate-in-line` is `s-white+`, 5.5 | refused |
+| `%TAG<tab>!e! p`, `%TAG !e!<tab>p` | the same | refused |
+| two `%TAG` for one handle | 6.8.2 | second silently replaced the first |
+| `%YAML 2.0` | 6.8.1 | parsed as though it said 1.2 |
+| `%YAML 1.2` then a bare node | `l-directive-document`, 9.2 | accepted |
+| `a: *x` before `b: &x 1` | an alias names a *preceding* anchor, 7.1 | resolved forward |
+| `!<> 1` | `c-verbatim-tag` needs `ns-uri-char+` | accepted |
+
+All eleven are fixed and pinned in `tests/data/yaml/spec-1.2.2.corpus`, which
+`make test` scores - not `make conformance`, which needs the network on first
+use and is not what anybody runs before committing. Prefer upstreaming a case
+to yaml-test-suite over adding one there.
+
+Two further differences are recorded but not treated as defects, because both
+references behave as this parser does. NEL (U+0085), LS and PS are folded as
+line breaks, though 1.2's `b-char` is LF and CR alone; and a byte order mark
+before a second document is refused, though `l-document-prefix` permits one.
+The suite contains no BOM case at all.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

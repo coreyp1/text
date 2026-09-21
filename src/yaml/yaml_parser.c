@@ -94,6 +94,18 @@ typedef struct {
 		 * at the alias rather than from the anchor map once parsing has
 		 * finished. NULL where the anchor was not yet known. */
 		GTEXT_YAML_Node **targets;
+		/* True where the anchor had been *written* but its node was not
+		 * finished yet, which is how a collection refers to itself:
+		 *
+		 *     a: &a [*a]      &a is written before the "[", so it is a
+		 *                     preceding anchor even though the sequence it
+		 *                     names does not exist until the "]"
+		 *
+		 * Only these may be looked up again once parsing has finished. An
+		 * alias whose anchor had not been written at all is a forward
+		 * reference and an error (7.1), and resolving those late is what
+		 * made "a: *x" over "b: &x 1" quietly succeed. */
+		bool *deferred;
 		size_t count;
 		size_t capacity;
 	} aliases;
@@ -143,6 +155,11 @@ typedef struct {
 	 * alias - not that one node was given two.  Only the message differs;
 	 * both are refused. */
 	bool outer_from_alias;
+	/* A directive has been read and the "---" that must follow it has not
+	 * arrived yet.  9.2: l-directive-document ::= l-directive+
+	 * l-explicit-document, so a directive prologue with no marker after it
+	 * is not a document. */
+	bool directive_awaits_marker;
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
@@ -235,11 +252,14 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->aliases.capacity = 16;
 	p->aliases.nodes = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
 	p->aliases.targets = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
-	if (!p->aliases.nodes || !p->aliases.targets) {
+	p->aliases.deferred = (bool *)malloc(p->aliases.capacity * sizeof(bool));
+	if (!p->aliases.nodes || !p->aliases.targets || !p->aliases.deferred) {
 		free(p->aliases.nodes);
 		free(p->aliases.targets);
+		free(p->aliases.deferred);
 		p->aliases.nodes = NULL;
 		p->aliases.targets = NULL;
+		p->aliases.deferred = NULL;
 		free(p->stack.nodes);
 		free(p->stack.states);
 		free(p->stack.indents);
@@ -269,6 +289,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->outer_anchor = NULL;
 	p->outer_tag = NULL;
 	p->outer_from_alias = false;
+	p->directive_awaits_marker = false;
 	p->pending_leading_comment = NULL;
 	p->last_emitted_node = NULL;
 	p->last_emitted_line = -1;
@@ -316,6 +337,7 @@ static void parser_free(parser_state *p) {
 	/* Free alias list */
 	free(p->aliases.nodes);
 	free(p->aliases.targets);
+	free(p->aliases.deferred);
 
 	free(p->pending_leading_comment);
 	free(p->outer_anchor);
@@ -857,7 +879,8 @@ static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEX
 static bool track_alias(
 	parser_state *p,
 	GTEXT_YAML_Node *alias_node,
-	GTEXT_YAML_Node *target
+	GTEXT_YAML_Node *target,
+	bool deferred
 ) {
 	if (!alias_node) return true;
 	
@@ -874,12 +897,36 @@ static bool track_alias(
 		);
 		if (!new_targets) return false;
 		p->aliases.targets = new_targets;
+		bool *new_deferred = (bool *)realloc(
+			p->aliases.deferred, new_cap * sizeof(bool)
+		);
+		if (!new_deferred) return false;
+		p->aliases.deferred = new_deferred;
 		p->aliases.capacity = new_cap;
 	}
 	
 	p->aliases.targets[p->aliases.count] = target;
+	p->aliases.deferred[p->aliases.count] = deferred;
 	p->aliases.nodes[p->aliases.count++] = alias_node;
 	return true;
+}
+
+/**
+ * @brief Has this anchor been written on a collection still being built?
+ *
+ * A collection's anchor is recorded on its stack level when the collection
+ * opens and only reaches the anchor map when the node exists, at the "]" or
+ * the dedent that closes it. Between the two an alias inside the collection
+ * can legitimately name it - that is what a recursive document is - and
+ * lookup_anchor() cannot see it yet.
+ */
+static bool anchor_open_on_stack(const parser_state *p, const char *name) {
+	if (!p || !name) return false;
+	for (size_t i = 0; i < p->stack.depth; i++) {
+		const char *anchor = p->stack.temps[i].anchor;
+		if (anchor && strcmp(anchor, name) == 0) return true;
+	}
+	return false;
 }
 
 /**
@@ -905,6 +952,16 @@ static const char *context_strdup(yaml_context *ctx, const char *value) {
 	memcpy(copy, value, len);
 	copy[len] = '\0';
 	return copy;
+}
+
+static const char *tag_handle_lookup(const parser_state *p, const char *handle) {
+	if (!p || !handle) return NULL;
+	for (size_t i = 0; i < p->tag_handles.count; i++) {
+		if (strcmp(p->tag_handles.entries[i].handle, handle) == 0) {
+			return p->tag_handles.entries[i].prefix;
+		}
+	}
+	return NULL;
 }
 
 static bool tag_handle_add(parser_state *p, const char *handle, const char *prefix) {
@@ -964,10 +1021,18 @@ static GTEXT_YAML_Status resolve_aliases(parser_state *p) {
 		}
 		alias_count++;
 		
-		const char *anchor_name = alias->as.alias.anchor_name;
+		/* Bound when the alias was written, and only then.  An alias refers
+		 * to the most recent *preceding* node carrying the anchor (7.1), so
+		 * a name that was not yet anchored is an error even if the document
+		 * goes on to define it.  Looking it up again here - after the whole
+		 * document is parsed, when every anchor exists - resolved forward
+		 * references silently: "a: *x" over "b: &x 1" came back as
+		 * {"a": 1, "b": 1}. Both PyYAML and js-yaml refuse it. */
 		GTEXT_YAML_Node *target = p->aliases.targets[i];
-		if (!target) target = lookup_anchor(p, anchor_name);
-		
+		if (!target && p->aliases.deferred[i]) {
+			target = lookup_anchor(p, alias->as.alias.anchor_name);
+		}
+
 		if (!target) {
 			/* Unknown anchor */
 			p->failed = true;
@@ -2488,6 +2553,35 @@ static GTEXT_YAML_Status parse_callback(
 		return GTEXT_YAML_E_INVALID;
 	}
 
+	/* A directive prologue is a document only when a "---" follows it
+	 * (l-directive-document, 9.2).  The marker arrives as an explicit
+	 * DOCUMENT_START; a bare document emits no DOCUMENT_START at all, so the
+	 * test has to be here, where content first appears.  Without it the
+	 * directives were simply applied to whatever came next and "%YAML 1.2"
+	 * over a bare "v" parsed as a document the grammar does not admit. */
+	if (p->directive_awaits_marker) {
+		switch (type) {
+			case GTEXT_YAML_EVENT_DOCUMENT_START:
+				if (event->explicit_marker) p->directive_awaits_marker = false;
+				break;
+			case GTEXT_YAML_EVENT_DOCUMENT_END:
+				break;
+			case GTEXT_YAML_EVENT_SCALAR:
+			case GTEXT_YAML_EVENT_SEQUENCE_START:
+			case GTEXT_YAML_EVENT_MAPPING_START:
+			case GTEXT_YAML_EVENT_ALIAS:
+			case GTEXT_YAML_EVENT_INDICATOR:
+				p->failed = true;
+				if (p->error) {
+					p->error->code = GTEXT_YAML_E_INVALID;
+					p->error->message = "Directives must be followed by '---'";
+				}
+				return GTEXT_YAML_E_INVALID;
+			default:
+				break;
+		}
+	}
+
 	/* An outer property is held from the node that carried it until the
 	 * block collection that node opens is pushed, which happens either
 	 * inside that same scalar event (a sequence, whose "-" pushed the level
@@ -2556,6 +2650,7 @@ static GTEXT_YAML_Status parse_callback(
 			}
 
 			p->doc->has_directives = true;
+			p->directive_awaits_marker = true;
 			if (strcmp(name, "YAML") == 0) {
 				/* "%YAML" takes exactly one parameter, the version (6.8.1),
 				 * and a document may carry at most one of them. Extra words
@@ -2605,6 +2700,32 @@ static GTEXT_YAML_Status parse_callback(
 					}
 					return GTEXT_YAML_E_INVALID;
 				}
+				/* 6.8.1: a processor must refuse a document whose major
+				 * version it does not implement, and should carry on with a
+				 * warning when only the minor version is ahead of it - the
+				 * minor versions are meant to stay compatible. Neither was
+				 * done, so "%YAML 2.0" parsed as though it said 1.2. */
+				if (major != 1) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message =
+							"YAML directive names a major version this parser does not implement";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				if (minor > 2) {
+					GTEXT_YAML_Status warn = gtext_yaml_emit_warning(
+						p->doc ? &p->doc->options : NULL,
+						GTEXT_YAML_WARNING_YAML_VERSION,
+						"YAML directive names a minor version newer than 1.2",
+						p->error
+					);
+					if (warn != GTEXT_YAML_OK) {
+						p->failed = true;
+						return warn;
+					}
+				}
 				p->doc->yaml_version_major = (int)major;
 				p->doc->yaml_version_minor = (int)minor;
 			} else if (strcmp(name, "TAG") == 0) {
@@ -2613,6 +2734,20 @@ static GTEXT_YAML_Status parse_callback(
 					if (p->error) {
 						p->error->code = GTEXT_YAML_E_INVALID;
 						p->error->message = "TAG directive missing handle or prefix";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				/* 6.8.2: at most one "%TAG" per handle per document. The
+				 * table simply replaced the prefix, so the second directive
+				 * quietly won and every shorthand written before it in the
+				 * same prologue resolved against a prefix the author had
+				 * already superseded. */
+				if (tag_handle_lookup(p, value)) {
+					p->failed = true;
+					if (p->error) {
+						p->error->code = GTEXT_YAML_E_INVALID;
+						p->error->message =
+							"Repeated TAG directive for one handle";
 					}
 					return GTEXT_YAML_E_INVALID;
 				}
@@ -3213,7 +3348,8 @@ static GTEXT_YAML_Status parse_callback(
 			/* Bound here rather than after the parse: an anchor may be
 			 * redefined, and this alias means whichever node held the name
 			 * when it was written. */
-			if (!track_alias(p, node, lookup_anchor(p, anchor_name))) {
+			if (!track_alias(p, node, lookup_anchor(p, anchor_name),
+					anchor_open_on_stack(p, anchor_name))) {
 				p->failed = true;
 				if (p->error) {
 					p->error->code = GTEXT_YAML_E_OOM;
@@ -5378,6 +5514,13 @@ static GTEXT_YAML_Status multidoc_callback(
 		 * one before it: adopt it rather than closing it and emitting a null. */
 		if (state->current_parser && state->current_from_directive) {
 			state->current_from_directive = false;
+			/* This branch is where the "---" that a directive prologue
+			 * requires actually lands: DOCUMENT_START is handled here and
+			 * deliberately not forwarded, so parse_callback never sees the
+			 * marker and has to be told the wait is over. */
+			if (event->explicit_marker) {
+				state->current_parser->directive_awaits_marker = false;
+			}
 			if (state->current_doc) {
 				state->current_doc->explicit_start = event->explicit_marker;
 			}

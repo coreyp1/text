@@ -1,0 +1,289 @@
+# YAML 1.2.2 cases that yaml-test-suite does not contain.
+#
+# Every case here was found by reading the specification rather than by
+# running the suite, and each was confirmed absent from the suite's 406
+# documents before being written down. That absence is the whole point: for a
+# long stretch this parser scored 100% on a corpus that never asked the
+# questions it got wrong, three separate times, and a score is only ever a
+# score over the documents somebody chose. These are the documents nobody
+# else chose.
+#
+# Prefer upstreaming a case to yaml-test-suite over keeping it here. This file
+# is for what the suite does not cover yet, not a second home for it.
+#
+# FORMAT
+#
+#   @case  <name>          one line, free text, used in failure output
+#   @yaml                  the input, verbatim on the lines that follow
+#   @json                  expected output, one JSON document per line
+#   @error <substring>     ...or: the parse must fail, with this in the message
+#   @end
+#
+# Only those five words, at column 0, are special. Outside a case, a line
+# starting with "#" is a comment. Inside @yaml, "\t" is a tab and "\\" a
+# backslash - written as escapes because a literal tab in a test fixture is
+# the first thing an editor eats, and half of these cases are about tabs.
+
+# ---------------------------------------------------------------------------
+# 10.3.2  Core schema resolution
+#
+# The rows of the resolution table are lists of spellings, not
+# case-insensitive words. Matching them case-insensitively resolved a whole
+# family of spellings the spec leaves alone.
+# ---------------------------------------------------------------------------
+
+@case mixed-case "true" is a string, not a boolean
+@yaml
+a: tRue
+b: TrUe
+c: trUE
+@json
+{"a":"tRue","b":"TrUe","c":"trUE"}
+@end
+
+@case the six boolean spellings the core schema lists
+@yaml
+[true, True, TRUE, false, False, FALSE]
+@json
+[true,true,true,false,false,false]
+@end
+
+@case mixed-case "false" is a string
+@yaml
+a: fAlse
+@json
+{"a":"fAlse"}
+@end
+
+@case mixed-case "null" is a string
+@yaml
+a: nULL
+b: NuLL
+@json
+{"a":"nULL","b":"NuLL"}
+@end
+
+@case the four null spellings the core schema lists
+@yaml
+[null, Null, NULL, ~]
+@json
+[null,null,null,null]
+@end
+
+@case ".Nan" is a string; only .nan, .NaN and .NAN are not-a-number
+@yaml
+a: .Nan
+b: .INf
+@json
+{"a":".Nan","b":".INf"}
+@end
+
+@case an underscore digit separator is YAML 1.1, so 1.2 sees a string
+@yaml
+a: 1_000
+b: 1_0.5
+@json
+{"a":"1_000","b":"1_0.5"}
+@end
+
+@case a binary literal is YAML 1.1, so 1.2 sees a string
+@yaml
+a: 0b101
+@json
+{"a":"0b101"}
+@end
+
+@case the octal and hex prefixes are lower case in 1.2
+@yaml
+a: 0o14
+b: 0x1f
+c: 0O14
+d: 0X1f
+@json
+{"a":12,"b":31,"c":"0O14","d":"0X1f"}
+@end
+
+@case a leading zero is not octal in 1.2
+@yaml
+a: 014
+@json
+{"a":"014"}
+@end
+
+@case an explicit !!int must hold what the int tag's syntax admits
+@yaml
+a: !!int 0b101
+@error Invalid integer scalar for explicit tag
+@end
+
+# ---------------------------------------------------------------------------
+# 6.8  Directives
+#
+# s-separate-in-line is s-white+, and s-white is a space *or a tab* (5.5).
+# ---------------------------------------------------------------------------
+
+@case a tab may separate %YAML from its version
+@yaml
+%YAML\t1.2
+---
+v
+@json
+"v"
+@end
+
+@case spaces and tabs may be mixed in %YAML separation
+@yaml
+%YAML \t 1.2
+---
+v
+@json
+"v"
+@end
+
+@case a tab may separate %TAG from its handle
+@yaml
+%TAG\t!e! tag:example.com,2000:
+---
+!e!a v
+@json
+"v"
+@end
+
+@case a tab may separate a %TAG handle from its prefix
+@yaml
+%TAG !e!\ttag:example.com,2000:
+---
+!e!a v
+@json
+"v"
+@end
+
+@case one %TAG per handle per document (6.8.2)
+@yaml
+%TAG !e! tag:example.com,2000:
+%TAG !e! tag:example.org,2000:
+---
+v
+@error Repeated TAG directive for one handle
+@end
+
+@case two %TAG directives for different handles are fine
+@yaml
+%TAG !e! tag:example.com,2000:
+%TAG !f! tag:example.org,2000:
+---
+v
+@json
+"v"
+@end
+
+@case a major version this parser does not implement is refused (6.8.1)
+@yaml
+%YAML 2.0
+---
+v
+@error major version
+@end
+
+@case a newer minor version is parsed anyway (6.8.1)
+@yaml
+%YAML 1.3
+---
+v
+@json
+"v"
+@end
+
+@case a directive prologue needs a "---" after it (9.2)
+@yaml
+%YAML 1.2
+v
+@error Directives must be followed by '---'
+@end
+
+@case a %TAG prologue needs one too
+@yaml
+%TAG !e! tag:example.com,2000:
+v
+@error Directives must be followed by '---'
+@end
+
+@case a comment may stand between the directive and the marker
+@yaml
+%YAML 1.2
+# nothing to see
+---
+v
+@json
+"v"
+@end
+
+@case the marker may carry the document on its own line
+@yaml
+%YAML 1.2
+--- text
+@json
+"text"
+@end
+
+# ---------------------------------------------------------------------------
+# 7.1  Node properties and alias nodes
+# ---------------------------------------------------------------------------
+
+@case an alias refers to a *preceding* anchor, never a later one
+@yaml
+a: *x
+b: &x 1
+@error Unknown anchor referenced by alias
+@end
+
+@case the same, in a sequence
+@yaml
+- *x
+- &x 1
+@error Unknown anchor referenced by alias
+@end
+
+@case an anchor written before the collection it names may be used inside it
+@yaml
+a: &x [1]
+b: *x
+@json
+{"a":[1],"b":[1]}
+@end
+
+@case a redefined anchor means the most recent one
+@yaml
+a: &x 1
+b: &x 2
+c: *x
+@json
+{"a":1,"b":2,"c":2}
+@end
+
+@case an alias node carries no anchor of its own
+@yaml
+a: &x 1
+b: &y *x
+@error An alias node may not carry an anchor
+@end
+
+@case an alias node carries no tag either
+@yaml
+a: &x 1
+b: !!str *x
+@error An alias node may not carry a tag
+@end
+
+@case a verbatim tag needs at least one character
+@yaml
+!<> 1
+@error Empty verbatim tag
+@end
+
+@case a verbatim tag is taken exactly as written
+@yaml
+!<tag:yaml.org,2002:str> 1
+@json
+"1"
+@end

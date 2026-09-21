@@ -105,6 +105,18 @@ beats that. The parser can see the property there because `prop_line` and
 `YTS_MIN_CORPUS` floors the second denominator so the corpus cannot quietly
 shrink back.
 
+**And a corpus is still not a specification.** Eleven divergences from YAML
+1.2.2 were found after the score reached 395 of 395, by reading the grammar
+instead of running the suite: case-insensitive matching of the core schema's
+resolution table, YAML 1.1 integer forms resolving under 1.2, tabs refused in
+directive separation, a repeated `%TAG` handle, `%YAML 2.0`, a directive with
+no `---` after it, a forward alias reference and an empty `!<>`. None of the
+eleven shapes appears in any of the suite's 406 documents, which is why the
+score did not move while they were wrong. They are fixed and pinned in
+`tests/data/yaml/spec-1.2.2.corpus`, scored by `make test` so they are asked
+on every build rather than only when somebody runs the conformance target.
+See \ref format_yaml "the YAML format page" for the table.
+
 **Recently closed:** a node carrying two anchors, which was the last case the
 harness could check and this parser could not answer. The second anchor
 silently replaced the first, which lost the outer anchor from the *valid*
@@ -960,7 +972,7 @@ All tests pass with zero memory leaks (valgrind-verified).
   (`retain_comments`) but are not re-emitted by the writer.
 - **Scalar style preservation**: a parse-write cycle normalizes style, so a
   round trip is semantically faithful but not textually faithful.
-- **YAML test suite integration**: see below - the largest single gap.
+- **YAML test suite integration**: shipped; see Compatibility below.
 - **Benchmarks**: parsing speed and memory use are unmeasured.
 
 Source location tracking and YAML-to-JSON conversion were previously listed
@@ -974,8 +986,7 @@ The parser targets YAML 1.2.2 and answers **all 395 of the**
 checked - by value, by event stream, or by refusal - measured by
 `make conformance`. That is 395 of the suite's 406; the other eleven carry no
 expectation, or one the harness cannot decode, and are neither passed nor
-failed. The two failures are one gap, described above: a property whose node
-is a block mapping with no scalar key. The same harness scores js-yaml at
+failed. The same harness scores js-yaml at
 82.0% and PyYAML at 77.3% on the value cases, so neither reference reaches
 100% on the cases it does check.
 

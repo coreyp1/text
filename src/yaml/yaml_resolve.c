@@ -12,7 +12,6 @@
 #include "yaml_internal.h"
 #include "../text_number_internal.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -24,17 +23,6 @@ static bool str_eq_len(const char *a, size_t len, const char *b) {
 	size_t blen = strlen(b);
 	if (len != blen) return false;
 	return memcmp(a, b, len) == 0;
-}
-
-static bool str_eq_ci_len(const char *a, size_t len, const char *b) {
-	size_t blen = strlen(b);
-	if (len != blen) return false;
-	for (size_t i = 0; i < len; i++) {
-		if ((char)tolower((unsigned char)a[i]) != (char)tolower((unsigned char)b[i])) {
-			return false;
-		}
-	}
-	return true;
 }
 
 static const char *tag_suffix(const char *tag) {
@@ -308,6 +296,26 @@ static char *strip_underscores(const char *s, size_t len, bool allow) {
 	return buf;
 }
 
+/**
+ * @brief Match one of an enumerated set of spellings, exactly.
+ *
+ * The resolution tables in chapter 10 are lists of spellings, not
+ * case-insensitive words: the core schema's bool row is
+ * "true | True | TRUE | false | False | FALSE" and nothing else, so "tRue"
+ * is a string. Matching case-insensitively resolved a whole family of
+ * spellings the spec leaves alone, and silently - a key written "nULL"
+ * became a null rather than the string somebody typed.
+ *
+ * The 1.1 tables are enumerations too ("y|Y|yes|Yes|YES|..."), so "yEs" is
+ * not a 1.1 boolean either. One helper serves both.
+ */
+static bool str_eq_any(const char *s, size_t len, const char *const *set) {
+	for (size_t i = 0; set[i]; i++) {
+		if (str_eq_len(s, len, set[i])) return true;
+	}
+	return false;
+}
+
 static bool parse_bool_value(
 	const char *s,
 	size_t len,
@@ -315,20 +323,26 @@ static bool parse_bool_value(
 	bool yaml_1_1,
 	bool *out
 ) {
+	/* 10.3.2, the core schema's bool row - and 10.2.2's, which is the same
+	   two spellings the JSON schema allows. */
+	static const char *const true_12[] = {"true", "True", "TRUE", NULL};
+	static const char *const false_12[] = {"false", "False", "FALSE", NULL};
+	/* The YAML 1.1 bool type, in full. */
+	static const char *const true_11[] = {
+		"y", "Y", "yes", "Yes", "YES", "on", "On", "ON", NULL};
+	static const char *const false_11[] = {
+		"n", "N", "no", "No", "NO", "off", "Off", "OFF", NULL};
+
 	if (json_only) {
 		if (str_eq_len(s, len, "true")) { *out = true; return true; }
 		if (str_eq_len(s, len, "false")) { *out = false; return true; }
 		return false;
 	}
-	if (str_eq_ci_len(s, len, "true")) { *out = true; return true; }
-	if (str_eq_ci_len(s, len, "false")) { *out = false; return true; }
+	if (str_eq_any(s, len, true_12)) { *out = true; return true; }
+	if (str_eq_any(s, len, false_12)) { *out = false; return true; }
 	if (yaml_1_1) {
-		if (str_eq_ci_len(s, len, "yes")) { *out = true; return true; }
-		if (str_eq_ci_len(s, len, "no")) { *out = false; return true; }
-		if (str_eq_ci_len(s, len, "on")) { *out = true; return true; }
-		if (str_eq_ci_len(s, len, "off")) { *out = false; return true; }
-		if (str_eq_ci_len(s, len, "y")) { *out = true; return true; }
-		if (str_eq_ci_len(s, len, "n")) { *out = false; return true; }
+		if (str_eq_any(s, len, true_11)) { *out = true; return true; }
+		if (str_eq_any(s, len, false_11)) { *out = false; return true; }
 	}
 	return false;
 }
@@ -337,12 +351,14 @@ static bool parse_null_value(const char *s, size_t len, bool json_only) {
 	/* The empty node resolves to null (10.3.2, and the "Empty" row of the
 	   core schema's resolution table), which is what "a:" with no value and
 	   "&anchor" with no node both stand for. */
+	static const char *const null_spellings[] = {"null", "Null", "NULL", NULL};
+
 	if (len == 0) return true;
 	if (json_only) {
 		return str_eq_len(s, len, "null");
 	}
 	if (len == 1 && s[0] == '~') return true;
-	return str_eq_ci_len(s, len, "null");
+	return str_eq_any(s, len, null_spellings);
 }
 
 static bool is_base64_space(unsigned char c) {
@@ -573,6 +589,7 @@ static bool parse_int_value(
 	size_t len,
 	bool allow_underscore,
 	bool allow_base_prefix,
+	bool allow_binary_and_upper_prefix,
 	bool allow_yaml_1_1_octal,
 	int64_t *out
 ) {
@@ -589,21 +606,28 @@ static bool parse_int_value(
 	}
 	if (*p == '\0') { free(clean); return false; }
 
+	/* 10.3.2 spells the two prefixed int rows "0o [0-7]+" and
+	   "0x [0-9a-fA-F]+" - lower case, and no binary row at all.  "0B"/"0O"/
+	   "0X" and base 2 are YAML 1.1, so they need the 1.1 schema. */
 	int base = 10;
 	if (allow_base_prefix && p[0] == '0' && p[1] != '\0') {
-		switch (p[1]) {
+		char prefix = p[1];
+		if (allow_binary_and_upper_prefix) {
+			if (prefix == 'B') prefix = 'b';
+			else if (prefix == 'O') prefix = 'o';
+			else if (prefix == 'X') prefix = 'x';
+		}
+		switch (prefix) {
 			case 'b':
-			case 'B':
+				if (!allow_binary_and_upper_prefix) break;
 				base = 2;
 				p += 2;
 				break;
 			case 'o':
-			case 'O':
 				base = 8;
 				p += 2;
 				break;
 			case 'x':
-			case 'X':
 				base = 16;
 				p += 2;
 				break;
@@ -611,6 +635,9 @@ static bool parse_int_value(
 				break;
 		}
 	}
+	/* Nothing consumed the prefix, so it is not a number the schema knows:
+	   strtoll would read the leading "0" of "0b101" and stop, and the
+	   trailing-character check below turns that into a string. */
 
 	if (allow_yaml_1_1_octal && p[0] == '0' && p[1] != '\0') {
 		bool octal = true;
@@ -665,15 +692,23 @@ static bool parse_float_value(
 	bool has_dot = strchr(clean, '.') != NULL;
 	bool has_exp = strchr(clean, 'e') != NULL || strchr(clean, 'E') != NULL;
 
-	if (str_eq_ci_len(clean, strlen(clean), ".inf") ||
-		str_eq_ci_len(clean, strlen(clean), "+.inf") ||
-		str_eq_ci_len(clean, strlen(clean), "-.inf")) {
+	/* 10.3.2 again, and enumerations again: the float row is
+	   "[-+]? ( .inf | .Inf | .INF )" and the not-a-number row
+	   ".nan | .NaN | .NAN". ".Nan" and ".INf" are strings. */
+	static const char *const inf_spellings[] = {
+		".inf", ".Inf", ".INF",
+		"+.inf", "+.Inf", "+.INF",
+		"-.inf", "-.Inf", "-.INF", NULL};
+	static const char *const nan_spellings[] = {".nan", ".NaN", ".NAN", NULL};
+
+	size_t clean_len = strlen(clean);
+	if (str_eq_any(clean, clean_len, inf_spellings)) {
 		*out = clean[0] == '-' ? -INFINITY : INFINITY;
 		free(clean);
 		return true;
 	}
 
-	if (str_eq_ci_len(clean, strlen(clean), ".nan")) {
+	if (str_eq_any(clean, clean_len, nan_spellings)) {
 		*out = NAN;
 		free(clean);
 		return true;
@@ -1167,7 +1202,7 @@ static void mapping_remove_pair(GTEXT_YAML_Node *node, size_t index) {
 	}
 }
 
-static GTEXT_YAML_Status emit_warning(
+GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_emit_warning(
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Warning_Code code,
 	const char *message,
@@ -1215,7 +1250,7 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 	bool yaml_1_1 = true;
 	if (parse_bool_value(value, len, json_only, yaml_1_1, &dummy)) {
 		if (!parse_bool_value(value, len, json_only, false, &dummy)) {
-			GTEXT_YAML_Status st = emit_warning(
+			GTEXT_YAML_Status st = gtext_yaml_emit_warning(
 				opts,
 				GTEXT_YAML_WARNING_YAML11_BOOL,
 				"YAML 1.1 boolean value in YAML 1.2 mode",
@@ -1228,7 +1263,7 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 	double sexa = 0.0;
 	bool sexa_is_int = false;
 	if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &sexa_is_int)) {
-		GTEXT_YAML_Status st = emit_warning(
+		GTEXT_YAML_Status st = gtext_yaml_emit_warning(
 			opts,
 			GTEXT_YAML_WARNING_YAML11_SEXAGESIMAL,
 			"YAML 1.1 sexagesimal value in YAML 1.2 mode",
@@ -1239,8 +1274,9 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 
 	if (has_disallowed_leading_zero(value, len, allow_underscore)) {
 		int64_t out = 0;
-		if (parse_int_value(value, len, allow_underscore, allow_base_prefix, true, &out)) {
-			GTEXT_YAML_Status st = emit_warning(
+		if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
+				true, true, &out)) {
+			GTEXT_YAML_Status st = gtext_yaml_emit_warning(
 				opts,
 				GTEXT_YAML_WARNING_YAML11_OCTAL,
 				"YAML 1.1 octal value in YAML 1.2 mode",
@@ -1277,7 +1313,7 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 					return GTEXT_YAML_E_DUPKEY;
 				case GTEXT_YAML_DUPKEY_FIRST_WINS:
 					{
-						GTEXT_YAML_Status warn = emit_warning(
+						GTEXT_YAML_Status warn = gtext_yaml_emit_warning(
 							opts,
 							GTEXT_YAML_WARNING_DUPLICATE_KEY,
 							"Duplicate mapping key (first wins)",
@@ -1290,7 +1326,7 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 					break;
 				case GTEXT_YAML_DUPKEY_LAST_WINS:
 					{
-						GTEXT_YAML_Status warn = emit_warning(
+						GTEXT_YAML_Status warn = gtext_yaml_emit_warning(
 							opts,
 							GTEXT_YAML_WARNING_DUPLICATE_KEY,
 							"Duplicate mapping key (last wins)",
@@ -1509,7 +1545,12 @@ static GTEXT_YAML_Status resolve_scalar(
 					return GTEXT_YAML_OK;
 				}
 			}
-			if (!parse_int_value(value, len, true, true, yaml_1_1, &out)) {
+			/* An explicit "!!int" names the tag whose syntax 10.3.2 defines,
+			   so the content has to be in it.  Leaving this lenient while
+			   implicit resolution follows the version would make "0b101" a
+			   string and "!!int 0b101" a five. */
+			if (!parse_int_value(value, len, yaml_1_1, true, yaml_1_1,
+					yaml_1_1, &out)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid integer scalar for explicit tag";
@@ -1535,7 +1576,7 @@ static GTEXT_YAML_Status resolve_scalar(
 					return GTEXT_YAML_OK;
 				}
 			}
-			if (!parse_float_value(value, len, true, &out)) {
+			if (!parse_float_value(value, len, yaml_use_1_1(doc, opts), &out)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid float scalar for explicit tag";
@@ -1643,9 +1684,17 @@ static GTEXT_YAML_Status resolve_scalar(
 	}
 
 	bool json_only = opts->schema == GTEXT_YAML_SCHEMA_JSON;
-	bool allow_underscore = opts->schema == GTEXT_YAML_SCHEMA_CORE;
-	bool allow_base_prefix = opts->schema == GTEXT_YAML_SCHEMA_CORE;
 	bool yaml_1_1 = yaml_use_1_1(doc, opts) && opts->schema == GTEXT_YAML_SCHEMA_CORE;
+	/* "1_000" and "0b101" are YAML 1.1 int forms.  The 1.2 core schema has
+	   three int rows and none of them admits either: "[-+]? [0-9]+",
+	   "0o [0-7]+" and "0x [0-9a-fA-F]+".  These were on for every core-schema
+	   parse, so a 1.2 document resolved them silently - and unlike the 1.1
+	   bool, octal and sexagesimal forms, which do warn, nothing said so.
+	   The uppercase "0O"/"0X" spellings are 1.1's too; 1.2 writes the
+	   prefix in lower case. */
+	bool allow_underscore = yaml_1_1;
+	bool allow_base_prefix = opts->schema == GTEXT_YAML_SCHEMA_CORE;
+	bool allow_binary_and_upper_prefix = yaml_1_1;
 
 	GTEXT_YAML_Status warn = warn_yaml_1_1_scalars(
 		value,
@@ -1693,7 +1742,8 @@ static GTEXT_YAML_Status resolve_scalar(
 	if (!yaml_1_1 && has_disallowed_leading_zero(value, len, allow_underscore)) {
 		return GTEXT_YAML_OK;
 	}
-	if (parse_int_value(value, len, allow_underscore, allow_base_prefix, yaml_1_1, &int_out)) {
+	if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
+			allow_binary_and_upper_prefix, yaml_1_1, &int_out)) {
 		node->type = GTEXT_YAML_INT;
 		node->as.scalar.type = GTEXT_YAML_INT;
 		node->as.scalar.int_value = int_out;

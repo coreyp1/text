@@ -2207,7 +2207,23 @@ scan_plain_scalar:
       }
       const char vc = s->input.data[s->cursor + vlen];
       vlen++;
-      if (vc == '>') break;
+      if (vc == '>') {
+        /* c-verbatim-tag ::= "!" "<" ns-uri-char+ ">" - one character at
+           least, so "!<>" names nothing and is not a tag.  It was being
+           carried through as the empty tag. */
+        if (vlen == 2) {
+          if (err) {
+            err->code = GTEXT_YAML_E_INVALID;
+            err->message = "Empty verbatim tag";
+            err->offset = off;
+            err->line = line;
+            err->col = col;
+          }
+          gtext_yaml_dynbuf_free(&scalar);
+          return GTEXT_YAML_E_INVALID;
+        }
+        break;
+      }
       if (vc == '\n' || vc == '\r') {
         if (err) {
           err->code = GTEXT_YAML_E_INVALID;
