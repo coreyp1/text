@@ -23,14 +23,20 @@ fi
 case "$which" in
 ours)
 	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
-	cflags=$(PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --cflags ghoti.io-cutil-0)
-	libs=$(PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --libs ghoti.io-cutil-0)
+	# chron as well as cutil: yaml_dom.h has included <ghoti.io/chron/chron.h>
+	# since !!timestamp stopped being parsed by hand, and this script asked
+	# only for cutil - so `make conformance` stopped compiling at that commit
+	# and nobody noticed, because it is not one of the targets `make test`
+	# runs. Both lookup directories, the way run-json-schema.sh does it.
+	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
 	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
 	generated=$(dirname "$(dirname "$archive")")/generated
 	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
 	runner=$suite/../yts-runner
-	# The same rpath the Makefile links with, so the runner finds cutil
-	# without the caller having to set LD_LIBRARY_PATH.
+	# The same rpath the Makefile links with, so the runner finds cutil and
+	# chron without the caller having to set LD_LIBRARY_PATH.
 	cc -O1 -o "$runner" "$root/tools/conformance/yaml_test_suite.c" \
 		-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
 		-Wl,-rpath,"$PREFIX/lib/ghoti.io"
