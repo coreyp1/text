@@ -10052,7 +10052,9 @@ TEST(JsonSchemaFormat, AnUnknownNameIsIgnoredAndAKnownOneIsNot) {
 
 	// ...and it compiles under the annotation policy, where it constrains
 	// nothing and so cannot be silently weaker than promised.
-	EXPECT_NE(gtext_json_schema_compile(sv, nullptr), nullptr);
+	GTEXT_JSON_Schema * annotating = gtext_json_schema_compile(sv, nullptr);
+	EXPECT_NE(annotating, nullptr);
+	gtext_json_schema_free(annotating);
 	gtext_json_free(sv);
 }
 
