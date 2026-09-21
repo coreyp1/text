@@ -137,6 +137,60 @@ typedef struct {
 } json_number;
 
 /**
+ * @brief A URI split into its RFC 3986 section 3 components
+ *
+ * Every pointer is into the string that was split, so none of it outlives
+ * that string. The `has_*` flags distinguish a component that was present and
+ * empty from one that was absent, which section 5 treats differently.
+ */
+typedef struct {
+  const char * scheme;
+  size_t scheme_len;
+  const char * authority;
+  size_t authority_len;
+  const char * path;
+  size_t path_len;
+  const char * query;
+  size_t query_len;
+  const char * fragment;
+  size_t fragment_len;
+  int has_scheme;
+  int has_authority;
+  int has_query;
+  int has_fragment;
+} json_uri_parts;
+
+/**
+ * @brief Split a URI into its components
+ */
+GTEXT_INTERNAL_API void json_uri_parts_split(
+    const char * uri, size_t len, json_uri_parts * out);
+
+/**
+ * @brief Resolve a URI-reference against a base, RFC 3986 section 5.2
+ *
+ * @return A malloc'd string the caller frees, or NULL if allocation failed
+ */
+GTEXT_INTERNAL_API char * json_uri_resolve(
+    const char * base, size_t base_len, const char * ref, size_t ref_len);
+
+/**
+ * @brief Copy a URI with its fragment removed
+ *
+ * @return A malloc'd string the caller frees, or NULL if allocation failed
+ */
+GTEXT_INTERNAL_API char * json_uri_without_fragment(
+    const char * uri, size_t len);
+
+/**
+ * @brief Percent-decode a string, RFC 3986 section 2.1
+ *
+ * @return A malloc'd string the caller frees, or NULL if allocation failed
+ */
+GTEXT_INTERNAL_API char * json_uri_percent_decode(
+    const char * s, size_t len, size_t * out_len);
+
+/**
  * @brief Is `name` one of the formats 2020-12's vocabulary defines?
  *
  * A name in the vocabulary is one a caller asking for assertion can expect to
@@ -1096,9 +1150,23 @@ typedef enum {
  * @brief One resolved `$ref` target
  */
 typedef struct {
-  char * pointer;          ///< JSON Pointer it was reached by, without the '#'
+  char * uri;              ///< Absolute URI it was reached by, owned
   json_schema_node * node; ///< Compiled schema, owned by the registry
 } json_schema_ref_entry;
+
+/**
+ * @brief One schema resource or named anchor
+ *
+ * A resource is what an `$id` creates: a document with its own base URI, from
+ * which every `$ref` inside it is resolved. An anchor is a name for a
+ * location inside one. Both are found by a pre-pass before anything is
+ * compiled, because a `$ref` may name a resource that appears later in the
+ * document than the reference does.
+ */
+typedef struct {
+  char * uri;                     ///< Absolute URI, owned
+  const GTEXT_JSON_Value * value; ///< The schema it names; borrowed
+} json_schema_resource;
 
 struct GTEXT_JSON_Schema {
   json_schema_node * root; ///< Root schema node
@@ -1119,6 +1187,23 @@ struct GTEXT_JSON_Schema {
   json_schema_ref_entry * refs;
   size_t refs_count;
   size_t refs_capacity;
+
+  /**
+   * Every `$id` and `$anchor` reachable from the document, keyed by the
+   * absolute URI it resolves to. Built before compilation starts: a `$ref`
+   * is free to name something that appears later in the document than the
+   * reference does, so resolving them as they are met would fail on a
+   * forward reference and succeed on a backward one.
+   */
+  json_schema_resource * resources;
+  size_t resources_count;
+  size_t resources_capacity;
+
+  /**
+   * The base URI the document was compiled against, owned. Empty unless the
+   * root carried an `$id`, which is the usual case.
+   */
+  char * base_uri;
 
   /**
    * The caller's regular-expression provider, copied at compile time, and

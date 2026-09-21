@@ -55,10 +55,14 @@
  *   matching branches is a failure
  * - if/then/else: "if" selects rather than asserts; an absent branch is no
  *   constraint
- * - $ref, with $defs and definitions: same-document JSON Pointer references
- *   ("#" and "#/..."). Recursive references work; targets are compiled once
- *   and shared. A reference that does not resolve, an external URI and a
- *   named anchor are all refused at compile time
+ * - $ref, $id, $anchor, $defs and definitions: the reference model is the
+ *   specification's, built on URIs. $id establishes a base URI and an
+ *   embedded resource; $anchor names a location in one; $ref is a
+ *   URI-reference resolved against the base in scope, so "#", "#/...",
+ *   "#name", "other.json" and an absolute URI all work. Recursive references
+ *   work; targets are compiled once and shared. A reference that leaves the
+ *   document is fetched through GTEXT_JSON_Schema_Options::resolver, and
+ *   refused at compile time when there is none or it does not know the URI
  * - prefixItems and items, where "items" applies to the elements at an
  *   index past the end of "prefixItems" and to every element when there is
  *   no "prefixItems". draft-07's array-valued "items" compiles to
@@ -198,6 +202,38 @@ typedef struct {
 } GTEXT_JSON_Regex_Provider;
 
 /**
+ * @brief Where a schema from another document comes from
+ *
+ * A `$ref` is a URI-reference, and one that resolves outside the document
+ * being compiled names a schema this library has no way to fetch. Nothing
+ * here opens a socket or reads a file: the caller decides what a URI means
+ * and hands back the document, which is the only arrangement in which a
+ * schema compile cannot become a network request nobody asked for.
+ *
+ * Without a resolver, a reference that leaves the document is refused at
+ * compile time - the same refusal as any other reference that does not
+ * resolve, and for the same reason.
+ */
+typedef struct {
+  /**
+   * User-defined, passed to each call.
+   */
+  void * ctx;
+
+  /**
+   * Return the schema document for `uri`, or NULL if there is none.
+   *
+   * `uri` is an absolute URI with no fragment, NUL-terminated, of `uri_len`
+   * bytes. The returned value is borrowed and must stay alive until
+   * gtext_json_schema_compile_with_options() returns; nothing is kept after
+   * that, because everything a compiled schema needs has been copied out of
+   * it by then.
+   */
+  const GTEXT_JSON_Value * (*get_fn)(
+      void * ctx, const char * uri, size_t uri_len);
+} GTEXT_JSON_Schema_Resolver;
+
+/**
  * @brief What the `format` keyword does
  */
 typedef enum {
@@ -270,6 +306,24 @@ typedef struct {
    * of a validator that has not been asked otherwise.
    */
   GTEXT_JSON_Format_Policy format;
+
+  /**
+   * Where a `$ref` that leaves this document is fetched from, or NULL for
+   * nowhere - in which case such a reference is refused.
+   *
+   * The pointer is borrowed, and so is everything reachable from its `ctx`.
+   * Both need only outlive the compile call.
+   */
+  const GTEXT_JSON_Schema_Resolver * resolver;
+
+  /**
+   * The base URI the document is compiled against, or NULL for none.
+   *
+   * A schema retrieved from `https://example.com/s.json` has that as its
+   * base whether or not it carries an `$id` saying so, and a relative `$ref`
+   * inside it means something different without it. NUL-terminated.
+   */
+  const char * base_uri;
 } GTEXT_JSON_Schema_Options;
 
 /**

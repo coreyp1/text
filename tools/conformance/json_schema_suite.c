@@ -88,6 +88,17 @@ static void put_field(const char * text) {
   }
 }
 
+static const char * description_of(const GTEXT_JSON_Value * value) {
+  const GTEXT_JSON_Value * field =
+      gtext_json_object_get(value, "description", 11);
+  const char * text = NULL;
+  size_t length = 0;
+  if (!field || gtext_json_get_string(field, &text, &length) != GTEXT_JSON_OK) {
+    return "(no description)";
+  }
+  return text;
+}
+
 static char * read_file(const char * path, size_t * out_len) {
   FILE * file = fopen(path, "rb");
   if (!file) {
@@ -122,21 +133,85 @@ static char * read_file(const char * path, size_t * out_len) {
   return data;
 }
 
-static const char * description_of(const GTEXT_JSON_Value * value) {
-  const GTEXT_JSON_Value * field =
-      gtext_json_object_get(value, "description", 11);
-  const char * text = NULL;
-  size_t length = 0;
-  if (!field || gtext_json_get_string(field, &text, &length) != GTEXT_JSON_OK) {
-    return "(no description)";
-  }
-  return text;
-}
-
 /* Set from JSS_FORMAT_ASSERT, which the scorer sets for the optional/format
  * files - those measure `format` as an assertion, and the default policy
  * asserts nothing, so running them without it measures nothing. */
 static int assert_formats = 0;
+
+/* ==========================================================================
+ * The remote-document resolver
+ *
+ * refRemote.json refers to `http://localhost:1234/...`, which by the suite's
+ * own convention is its `remotes/` directory. Nothing here opens a socket:
+ * the library asks for a URI and this hands back a parsed document, which is
+ * the whole point of the resolver being the caller's.
+ * ========================================================================*/
+
+#define REMOTE_CACHE_MAX 256
+static struct {
+  char * uri;
+  GTEXT_JSON_Value * doc;
+} remote_cache[REMOTE_CACHE_MAX];
+static size_t remote_cache_count = 0;
+static const char * remotes_dir = NULL;
+
+static const char * const REMOTE_PREFIX = "http://localhost:1234/";
+
+static const GTEXT_JSON_Value * remote_get(
+    void * ctx, const char * uri, size_t uri_len) {
+  (void)ctx;
+  (void)uri_len;
+  for (size_t i = 0; i < remote_cache_count; i++) {
+    if (strcmp(remote_cache[i].uri, uri) == 0) {
+      return remote_cache[i].doc;
+    }
+  }
+  if (!remotes_dir || remote_cache_count == REMOTE_CACHE_MAX) {
+    return NULL;
+  }
+  size_t prefix_len = strlen(REMOTE_PREFIX);
+  if (strncmp(uri, REMOTE_PREFIX, prefix_len) != 0) {
+    return NULL;
+  }
+  char path[2048];
+  snprintf(path, sizeof(path), "%s/%s", remotes_dir, uri + prefix_len);
+
+  size_t length = 0;
+  char * text = read_file(path, &length);
+  if (!text) {
+    return NULL;
+  }
+  GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+  GTEXT_JSON_Error error;
+  memset(&error, 0, sizeof(error));
+  GTEXT_JSON_Value * doc = gtext_json_parse(text, length, &po, &error);
+  free(text);
+  if (!doc) {
+    gtext_json_error_free(&error);
+    return NULL;
+  }
+  /* Not strdup: it is POSIX rather than C, and this file is compiled with
+   * whatever the host's cc defaults to. */
+  size_t uri_size = strlen(uri) + 1;
+  char * key = (char *)malloc(uri_size);
+  if (!key) {
+    gtext_json_free(doc);
+    return NULL;
+  }
+  memcpy(key, uri, uri_size);
+  remote_cache[remote_cache_count].uri = key;
+  remote_cache[remote_cache_count].doc = doc;
+  remote_cache_count++;
+  return doc;
+}
+
+static void remote_cache_clear(void) {
+  for (size_t i = 0; i < remote_cache_count; i++) {
+    free(remote_cache[i].uri);
+    gtext_json_free(remote_cache[i].doc);
+  }
+  remote_cache_count = 0;
+}
 
 static void run_group(const char * file, const GTEXT_JSON_Value * group,
     const GTEXT_JSON_Regex_Provider * provider) {
@@ -150,6 +225,8 @@ static void run_group(const char * file, const GTEXT_JSON_Value * group,
 
   GTEXT_JSON_Schema_Options options = gtext_json_schema_options_default();
   options.regex = provider;
+  GTEXT_JSON_Schema_Resolver resolver = {NULL, remote_get};
+  options.resolver = &resolver;
   if (assert_formats) {
     options.format = GTEXT_JSON_FORMAT_ASSERT;
   }
@@ -244,6 +321,7 @@ int main(int argc, char ** argv) {
 #endif
 
   assert_formats = (getenv("JSS_FORMAT_ASSERT") != NULL);
+  remotes_dir = getenv("JSS_REMOTES");
 
   GTEXT_JSON_Parse_Options parse_options = gtext_json_parse_options_default();
 
@@ -278,5 +356,6 @@ int main(int argc, char ** argv) {
     gtext_json_free(doc);
     free(text);
   }
+  remote_cache_clear();
   return 0;
 }

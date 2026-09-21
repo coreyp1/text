@@ -9764,6 +9764,201 @@ TEST(JsonSchemaKeywords, MultipleOfIsAskedInDecimal) {
 	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.5}", "1.5"));
 }
 
+/* Compile with a base URI and an optional resolver, then validate. */
+struct StubResolver {
+	std::vector<std::pair<std::string, GTEXT_JSON_Value *>> docs;
+	std::vector<std::string> asked;
+
+	~StubResolver() {
+		for (auto & d : docs) {
+			gtext_json_free(d.second);
+		}
+	}
+	void add(const char * uri, const char * src) {
+		GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+		GTEXT_JSON_Value * v = gtext_json_parse(src, strlen(src), &po, nullptr);
+		docs.emplace_back(uri, v);
+	}
+	static const GTEXT_JSON_Value * get(
+	    void * ctx, const char * uri, size_t uri_len) {
+		StubResolver * self = (StubResolver *)ctx;
+		self->asked.emplace_back(uri, uri_len);
+		for (auto & d : self->docs) {
+			if (d.first == uri) {
+				return d.second;
+			}
+		}
+		return nullptr;
+	}
+};
+
+static bool ref_accepts(const char * schema_src, const char * instance_src,
+    const char * base = nullptr, StubResolver * remote = nullptr) {
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Value * sv =
+	    gtext_json_parse(schema_src, strlen(schema_src), &po, nullptr);
+	GTEXT_JSON_Value * iv =
+	    gtext_json_parse(instance_src, strlen(instance_src), &po, nullptr);
+	EXPECT_NE(sv, nullptr);
+	EXPECT_NE(iv, nullptr);
+	if (!sv || !iv) {
+		return false;
+	}
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.base_uri = base;
+	GTEXT_JSON_Schema_Resolver resolver = {remote, StubResolver::get};
+	if (remote) {
+		opts.resolver = &resolver;
+	}
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	GTEXT_JSON_Schema * sc =
+	    gtext_json_schema_compile_with_options(sv, &opts, &serr);
+	EXPECT_NE(sc, nullptr) << "did not compile: " << schema_src << " - "
+	                       << (serr.message ? serr.message : "");
+	bool ok = false;
+	if (sc) {
+		ok = gtext_json_schema_validate(sc, iv, nullptr) == GTEXT_JSON_OK;
+	}
+	gtext_json_schema_free(sc);
+	gtext_json_error_free(&serr);
+	gtext_json_free(iv);
+	gtext_json_free(sv);
+	return ok;
+}
+
+TEST(JsonSchemaRef, ResolvesAgainstTheBaseUriInScope) {
+	// The shape that worked before: no $id anywhere, so the base is empty and
+	// a pointer fragment addresses the document.
+	EXPECT_TRUE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"type\":\"integer\"}},\"$ref\":\"#/$defs/n\"}", "5"));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"type\":\"integer\"}},\"$ref\":\"#/$defs/n\"}",
+	    "\"x\""));
+
+	// With an $id, a relative reference is resolved against it rather than
+	// against the document - which is the whole difference between a
+	// reference model built on URIs and one built on JSON Pointer.
+	StubResolver remote;
+	remote.add("http://example.com/other.json", "{\"type\":\"integer\"}");
+	EXPECT_TRUE(ref_accepts(
+	    "{\"$id\":\"http://example.com/root.json\",\"$ref\":\"other.json\"}", "5",
+	    nullptr, &remote));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$id\":\"http://example.com/root.json\",\"$ref\":\"other.json\"}",
+	    "\"x\"", nullptr, &remote));
+	ASSERT_FALSE(remote.asked.empty());
+	EXPECT_EQ(remote.asked[0], "http://example.com/other.json");
+
+	// The caller's base does the same job when the document carries no $id.
+	StubResolver rooted;
+	rooted.add("http://example.com/dir/sub.json", "{\"type\":\"string\"}");
+	EXPECT_TRUE(ref_accepts("{\"$ref\":\"sub.json\"}", "\"x\"",
+	    "http://example.com/dir/root.json", &rooted));
+}
+
+TEST(JsonSchemaRef, NamedAnchorsResolve) {
+	EXPECT_TRUE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"$anchor\":\"num\",\"type\":\"integer\"}},"
+	    "\"$ref\":\"#num\"}",
+	    "5"));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"$anchor\":\"num\",\"type\":\"integer\"}},"
+	    "\"$ref\":\"#num\"}",
+	    "\"x\""));
+
+	// A $dynamicAnchor is a plain anchor too, for a reference that does not
+	// need the dynamic scope.
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"$dynamicAnchor\":\"num\",\"type\":\"integer\"}},"
+	    "\"$ref\":\"#num\"}",
+	    "\"x\""));
+}
+
+TEST(JsonSchemaRef, AForwardReferenceResolves) {
+	// The identifiers are collected before anything compiles, so a reference
+	// may name something defined later in the document than itself. Resolving
+	// them as they were met would answer this and its mirror differently.
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$ref\":\"#later\",\"$defs\":{\"x\":{\"$anchor\":\"later\","
+	    "\"type\":\"integer\"}}}",
+	    "\"s\""));
+}
+
+TEST(JsonSchemaRef, AFragmentIsPercentDecodedBeforeItIsAPointer) {
+	// RFC 6901 section 6: percent-decoding first, then the pointer's own
+	// tilde escapes. Skipping the first step looked for a member named
+	// `percent%25field` and found nothing.
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"percent%field\":{\"type\":\"integer\"}},"
+	    "\"$ref\":\"#/$defs/percent%25field\"}",
+	    "\"s\""));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"tilde~field\":{\"type\":\"integer\"}},"
+	    "\"$ref\":\"#/$defs/tilde~0field\"}",
+	    "\"s\""));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"slash/field\":{\"type\":\"integer\"}},"
+	    "\"$ref\":\"#/$defs/slash~1field\"}",
+	    "\"s\""));
+}
+
+TEST(JsonSchemaRef, AnIdentifierOnlyCountsInASchemaPosition) {
+	// `$id` inside an `enum` is a member of a value, not an identifier, and a
+	// pre-pass that walked every object in the document would register it.
+	StubResolver remote;
+	EXPECT_TRUE(ref_accepts(
+	    "{\"$defs\":{\"id_in_enum\":{\"enum\":[{\"$id\":\"https://x/e\","
+	    "\"type\":\"null\"}]}},\"$ref\":\"#/$defs/id_in_enum\"}",
+	    "{\"$id\":\"https://x/e\",\"type\":\"null\"}", nullptr, &remote));
+	// Nothing was ever fetched for it, because it was never an identifier.
+	EXPECT_TRUE(remote.asked.empty());
+}
+
+TEST(JsonSchemaRef, ALeavingReferenceIsRefusedWithNoResolver) {
+	const char * src = "{\"$ref\":\"http://example.com/nowhere.json\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, nullptr);
+	ASSERT_NE(sv, nullptr);
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile(sv, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA);
+	gtext_json_error_free(&err);
+
+	// And with a resolver that does not know it, which is the same answer for
+	// the same reason.
+	StubResolver empty;
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	GTEXT_JSON_Schema_Resolver resolver = {&empty, StubResolver::get};
+	opts.resolver = &resolver;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile_with_options(sv, &opts, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA);
+	gtext_json_error_free(&err);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaRef, ATargetCompilesInItsOwnScope) {
+	// The fetched document's own relative $ref must resolve against where it
+	// came from, not against the document that referred to it. Carrying the
+	// referrer's base across the boundary reads the wrong schema and says
+	// nothing about having done so.
+	StubResolver remote;
+	remote.add("http://example.com/a/outer.json",
+	    "{\"$ref\":\"inner.json\"}");
+	remote.add("http://example.com/a/inner.json", "{\"type\":\"integer\"}");
+	EXPECT_TRUE(ref_accepts("{\"$ref\":\"http://example.com/a/outer.json\"}",
+	    "5", "http://example.com/b/root.json", &remote));
+	EXPECT_FALSE(ref_accepts("{\"$ref\":\"http://example.com/a/outer.json\"}",
+	    "\"x\"", "http://example.com/b/root.json", &remote));
+	for (const auto & asked : remote.asked) {
+		EXPECT_NE(asked, "http://example.com/b/inner.json")
+		    << "resolved the inner reference against the referrer's base";
+	}
+}
+
 /* Compile with a chosen format policy and say whether the instance passes. */
 static bool format_accepts(const char * format, const char * instance_src,
     GTEXT_JSON_Format_Policy policy = GTEXT_JSON_FORMAT_ASSERT) {

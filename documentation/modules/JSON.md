@@ -350,11 +350,17 @@ than no list, because it is read as current. What remains unimplemented is:
 - **Annotation-collecting applicators**: `unevaluatedProperties` and
   `unevaluatedItems`, which need annotation results carried across
   applicators - a different shape of evaluation from anything here now
-- **Dynamic references**: `$recursiveRef`, `$recursiveAnchor`, `$dynamicRef`,
-  and `$anchor` as a reference target. Same-document JSON Pointer `$ref`
-  works; a named anchor is refused
+- **Dynamic references**: `$recursiveRef`, `$recursiveAnchor` and
+  `$dynamicRef`. `$dynamicAnchor` is registered as an ordinary anchor, so a
+  `$ref` to one inside the same resource resolves; what is missing is the
+  dynamic scope that makes the reference mean something different depending
+  on where validation came from
 - **Vocabularies**: `$vocabulary` is ignored, along with `$schema`, since only
   one dialect is implemented
+- **The published metaschemas**: a `$ref` to
+  `https://json-schema.org/draft/2020-12/schema` is a reference that leaves
+  the document like any other, so it resolves only through a resolver that
+  supplies it. Nothing is built in
 A schema using any of those is refused at compile time rather than validated
 with the keyword ignored.
 

@@ -55,5 +55,5 @@ cc -O1 -o "$runner" "$root/tools/conformance/json_schema_suite.c" \
 	-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
 	-Wl,-rpath,"$PREFIX/lib/ghoti.io"
 
-JSS_COMMIT="$commit" exec python3 "$root/tools/conformance/json_schema_suite.py" \
+JSS_COMMIT="$commit" JSS_REMOTES="$suite/remotes" exec python3 "$root/tools/conformance/json_schema_suite.py" \
 	"$suite" "$runner" --draft "$draft"
