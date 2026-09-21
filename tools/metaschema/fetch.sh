@@ -1,9 +1,10 @@
 #!/bin/sh
 #
-# Fetch the published JSON Schema 2020-12 meta-schemas.
+# Fetch the published JSON Schema meta-schemas, for every dialect this
+# library reads that has them.
 #
-# These nine documents are what a `$ref` to
-# https://json-schema.org/draft/2020-12/schema and the seven vocabulary
+# Sixteen documents: 2020-12's nine, and 2019-09's seven. They are what a
+# `$ref` to https://json-schema.org/draft/<date>/schema and the vocabulary
 # meta-schemas beneath it resolve to. The library embeds them, so that
 # validating a schema against its own dialect needs neither a resolver nor a
 # socket; tools/metaschema/gen_metaschema.py turns what this script fetches
@@ -18,11 +19,14 @@
 # the alternative to embedding them is a validator that opens a connection in
 # the middle of a compile, to a URI it read out of the document it was handed.
 #
-# format-assertion is fetched although the root meta-schema does not reference
-# it: it is the meta-schema of the one optional vocabulary in the dialect, and
-# a schema that declares that vocabulary refers to it.
+# format-assertion is fetched although the 2020-12 root meta-schema does not
+# reference it: it is the meta-schema of the one optional vocabulary in that
+# dialect, and a schema that declares that vocabulary refers to it. 2019-09
+# has no such split - one `format` vocabulary, whose assertion behaviour the
+# implementation chooses - so its set is seven rather than nine, and there is
+# no `unevaluated` because 2019-09 keeps those two keywords in `applicator`.
 #
-# Everything lands in third_party/json-schema/2020-12/, which .gitignore
+# Everything lands in third_party/json-schema/<date>/, which .gitignore
 # excludes.
 #
 # Usage:  tools/metaschema/fetch.sh
@@ -32,10 +36,6 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-dest="$root/third_party/json-schema/2020-12"
-base="https://json-schema.org/draft/2020-12"
-
-mkdir -p "$dest/meta"
 
 # json-schema.org negotiates on Accept, and a request that does not ask for
 # JSON is answered with the human-readable page about the document rather than
@@ -64,10 +64,21 @@ fetch() {
 	esac
 }
 
-echo "fetching the 2020-12 meta-schemas into $dest"
-fetch "$base/schema" "$dest/schema.json"
-for name in core applicator unevaluated validation meta-data \
-	format-annotation format-assertion content; do
-	fetch "$base/meta/$name" "$dest/meta/$name.json"
-done
+fetch_dialect() {
+	draft="$1"
+	shift
+	dest="$root/third_party/json-schema/$draft"
+	base="https://json-schema.org/draft/$draft"
+	mkdir -p "$dest/meta"
+	echo "fetching the $draft meta-schemas into $dest"
+	fetch "$base/schema" "$dest/schema.json"
+	for name in "$@"; do
+		fetch "$base/meta/$name" "$dest/meta/$name.json"
+	done
+}
+
+fetch_dialect 2020-12 core applicator unevaluated validation meta-data \
+	format-annotation format-assertion content
+fetch_dialect 2019-09 core applicator validation meta-data format content
+
 echo "done; regenerate with tools/metaschema/gen_metaschema.py"

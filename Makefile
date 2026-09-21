@@ -1309,7 +1309,7 @@ IDNA_TABLES := src/idna/tables
 # says why at length.
 IDNA_MAPPING_VERSION := $(shell cat tools/idna/IDNA_MAPPING_VERSION 2>/dev/null)
 IDNA_MAPPING_DIR := third_party/idna/$(IDNA_MAPPING_VERSION)
-METASCHEMA_DIR := third_party/json-schema/2020-12
+METASCHEMA_DIR := third_party/json-schema
 METASCHEMA_SRC := src/json/metaschema
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
@@ -1383,7 +1383,8 @@ check-nfc-oracle: $(APP_DIR)/$(TARGET)
 	python3 tools/idna/nfc_oracle.py
 
 check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.org publishes
-# The nine documents under $(METASCHEMA_SRC) are somebody else's, embedded so
+# The sixteen documents under $(METASCHEMA_SRC) - 2020-12's nine and 2019-09's
+# seven - are somebody else's, embedded so
 # that a schema which validates another schema needs no resolver and no
 # socket. That makes this file the one place in the repository where a silent
 # edit would change what "a valid 2020-12 schema" means, with nothing to

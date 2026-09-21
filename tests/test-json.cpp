@@ -9189,7 +9189,6 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 	const Case cases[] = {
 	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
 	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
-	    {"$recursiveRef", "{\"$recursiveRef\":\"#\"}"},
 	};
 
 	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
@@ -11981,10 +11980,15 @@ TEST(JsonSchemaMetaschema, TheCallersResolverWins) {
 	gtext_json_free(doc);
 }
 
-TEST(JsonSchemaMetaschema, EmbedsNineDocumentsAndNotTheWholeWeb) {
+TEST(JsonSchemaMetaschema, EmbedsSixteenDocumentsAndNotTheWholeWeb) {
 	// A reference that leaves the document still does not resolve. What was
-	// added is nine documents, not a fetcher, and a URI that merely looks
-	// like one of them is refused the way it always was.
+	// added is sixteen documents - 2020-12's nine and 2019-09's seven - not a
+	// fetcher, and a URI that merely looks like one of them is refused the
+	// way it always was.
+	//
+	// 2019-09's root used to be in this list, because only 2020-12 was
+	// embedded. It is now a document this library carries, and it has moved
+	// to the test below that compiles it.
 	ToyProvider provider;
 	GTEXT_JSON_Regex_Provider rvt = toy_vtable(&provider);
 	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
@@ -11992,7 +11996,8 @@ TEST(JsonSchemaMetaschema, EmbedsNineDocumentsAndNotTheWholeWeb) {
 
 	const char * elsewhere[] = {
 	    "{\"$ref\":\"https://example.com/schema\"}",
-	    "{\"$ref\":\"https://json-schema.org/draft/2019-09/schema\"}",
+	    "{\"$ref\":\"https://json-schema.org/draft/2018-01/schema\"}",
+	    "{\"$ref\":\"https://json-schema.org/draft/2019-09/meta/unevaluated\"}",
 	    "{\"$ref\":\"https://json-schema.org/draft/2020-12/meta/nonesuch\"}",
 	    "{\"$ref\":\"https://json-schema.org/draft/2020-12/schema/\"}",
 	};
@@ -12386,4 +12391,141 @@ TEST(JsonSchemaDraft, AnUnknownDialectIsStillReadAsTheStandardOne) {
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// ---------------------------------------------------------------------------
+// 2019-09's $recursiveRef / $recursiveAnchor
+//
+// 2020-12 replaced these with $dynamicRef and $dynamicAnchor, and this engine
+// refused any schema carrying $recursiveRef until it could answer it. The
+// mechanism is the same scope walk, with one anonymous anchor name instead of
+// many.
+// ---------------------------------------------------------------------------
+
+TEST(JsonSchemaRecursiveRef, TheOutermostAnchorOnThePathWins) {
+	// The recursive-extension pattern the keyword exists for. `strict-tree`
+	// refers to `tree` and adds `unevaluatedProperties: false`; `tree` refers
+	// to itself with `$recursiveRef`, and because both resources declare
+	// `$recursiveAnchor: true` that lands back on `strict-tree` at every
+	// level of the recursion rather than on `tree`.
+	//
+	// The misspelling in the *child* is what tells the two readings apart.
+	// Under a plain `$ref` the child would be checked against `tree`, which
+	// allows any property, and the document would be valid.
+	MetaFixture f(
+	    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"$id\":\"https://example.com/strict-tree\","
+	    "\"$recursiveAnchor\":true,"
+	    "\"$ref\":\"https://example.com/tree\","
+	    "\"unevaluatedProperties\":false,"
+	    "\"$defs\":{\"tree\":{"
+	    "\"$id\":\"https://example.com/tree\","
+	    "\"$recursiveAnchor\":true,"
+	    "\"type\":\"object\","
+	    "\"properties\":{\"data\":true,"
+	    "\"children\":{\"type\":\"array\","
+	    "\"items\":{\"$recursiveRef\":\"#\"}}}}}}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{\"data\":1}"));
+	EXPECT_TRUE(f.accepts("{\"data\":1,\"children\":[{\"data\":2}]}"));
+	EXPECT_FALSE(f.accepts("{\"daat\":1}"));
+	// The one that only fails if the recursion carried strict-tree down.
+	EXPECT_FALSE(f.accepts("{\"data\":1,\"children\":[{\"daat\":2}]}"));
+}
+
+TEST(JsonSchemaRecursiveRef, WithoutAnAnchorItIsAnOrdinaryRef) {
+	// A resource that does not declare `$recursiveAnchor` gets no dynamic
+	// behaviour: `$recursiveRef: "#"` is `$ref: "#"` with a longer spelling,
+	// which is the same relationship `$dynamicRef` has to a plain anchor.
+	MetaFixture f(
+	    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"$id\":\"https://example.com/plain\","
+	    "\"type\":\"object\","
+	    "\"properties\":{\"child\":{\"$recursiveRef\":\"#\"}}}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{}"));
+	EXPECT_TRUE(f.accepts("{\"child\":{\"child\":{}}}"));
+	// The self-reference still carries the object type down.
+	EXPECT_FALSE(f.accepts("{\"child\":1}"));
+}
+
+TEST(JsonSchemaRecursiveRef, OnlyTheEmptyFragmentIsAllowed) {
+	// 2019-09 core section 8.2.4.2.1 gives the keyword exactly one legal
+	// value. Reading anything else would mean guessing at a reference the
+	// specification does not define.
+	MetaFixture f(
+	    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"$recursiveRef\":\"#/$defs/x\",\"$defs\":{\"x\":true}}");
+	EXPECT_EQ(f.schema, nullptr);
+	EXPECT_EQ(f.err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+}
+
+TEST(JsonSchemaRecursiveRef, NeitherKeywordExistsIn2020_12) {
+	// 2020-12 removed both. A document carrying them under that dialect has
+	// written unknown members, and unknown members are ignored - not
+	// honoured, and not refused either, which is why the illegal
+	// `$recursiveRef` value above compiles here.
+	MetaFixture f(
+	    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\","
+	    "\"$recursiveAnchor\":true,"
+	    "\"$recursiveRef\":\"#/$defs/never\","
+	    "\"type\":\"object\","
+	    "\"$defs\":{\"never\":false}}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	// Were `$recursiveRef` honoured here it would resolve to `false`, and
+	// nothing at all would validate.
+	EXPECT_TRUE(f.accepts("{}"));
+	EXPECT_FALSE(f.accepts("1"));
+}
+
+TEST(JsonSchemaMetaschema, Resolves2019_09WithoutAResolver) {
+	// The embedded set is both dialects that publish one, not just the
+	// newest. Without this a 2019-09 document that validates another schema -
+	// which its own `$defs` meta-schema test does - had nowhere to resolve.
+	MetaFixture f(
+	    "{\"$ref\":\"https://json-schema.org/draft/2019-09/schema\"}");
+	ASSERT_EQ(f.opts.resolver, nullptr);
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{\"type\":\"string\"}"));
+	EXPECT_FALSE(f.accepts("{\"type\":\"nonesuch\"}"));
+}
+
+TEST(JsonSchemaAdditionalItems, AppliesOnlyWhenItemsIsAnArray) {
+	// draft-06, draft-07 and 2019-09 agree: `additionalItems` describes the
+	// tail of a positional `items`, and is ignored when `items` is a single
+	// schema or absent, because then there is no tail to describe.
+	//
+	// This engine applied it from index prefix_items_count onward, which is
+	// zero when there is no positional list, so both of the first two schemas
+	// here called every non-empty array invalid.
+	{
+		MetaFixture f(
+		    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+		    "\"items\":{\"type\":\"integer\"},"
+		    "\"additionalItems\":{\"type\":\"string\"}}");
+		ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+		EXPECT_TRUE(f.accepts("[1,2,3]"));
+		EXPECT_FALSE(f.accepts("[\"a\"]"));
+	}
+	{
+		MetaFixture f(
+		    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+		    "\"additionalItems\":false}");
+		ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+		EXPECT_TRUE(f.accepts("[1,2,3]"));
+	}
+	{
+		// And it does still govern the tail when there is one.
+		MetaFixture f(
+		    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+		    "\"items\":[{\"type\":\"integer\"}],"
+		    "\"additionalItems\":false}");
+		ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+		EXPECT_TRUE(f.accepts("[1]"));
+		EXPECT_FALSE(f.accepts("[1,2]"));
+	}
 }

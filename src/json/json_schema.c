@@ -267,6 +267,35 @@ static const struct {
         JSON_VOCAB_FORMAT_ASSERTION},
     {"https://json-schema.org/draft/2020-12/vocab/content",
         JSON_VOCAB_CONTENT},
+
+    /*
+     * 2019-09's set.  It is not 2020-12's with the date changed:
+     *
+     *  - `unevaluatedItems` and `unevaluatedProperties` live in 2019-09's
+     *    *applicator* vocabulary, and were only split into one of their own in
+     *    2020-12, so that URI carries both bits here;
+     *  - there is one `format` vocabulary rather than the annotation and
+     *    assertion pair, and it is the annotation one - 2019-09 leaves
+     *    asserting to the implementation, which is what
+     *    GTEXT_JSON_FORMAT_ASSERT already decides;
+     *  - there is no `prefixItems`, so nothing needs a bit for it.
+     *
+     * Without these, a 2019-09 meta-schema's `$vocabulary` named URIs this
+     * table did not have and the compile was refused for requiring a
+     * vocabulary "this implementation does not have" - which it does have,
+     * under a different name.
+     */
+    {"https://json-schema.org/draft/2019-09/vocab/core", JSON_VOCAB_CORE},
+    {"https://json-schema.org/draft/2019-09/vocab/applicator",
+        JSON_VOCAB_APPLICATOR | JSON_VOCAB_UNEVALUATED},
+    {"https://json-schema.org/draft/2019-09/vocab/validation",
+        JSON_VOCAB_VALIDATION},
+    {"https://json-schema.org/draft/2019-09/vocab/meta-data",
+        JSON_VOCAB_META_DATA},
+    {"https://json-schema.org/draft/2019-09/vocab/format",
+        JSON_VOCAB_FORMAT_ANNOTATION},
+    {"https://json-schema.org/draft/2019-09/vocab/content",
+        JSON_VOCAB_CONTENT},
     {NULL, 0}};
 
 /*
@@ -333,20 +362,28 @@ static const struct {
 static const struct {
   const char * keyword;
   json_schema_draft since;
+  /* The last draft that still has it, or 0 for one that is still current.
+   * `$recursiveRef` and `$recursiveAnchor` are the reason this field exists:
+   * they arrived in 2019-09 and were *removed* in 2020-12, replaced by
+   * `$dynamicRef` and `$dynamicAnchor`. Without an upper bound they would be
+   * read in 2020-12, where they are ordinary unknown members. */
+  json_schema_draft until;
 } json_schema_keyword_since[] = {
-    {"prefixItems", JSON_DRAFT_2020_12},
-    {"$dynamicRef", JSON_DRAFT_2020_12},
-    {"$dynamicAnchor", JSON_DRAFT_2020_12},
-    {"unevaluatedItems", JSON_DRAFT_2019_09},
-    {"unevaluatedProperties", JSON_DRAFT_2019_09},
-    {"dependentSchemas", JSON_DRAFT_2019_09},
-    {"dependentRequired", JSON_DRAFT_2019_09},
-    {"maxContains", JSON_DRAFT_2019_09},
-    {"minContains", JSON_DRAFT_2019_09},
-    {"if", JSON_DRAFT_07},
-    {"then", JSON_DRAFT_07},
-    {"else", JSON_DRAFT_07},
-    {NULL, JSON_DRAFT_06}};
+    {"prefixItems", JSON_DRAFT_2020_12, 0},
+    {"$dynamicRef", JSON_DRAFT_2020_12, 0},
+    {"$dynamicAnchor", JSON_DRAFT_2020_12, 0},
+    {"$recursiveRef", JSON_DRAFT_2019_09, JSON_DRAFT_2019_09},
+    {"$recursiveAnchor", JSON_DRAFT_2019_09, JSON_DRAFT_2019_09},
+    {"unevaluatedItems", JSON_DRAFT_2019_09, 0},
+    {"unevaluatedProperties", JSON_DRAFT_2019_09, 0},
+    {"dependentSchemas", JSON_DRAFT_2019_09, 0},
+    {"dependentRequired", JSON_DRAFT_2019_09, 0},
+    {"maxContains", JSON_DRAFT_2019_09, 0},
+    {"minContains", JSON_DRAFT_2019_09, 0},
+    {"if", JSON_DRAFT_07, 0},
+    {"then", JSON_DRAFT_07, 0},
+    {"else", JSON_DRAFT_07, 0},
+    {NULL, JSON_DRAFT_06, 0}};
 
 /* Which vocabulary each keyword belongs to. A keyword not listed here is one
  * this engine ignores anyway, so no lookup is needed for it. */
@@ -357,6 +394,7 @@ static const struct {
     {"$id", JSON_VOCAB_CORE}, {"$schema", JSON_VOCAB_CORE},
     {"$ref", JSON_VOCAB_CORE}, {"$anchor", JSON_VOCAB_CORE},
     {"$dynamicRef", JSON_VOCAB_CORE}, {"$dynamicAnchor", JSON_VOCAB_CORE},
+    {"$recursiveRef", JSON_VOCAB_CORE}, {"$recursiveAnchor", JSON_VOCAB_CORE},
     {"$vocabulary", JSON_VOCAB_CORE}, {"$comment", JSON_VOCAB_CORE},
     {"$defs", JSON_VOCAB_CORE},
 
@@ -421,7 +459,11 @@ static int json_schema_keyword_in_draft(
   for (size_t i = 0; json_schema_keyword_since[i].keyword; i++) {
     const char * name = json_schema_keyword_since[i].keyword;
     if (strlen(name) == key_len && memcmp(name, key, key_len) == 0) {
-      return draft >= json_schema_keyword_since[i].since;
+      if (draft < json_schema_keyword_since[i].since) {
+        return 0;
+      }
+      json_schema_draft until = json_schema_keyword_since[i].until;
+      return until == 0 || draft <= until;
     }
   }
   return 1;
@@ -435,8 +477,7 @@ static int json_schema_keyword_in_draft(
  * caller has no way to find out - the failure mode this list exists to
  * prevent.  A schema using one is refused at compile time instead.
  */
-static const char * const json_schema_unsupported_keywords[] = {
-    "$recursiveRef", NULL};
+static const char * const json_schema_unsupported_keywords[] = {NULL};
 
 /*
  * `format`, `contentEncoding`, `contentMediaType` and `contentSchema` were in
@@ -840,7 +881,8 @@ static GTEXT_JSON_Status json_schema_scan_resources(GTEXT_JSON_Schema * schema,
    */
   const GTEXT_JSON_Value * dynamic =
       gtext_json_object_get(value, "$dynamicAnchor", 14);
-  if (dynamic && dynamic->type == GTEXT_JSON_STRING) {
+  if (dynamic && dynamic->type == GTEXT_JSON_STRING
+      && dynamic->as.string.len > 0) {
     size_t scope_len = strlen(scope);
     size_t name_len = dynamic->as.string.len;
     char * uri = (char *)malloc(scope_len + name_len + 2);
@@ -867,6 +909,30 @@ static GTEXT_JSON_Status json_schema_scan_resources(GTEXT_JSON_Schema * schema,
         dynamic->as.string.len, NULL, value, err);
     if (status != GTEXT_JSON_OK) {
       return status;
+    }
+  }
+
+  /*
+   * 2019-09's `$recursiveAnchor` is the same mechanism with one anonymous
+   * name: a resource either offers itself as the recursive target or does
+   * not, and a `$recursiveRef` asks for "the outermost one that does". It is
+   * recorded in the same table under the empty name, which no `$dynamicAnchor`
+   * can take - the guard above requires a non-empty one, and the 2020-12
+   * meta-schema's `$anchor` pattern would refuse it anyway.
+   *
+   * Only `true` counts. `"$recursiveAnchor": false` is the default spelled
+   * out, and a non-boolean is not this keyword at all.
+   */
+  const GTEXT_JSON_Value * recursive =
+      gtext_json_object_get(value, "$recursiveAnchor", 16);
+  if (recursive && recursive->type == GTEXT_JSON_BOOL) {
+    bool on = false;
+    if (gtext_json_get_bool(recursive, &on) == GTEXT_JSON_OK && on) {
+      GTEXT_JSON_Status status = json_schema_add_dynamic_anchor(schema,
+          json_schema_resource_slot(schema, scope), "", 0, NULL, value, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
     }
   }
 
@@ -1649,12 +1715,26 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
   const GTEXT_JSON_Value * dynamic_anchor =
       gtext_json_object_get(schema_doc, "$dynamicAnchor", 14);
   if (dynamic_anchor && dynamic_anchor->type == GTEXT_JSON_STRING
-      && node->resource_slot != 0) {
+      && dynamic_anchor->as.string.len > 0 && node->resource_slot != 0) {
     GTEXT_JSON_Status status = json_schema_add_dynamic_anchor(cc->schema,
         node->resource_slot, dynamic_anchor->as.string.data,
         dynamic_anchor->as.string.len, node, schema_doc, err);
     if (status != GTEXT_JSON_OK) {
       return status;
+    }
+  }
+  /* 2019-09's spelling of the same thing, under the empty name. */
+  const GTEXT_JSON_Value * recursive_anchor =
+      gtext_json_object_get(schema_doc, "$recursiveAnchor", 16);
+  if (recursive_anchor && recursive_anchor->type == GTEXT_JSON_BOOL
+      && cc->draft == JSON_DRAFT_2019_09 && node->resource_slot != 0) {
+    bool on = false;
+    if (gtext_json_get_bool(recursive_anchor, &on) == GTEXT_JSON_OK && on) {
+      GTEXT_JSON_Status status = json_schema_add_dynamic_anchor(
+          cc->schema, node->resource_slot, "", 0, node, schema_doc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
     }
   }
 
@@ -2251,6 +2331,94 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
           node->dynamic_ref_name[name_len] = '\0';
           node->dynamic_ref_name_len = name_len;
         }
+      }
+    }
+    else if (json_matches(key, key_len, "$recursiveRef")) {
+      /*
+       * 2019-09's dynamic reference, which 2020-12 replaced with
+       * `$dynamicRef`. The rule is the same shape and the same scope walk
+       * answers it, with one anonymous anchor name instead of many:
+       *
+       *   - it resolves statically first, exactly as `$ref` does;
+       *   - it becomes dynamic only if what it resolves to declares
+       *     `$recursiveAnchor: true`;
+       *   - and then the target is the *outermost* resource on the dynamic
+       *     path that also declares one.
+       *
+       * Where a resource does not declare the anchor, `$recursiveRef` is
+       * `$ref` with a longer spelling - the same relationship `$dynamicRef`
+       * has to a plain anchor.
+       */
+      const char * rs = NULL;
+      size_t rl = 0;
+      if (value->type != GTEXT_JSON_STRING
+          || gtext_json_get_string(value, &rs, &rl) != GTEXT_JSON_OK) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "$recursiveRef must be a string"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      /*
+       * 2019-09 core section 8.2.4.2.1 allows exactly one value. Accepting
+       * anything else would mean guessing at a reference the specification
+       * does not define, and guessing wrong is a wrong answer about the
+       * instance rather than an unknown keyword.
+       */
+      if (rl != 1 || rs[0] != '#') {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+              .message = "$recursiveRef may only be \"#\""};
+        }
+        return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+      }
+      cc->depth++;
+      GTEXT_JSON_Status status =
+          json_schema_resolve_ref(&node->ref_target, rs, rl, cc, err);
+      cc->depth--;
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+      /*
+       * The bookending check, asked of the target document the way the
+       * `$dynamicRef` branch asks it - and for the same reason: the registry
+       * of compiled nodes is keyed by URI, so one schema reached under two
+       * URIs is two nodes and comparing pointers gives the wrong answer.
+       */
+      const GTEXT_JSON_Value * target =
+          json_schema_find_target(cc, cc->base_uri, NULL);
+      int bookended = 0;
+      if (target && target->type == GTEXT_JSON_OBJECT) {
+        const GTEXT_JSON_Value * declared =
+            gtext_json_object_get(target, "$recursiveAnchor", 16);
+        bool on = false;
+        bookended = declared && declared->type == GTEXT_JSON_BOOL
+            && gtext_json_get_bool(declared, &on) == GTEXT_JSON_OK && on;
+      }
+      if (bookended) {
+        free(node->dynamic_ref_name);
+        node->dynamic_ref_name = (char *)malloc(1);
+        if (!node->dynamic_ref_name) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                .message = "Out of memory recording $recursiveRef"};
+          }
+          return GTEXT_JSON_E_OOM;
+        }
+        node->dynamic_ref_name[0] = '\0';
+        node->dynamic_ref_name_len = 0;
+      }
+    }
+    /* `$recursiveAnchor` is recorded before this loop runs, so there is
+     * nothing to do for it here; it reaches this point only to be accepted
+     * rather than fall through to the unsupported-keyword check. */
+    else if (json_matches(key, key_len, "$recursiveAnchor")) {
+      if (value->type != GTEXT_JSON_BOOL) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "$recursiveAnchor must be a boolean"};
+        }
+        return GTEXT_JSON_E_INVALID;
       }
     }
     // --- positional array schemas -------------------------------------
@@ -2896,6 +3064,31 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
    * the two differ only for `"prefixItems": []`, which covers no element - so
    * `items` starts at index 0 either way and the readings agree.
    */
+  /*
+   * `additionalItems` governs the tail of a *positional* `items` and nothing
+   * else.  2019-09 core section 9.3.1.2, and draft-07 and draft-06 before it,
+   * say that if `items` is absent or is a single schema then `additionalItems`
+   * is ignored entirely - the single schema already covers every element, so
+   * there is no tail for a second keyword to describe.
+   *
+   * This engine applied it to every element from prefix_items_count onward,
+   * which is zero when there is no positional list, so
+   * `{"items": {"type": "integer"}, "additionalItems": false}` called every
+   * non-empty array invalid and `{"additionalItems": false}` on its own called
+   * every array invalid.  Both are valid-for-anything schemas.
+   *
+   * 2020-12 removed the keyword, so there it is an unknown member and never
+   * reaches here.
+   */
+  if (cc->draft < JSON_DRAFT_2020_12 && node->additional_items) {
+    const GTEXT_JSON_Value * items =
+        gtext_json_object_get(schema_doc, "items", 5);
+    if (!items || items->type != GTEXT_JSON_ARRAY) {
+      json_schema_node_free(node->additional_items);
+      node->additional_items = NULL;
+    }
+  }
+
   if (node->prefix_items_count > 0 && node->items_schema) {
     if (node->additional_items) {
       /*
