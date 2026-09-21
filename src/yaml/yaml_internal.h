@@ -15,6 +15,8 @@
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
+#include <ghoti.io/chron/chron.h>
+
 /* Forward declarations */
 typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
 
@@ -188,17 +190,15 @@ typedef struct {
 	int64_t int_value;          /* Parsed integer value */
 	double float_value;         /* Parsed floating-point value */
 	bool has_timestamp;         /* True if timestamp was parsed */
-	bool timestamp_has_time;    /* True if time component is present */
-	bool timestamp_tz_specified;/* True if timezone was specified */
-	bool timestamp_tz_utc;      /* True if timezone was 'Z' */
-	int timestamp_year;
-	int timestamp_month;
-	int timestamp_day;
-	int timestamp_hour;
-	int timestamp_minute;
-	int timestamp_second;
-	int timestamp_nsec;         /* Fractional seconds in nanoseconds */
-	int timestamp_tz_offset;    /* Offset in minutes from UTC */
+	/* The timestamp itself, as chron read it.  This was twelve loose ints
+	   and four flags, parsed by a hundred lines in yaml_resolve.c that had
+	   never been held against another implementation and were off-spec in
+	   five ways.  Time is not this library's business. */
+	GCHRON_YamlValue timestamp;
+	/* The text said `:60`.  The value above says `:59`, where the kernel puts
+	   the repeated second; this is the evidence that it did not have to, and
+	   the reason the scalar is left as it was written. */
+	bool timestamp_leap_second;
 	bool has_binary;            /* True if binary data was parsed */
 	const unsigned char *binary_data; /* Binary payload (arena-allocated) */
 	size_t binary_len;          /* Length of binary payload */

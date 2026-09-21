@@ -225,6 +225,26 @@ INCLUDE += $(CUTIL_CFLAGS)
 # cutil's default allocator rather than reimplementing it.
 LDFLAGS += $(CUTIL_LIBS)
 
+# ghoti.io-chron, for YAML's !!timestamp.  The type YAML 1.1 defines is a
+# calendar date, a wall-clock reading and an offset, and this library used to
+# read it with a parser of its own - a hundred lines in yaml_resolve.c that
+# were off-spec in five ways, because they had never been held against an
+# outside implementation.  Time is not a text format's business, and chron
+# owns it for the same reason cutil owns the allocator: one definition, held
+# against the reference implementation, rather than a copy per consumer.
+#
+# The graph stays a DAG: cutil -> chron -> text.
+CHRON_PC ?= ghoti.io-chron$(BRANCH)
+CHRON_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(CHRON_PC) 2>/dev/null)
+CHRON_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(CHRON_PC) 2>/dev/null)
+ifeq ($(strip $(CHRON_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-chron was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+endif
+endif
+INCLUDE += $(CHRON_CFLAGS)
+LDFLAGS += $(CHRON_LIBS)
+
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
 
@@ -683,14 +703,14 @@ check-headers: ## Fail if any installed header is not self-contained
 		checked=$$((checked + 1)); \
 		printf '#include <%s>\n#include <%s>\nint main(void) { return 0; }\n' "$$h" "$$h" \
 			> $(BUILD_DIR)/hdrcheck.c; \
-		if ! $(CC) $(CFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) \
+		if ! $(CC) $(CFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) $(CHRON_CFLAGS) \
 				-c -o /dev/null $(BUILD_DIR)/hdrcheck.c 2> $(BUILD_DIR)/hdrcheck.log; then \
 			printf "\033[0;31m\n### %s is not self-contained (C) ###\033[0m\n" "$$h" >&2; \
 			sed 's/^/    /' $(BUILD_DIR)/hdrcheck.log >&2; \
 			fail=1; \
 		fi; \
 		cp $(BUILD_DIR)/hdrcheck.c $(BUILD_DIR)/hdrcheck.cpp; \
-		if ! $(CXX) $(CXXFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) \
+		if ! $(CXX) $(CXXFLAGS) -I include -I $(GEN_DIR) $(CUTIL_CFLAGS) $(CHRON_CFLAGS) \
 				-c -o /dev/null $(BUILD_DIR)/hdrcheck.cpp 2> $(BUILD_DIR)/hdrcheck.log; then \
 			printf "\033[0;31m\n### %s is not self-contained (C++) ###\033[0m\n" "$$h" >&2; \
 			sed 's/^/    /' $(BUILD_DIR)/hdrcheck.log >&2; \
@@ -1064,7 +1084,7 @@ clean: ## Remove all contents of the build directories.
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 
 # Dependencies a consumer of this library needs on its own include path.
-PC_REQUIRES := $(CUTIL_PC)
+PC_REQUIRES := $(CUTIL_PC) $(CHRON_PC)
 
 # Where this project's own .pc file is installed. Defaults to the directory
 # pkg-config is already being told to search, but separate from it so a

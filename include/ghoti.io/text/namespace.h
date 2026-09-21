@@ -254,6 +254,8 @@
 #define gtext_yaml_node_as_int GHOTIIO_TEXT(gtext_yaml_node_as_int)
 #define gtext_yaml_node_as_string GHOTIIO_TEXT(gtext_yaml_node_as_string)
 #define gtext_yaml_node_as_timestamp GHOTIIO_TEXT(gtext_yaml_node_as_timestamp)
+#define gtext_yaml_node_timestamp_is_leap_second GHOTIIO_TEXT(gtext_yaml_node_timestamp_is_leap_second)
+#define gtext_yaml_node_timestamp_value GHOTIIO_TEXT(gtext_yaml_node_timestamp_value)
 #define gtext_yaml_node_clone GHOTIIO_TEXT(gtext_yaml_node_clone)
 #define gtext_yaml_node_inline_comment GHOTIIO_TEXT(gtext_yaml_node_inline_comment)
 #define gtext_yaml_node_is_null GHOTIIO_TEXT(gtext_yaml_node_is_null)

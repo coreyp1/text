@@ -79,9 +79,25 @@ from the core schema. From the 1.1 type repository, with the limits noted:
 - `!!binary` is base64-decoded. The node remains a string node - its string
   accessor returns the base64 source text - and `gtext_yaml_node_as_binary()`
   returns the decoded bytes. Writing re-emits the base64 form.
-- `!!timestamp` accepts a strict ISO 8601 subset and **validates without
-  parsing**: the value stays a string, with no normalization, no timezone
-  conversion and no epoch.
+- `!!timestamp` is read by [`chron`](https://github.com/Ghoti-io/chron),
+  which implements the YAML 1.1 type repository's own expression. The node
+  stays a string node - its string accessor returns the **normalized**
+  spelling, `YYYY-MM-DDTHH:MM:SS` with the shortest fraction that loses
+  nothing - and the value is reached through
+  `gtext_yaml_node_timestamp_value()`, which hands back a `GCHRON_YamlValue`.
+  `gtext_yaml_node_as_timestamp()` remains as a flattened view of the same
+  thing.
+
+  Three things are worth knowing. **A timestamp with no zone is not UTC**: the
+  document did not say which zone it meant, and `GCHRON_YAML_DATE_TIME` keeps
+  the civil reading rather than deciding for it - `chron`'s `zoned.h` is where
+  a caller who knows the zone resolves it, and where the conversion can report
+  that the reading names no instant, or two. No timezone conversion happens
+  here. **A `:60` second is kept exactly as written**, because the value holds
+  it as `:59` of the same minute and re-emitting that would move the reading a
+  second earlier; `gtext_yaml_node_timestamp_is_leap_second()` says so.
+  And this library does **not** resolve timestamps implicitly - an untagged
+  `2001-12-14` is a string - so `!!timestamp` is the only way in.
 - `!!set` validates that mapping values are null. `!!omap` and `!!pairs`
   validate that entries are single-pair mappings, and `!!omap` enforces
   unique keys. Distinct `GTEXT_YAML_Node_Type` values exist for all three.
@@ -179,7 +195,7 @@ semantically equal to the input, not textually equal.
 | Anchors and aliases | yes, cycle-detected | `GTEXT_YAML_E_LIMIT` past `max_alias_expansion` |
 | Merge keys | yes, default on | |
 | `!!binary` | decoded | via a separate accessor |
-| `!!timestamp` | validated | not parsed into a time type |
+| `!!timestamp` | parsed, by `chron` | `GCHRON_YamlValue`; normalized on output; explicit tag only |
 | `!!set` / `!!omap` / `!!pairs` | validated, own node types | convert to JSON structurally |
 | UTF-16 / UTF-32 input | yes, transcoded | |
 | Duplicate keys | `ERROR` default | `GTEXT_YAML_E_DUPKEY` |

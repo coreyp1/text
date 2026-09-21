@@ -209,208 +209,80 @@ static bool node_is_null(const GTEXT_YAML_Node *node) {
 	return false;
 }
 
-static bool parse_fixed_digits(const char *s, size_t len, size_t count, int *out) {
-	if (!s || len < count || !out) return false;
-	int value = 0;
-	for (size_t i = 0; i < count; i++) {
-		if (s[i] < '0' || s[i] > '9') return false;
-		value = value * 10 + (s[i] - '0');
-	}
-	*out = value;
-	return true;
-}
-
-static int days_in_month(int year, int month) {
-	static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-	int is_leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
-	if (month == 2) return days[1] + (is_leap ? 1 : 0);
-	return days[month - 1];
-}
-
+/**
+ * Read a YAML 1.1 `!!timestamp`.
+ *
+ * The grammar is chron's, which is the type repository's regular expression -
+ * and not, as the hundred lines this replaced were, an approximation of it.
+ * That parser refused four spellings YAML permits (a one-digit hour, a
+ * one-digit offset hour, more than one space before the time, and whitespace
+ * before the zone) and accepted one it does not (a time with no seconds); it
+ * had never been compared against another implementation, so nothing said so.
+ *
+ * @param value The scalar text.
+ * @param len Its length.
+ * @param out Receives the timestamp; untouched on failure.
+ * @return Whether the text is a YAML 1.1 timestamp.
+ */
 static bool parse_timestamp(
 	const char *value,
 	size_t len,
 	yaml_node_scalar *out
 ) {
-	if (!value || len < 10 || !out) return false;
-	int year = 0;
-	int month = 0;
-	int day = 0;
-	if (!parse_fixed_digits(value, len, 4, &year)) return false;
-	if (value[4] != '-') return false;
-	if (!parse_fixed_digits(value + 5, len - 5, 2, &month)) return false;
-	if (value[7] != '-') return false;
-	if (!parse_fixed_digits(value + 8, len - 8, 2, &day)) return false;
-	if (month < 1 || month > 12) return false;
-	if (day < 1 || day > days_in_month(year, month)) return false;
-
-	bool has_time = false;
-	bool tz_specified = false;
-	bool tz_utc = false;
-	int tz_offset = 0;
-	int hour = 0;
-	int minute = 0;
-	int second = 0;
-	int nsec = 0;
-
-	if (len > 10) {
-		size_t idx = 10;
-		char sep = value[idx];
-		if (sep != 'T' && sep != 't' && sep != ' ') return false;
-		idx++;
-		has_time = true;
-
-		if (!parse_fixed_digits(value + idx, len - idx, 2, &hour)) return false;
-		idx += 2;
-		if (idx >= len || value[idx] != ':') return false;
-		idx++;
-		if (!parse_fixed_digits(value + idx, len - idx, 2, &minute)) return false;
-		idx += 2;
-		if (idx < len && value[idx] == ':') {
-			idx++;
-			if (!parse_fixed_digits(value + idx, len - idx, 2, &second)) return false;
-			idx += 2;
-		}
-		if (hour > 23 || minute > 59 || second > 60) return false;
-
-		if (idx < len && value[idx] == '.') {
-			idx++;
-			if (idx >= len) return false;
-			int digits = 0;
-			int frac = 0;
-			while (idx < len && value[idx] >= '0' && value[idx] <= '9') {
-				if (digits >= 9) return false;
-				frac = frac * 10 + (value[idx] - '0');
-				digits++;
-				idx++;
-			}
-			while (digits < 9) {
-				frac *= 10;
-				digits++;
-			}
-			nsec = frac;
-		}
-
-		if (idx < len) {
-			if (value[idx] == 'Z' || value[idx] == 'z') {
-				tz_specified = true;
-				tz_utc = true;
-				tz_offset = 0;
-				idx++;
-			} else if (value[idx] == '+' || value[idx] == '-') {
-				int sign = value[idx] == '-' ? -1 : 1;
-				idx++;
-				int tz_hour = 0;
-				int tz_minute = 0;
-				if (!parse_fixed_digits(value + idx, len - idx, 2, &tz_hour)) return false;
-				idx += 2;
-				if (idx < len && value[idx] == ':') {
-					idx++;
-				}
-				if (idx + 2 <= len && value[idx] >= '0' && value[idx] <= '9') {
-					if (!parse_fixed_digits(value + idx, len - idx, 2, &tz_minute)) return false;
-					idx += 2;
-				}
-				if (tz_hour > 23 || tz_minute > 59) return false;
-				tz_specified = true;
-				tz_offset = sign * (tz_hour * 60 + tz_minute);
-			}
-			if (idx != len) return false;
-		}
+	if (!value || !out) return false;
+	GCHRON_YamlValue parsed;
+	GCHRON_ParseInfo info;
+	/* NULL options are gchron_parse_options_yaml(): truncate a long fraction
+	   and accept `:60`, which is what the grammar permits and YAML declines
+	   to rule on either way. */
+	if (gchron_parse_yaml_timestamp(value, len, NULL, &parsed, &info, NULL)
+			!= GCHRON_OK) {
+		return false;
 	}
-
 	out->has_timestamp = true;
-	out->timestamp_has_time = has_time;
-	out->timestamp_tz_specified = tz_specified;
-	out->timestamp_tz_utc = tz_utc;
-	out->timestamp_year = year;
-	out->timestamp_month = month;
-	out->timestamp_day = day;
-	out->timestamp_hour = hour;
-	out->timestamp_minute = minute;
-	out->timestamp_second = second;
-	out->timestamp_nsec = nsec;
-	out->timestamp_tz_offset = tz_offset;
+	out->timestamp = parsed;
+	out->timestamp_leap_second = info.leap_second;
 	return true;
 }
 
+/**
+ * Write a `!!timestamp` back out in its canonical spelling.
+ *
+ * chron writes the two-digit, `T`-separated form with the shortest fraction
+ * that loses nothing, which is the spelling the type repository's own
+ * canonical example uses and the one every YAML 1.1 reader accepts. The
+ * relaxed input spellings deliberately do not survive.
+ *
+ * @param doc The document, for its arena.
+ * @param scalar The scalar carrying the timestamp.
+ * @return The normalised text, or NULL when the arena is exhausted.
+ */
 static const char *format_timestamp(
 	GTEXT_YAML_Document *doc,
 	const yaml_node_scalar *scalar
 ) {
 	if (!doc || !scalar || !scalar->has_timestamp) return NULL;
-	char buf[64];
-	int offset_abs = scalar->timestamp_tz_offset < 0
-		? -scalar->timestamp_tz_offset
-		: scalar->timestamp_tz_offset;
-	int offset_hour = offset_abs / 60;
-	int offset_min = offset_abs % 60;
-
-	int len = 0;
-	if (!scalar->timestamp_has_time) {
-		len = snprintf(
-			buf,
-			sizeof(buf),
-			"%04d-%02d-%02d",
-			scalar->timestamp_year,
-			scalar->timestamp_month,
-			scalar->timestamp_day
-		);
-	} else {
-		len = snprintf(
-			buf,
-			sizeof(buf),
-			"%04d-%02d-%02dT%02d:%02d:%02d",
-			scalar->timestamp_year,
-			scalar->timestamp_month,
-			scalar->timestamp_day,
-			scalar->timestamp_hour,
-			scalar->timestamp_minute,
-			scalar->timestamp_second
-		);
-		if (scalar->timestamp_nsec > 0) {
-			int frac = scalar->timestamp_nsec;
-			char frac_buf[10];
-			int digits = 9;
-			for (int i = 8; i >= 0; i--) {
-				frac_buf[i] = (char)('0' + (frac % 10));
-				frac /= 10;
-			}
-			while (digits > 0 && frac_buf[digits - 1] == '0') {
-				digits--;
-			}
-			if (digits > 0 && len + 1 + digits < (int)sizeof(buf)) {
-				buf[len++] = '.';
-				memcpy(buf + len, frac_buf, (size_t)digits);
-				len += digits;
-				buf[len] = '\0';
-			}
-		}
-		if (scalar->timestamp_tz_specified) {
-			if (scalar->timestamp_tz_utc) {
-				if (len + 1 < (int)sizeof(buf)) {
-					buf[len++] = 'Z';
-					buf[len] = '\0';
-				}
-			} else {
-				char sign = scalar->timestamp_tz_offset < 0 ? '-' : '+';
-				if (len + 6 < (int)sizeof(buf)) {
-					len += snprintf(
-						buf + len,
-						sizeof(buf) - (size_t)len,
-						"%c%02d:%02d",
-						sign,
-						offset_hour,
-						offset_min
-					);
-				}
-			}
-		}
+	if (scalar->timestamp_leap_second) {
+		/* The one reading whose canonical spelling would say something
+		   different from what the document said. chron holds a `:60` as `:59`
+		   of the same minute - there is nowhere else to put it - so writing
+		   the value back out would move a log line one second earlier and
+		   nothing in the document would record that it had happened.
+		   Normalisation here changes the spelling, never the value, so this
+		   scalar keeps the text it arrived with. The parsed value still says
+		   `:59`, and gtext_yaml_node_timestamp_is_leap_second() is what
+		   reconciles the two. */
+		return scalar->value;
 	}
-	if (len <= 0) return NULL;
-	char *out = (char *)yaml_context_alloc(doc->ctx, (size_t)len + 1, 1);
+	char buf[GCHRON_YAML_TIMESTAMP_MAX];
+	size_t len = 0;
+	if (gchron_write_yaml_timestamp(&scalar->timestamp, NULL, buf, sizeof(buf),
+			&len) != GCHRON_OK) {
+		return NULL;
+	}
+	char *out = (char *)yaml_context_alloc(doc->ctx, len + 1, 1);
 	if (!out) return NULL;
-	memcpy(out, buf, (size_t)len);
+	memcpy(out, buf, len);
 	out[len] = '\0';
 	return out;
 }

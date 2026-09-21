@@ -37,14 +37,23 @@ int main(void) {
 
 ## Dependencies
 
-[ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
-vtable the suite shares, resolved through pkg-config. Nothing else beyond
-libc. Google Test is required only to build the test suite, and clang only to
-build the fuzzers.
+Two, both inside the suite and both resolved through pkg-config:
+
+- [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
+  vtable the suite shares.
+- [ghoti.io-chron](https://github.com/Ghoti-io/chron), for YAML's
+  `!!timestamp`. The type YAML 1.1 defines is a calendar date, a wall-clock
+  reading and an offset, and this library used to read it with a parser of its
+  own - one that refused four spellings YAML permits and accepted one it does
+  not, because it had never been held against another implementation. Time is
+  not a text format's business.
+
+Nothing else beyond libc. Google Test is required only to build the test
+suite, and clang only to build the fuzzers.
 
 ## Building
 
-If cutil is installed where pkg-config can find it:
+If both are installed where pkg-config can find them:
 
 ```bash
 make
@@ -53,7 +62,7 @@ sudo make install
 ```
 
 Otherwise build the suite into a local prefix from the parent folder, which
-installs cutil first, and point this build at the same prefix:
+installs cutil and chron first, and point this build at the same prefix:
 
 ```bash
 ./bootstrap.sh

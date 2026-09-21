@@ -17,6 +17,11 @@
 
 #include <ghoti.io/text/yaml/yaml_core.h>
 
+/* YAML's !!timestamp is a chron value.  A public include, so a consumer that
+   reads one gets the type and everything that operates on it; the pkg-config
+   entry's Requires: line carries the flags. */
+#include <ghoti.io/chron/chron.h>
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -231,19 +236,39 @@ GTEXT_API bool gtext_yaml_node_is_null(const GTEXT_YAML_Node * n);
 /**
  * @struct GTEXT_YAML_Timestamp
  * @brief Parsed timestamp fields for !!timestamp scalars.
+ *
+ * A flattened view of the `GCHRON_YamlValue` the node actually holds, kept
+ * because it is the simpler thing to read when all a caller wants is the
+ * fields. It says less: it cannot distinguish `Z` from `+00:00` except through
+ * @ref tz_utc, it carries the offset in whole minutes, and it has no way to
+ * say that `-00:00` meant the offset was *unknown*.
+ *
+ * `gtext_yaml_node_timestamp_value()` hands back the value itself, and is what
+ * to use for anything beyond reading the numbers - converting to an instant,
+ * resolving through a zone, comparing two timestamps, or writing one back out.
  */
 typedef struct {
-	bool has_time;
-	bool tz_specified;
-	bool tz_utc;
+	bool has_time;      ///< A time was present, not just a date.
+	bool tz_specified;  ///< An offset was present.
+	bool tz_utc;        ///< The offset was written `Z`.
 	int year;
 	int month;
 	int day;
 	int hour;
 	int minute;
 	int second;
-	int nsec;
-	int tz_offset;
+	int nsec;           ///< Fractional seconds, in nanoseconds.
+	int tz_offset;      ///< Minutes ahead of UTC.
+	/**
+	 * The document wrote `:60`.
+	 *
+	 * @ref second then reads 59, of the same minute and with the same
+	 * fraction - where the Linux kernel puts the repeated second, and the
+	 * only place a value with sixty seconds can go. This flag is what says it
+	 * did not have to, and without it the fields would quietly disagree with
+	 * the scalar they came from.
+	 */
+	bool leap_second;
 } GTEXT_YAML_Timestamp;
 
 /**
@@ -258,6 +283,45 @@ typedef struct {
 GTEXT_API bool gtext_yaml_node_as_timestamp(
 	const GTEXT_YAML_Node * n,
 	GTEXT_YAML_Timestamp * out
+);
+
+/**
+ * @brief Return a `!!timestamp` scalar as the chron value it was read as.
+ *
+ * The lossless accessor. `GCHRON_YamlValue::kind` says which of YAML's three
+ * shapes the document wrote - a date, a date-time with no zone, or one with an
+ * offset - and the distinction matters: **a timestamp with no zone is not
+ * UTC**, and treating it as UTC asserts something the document did not say.
+ *
+ * Everything chron can do with a timestamp takes this type: converting to an
+ * instant, resolving a zoneless reading through a named zone (where the
+ * conversion can report that the reading names no instant, or two), comparing,
+ * and writing it back out.
+ *
+ * @param n Scalar node to query
+ * @param out Receives the value; untouched on failure
+ * @return true on success; false if @p n is NULL, is not a timestamp scalar,
+ *   or @p out is NULL
+ */
+GTEXT_API bool gtext_yaml_node_timestamp_value(
+	const GTEXT_YAML_Node * n,
+	GCHRON_YamlValue * out
+);
+
+/**
+ * @brief Whether a `!!timestamp` scalar was written with a `:60` second.
+ *
+ * The companion to gtext_yaml_node_timestamp_value(), which hands back a value
+ * holding `:59` because that is the only place a sixtieth second fits. A
+ * scalar this returns true for is **left exactly as the document wrote it**
+ * when the document is re-emitted: normalising it would move the reading a
+ * second earlier, and nothing in the output would record that it had happened.
+ *
+ * @param n Scalar node to query
+ * @return true when the node is a timestamp scalar whose text said `:60`
+ */
+GTEXT_API bool gtext_yaml_node_timestamp_is_leap_second(
+	const GTEXT_YAML_Node * n
 );
 
 /**

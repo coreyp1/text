@@ -69,17 +69,11 @@ GTEXT_YAML_Node *yaml_node_new_scalar(
 	node->as.scalar.int_value = 0;
 	node->as.scalar.float_value = 0.0;
 	node->as.scalar.has_timestamp = false;
-	node->as.scalar.timestamp_has_time = false;
-	node->as.scalar.timestamp_tz_specified = false;
-	node->as.scalar.timestamp_tz_utc = false;
-	node->as.scalar.timestamp_year = 0;
-	node->as.scalar.timestamp_month = 0;
-	node->as.scalar.timestamp_day = 0;
-	node->as.scalar.timestamp_hour = 0;
-	node->as.scalar.timestamp_minute = 0;
-	node->as.scalar.timestamp_second = 0;
-	node->as.scalar.timestamp_nsec = 0;
-	node->as.scalar.timestamp_tz_offset = 0;
+	/* Zeroed wholesale rather than field by field: GCHRON_YAML_NONE is zero,
+	   so a cleared value is recognisably unset, and a field chron adds later
+	   is cleared here without this file having to learn about it. */
+	memset(&node->as.scalar.timestamp, 0, sizeof(node->as.scalar.timestamp));
+	node->as.scalar.timestamp_leap_second = false;
 	node->as.scalar.has_binary = false;
 	node->as.scalar.binary_data = NULL;
 	node->as.scalar.binary_len = 0;
@@ -324,18 +318,46 @@ GTEXT_API bool gtext_yaml_node_as_timestamp(
 	if (n->type != GTEXT_YAML_STRING) return false;
 	if (!n->as.scalar.has_timestamp) return false;
 
-	out->has_time = n->as.scalar.timestamp_has_time;
-	out->tz_specified = n->as.scalar.timestamp_tz_specified;
-	out->tz_utc = n->as.scalar.timestamp_tz_utc;
-	out->year = n->as.scalar.timestamp_year;
-	out->month = n->as.scalar.timestamp_month;
-	out->day = n->as.scalar.timestamp_day;
-	out->hour = n->as.scalar.timestamp_hour;
-	out->minute = n->as.scalar.timestamp_minute;
-	out->second = n->as.scalar.timestamp_second;
-	out->nsec = n->as.scalar.timestamp_nsec;
-	out->tz_offset = n->as.scalar.timestamp_tz_offset;
+	const GCHRON_YamlValue *ts = &n->as.scalar.timestamp;
+	out->has_time = (ts->kind != GCHRON_YAML_DATE);
+	out->tz_specified = (ts->kind == GCHRON_YAML_OFFSET_DATE_TIME);
+	out->tz_utc = ts->offset_is_z;
+	out->year = ts->civil.date.year;
+	out->month = ts->civil.date.month;
+	out->day = ts->civil.date.day;
+	out->hour = ts->civil.time.hour;
+	out->minute = ts->civil.time.minute;
+	out->second = ts->civil.time.second;
+	out->nsec = ts->civil.time.nsec;
+	/* Minutes, as this struct has always reported them.  chron holds seconds,
+	   because Europe/Amsterdam ran on +00:19:32 until 1937 - a sub-minute
+	   offset this field cannot express.  No YAML timestamp can write one,
+	   since the grammar's offset is whole minutes, so the conversion is exact
+	   for every value that can reach it; gtext_yaml_node_timestamp_value()
+	   is the accessor that does not have to make the claim at all. */
+	out->tz_offset = ts->offset_sec / 60;
+	out->leap_second = n->as.scalar.timestamp_leap_second;
 	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_timestamp_value(
+	const GTEXT_YAML_Node *n,
+	GCHRON_YamlValue *out
+) {
+	if (!n || !out) return false;
+	if (n->type != GTEXT_YAML_STRING) return false;
+	if (!n->as.scalar.has_timestamp) return false;
+	*out = n->as.scalar.timestamp;
+	return true;
+}
+
+GTEXT_API bool gtext_yaml_node_timestamp_is_leap_second(
+	const GTEXT_YAML_Node *n
+) {
+	if (!n) return false;
+	if (n->type != GTEXT_YAML_STRING) return false;
+	if (!n->as.scalar.has_timestamp) return false;
+	return n->as.scalar.timestamp_leap_second;
 }
 
 GTEXT_API bool gtext_yaml_node_as_binary(
@@ -1129,17 +1151,12 @@ static GTEXT_YAML_Node *clone_node(
 			clone->as.scalar.int_value = node->as.scalar.int_value;
 			clone->as.scalar.float_value = node->as.scalar.float_value;
 			clone->as.scalar.has_timestamp = node->as.scalar.has_timestamp;
-			clone->as.scalar.timestamp_has_time = node->as.scalar.timestamp_has_time;
-			clone->as.scalar.timestamp_tz_specified = node->as.scalar.timestamp_tz_specified;
-			clone->as.scalar.timestamp_tz_utc = node->as.scalar.timestamp_tz_utc;
-			clone->as.scalar.timestamp_year = node->as.scalar.timestamp_year;
-			clone->as.scalar.timestamp_month = node->as.scalar.timestamp_month;
-			clone->as.scalar.timestamp_day = node->as.scalar.timestamp_day;
-			clone->as.scalar.timestamp_hour = node->as.scalar.timestamp_hour;
-			clone->as.scalar.timestamp_minute = node->as.scalar.timestamp_minute;
-			clone->as.scalar.timestamp_second = node->as.scalar.timestamp_second;
-			clone->as.scalar.timestamp_nsec = node->as.scalar.timestamp_nsec;
-			clone->as.scalar.timestamp_tz_offset = node->as.scalar.timestamp_tz_offset;
+			/* One assignment, where this was twelve. A clone that copied the
+			   fields one at a time is a clone that silently drops whichever
+			   one is added next. */
+			clone->as.scalar.timestamp = node->as.scalar.timestamp;
+			clone->as.scalar.timestamp_leap_second =
+				node->as.scalar.timestamp_leap_second;
 			clone->as.scalar.has_binary = node->as.scalar.has_binary;
 			clone->as.scalar.binary_len = node->as.scalar.binary_len;
 			clone->as.scalar.binary_data = NULL;
