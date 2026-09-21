@@ -1091,6 +1091,34 @@ typedef struct json_schema_node {
   struct json_schema_node * property_names;
 
   /**
+   * Which schema resource this node's schema object belongs to, as one plus
+   * its index in the schema's resource table, or 0 for none.
+   *
+   * One plus, because a node is allocated with calloc and index 0 is a real
+   * resource - the document itself. Only `$dynamicRef` reads this, and only
+   * to know when validation has crossed from one resource into another.
+   */
+  size_t resource_slot;
+
+  /**
+   * The plain-name fragment of a `$dynamicRef`, or NULL. Owned.
+   *
+   * Set only when the reference is the kind that behaves dynamically: a
+   * plain name whose statically-resolved target carries a `$dynamicAnchor`
+   * of that name. Every other `$dynamicRef` is a `$ref` with a longer
+   * spelling, and compiles to ref_target alone.
+   */
+  char * dynamic_ref_name;
+  size_t dynamic_ref_name_len;
+
+  /**
+   * The schema this node belongs to, for the one keyword that has to look
+   * something up at validation time. Borrowed, and never null on a node that
+   * carries a dynamic_ref_name.
+   */
+  const struct GTEXT_JSON_Schema * owner;
+
+  /**
    * `unevaluatedItems` and `unevaluatedProperties`.
    *
    * These are the only keywords that need to know what the *rest* of this
@@ -1166,6 +1194,25 @@ typedef struct {
 } json_schema_ref_entry;
 
 /**
+ * @brief One `$dynamicAnchor`, and the resource it was declared in
+ */
+typedef struct {
+  size_t resource_slot;    ///< One plus the resource's index
+  char * name;             ///< The anchor name, owned
+  json_schema_node * node; ///< The schema it names; owned elsewhere
+  /**
+   * The schema object it was found on, borrowed.
+   *
+   * Entries are created by the pre-pass, which runs over the whole document,
+   * and only then compiled - because a `$dynamicAnchor` inside a `$defs`
+   * nothing refers to still has to be findable. Compiling only what a `$ref`
+   * reaches left exactly those out, and they are the ones the recursive
+   * patterns depend on.
+   */
+  const GTEXT_JSON_Value * value;
+} json_schema_dynamic_anchor;
+
+/**
  * @brief One schema resource or named anchor
  *
  * A resource is what an `$id` creates: a document with its own base URI, from
@@ -1215,6 +1262,18 @@ struct GTEXT_JSON_Schema {
    * root carried an `$id`, which is the usual case.
    */
   char * base_uri;
+
+  /**
+   * Every `$dynamicAnchor`, with the resource each was declared in.
+   *
+   * A `$dynamicRef` is resolved against the chain of resources validation
+   * has passed through rather than against the document, so this is looked
+   * up at validation time and not at compile time - which is the whole
+   * difference between it and `$ref`.
+   */
+  json_schema_dynamic_anchor * dynamic_anchors;
+  size_t dynamic_anchors_count;
+  size_t dynamic_anchors_capacity;
 
   /**
    * The caller's regular-expression provider, copied at compile time, and

@@ -9189,7 +9189,6 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 	const Case cases[] = {
 	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
 	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
-	    {"$dynamicRef", "{\"$dynamicRef\":\"#meta\"}"},
 	    {"$recursiveRef", "{\"$recursiveRef\":\"#\"}"},
 	};
 
@@ -10271,6 +10270,58 @@ TEST(JsonSchemaUnevaluated, NestedSchemasSeeOnlyTheirOwn) {
 	    "{\"properties\":{\"foo\":{}},"
 	    "\"allOf\":[{\"unevaluatedProperties\":false}]}",
 	    "{\"foo\":1}"));
+}
+
+TEST(JsonSchemaDynamicRef, ResolvesAgainstTheOutermostScope) {
+	// The recursive-extension pattern the keyword exists for. `strict` is a
+	// `tree` that also refuses properties nothing named; the reference inside
+	// `tree` has to come back to `strict` at every level of the recursion, or
+	// the strictness applies only to the root.
+	StubResolver remote;
+	remote.add("http://x/tree.json",
+	    "{\"$id\":\"http://x/tree.json\",\"$dynamicAnchor\":\"node\","
+	    "\"type\":\"object\",\"properties\":{\"data\":true,\"children\":"
+	    "{\"type\":\"array\",\"items\":{\"$dynamicRef\":\"#node\"}}}}");
+	const char * strict =
+	    "{\"$id\":\"http://x/strict.json\",\"$dynamicAnchor\":\"node\","
+	    "\"$ref\":\"tree.json\",\"unevaluatedProperties\":false}";
+
+	EXPECT_TRUE(ref_accepts(strict,
+	    "{\"children\":[{\"data\":1}]}", nullptr, &remote));
+	// The misspelling is one level down, which is the whole point: a plain
+	// $ref would have applied `tree` there and accepted it.
+	EXPECT_FALSE(ref_accepts(strict,
+	    "{\"children\":[{\"daat\":1}]}", nullptr, &remote));
+	// And at the root, where even a static reference would have caught it.
+	EXPECT_FALSE(ref_accepts(strict, "{\"daat\":1}", nullptr, &remote));
+}
+
+TEST(JsonSchemaDynamicRef, TheAnchorNeedsNoReferenceToBeFound) {
+	// The anchor lives in a `$defs` nothing refers to. Compiling only what a
+	// `$ref` reaches left it out, and the reference then resolved to the
+	// inner anchor instead - a wrong answer with nothing to show for it.
+	const char * schema =
+	    "{\"$id\":\"http://x/root\",\"$ref\":\"list\","
+	    "\"$defs\":{"
+	    "\"foo\":{\"$dynamicAnchor\":\"items\",\"type\":\"string\"},"
+	    "\"list\":{\"$id\":\"list\",\"type\":\"array\","
+	    "\"items\":{\"$dynamicRef\":\"#items\"},"
+	    "\"$defs\":{\"items\":{\"$dynamicAnchor\":\"items\"}}}}}";
+	EXPECT_TRUE(ref_accepts(schema, "[\"a\",\"b\"]"));
+	EXPECT_FALSE(ref_accepts(schema, "[\"a\",1]"));
+}
+
+TEST(JsonSchemaDynamicRef, WithoutBookendingItIsAnOrdinaryReference) {
+	// A `$dynamicRef` whose target declares no `$dynamicAnchor` of that name
+	// behaves as `$ref` does, and so does one whose fragment is a pointer.
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"$anchor\":\"plain\",\"type\":\"integer\"}},"
+	    "\"$dynamicRef\":\"#plain\"}",
+	    "\"s\""));
+	EXPECT_FALSE(ref_accepts(
+	    "{\"$defs\":{\"n\":{\"type\":\"integer\"}},"
+	    "\"$dynamicRef\":\"#/$defs/n\"}",
+	    "\"s\""));
 }
 
 TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {

@@ -76,6 +76,12 @@
  * - dependentSchemas, and draft-07's "dependencies" in either of its forms
  * - Boolean schemas: "true" accepts everything and "false" nothing, anywhere
  *   a schema is allowed, the root included
+ * - $dynamicRef and $dynamicAnchor: a reference whose target is the outermost
+ *   schema resource on the validation path that declares an anchor of that
+ *   name, which is what lets a schema extend another and have the other's
+ *   internal references come back to the extension. A $dynamicRef whose
+ *   fragment is not a plain name, or whose target declares no $dynamicAnchor
+ *   of that name, is an ordinary $ref
  * - unevaluatedItems and unevaluatedProperties, which apply to whatever the
  *   rest of the same schema object did not reach. What counts as reached is
  *   carried across the in-place applicators - allOf, anyOf, oneOf,
@@ -91,8 +97,8 @@
  *
  * Unsupported standard keywords (rejected at compile time):
  * - pattern, patternProperties, when no provider was supplied
- * - $recursiveRef, $dynamicRef - the 2019-09 and 2020-12 dynamic-scope
- *   references
+ * - $recursiveRef and $recursiveAnchor - 2019-09's dynamic-scope references,
+ *   which 2020-12 replaced
  * - idn-hostname as a `format`, when format assertion is asked for: it needs
  *   IDNA tables this library does not carry
  *

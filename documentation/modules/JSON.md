@@ -347,11 +347,8 @@ This list had gone stale: most of what it called planned has been
 implemented, and a list of gaps that names things which are not gaps is worse
 than no list, because it is read as current. What remains unimplemented is:
 
-- **Dynamic references**: `$recursiveRef`, `$recursiveAnchor` and
-  `$dynamicRef`. `$dynamicAnchor` is registered as an ordinary anchor, so a
-  `$ref` to one inside the same resource resolves; what is missing is the
-  dynamic scope that makes the reference mean something different depending
-  on where validation came from
+- **2019-09's dynamic references**: `$recursiveRef` and `$recursiveAnchor`,
+  which 2020-12 replaced. `$dynamicRef` and `$dynamicAnchor` are implemented
 - **Vocabularies**: `$vocabulary` is ignored, along with `$schema`, since only
   one dialect is implemented
 - **The published metaschemas**: a `$ref` to

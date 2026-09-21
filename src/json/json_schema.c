@@ -40,6 +40,7 @@ static void json_schema_node_free(json_schema_node * node) {
     free(node->required_keys);
   }
 
+  free(node->dynamic_ref_name);
   json_schema_node_free(node->unevaluated_items);
   json_schema_node_free(node->unevaluated_properties);
 
@@ -225,7 +226,7 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
  * prevent.  A schema using one is refused at compile time instead.
  */
 static const char * const json_schema_unsupported_keywords[] = {
-    "$recursiveRef", "$dynamicRef", NULL};
+    "$recursiveRef", NULL};
 
 /*
  * `format`, `contentEncoding`, `contentMediaType` and `contentSchema` were in
@@ -493,6 +494,14 @@ static const char * const json_schema_subschema_map_keywords[] = {
     "properties", "patternProperties", "$defs", "definitions",
     "dependentSchemas", NULL};
 
+static size_t json_schema_resource_slot(
+    const GTEXT_JSON_Schema * schema, const char * base);
+
+static GTEXT_JSON_Status json_schema_add_dynamic_anchor(
+    GTEXT_JSON_Schema * schema, size_t resource_slot, const char * name,
+    size_t name_len, json_schema_node * node, const GTEXT_JSON_Value * value,
+    GTEXT_JSON_Error * err);
+
 static GTEXT_JSON_Status json_schema_scan_resources(GTEXT_JSON_Schema * schema,
     const GTEXT_JSON_Value * value, const char * base, int depth,
     GTEXT_JSON_Error * err);
@@ -624,6 +633,17 @@ static GTEXT_JSON_Status json_schema_scan_resources(GTEXT_JSON_Schema * schema,
     }
     GTEXT_JSON_Status status =
         json_schema_add_resource(schema, uri, value, err, NULL);
+    if (status != GTEXT_JSON_OK) {
+      return status;
+    }
+    /* Also remembered as a dynamic anchor, with no compiled node yet. The
+     * schema it names is compiled afterwards whether or not a `$ref` reaches
+     * it: an anchor inside a `$defs` nothing refers to is exactly the case
+     * the recursive patterns rely on, and compiling only what is reachable
+     * left those out. */
+    status = json_schema_add_dynamic_anchor(schema,
+        json_schema_resource_slot(schema, scope), dynamic->as.string.data,
+        dynamic->as.string.len, NULL, value, err);
     if (status != GTEXT_JSON_OK) {
       return status;
     }
@@ -1001,6 +1021,87 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
   return status;
 }
 
+/* One plus the index of the resource `base` names, or 0 if it names none. */
+static size_t json_schema_resource_slot(
+    const GTEXT_JSON_Schema * schema, const char * base) {
+  for (size_t i = 0; i < schema->resources_count; i++) {
+    if (strcmp(schema->resources[i].uri, base) == 0) {
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+static GTEXT_JSON_Status json_schema_add_dynamic_anchor(
+    GTEXT_JSON_Schema * schema, size_t resource_slot, const char * name,
+    size_t name_len, json_schema_node * node, const GTEXT_JSON_Value * value,
+    GTEXT_JSON_Error * err) {
+  /* The pre-pass makes the entry with no compiled node; compilation fills it
+   * in. Appending a second entry instead would leave the empty one in front
+   * of it, and the search below would keep finding that. */
+  for (size_t i = 0; i < schema->dynamic_anchors_count; i++) {
+    json_schema_dynamic_anchor * entry = &schema->dynamic_anchors[i];
+    if (entry->resource_slot == resource_slot && strlen(entry->name) == name_len
+        && memcmp(entry->name, name, name_len) == 0) {
+      if (node && !entry->node) {
+        entry->node = node;
+      }
+      if (value && !entry->value) {
+        entry->value = value;
+      }
+      return GTEXT_JSON_OK;
+    }
+  }
+  if (schema->dynamic_anchors_count == schema->dynamic_anchors_capacity) {
+    size_t cap = schema->dynamic_anchors_capacity
+        ? schema->dynamic_anchors_capacity * 2
+        : 4;
+    json_schema_dynamic_anchor * grown =
+        (json_schema_dynamic_anchor *)realloc(schema->dynamic_anchors,
+            cap * sizeof(json_schema_dynamic_anchor));
+    if (!grown) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+            .message = "Out of memory recording a $dynamicAnchor"};
+      }
+      return GTEXT_JSON_E_OOM;
+    }
+    schema->dynamic_anchors = grown;
+    schema->dynamic_anchors_capacity = cap;
+  }
+  char * copy = (char *)malloc(name_len + 1);
+  if (!copy) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory recording a $dynamicAnchor"};
+    }
+    return GTEXT_JSON_E_OOM;
+  }
+  memcpy(copy, name, name_len);
+  copy[name_len] = '\0';
+  schema->dynamic_anchors[schema->dynamic_anchors_count].resource_slot =
+      resource_slot;
+  schema->dynamic_anchors[schema->dynamic_anchors_count].name = copy;
+  schema->dynamic_anchors[schema->dynamic_anchors_count].node = node;
+  schema->dynamic_anchors[schema->dynamic_anchors_count].value = value;
+  schema->dynamic_anchors_count++;
+  return GTEXT_JSON_OK;
+}
+
+/* The schema a `$dynamicAnchor` of this name names inside this resource. */
+static json_schema_node * json_schema_find_dynamic_anchor(
+    const GTEXT_JSON_Schema * schema, size_t resource_slot, const char * name,
+    size_t name_len) {
+  for (size_t i = 0; i < schema->dynamic_anchors_count; i++) {
+    const json_schema_dynamic_anchor * entry = &schema->dynamic_anchors[i];
+    if (entry->resource_slot == resource_slot && strlen(entry->name) == name_len
+        && memcmp(entry->name, name, name_len) == 0) {
+      return entry->node;
+    }
+  }
+  return NULL;
+}
+
 static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
     const GTEXT_JSON_Value * schema_doc, json_schema_compile_ctx * cc,
     GTEXT_JSON_Error * err) {
@@ -1034,6 +1135,24 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
           .code = GTEXT_JSON_E_INVALID, .message = "Schema must be an object"};
     }
     return GTEXT_JSON_E_INVALID;
+  }
+
+  /* Which resource this schema object sits in, and any `$dynamicAnchor` it
+   * declares. Both are recorded before the keywords are walked, because a
+   * `$dynamicRef` in this same object has to be able to find an anchor this
+   * object declares. */
+  node->owner = cc->schema;
+  node->resource_slot = json_schema_resource_slot(cc->schema, cc->base_uri);
+  const GTEXT_JSON_Value * dynamic_anchor =
+      gtext_json_object_get(schema_doc, "$dynamicAnchor", 14);
+  if (dynamic_anchor && dynamic_anchor->type == GTEXT_JSON_STRING
+      && node->resource_slot != 0) {
+    GTEXT_JSON_Status status = json_schema_add_dynamic_anchor(cc->schema,
+        node->resource_slot, dynamic_anchor->as.string.data,
+        dynamic_anchor->as.string.len, node, schema_doc, err);
+    if (status != GTEXT_JSON_OK) {
+      return status;
+    }
   }
 
   size_t obj_size = gtext_json_object_size(schema_doc);
@@ -1527,6 +1646,81 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
       cc->depth--;
       if (status != GTEXT_JSON_OK) {
         return status;
+      }
+    }
+    else if (json_matches(key, key_len, "$dynamicRef")) {
+      /*
+       * Resolved statically first, exactly as a `$ref` is - which is also
+       * the answer for most of them. 2020-12 core section 8.2.3.2 makes the
+       * reference dynamic only when its fragment is a plain name *and* the
+       * schema it statically resolves to declares a `$dynamicAnchor` of that
+       * name. A `$dynamicRef` to a pointer fragment, or to a plain anchor
+       * that is not dynamic, is a `$ref` with a longer spelling.
+       */
+      const char * rs = NULL;
+      size_t rl = 0;
+      if (value->type != GTEXT_JSON_STRING
+          || gtext_json_get_string(value, &rs, &rl) != GTEXT_JSON_OK) {
+        if (err) {
+          *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+              .message = "$dynamicRef must be a string"};
+        }
+        return GTEXT_JSON_E_INVALID;
+      }
+      cc->depth++;
+      GTEXT_JSON_Status status =
+          json_schema_resolve_ref(&node->ref_target, rs, rl, cc, err);
+      cc->depth--;
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+      const char * hash = (const char *)memchr(rs, '#', rl);
+      if (hash) {
+        const char * name = hash + 1;
+        size_t name_len = rl - (size_t)(hash - rs) - 1;
+        /*
+         * The bookending requirement, asked of the target *schema* rather
+         * than of the compiled node: does what this statically resolves to
+         * declare a `$dynamicAnchor` of this name?
+         *
+         * Asked of the node it compiled to, it came out wrong. The registry
+         * of compiled targets is keyed by URI, so the same schema reached as
+         * ".../tree.json" and as ".../tree.json#node" compiles to two nodes,
+         * and comparing pointers said the anchor did not match when it
+         * plainly did. Every strict-tree-shaped schema then quietly became an
+         * ordinary `$ref`.
+         */
+        int bookended = 0;
+        if (name_len > 0 && name[0] != '/') {
+          char * resolved = json_uri_resolve(
+              cc->base_uri, strlen(cc->base_uri), rs, rl);
+          if (resolved) {
+            const GTEXT_JSON_Value * target =
+                json_schema_find_target(cc, resolved, NULL);
+            free(resolved);
+            if (target && target->type == GTEXT_JSON_OBJECT) {
+              const GTEXT_JSON_Value * declared =
+                  gtext_json_object_get(target, "$dynamicAnchor", 14);
+              bookended = declared && declared->type == GTEXT_JSON_STRING
+                  && declared->as.string.len == name_len
+                  && memcmp(declared->as.string.data, name, name_len) == 0;
+            }
+          }
+        }
+        if (bookended) {
+          free(node->dynamic_ref_name);
+          node->dynamic_ref_name = (char *)malloc(name_len + 1);
+          if (!node->dynamic_ref_name) {
+            if (err) {
+              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+                  .message = "Out of memory recording $dynamicRef"};
+            }
+            return GTEXT_JSON_E_OOM;
+          }
+          memcpy(node->dynamic_ref_name, name, name_len);
+          node->dynamic_ref_name[name_len] = '\0';
+          node->dynamic_ref_name_len = name_len;
+        }
       }
     }
     // --- positional array schemas -------------------------------------
@@ -2291,6 +2485,24 @@ static size_t json_schema_string_length(const char * bytes, size_t byte_len) {
 }
 
 /*
+ * The chain of schema resources validation has passed through.
+ *
+ * `$dynamicRef` is the one keyword whose target is not known until validation
+ * runs: it looks for the *outermost* resource in this chain that declares a
+ * `$dynamicAnchor` of the name it wants. That is what lets a schema extend
+ * another one and have the other one's internal references come back to the
+ * extension - the recursive-tree pattern the specification is built around.
+ *
+ * A link per frame on the C stack, so nothing is allocated and the chain
+ * unwinds itself. Innermost first, which is why the search below keeps the
+ * last match rather than the first.
+ */
+typedef struct json_schema_scope {
+  const struct json_schema_scope * parent;
+  size_t resource_slot;
+} json_schema_scope;
+
+/*
  * What a schema object has already reached, for the two keywords that ask.
  *
  * `unevaluatedItems` and `unevaluatedProperties` apply to whatever nothing
@@ -2355,11 +2567,13 @@ static void json_schema_eval_merge(
 
 static GTEXT_JSON_Status json_schema_validate_body(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err);
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * scope, GTEXT_JSON_Error * err);
 
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err);
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * scope, GTEXT_JSON_Error * err);
 
 /*
  * Kept so the existing call sites read the same.  Every recursive call goes
@@ -2369,7 +2583,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
 static GTEXT_JSON_Status json_schema_validate_node(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     GTEXT_JSON_Error * err) {
-  return json_schema_validate_depth(node, instance, 0, NULL, err);
+  return json_schema_validate_depth(node, instance, 0, NULL, NULL, err);
 }
 
 /*
@@ -2383,7 +2597,8 @@ static GTEXT_JSON_Status json_schema_validate_node(
  */
 static GTEXT_JSON_Status json_schema_apply_unevaluated(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * scope, GTEXT_JSON_Error * err) {
   if (node->unevaluated_items && instance->type == GTEXT_JSON_ARRAY) {
     size_t count = gtext_json_array_size(instance);
     for (size_t i = 0; i < count; i++) {
@@ -2395,8 +2610,8 @@ static GTEXT_JSON_Status json_schema_apply_unevaluated(
         continue;
       }
       GTEXT_JSON_Status status =
-          json_schema_validate_depth(node->unevaluated_items, item, depth + 1,
-              NULL, err);
+          json_schema_validate_depth(
+              node->unevaluated_items, item, depth + 1, NULL, scope, err);
       if (status != GTEXT_JSON_OK) {
         if (err && err->code == GTEXT_JSON_E_SCHEMA) {
           err->message = "An item is not allowed by unevaluatedItems";
@@ -2417,7 +2632,7 @@ static GTEXT_JSON_Status json_schema_apply_unevaluated(
         continue;
       }
       GTEXT_JSON_Status status = json_schema_validate_depth(
-          node->unevaluated_properties, value, depth + 1, NULL, err);
+          node->unevaluated_properties, value, depth + 1, NULL, scope, err);
       if (status != GTEXT_JSON_OK) {
         if (err && err->code == GTEXT_JSON_E_SCHEMA) {
           err->message = "A property is not allowed by unevaluatedProperties";
@@ -2441,10 +2656,26 @@ static GTEXT_JSON_Status json_schema_apply_unevaluated(
  */
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * outer, GTEXT_JSON_Error * err) {
+  /*
+   * Entering a schema resource extends the dynamic scope. Pushed only when
+   * the resource actually changes, so the chain is the sequence of distinct
+   * resources on the path rather than one link per subschema - which is what
+   * `$dynamicRef` is defined over.
+   */
+  json_schema_scope pushed;
+  const json_schema_scope * scope = outer;
+  if (node && node->resource_slot != 0
+      && (!outer || outer->resource_slot != node->resource_slot)) {
+    pushed.parent = outer;
+    pushed.resource_slot = node->resource_slot;
+    scope = &pushed;
+  }
+
   if (!node || !instance
       || (!node->unevaluated_items && !node->unevaluated_properties)) {
-    return json_schema_validate_body(node, instance, depth, eval, err);
+    return json_schema_validate_body(node, instance, depth, eval, scope, err);
   }
 
   json_schema_eval local;
@@ -2456,9 +2687,9 @@ static GTEXT_JSON_Status json_schema_validate_depth(
     return GTEXT_JSON_E_OOM;
   }
   GTEXT_JSON_Status status =
-      json_schema_validate_body(node, instance, depth, &local, err);
+      json_schema_validate_body(node, instance, depth, &local, scope, err);
   if (status == GTEXT_JSON_OK) {
-    status = json_schema_apply_unevaluated(node, instance, depth, &local, err);
+    status = json_schema_apply_unevaluated(node, instance, depth, &local, scope, err);
   }
   if (status == GTEXT_JSON_OK) {
     json_schema_eval_merge(eval, &local);
@@ -2475,9 +2706,10 @@ static GTEXT_JSON_Status json_schema_validate_depth(
  */
 static GTEXT_JSON_Status json_schema_validate_inplace(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * scope, GTEXT_JSON_Error * err) {
   if (!eval || !eval->marks) {
-    return json_schema_validate_depth(node, instance, depth, NULL, err);
+    return json_schema_validate_depth(node, instance, depth, NULL, scope, err);
   }
   json_schema_eval sub;
   if (json_schema_eval_init(&sub, instance) != GTEXT_JSON_OK) {
@@ -2488,7 +2720,7 @@ static GTEXT_JSON_Status json_schema_validate_inplace(
     return GTEXT_JSON_E_OOM;
   }
   GTEXT_JSON_Status status =
-      json_schema_validate_depth(node, instance, depth, &sub, err);
+      json_schema_validate_depth(node, instance, depth, &sub, scope, err);
   if (status == GTEXT_JSON_OK) {
     json_schema_eval_merge(eval, &sub);
   }
@@ -2498,7 +2730,8 @@ static GTEXT_JSON_Status json_schema_validate_inplace(
 
 static GTEXT_JSON_Status json_schema_validate_body(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+    int depth, json_schema_eval * eval,
+    const json_schema_scope * scope, GTEXT_JSON_Error * err) {
   if (depth >= JSON_SCHEMA_MAX_VALIDATE_DEPTH) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_DEPTH,
@@ -2527,12 +2760,42 @@ static GTEXT_JSON_Status json_schema_validate_body(
     return GTEXT_JSON_E_SCHEMA;
   }
 
+  /*
+   * `$dynamicRef` with a plain name: the target is whichever schema resource
+   * *outermost* on the path here declares a `$dynamicAnchor` of that name,
+   * and only if none does is the statically-resolved target used.
+   *
+   * This is what makes the recursive-extension pattern work. A strict schema
+   * that declares `$dynamicAnchor: "node"` and then `$ref`s a permissive one
+   * whose internals say `$dynamicRef: "#node"` gets its own definition back
+   * at every level of the recursion, rather than the permissive one's.
+   *
+   * The chain runs innermost first, so the last match found walking it is the
+   * outermost, which is the one wanted.
+   */
+  if (node->dynamic_ref_name) {
+    const json_schema_node * target = node->ref_target;
+    for (const json_schema_scope * s = scope; s; s = s->parent) {
+      json_schema_node * found = json_schema_find_dynamic_anchor(node->owner,
+          s->resource_slot, node->dynamic_ref_name, node->dynamic_ref_name_len);
+      if (found) {
+        target = found;
+      }
+    }
+    if (target) {
+      GTEXT_JSON_Status status = json_schema_validate_inplace(
+          target, instance, depth + 1, eval, scope, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+  }
   // $ref applies the referenced schema.  In 2020-12 a $ref sits alongside
   // other keywords and all of them apply, which is what happens here: the
   // reference is checked and then the rest of this node continues.
-  if (node->ref_target) {
+  else if (node->ref_target) {
     GTEXT_JSON_Status status = json_schema_validate_inplace(
-        node->ref_target, instance, depth + 1, eval, err);
+        node->ref_target, instance, depth + 1, eval, scope, err);
     if (status != GTEXT_JSON_OK) {
       return status;
     }
@@ -2550,7 +2813,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
       if (json_schema_validate_inplace(
-              node->all_of[i], instance, depth + 1, eval, &sub)
+              node->all_of[i], instance, depth + 1, eval, scope, &sub)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&sub);
         if (err) {
@@ -2569,7 +2832,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
       if (json_schema_validate_inplace(
-              node->any_of[i], instance, depth + 1, eval, &sub)
+              node->any_of[i], instance, depth + 1, eval, scope, &sub)
           == GTEXT_JSON_OK) {
         matched = 1;
       }
@@ -2597,7 +2860,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
       if (json_schema_validate_inplace(
-              node->one_of[i], instance, depth + 1, eval, &sub)
+              node->one_of[i], instance, depth + 1, eval, scope, &sub)
           == GTEXT_JSON_OK) {
         matches++;
       }
@@ -2623,7 +2886,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
     /* `not` contributes no annotations: it succeeds exactly when its
      * subschema failed, and a subschema that failed evaluated nothing. */
     GTEXT_JSON_Status inner = json_schema_validate_depth(
-        node->not_schema, instance, depth + 1, NULL, &sub);
+        node->not_schema, instance, depth + 1, NULL, scope, &sub);
     gtext_json_error_free(&sub);
     if (inner == GTEXT_JSON_OK) {
       if (err) {
@@ -2643,7 +2906,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
      * which is the same rule as everywhere else and is why this cannot just
      * pass `eval` in and ignore the result. */
     int cond = json_schema_validate_inplace(
-                   node->if_schema, instance, depth + 1, eval, &sub)
+                   node->if_schema, instance, depth + 1, eval, scope, &sub)
         == GTEXT_JSON_OK;
     gtext_json_error_free(&sub);
     const json_schema_node * branch =
@@ -2651,7 +2914,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
     if (branch) {
       GTEXT_JSON_Error berr;
       memset(&berr, 0, sizeof(berr));
-      if (json_schema_validate_inplace(branch, instance, depth + 1, eval, &berr)
+      if (json_schema_validate_inplace(branch, instance, depth + 1, eval, scope, &berr)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&berr);
         if (err) {
@@ -2921,7 +3184,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
         continue;
       }
       GTEXT_JSON_Status status = json_schema_validate_depth(
-          node->prefix_items[i], item, depth + 1, NULL, err);
+          node->prefix_items[i], item, depth + 1, NULL, scope, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
@@ -2934,7 +3197,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
           continue;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->additional_items, item, depth + 1, NULL, err);
+            node->additional_items, item, depth + 1, NULL, scope, err);
         if (status != GTEXT_JSON_OK) {
           return status;
         }
@@ -2955,7 +3218,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
         GTEXT_JSON_Error sub;
         memset(&sub, 0, sizeof(sub));
         if (json_schema_validate_depth(
-                node->contains_schema, item, depth + 1, NULL, &sub)
+                node->contains_schema, item, depth + 1, NULL, scope, &sub)
             == GTEXT_JSON_OK) {
           matches++;
           /* `contains` evaluates the items it matched and no others, which
@@ -2991,7 +3254,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
         }
 
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->items_schema, item, depth + 1, NULL, err);
+            node->items_schema, item, depth + 1, NULL, scope, err);
         if (status != GTEXT_JSON_OK) {
           return status;
         }
@@ -3074,7 +3337,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
           return GTEXT_JSON_E_OOM;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->property_names, key_val, depth + 1, NULL, err);
+            node->property_names, key_val, depth + 1, NULL, scope, err);
         gtext_json_free(key_val);
         if (status != GTEXT_JSON_OK) {
           if (err && err->code == GTEXT_JSON_E_SCHEMA) {
@@ -3132,7 +3395,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
           }
           covered = 1;
           status = json_schema_validate_depth(
-              entry->schema, pv, depth + 1, NULL, err);
+              entry->schema, pv, depth + 1, NULL, scope, err);
           json_schema_eval_mark(eval, i);
           if (status != GTEXT_JSON_OK) {
             if (err && err->code == GTEXT_JSON_E_SCHEMA) {
@@ -3147,7 +3410,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
           continue;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->additional_properties, pv, depth + 1, NULL, err);
+            node->additional_properties, pv, depth + 1, NULL, scope, err);
         json_schema_eval_mark(eval, i);
         if (status != GTEXT_JSON_OK) {
           if (err && err->code == GTEXT_JSON_E_SCHEMA) {
@@ -3165,7 +3428,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
         continue;
       }
       GTEXT_JSON_Status status = json_schema_validate_inplace(
-          dep->schema, instance, depth + 1, eval, err);
+          dep->schema, instance, depth + 1, eval, scope, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
@@ -3194,7 +3457,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
               continue;
             }
             GTEXT_JSON_Status status = json_schema_validate_depth(
-                prop->schema, prop_val, depth + 1, NULL, err);
+                prop->schema, prop_val, depth + 1, NULL, scope, err);
             if (status != GTEXT_JSON_OK) {
               return status;
             }
@@ -3212,7 +3475,7 @@ static GTEXT_JSON_Status json_schema_validate_body(
           if (prop_val) {
             // Property exists, validate it
             GTEXT_JSON_Status status = json_schema_validate_depth(
-                prop->schema, prop_val, depth + 1, NULL, err);
+                prop->schema, prop_val, depth + 1, NULL, scope, err);
             if (status != GTEXT_JSON_OK) {
               return status;
             }
@@ -3413,6 +3676,49 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
     return NULL;
   }
 
+  /*
+   * Every `$dynamicAnchor` the pre-pass found, compiled whether or not a
+   * `$ref` reaches it.
+   *
+   * The whole point of one is that a reference finds it at validation time
+   * without naming it, so "is it referenced" is not a question that can be
+   * asked at compile time. The specification's own example puts the anchor
+   * in a `$defs` nothing refers to, and compiling only the reachable schemas
+   * left it out - which then resolved the reference to the wrong one and
+   * said nothing about having done so.
+   *
+   * The loop re-reads the count each time because compiling one can register
+   * another, and a new entry is one more to compile.
+   */
+  for (size_t i = 0; i < schema->dynamic_anchors_count; i++) {
+    json_schema_dynamic_anchor * entry = &schema->dynamic_anchors[i];
+    if (entry->node || !entry->value || entry->resource_slot == 0) {
+      continue;
+    }
+    size_t name_len = strlen(entry->name);
+    char * ref = (char *)malloc(name_len + 2);
+    if (!ref) {
+      gtext_json_schema_free(schema);
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+            .message = "Out of memory compiling a $dynamicAnchor"};
+      }
+      return NULL;
+    }
+    ref[0] = '#';
+    memcpy(ref + 1, entry->name, name_len + 1);
+    json_schema_node * target = NULL;
+    cc.base_uri = schema->resources[entry->resource_slot - 1].uri;
+    status = json_schema_resolve_ref(&target, ref, name_len + 1, &cc, err);
+    free(ref);
+    if (status != GTEXT_JSON_OK) {
+      gtext_json_schema_free(schema);
+      return NULL;
+    }
+    /* `entry` may have been moved by a realloc inside the compile. */
+    schema->dynamic_anchors[i].node = target;
+  }
+
   return schema;
 }
 
@@ -3438,6 +3744,12 @@ GTEXT_API void gtext_json_schema_free(GTEXT_JSON_Schema * schema) {
       free(schema->resources[i].uri);
     }
     free(schema->resources);
+  }
+  if (schema->dynamic_anchors) {
+    for (size_t i = 0; i < schema->dynamic_anchors_count; i++) {
+      free(schema->dynamic_anchors[i].name);
+    }
+    free(schema->dynamic_anchors);
   }
   free(schema->base_uri);
 
