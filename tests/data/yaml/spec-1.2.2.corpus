@@ -709,3 +709,61 @@ b: *!x
 !| 1
 @error block scalar header
 @end
+
+# ---------------------------------------------------------------------------
+# 10.3.2  White space is in none of the rows
+#
+# The integer row is "[-+]? [0-9]+" and the two prefixed forms are "0o [0-7]+"
+# and "0x [0-9a-fA-F]+". There is no white space in any of them, nor in the
+# float, boolean or null rows - they are enumerations of whole words.
+#
+# strtoll() skips leading white space, and the resolver consumes the sign and
+# any base prefix itself before handing strtoll what follows. So the space in
+# the middle was never measured by anything: a plain scalar of "+" and "1" on
+# two lines folds to "+\n1", and that came back as the integer 1.
+#
+# The suite has no case with white space inside something that would otherwise
+# resolve, which is what kept this out of every score on this page.
+# ---------------------------------------------------------------------------
+
+@case a folded break between the sign and the digits is not an integer
+@yaml
++
+
+1
+@json
+"+\\n1"
+@end
+
+@case a folded break between a base prefix and its digits is not an integer
+@yaml
+0x
+
+10
+@json
+"0x\\n10"
+@end
+
+@case a space between the sign and the digits is not an integer
+@yaml
+a: + 1
+@json
+{"a":"+ 1"}
+@end
+
+@case a space between a base prefix and its digits is not an integer
+@yaml
+a: 0x 10
+b: 0o 17
+@json
+{"a":"0x 10","b":"0o 17"}
+@end
+
+@case a folded break inside a float is not a float
+@yaml
+a: 1.
+
+  5
+@json
+{"a":"1.\\n5"}
+@end

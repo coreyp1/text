@@ -122,6 +122,23 @@ const Case kCases[] = {
 	{"outer:\n  &a x: 1\n   c\n", "{\"outer\": {\"x\": \"1 c\"}}"},
 	{"outer:\n  x: 1\n   c\n", "{\"outer\": {\"x\": \"1 c\"}}"},
 
+	/* And the same question a third time, where the entry above has no value
+	   written. The rule that a flow collection at the key's own column is the
+	   next entry's key was measuring the collection rather than the entry, so
+	   with a property in front of it the columns no longer matched and the
+	   collection landed where the value goes.
+
+	   That rule applies only where the collection *begins its own line*.
+	   "a: [b, c]" is a sequence on the same line as its key, and asking for
+	   the line's first node there answers "a" - which would make the value
+	   look like the next key. Ten documents of yaml-test-suite say so. */
+	{"a:\n&k [x]:\n", "{\"a\": null, [\"x\"]: null}"},
+	{"a:\n&k [x]: 1\n", "{\"a\": null, [\"x\"]: 1}"},
+	{"a:\n[x]:\n", "{\"a\": null, [\"x\"]: null}"},
+	{":\n&k {}:\n", "{null: null, {}: null}"},
+	{"a: [b, c]\n", "{\"a\": [\"b\", \"c\"]}"},
+	{"a: &k [b]\n", "{\"a\": [\"b\"]}"},
+
 	/* The entry above has no value written, so the flow key follows a key
 	   that is still waiting for one.  These were not refused before - they
 	   were accepted with the wrong shape, the second entry nested inside the

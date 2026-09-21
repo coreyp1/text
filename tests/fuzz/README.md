@@ -179,6 +179,17 @@ first was a writer defect:
   over `  &a x: 1` over `   c` was refused where the same lines without the
   `&a` fold into `1 c`.
 
+Two more after those. A built scalar of `+` and `1` with a break between them
+was the integer 1, because `strtoll()` skips leading white space and this code
+consumes the sign itself before handing `strtoll` what follows - and that half
+was reachable from *text* as well, so `+` over a blank line over `1` parsed as
+1 where both references read the string. Not one row of the 10.3.2 table
+contains white space anywhere, which is the whole rule and is now written as
+one. And the property-in-front-of-a-key defect had a third site: the rule that
+a flow collection at the key's own column is the next entry's key measured the
+collection rather than the entry, so `a:` over `&k [x]:` put the sequence
+where a's value goes.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -259,7 +270,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — twenty-five library defects and two of its own,
+has already earned that — twenty-seven library defects and two of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

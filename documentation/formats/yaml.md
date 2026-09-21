@@ -1057,6 +1057,53 @@ first is a writer defect; the rest are the parser, reached through it.
   entry may put in front of a node. That one field replaced three, and is
   what both the flow-key and the property questions were really asking.
 
+### White space is in none of 10.3.2's rows
+
+The integer row is `[-+]? [0-9]+` and its two prefixed forms are `0o [0-7]+`
+and `0x [0-9a-fA-F]+`. The float rows are the same shape, and the boolean and
+null rows are enumerations of whole words. **Not one of them contains white
+space anywhere** - and that had never been stated in one place, so it was
+enforced in pieces and the pieces had a hole in the middle.
+
+`strtoll()` skips leading white space, and this code consumes the sign and any
+base prefix itself before handing `strtoll` what follows. So the space between
+the two was never measured by anything:
+
+```yaml
++
+
+1
+```
+
+is a plain scalar whose folded content is `+\n1`, and it came back as the
+**integer 1**. `0x` over `10` came back as 16, and `a: + 1` was 1 as well.
+js-yaml reads all three as the strings they are.
+
+Two things changed. `gtext_yaml_plain_text_classify()` now says that text
+carrying white space anywhere is a string, which is the whole rule in one
+line and replaces a test of the two *ends* that had been added for the DOM
+API's sake. And `parse_int_value()` requires a digit of its base straight
+after the sign, on its own account, because a helper whose contract is a
+10.3.2 row should not depend on its callers to keep it honest.
+
+The suite has no case with white space inside something that would otherwise
+resolve, which is what kept this out of every score on this page. The five
+cases are in `tests/data/yaml/spec-1.2.2.corpus`.
+
+### A property in front of a key, for the third time
+
+The rule that a flow collection standing at the key's own column is the next
+entry's key - the one that makes `a:` over `{}: 1` two entries rather than one
+- was measuring the collection and not the entry. With a property in front,
+`&k [x]` begins at the `&` and the columns no longer matched, so the
+collection landed where `a`'s value goes and the `:` after it found nothing to
+claim.
+
+The correction only applies where the collection **begins its own line**.
+`a: [b, c]` is a sequence on the same line as its key, and asking for that
+line's first node answers `a`; ten documents of yaml-test-suite say what
+happens if you do not draw that line.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

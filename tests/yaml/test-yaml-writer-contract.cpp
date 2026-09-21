@@ -304,6 +304,14 @@ TEST(YamlWriterContract, ABuiltScalarHasTheTypeItsTextWouldParseAs) {
 TEST(YamlWriterContract, OuterWhiteSpaceMakesABuiltScalarAString) {
 	const char *texts[] = {
 		" 3", "\t3", "\n3", "3 ", "3\n", "\ntrue", " ~", " ", "\n",
+		/* And the middle, which the ends-only test left. This code consumes
+		   the sign itself and hands strtoll() what follows, and strtoll()
+		   skips leading white space - so "+\n1" was the integer 1 and
+		   "0x\n10" was 16. Not one row of the 10.3.2 table contains white
+		   space anywhere, so the rule is simply that text carrying any is a
+		   string, and the helper now wants a digit straight after the sign
+		   on its own account as well. */
+		"+\n1", "+ 1", "-\n1", "0x\n10", "1 1", "1\n1", "+\n\n1",
 	};
 	for (const char *text : texts) {
 		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);

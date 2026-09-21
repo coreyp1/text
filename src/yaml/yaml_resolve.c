@@ -594,6 +594,16 @@ static bool parse_sexagesimal_value(
 	return true;
 }
 
+/* Whether @p c is a digit of @p base, which is 2, 8, 10 or 16 here. */
+static bool digit_in_base(char c, int base) {
+	int value;
+	if (c >= '0' && c <= '9') value = c - '0';
+	else if (c >= 'a' && c <= 'f') value = c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F') value = c - 'A' + 10;
+	else return false;
+	return value < base;
+}
+
 static bool parse_int_value(
 	const char *s,
 	size_t len,
@@ -658,6 +668,7 @@ static bool parse_int_value(
 			}
 		}
 		if (octal) {
+			if (!digit_in_base(*p, 8)) { free(clean); return false; }
 			errno = 0;
 			char *end = NULL;
 			long long parsed = strtoll(p, &end, 8);
@@ -673,6 +684,14 @@ static bool parse_int_value(
 	}
 
 	if (*p == '\0') { free(clean); return false; }
+
+	/* strtoll() skips leading white space and would take a sign of its own,
+	   and this has already taken the sign and any base prefix - so without
+	   this "+\n1" reads as 1 and "+ +1" as 1 too.  10.3.2's integer row is
+	   "[-+]? [0-9]+": one optional sign, then digits, and nothing between
+	   them.  The caller above keeps white space out of the classifier
+	   entirely; this keeps the helper honest on its own. */
+	if (!digit_in_base(*p, base)) { free(clean); return false; }
 
 	errno = 0;
 	char *end = NULL;
@@ -1834,19 +1853,29 @@ static GTEXT_YAML_Status resolve_scalar(
  * predicates resolve_scalar() uses a few lines above, not a second copy of
  * the tables. */
 /**
- * @brief Whether white space stands at either end of @p value.
+ * @brief Whether @p value holds white space anywhere.
  *
- * A plain scalar's content has none: ns-plain(n,c) begins and ends with an
- * ns-char (7.3.3), and what surrounds it is separation the scanner has
- * already taken off.  So text carrying any is text no plain scalar could
- * have held - only a quoted one can spell it, and a quoted scalar is a
- * string (10.3.2).
+ * Not one row of the 10.3.2 resolution table contains any: the null and
+ * boolean rows are enumerations of whole words, the integer row is
+ * "[-+]? [0-9]+" and its two prefixed forms, and the float rows are the same
+ * shape.  So text carrying white space resolves to a string wherever it
+ * stands, and the question does not have to be asked of each row separately.
+ *
+ * This began as a test of the two *ends* only, which was the half the writer
+ * fuzzer found first: a plain scalar's content has white space at neither end
+ * (ns-plain begins and ends with an ns-char, 7.3.3), so only a quoted scalar
+ * could spell " 3" and quoted is string.  That left the middle, and the
+ * middle was reachable: strtoll() skips leading white space, and this code
+ * consumes the sign itself and hands strtoll what follows - so "+\n1" and
+ * "+ 1" were the integer 1, and "0x\n10" was 16.
  */
-static bool plain_text_has_outer_space(const char *value, size_t len) {
-	const char *ws = " \t\r\n";
-
-	if (!value || len == 0) return false;
-	return strchr(ws, value[0]) != NULL || strchr(ws, value[len - 1]) != NULL;
+static bool plain_text_has_space(const char *value, size_t len) {
+	if (!value) return false;
+	for (size_t i = 0; i < len; i++) {
+		const char c = value[i];
+		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') return true;
+	}
+	return false;
 }
 
 GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
@@ -1867,12 +1896,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	else if (len == 0) {
 		type = GTEXT_YAML_NULL;   /* 7.2's empty node */
 	}
-	else if (plain_text_has_outer_space(value, len)) {
-		/* strtoll() skips leading white space, so " 3", "\t3" and "\n3" all
-		   answered "the integer 3" - for a node the writer then quoted,
-		   because no plain spelling of that text exists, and the reader read
-		   back as the string it now was.  The trailing end was already
-		   right, which is why only one half of this ever showed. */
+	else if (plain_text_has_space(value, len)) {
 		type = GTEXT_YAML_STRING;
 	}
 	else if (parse_null_value(value, len, false)) {

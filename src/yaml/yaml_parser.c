@@ -1538,6 +1538,28 @@ static bool block_value_is_missing(parser_state *p, int col) {
  * collection has no such spelling - indented it is the value, at the key's
  * column it is the next key - and both references agree.
  */
+static int line_key_col_from_offset(const parser_state *p, size_t offset);
+static bool block_key_may_start_at(const parser_state *p, size_t offset);
+
+/* Where the entry a node at @p offset begins, for comparing against a block
+   mapping's indentation.
+
+   Usually that is the node's own column.  It is further left exactly when the
+   node begins its own line and carries properties, because a property is part
+   of the key it precedes: "&a [x]" is a key starting at the "&".
+   block_key_may_start_at() is the test for "begins its own line" - it allows
+   indentation, the indicators a compact entry may put in front, and up to two
+   properties, and nothing else.  Asking line_key_col_from_offset()
+   unconditionally instead answers about the line's *first* node, which for
+   "a: [b, c]" is the "a" - and that made the flow sequence look like the next
+   key rather than a's value. */
+static int block_entry_col(const parser_state *p, size_t offset, int node_col) {
+	int col;
+	if (!block_key_may_start_at(p, offset)) return node_col;
+	col = line_key_col_from_offset(p, offset);
+	return col >= 0 ? col : node_col;
+}
+
 static GTEXT_YAML_Status block_value_supply_if_missing(
 	parser_state *p,
 	const GTEXT_YAML_Node *node,
@@ -2303,7 +2325,9 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 		if (root_status != GTEXT_YAML_OK) return root_status;
 	} else {
 		GTEXT_YAML_Status supplied =
-			block_value_supply_if_missing(p, node, source_col);
+			block_value_supply_if_missing(
+				p, node,
+				block_entry_col(p, source_offset, source_col));
 		if (supplied != GTEXT_YAML_OK) return supplied;
 		if (!temp_add(p, node)) {
 			if (p->error) {
@@ -3210,7 +3234,9 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				if (!explicit_handled) {
 					GTEXT_YAML_Status supplied =
-						block_value_supply_if_missing(p, node, source_col);
+						block_value_supply_if_missing(
+				p, node,
+				block_entry_col(p, source_offset, source_col));
 					if (supplied != GTEXT_YAML_OK) return supplied;
 					if (!temp_add(p, node)) {
 						p->failed = true;
@@ -3371,7 +3397,9 @@ static GTEXT_YAML_Status parse_callback(
 				}
 				if (!explicit_handled) {
 					GTEXT_YAML_Status supplied =
-						block_value_supply_if_missing(p, node, source_col);
+						block_value_supply_if_missing(
+				p, node,
+				block_entry_col(p, source_offset, source_col));
 					if (supplied != GTEXT_YAML_OK) return supplied;
 					if (!temp_add(p, node)) {
 						p->failed = true;
@@ -3612,7 +3640,9 @@ static GTEXT_YAML_Status parse_callback(
 						if (root_status != GTEXT_YAML_OK) return root_status;
 					} else {
 						GTEXT_YAML_Status supplied =
-							block_value_supply_if_missing(p, node, source_col);
+							block_value_supply_if_missing(
+				p, node,
+				block_entry_col(p, source_offset, source_col));
 						if (supplied != GTEXT_YAML_OK) return supplied;
 						if (!temp_add(p, node)) {
 							p->failed = true;
