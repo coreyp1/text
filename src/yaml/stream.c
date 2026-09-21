@@ -764,6 +764,17 @@ process_token:
       if (tok.u.c == '-') stream_props_claimed_by_sequence(s);
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
+      /* Properties still looking for their node when an indicator arrives:
+         where they were written travels with the indicator, so a consumer
+         that is about to decide what this indicator opens can see that
+         something is already waiting to name it. */
+      if (s->pending_anchor || s->pending_tag) {
+        ev.prop_line = s->pending_prop_line;
+        ev.prop_col = s->pending_prop_col;
+      }
+      else {
+        ev.prop_col = -1;
+      }
       /* indicator event */
       /* Adjust depth for simple flow indicators and enforce max_depth */
       if (tok.u.c == '[' || tok.u.c == '{') {
@@ -1139,6 +1150,17 @@ process_token_finish:
       if (tok.u.c == '-') stream_props_claimed_by_sequence(s);
       ev.type = GTEXT_YAML_EVENT_INDICATOR;
       ev.data.indicator = tok.u.c;
+      /* Properties still looking for their node when an indicator arrives:
+         where they were written travels with the indicator, so a consumer
+         that is about to decide what this indicator opens can see that
+         something is already waiting to name it. */
+      if (s->pending_anchor || s->pending_tag) {
+        ev.prop_line = s->pending_prop_line;
+        ev.prop_col = s->pending_prop_col;
+      }
+      else {
+        ev.prop_col = -1;
+      }
 
       if (tok.u.c == '[' || tok.u.c == '{') {
         s->current_depth++;

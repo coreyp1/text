@@ -150,6 +150,15 @@ typedef struct {
 	bool explicit_key_pending;          /* True if '?' indicator seen and key is pending */
 	bool explicit_key_active;           /* True if explicit key stored and awaiting ':' */
 	int explicit_key_indent;            /* Indent column for explicit key */
+	/* The line the "?" was written on, or 0 when no explicit key is open.
+	 *
+	 * "?" takes s-l+block-indented(n,block-out), which includes
+	 * ns-l-compact-mapping (8.2.2), so the key may begin on the "?"'s own
+	 * line: "? earth: blue" has {earth: blue} for its key.  That is the same
+	 * event sequence as "? a" on one line and "c: 1" on the next, where the
+	 * explicit key never got a value and "c" opens a new entry - and the two
+	 * differ only in whether the "?" shares the line. */
+	int explicit_key_line;
 	size_t explicit_key_depth;          /* Stack depth for explicit key mapping */
 	char *pending_leading_comment;      /* Pending leading comment (malloc'd) */
 	GTEXT_YAML_Node *last_emitted_node; /* Last node created for inline comments */
@@ -262,6 +271,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->explicit_key_pending = false;
 	p->explicit_key_active = false;
 	p->explicit_key_indent = -1;
+	p->explicit_key_line = 0;
 	p->explicit_key_depth = 0;
 	
 	return true;
@@ -533,6 +543,11 @@ static GTEXT_JSON_Dupkey_Mode json_dupkey_mode(GTEXT_YAML_Dupkey_Mode mode) {
 			return GTEXT_JSON_DUPKEY_FIRST_WINS;
 		case GTEXT_YAML_DUPKEY_LAST_WINS:
 			return GTEXT_JSON_DUPKEY_LAST_WINS;
+		case GTEXT_YAML_DUPKEY_KEEP_ALL:
+			/* Unreachable while enable_json_fast_path is forced off for this
+			   mode below, and here so that the switch names every value: the
+			   JSON DOM has no way to hold two pairs with the same key, so
+			   there is no honest translation of KEEP_ALL. */
 		case GTEXT_YAML_DUPKEY_ERROR:
 		default:
 			return GTEXT_JSON_DUPKEY_ERROR;
@@ -1291,6 +1306,46 @@ static bool sequence_supply_empty_entry(parser_state *p) {
  * too.  js-yaml accepts the plain "--- a: b" and refuses the rest, which is
  * the more forgiving reading; this follows the grammar.
  */
+/**
+ * @brief Is this ":" the first thing on its line?
+ *
+ * A block mapping entry begins at s-indent(n), so an entry whose key is the
+ * empty node has nothing in front of its ":" but the indentation (8.2.2).
+ *
+ * Anything else in front of it belongs to whatever that is.  In
+ *
+ *     a:
+ *     - 1
+ *       b: 2
+ *
+ * "1 b" is one plain scalar across two lines and the ":" after it ends
+ * nothing, which is an error - not a mapping entry with no key.
+ */
+static bool colon_begins_its_line(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t i = offset;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
+	buffer = p->ctx->input_buffer;
+	while (i > 0) {
+		char c = buffer[i - 1];
+		if (c == '\n' || c == '\r') return true;
+		if (c == ' ' || c == '\t') { i--; continue; }
+		/* "- " opens a sequence entry and "? " an explicit key, and a compact
+		   collection may follow either on the same line (8.2.1, 8.2.2).  So
+		   may an entry with no key: "- :" is [{null: null}].  The space after
+		   the indicator is what makes it one - "-:" is a plain scalar. */
+		if ((c == '-' || c == '?')
+				&& (i == 1 || buffer[i - 2] == '\n' || buffer[i - 2] == '\r'
+					|| buffer[i - 2] == ' ' || buffer[i - 2] == '\t')) {
+			i--;
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
 static bool node_is_on_document_start_line(const parser_state *p, size_t offset) {
 	const char *buffer = NULL;
 	size_t length = 0;
@@ -1699,6 +1754,61 @@ static GTEXT_YAML_Status set_document_root(parser_state *p, GTEXT_YAML_Node *nod
 	return GTEXT_YAML_OK;
 }
 
+/**
+ * @brief Take back a flow collection that turns out to be a mapping key.
+ *
+ * ns-s-block-map-implicit-key is c-s-implicit-json-key or
+ * ns-s-implicit-yaml-key (8.2.2), and the first of those is a
+ * c-flow-json-node: "[a]: b" and "{a: 1}: b" are block mappings whose key is
+ * the flow collection.  detach_last_scalar() cannot answer for them because
+ * the node is not a scalar, and every such document was refused.
+ *
+ * Only a *flow* collection qualifies, and only one that finished on this
+ * line: a block collection has no c-flow-json-node to be, and an implicit key
+ * is on one line by construction.  The style is the one the parser recorded
+ * when it built the node.
+ */
+static GTEXT_YAML_Node *flow_key_candidate(const parser_state *p, int line) {
+	GTEXT_YAML_Node *node = p->last_emitted_node;
+	GTEXT_YAML_Flow_Style style;
+
+	if (!node || p->last_emitted_line != line) return NULL;
+	switch (node->type) {
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			style = node->as.sequence.flow_style;
+			break;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			style = node->as.mapping.flow_style;
+			break;
+		default:
+			return NULL;
+	}
+	if (style != GTEXT_YAML_FLOW_STYLE_FLOW) return NULL;
+
+	/* It has to still be where it was put, so that taking it back cannot
+	   disturb anything built since. */
+	if (p->root == node) return node;
+	if (p->temp.count > 0 && p->temp.items[p->temp.count - 1] == node) return node;
+	return NULL;
+}
+
+static GTEXT_YAML_Node *detach_last_flow_node(parser_state *p, int line) {
+	GTEXT_YAML_Node *node = flow_key_candidate(p, line);
+
+	if (!node) return NULL;
+	if (p->root == node) {
+		p->root = NULL;
+	}
+	else {
+		p->temp.count--;
+	}
+	p->last_emitted_node = NULL;
+	return node;
+}
+
 static GTEXT_YAML_Node *detach_last_scalar(parser_state *p) {
 	GTEXT_YAML_Node *node = p->last_scalar_node;
 
@@ -1825,6 +1935,19 @@ static GTEXT_YAML_Status mapping_close_trailing_key(parser_state *p) {
 			return GTEXT_YAML_E_OOM;
 		}
 		p->explicit_key_pending = false;
+	}
+	/* A "?" that got its key but never a ":" has a value all the same:
+	 * c-l-block-map-explicit-entry's second arm is e-node (8.2.2), so
+	 * "? - a" with nothing under it is {[a]: null}.  That key was claimed by
+	 * the "?" rather than by a ":", so the check below - which asks whether a
+	 * ":" claimed it - would call it a scalar nobody wanted. */
+	if (p->explicit_key_active
+			&& p->stack.depth > 0
+			&& p->explicit_key_depth == p->stack.depth
+			&& (p->temp.count % 2) == 1) {
+		(void)mapping_supply_null_value(p);
+		p->explicit_key_active = false;
+		return GTEXT_YAML_OK;
 	}
 	if ((p->temp.count % 2) == 0) return GTEXT_YAML_OK;
 	if (p->stack.depth > 0 && p->stack.is_block[p->stack.depth - 1]
@@ -3304,6 +3427,36 @@ static GTEXT_YAML_Status parse_callback(
 					int source_col = 0;
 					size_t top = 0;
 
+					if (p->stack.depth > 0) {
+						top = p->stack.depth - 1;
+						in_flow_mapping = !p->stack.is_block[top] &&
+							(p->stack.states[top] == STATE_MAPPING_KEY ||
+							 p->stack.states[top] == STATE_MAPPING_VALUE);
+						in_block_mapping = p->stack.is_block[top] &&
+							(p->stack.states[top] == STATE_MAPPING_KEY ||
+							 p->stack.states[top] == STATE_MAPPING_VALUE);
+					}
+
+					/* In block context a ":" on the "?"'s own line is not the
+					 * explicit entry's colon at all: "?" takes
+					 * s-l+block-indented, which includes ns-l-compact-mapping
+					 * (8.2.2), so the colon belongs to a mapping nested under
+					 * the "?" and that mapping is the explicit key.
+					 *
+					 *     - ? : x      the key is {null: x}, and the entry
+					 *                 that key belongs to has no value
+					 *
+					 * c-l-block-map-explicit-value needs a line of its own,
+					 * so there is nothing else such a colon could be.  Flow
+					 * is the other way round: ns-flow-map-explicit-entry
+					 * reaches its ":" across s-separate, which needs no
+					 * break, and "[ ? a : b ]" is one pair on one line. */
+					const bool colon_on_question_line =
+						in_block_mapping
+						&& (p->explicit_key_active || p->explicit_key_pending)
+						&& p->stack.depth == p->explicit_key_depth
+						&& p->explicit_key_line == event->line;
+
 					/* A "?" whose key never arrived still has one: the
 					 * empty node.  "? " over ": 1" and "[ ? : 1 ]" are
 					 * {null: 1}, by c-l-block-map-explicit-entry's
@@ -3315,6 +3468,7 @@ static GTEXT_YAML_Status parse_callback(
 					 * different thing - a key the parser lost track of as
 					 * collections opened under it - and stays an error. */
 					if (p->explicit_key_pending
+							&& !colon_on_question_line
 							&& p->stack.depth == p->explicit_key_depth
 							&& p->stack.depth > 0) {
 						if (!mapping_supply_empty_key(p)) {
@@ -3331,22 +3485,14 @@ static GTEXT_YAML_Status parse_callback(
 						p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
 					}
 
-					if (p->explicit_key_pending && p->stack.depth <= p->explicit_key_depth) {
+					if (p->explicit_key_pending
+							&& !colon_on_question_line
+							&& p->stack.depth <= p->explicit_key_depth) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
 							p->error->message = "Explicit key missing before ':'";
 						}
 						return GTEXT_YAML_E_INVALID;
-					}
-
-					if (p->stack.depth > 0) {
-						top = p->stack.depth - 1;
-						in_flow_mapping = !p->stack.is_block[top] &&
-							(p->stack.states[top] == STATE_MAPPING_KEY ||
-							 p->stack.states[top] == STATE_MAPPING_VALUE);
-						in_block_mapping = p->stack.is_block[top] &&
-							(p->stack.states[top] == STATE_MAPPING_KEY ||
-							 p->stack.states[top] == STATE_MAPPING_VALUE);
 					}
 
 					/* An explicit key's value colon stands on a line of its own
@@ -3358,7 +3504,12 @@ static GTEXT_YAML_Status parse_callback(
 					 * was looked for in c's. */
 					if (p->explicit_key_active && in_block_mapping
 							&& p->stack.depth == p->explicit_key_depth
-							&& p->last_scalar_line == event->line) {
+							&& p->last_scalar_line == event->line
+							/* ... but not when the "?" is on this line too.
+							 * Then the scalar is the first key of a compact
+							 * mapping that is the explicit key, not a new
+							 * entry beside it - suite case V9D5. */
+							&& !colon_on_question_line) {
 						/* The scalar on this line is already in temp, sitting
 						 * where the explicit key's value belongs, so it has to
 						 * step aside while the null goes in behind it. */
@@ -3381,7 +3532,19 @@ static GTEXT_YAML_Status parse_callback(
 						}
 					}
 
-					if (p->explicit_key_active && p->stack.depth == p->explicit_key_depth) {
+					/* c-l-block-map-explicit-value(n) is s-indent(n) ":" - a
+					 * line of its own (8.2.2) - so in block context a ":"
+					 * sharing the "?"'s line is not the explicit key's value
+					 * colon.  It belongs to the compact mapping the "?"
+					 * opened, and is that mapping's first key's colon:
+					 * "? earth: blue" has {earth: blue} for its key.
+					 *
+					 * Flow is the other way round.  ns-flow-map-explicit-entry
+					 * reaches its ":" through s-separate, which needs no
+					 * break, so "[ ? a : b ]" is one line and is a pair. */
+					if (p->explicit_key_active
+							&& p->stack.depth == p->explicit_key_depth
+							&& !colon_on_question_line) {
 						if (p->stack.depth == 0) {
 							if (p->error) {
 								p->error->code = GTEXT_YAML_E_INVALID;
@@ -3561,7 +3724,137 @@ static GTEXT_YAML_Status parse_callback(
 						break;
 					}
 
-					if (key_indent < 0) {
+					/* The other arm of c-l-block-map-implicit-entry is
+					 * e-node (8.2.2), so a block mapping entry may have no
+					 * key written at all.  ": a" is {null: a}, ":" alone is
+					 * {null: null}, and a mapping already open takes such an
+					 * entry beside its others:
+					 *
+					 *     key: value
+					 *     : empty key
+					 *
+					 * A ":" has no key when no scalar stands in front of it
+					 * on its own line - either none has been read, or the
+					 * last one belongs to a line already finished.  A scalar
+					 * on this line is this entry's key, and is claimed below.
+					 *
+					 * An explicit key is not this shape, except for the one
+					 * the "?" opened on this very line: "?" has already put a
+					 * key in place, and its own ":" is handled above.
+					 *
+					 * One shape is left out on purpose.  A property written
+					 * on an earlier line is still looking for its node, and
+					 * the node it would get is the mapping this ":" opens -
+					 * "&a" on its own line over ": 1" anchors the mapping,
+					 * the way it does in "&a" over "a: 1" (8.2).  There is
+					 * nowhere to put such a property when no key carries it
+					 * in, so that entry stays refused rather than being
+					 * accepted with the property moved quietly onto the
+					 * value.  The same gap keeps suite cases 26DV and 6BFJ
+					 * failing. */
+					const bool property_waiting =
+						event->prop_col >= 0 && event->prop_line > 0
+						&& event->prop_line < event->line;
+
+					if ((key_indent < 0 || p->last_scalar_line != event->line)
+							&& colon_begins_its_line(p, event->offset)
+							&& !flow_key_candidate(p, event->line)
+							&& !property_waiting
+							&& (colon_on_question_line
+								|| (!p->explicit_key_active
+									&& !p->explicit_key_pending))) {
+						if (!colon_on_question_line && in_block_mapping
+								&& p->stack.indents[top] == event->col) {
+							/* Another entry of the mapping already open.  In
+							 * value state the key above never got one, and
+							 * gets the empty node before this entry starts. */
+							if (p->stack.states[top] == STATE_MAPPING_VALUE
+									&& (p->temp.count % 2) == 1) {
+								if (!mapping_supply_null_value(p)) {
+									p->failed = true;
+									if (p->error) {
+										p->error->code = GTEXT_YAML_E_OOM;
+										p->error->message =
+											"Out of memory closing mapping entry";
+									}
+									return GTEXT_YAML_E_OOM;
+								}
+							}
+							if (!mapping_supply_empty_key(p)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_OOM;
+									p->error->message =
+										"Out of memory supplying empty key";
+								}
+								return GTEXT_YAML_E_OOM;
+							}
+							p->claimed_key = p->temp.items[p->temp.count - 1];
+							p->stack.states[top] = STATE_MAPPING_VALUE;
+							p->expect_mapping_value = true;
+							break;
+						}
+
+						if (colon_on_question_line || !in_block_mapping) {
+							/* The ":" opens a block mapping of its own, at
+							 * its own column: at the top of a document,
+							 * compacted onto a sequence entry as in "- :",
+							 * or nested under a "?" on this line, where the
+							 * mapping it opens is the explicit key - suite
+							 * case M2N8, "- ? : x". */
+							if (node_is_on_document_start_line(p, event->offset)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_INVALID;
+									p->error->message =
+										"Block mapping may not begin on the \"---\" line";
+								}
+								return GTEXT_YAML_E_INVALID;
+							}
+							if (!stack_push(
+								p,
+								NULL,
+								STATE_MAPPING_KEY,
+								NULL,
+								NULL,
+								event->col,
+								true,
+								event->offset,
+								event->line,
+								event->col
+							)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_OOM;
+									p->error->message =
+										"Out of memory tracking block mapping";
+								}
+								return GTEXT_YAML_E_OOM;
+							}
+							if (!mapping_supply_empty_key(p)) {
+								p->failed = true;
+								if (p->error) {
+									p->error->code = GTEXT_YAML_E_OOM;
+									p->error->message =
+										"Out of memory supplying empty key";
+								}
+								return GTEXT_YAML_E_OOM;
+							}
+							p->claimed_key = p->temp.items[p->temp.count - 1];
+							p->stack.states[p->stack.depth - 1] = STATE_MAPPING_VALUE;
+							p->expect_mapping_value = true;
+							break;
+						}
+					}
+
+					/* Both guards below measure the last *scalar*, which says
+					 * nothing about a key that is a flow collection: "[a]: b"
+					 * has no scalar of its own standing before the ":" and
+					 * "{}: b" has none at all. */
+					const bool has_flow_key =
+						flow_key_candidate(p, event->line) != NULL;
+
+					if (key_indent < 0 && !has_flow_key) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
 							p->error->message = "Mapping key missing before ':'";
@@ -3569,7 +3862,7 @@ static GTEXT_YAML_Status parse_callback(
 						return GTEXT_YAML_E_INVALID;
 					}
 
-					if (p->last_scalar_line != event->line) {
+					if (p->last_scalar_line != event->line && !has_flow_key) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
 							p->error->message = "Mapping key not on same line as ':'";
@@ -3615,6 +3908,18 @@ static GTEXT_YAML_Status parse_callback(
 
 					key_node = detach_last_scalar(p);
 					if (!key_node) {
+						key_node = detach_last_flow_node(p, event->line);
+						if (key_node) {
+							/* The key is the collection, so the entry is
+							 * indented where the collection begins - not
+							 * where the last scalar inside it happened to
+							 * be, which is what key_indent holds. */
+							int flow_col = 0;
+							node_get_source_location(key_node, NULL, NULL, &flow_col);
+							key_indent = flow_col;
+						}
+					}
+					if (!key_node) {
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
 							p->error->message = "Mapping key not found before ':'";
@@ -3642,8 +3947,12 @@ static GTEXT_YAML_Status parse_callback(
 						return GTEXT_YAML_E_INVALID;
 					}
 
+					/* ... except under a "?" on this same line, where a key
+					 * indented past the mapping is the compact mapping the
+					 * "?" opened (ns-l-compact-mapping, 8.2.2) rather than a
+					 * key belonging to nothing. */
 					if (in_block_mapping && key_indent > p->stack.indents[top] &&
-						(p->temp.count % 2) == 0) {
+						(p->temp.count % 2) == 0 && !colon_on_question_line) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
@@ -3752,6 +4061,7 @@ static GTEXT_YAML_Status parse_callback(
 						p->explicit_key_pending = true;
 						p->explicit_key_active = false;
 						p->explicit_key_indent = indent;
+						p->explicit_key_line = event->line;
 						p->explicit_key_depth = p->stack.depth;
 						break;
 					}
@@ -3798,6 +4108,7 @@ static GTEXT_YAML_Status parse_callback(
 						p->explicit_key_pending = true;
 						p->explicit_key_active = false;
 						p->explicit_key_indent = indent;
+						p->explicit_key_line = event->line;
 						p->explicit_key_depth = p->stack.depth;
 						break;
 					}
@@ -3827,6 +4138,7 @@ static GTEXT_YAML_Status parse_callback(
 					p->explicit_key_pending = true;
 					p->explicit_key_active = false;
 					p->explicit_key_indent = indent;
+					p->explicit_key_line = event->line;
 					p->explicit_key_depth = p->stack.depth;
 					break;
 				}
@@ -3997,7 +4309,19 @@ static GTEXT_YAML_Status parse_callback(
 					 * still waiting for its value is the ordinary case -
 					 * "a:" over "- b" is that sequence as a's value - and an
 					 * odd temp count is what tells them apart. */
-					if (start_new && p->stack.depth > 0) {
+					/* ... unless a "?" at this level is still waiting for its
+					 * key, in which case the sequence is that key.  It may
+					 * stand at the mapping's own column: "?" takes
+					 * s-l+block-indented(n,block-out), whose s-l+block-node
+					 * arm reaches a block sequence through
+					 * seq-spaces(n,block-out), which is n-1 (8.2.1, 8.2.2).
+					 * Suite case 6PBE writes one at column zero. */
+					const bool key_of_pending_explicit_entry =
+						p->explicit_key_pending
+						&& p->stack.depth == p->explicit_key_depth;
+
+					if (start_new && p->stack.depth > 0
+							&& !key_of_pending_explicit_entry) {
 						const size_t top = p->stack.depth - 1;
 						if (p->stack.is_block[top] &&
 							(p->stack.states[top] == STATE_MAPPING_KEY ||
@@ -4138,7 +4462,12 @@ GTEXT_YAML_Document *yaml_parse_document(
 		gtext_yaml_parse_options_effective(options);
 	const GTEXT_YAML_Parse_Options *opts = &effective_opts;
 
-	if (opts->enable_json_fast_path && json_fastpath_candidate(input, length)) {
+	/* The fast path builds the document out of a JSON DOM, which collapses
+	   duplicate keys however it is asked not to, so it cannot answer for
+	   KEEP_ALL.  Taking the ordinary path is slower and right. */
+	if (opts->enable_json_fast_path
+			&& opts->dupkeys != GTEXT_YAML_DUPKEY_KEEP_ALL
+			&& json_fastpath_candidate(input, length)) {
 		GTEXT_YAML_Document *json_doc = yaml_parse_json_document_internal(
 			input,
 			length,

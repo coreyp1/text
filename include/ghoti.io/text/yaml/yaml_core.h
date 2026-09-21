@@ -112,7 +112,27 @@ typedef struct GTEXT_YAML_Node GTEXT_YAML_Node;
 typedef struct GTEXT_YAML_Document GTEXT_YAML_Document;
 typedef struct GTEXT_JSON_Value GTEXT_JSON_Value;
 
-typedef enum { GTEXT_YAML_DUPKEY_ERROR, GTEXT_YAML_DUPKEY_FIRST_WINS, GTEXT_YAML_DUPKEY_LAST_WINS } GTEXT_YAML_Dupkey_Mode;
+/**
+ * @enum GTEXT_YAML_Dupkey_Mode
+ * @brief What to do about a mapping whose keys are not unique.
+ *
+ * Keys have to be unique (3.2.1.3), so ERROR is the default and the other
+ * three are the caller deciding to accept a document the spec does not allow.
+ *
+ * KEEP_ALL is the one that keeps the document: FIRST_WINS and LAST_WINS
+ * remove a pair, and ERROR removes the whole parse.  A tool that has to see
+ * the document as it was written - a linter, a formatter, an event stream -
+ * needs the pairs it actually holds, duplicates and all, and
+ * gtext_yaml_mapping_get() then answers with the first of them.  It also
+ * turns off the JSON fast path, which has no way to represent such a
+ * mapping.
+ */
+typedef enum {
+  GTEXT_YAML_DUPKEY_ERROR,
+  GTEXT_YAML_DUPKEY_FIRST_WINS,
+  GTEXT_YAML_DUPKEY_LAST_WINS,
+  GTEXT_YAML_DUPKEY_KEEP_ALL
+} GTEXT_YAML_Dupkey_Mode;
 
 /**
  * @enum GTEXT_YAML_Schema

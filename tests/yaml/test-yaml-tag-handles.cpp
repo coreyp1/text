@@ -140,6 +140,44 @@ TEST(YamlTagHandles, ThePrimaryHandleExpands) {
 	gtext_yaml_free(doc);
 }
 
+/* A shorthand's suffix is ns-tag-chars, which exclude "!", "," and the flow
+   indicators; those are written as "%" and two hex digits and are part of the
+   tag rather than of its spelling (5.6, 6.8.2.2).  Spec example 6.26 - suite
+   case 6CK3 - writes "!e!tag%21" for a tag ending in "!", and the suffix was
+   being copied through with the escape still in it.
+
+   Only a shorthand: a verbatim tag reaches the DOM as the URI between its
+   brackets and is used exactly as written (5.3). */
+TEST(YamlTagHandles, EscapesInTheSuffixAreDecoded) {
+	struct { const char *input; const char *tag; } cases[] = {
+		{"%TAG !e! tag:example.com,2000:app/\n---\n!e!tag%21 x\n",
+		 "tag:example.com,2000:app/tag!"},
+		{"%TAG ! tag:primary/\n---\n!foo%21 x\n", "tag:primary/foo!"},
+		/* "%" that is not an escape stays a "%" rather than failing the parse
+		   over a tag this library has no opinion about. */
+		{"%TAG !e! tag:x/\n---\n!e!a%zz x\n", "tag:x/a%zz"},
+		{"%TAG !e! tag:x/\n---\n!e!a%2 x\n", "tag:x/a%2"},
+		/* With no %TAG for the handle the tag keeps its spelling, escapes
+		   and all: decoding a "%21" there would produce the "!" that makes a
+		   shorthand named, and "!local!" is a handle nothing declared. */
+		{"!local%21 x\n", "!local%21"},
+		/* Verbatim tags are used as written. */
+		{"!<tag:x%21> a\n", "tag:x%21"},
+	};
+	for (const auto &c : cases) {
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(c.input, strlen(c.input), nullptr, &err);
+		ASSERT_NE(doc, nullptr)
+			<< c.input << ": " << (err.message ? err.message : "?");
+		const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+		ASSERT_NE(root, nullptr) << c.input;
+		EXPECT_STREQ(gtext_yaml_node_tag(root), c.tag) << c.input;
+		gtext_yaml_free(doc);
+	}
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

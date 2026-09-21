@@ -217,7 +217,7 @@ See [the CSV page](@ref format_csv).
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. `make conformance` scores it
-against yaml-test-suite: **377 of the 395 checkable cases, 95.4%**.
+against yaml-test-suite: **393 of the 395 checkable cases, 99.5%**.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is
@@ -344,7 +344,7 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **95.4%** of the 395 cases that can be checked by
+this parser against it: **99.5%** of the 395 cases that can be checked by
 value, by event stream, or by refusal. For calibration, the same harness
 scores **js-yaml at 82.0%** and **PyYAML at 77.3%** on the value cases -
 neither reference scores anything like 100% here, which is what makes the
@@ -383,13 +383,15 @@ two of a kind with nothing between them name two nodes or none.
 
 **The skipped tenth of the corpus was where the failures were.** For as long
 as the harness checked only value and refusal, it reported 100% - and the
-thirty-eight cases it skipped were the ones asserting an event stream, which
-is exactly the shape this parser is weakest on. `gtext_yaml_stream_walk()`
-made twenty-nine of them askable, and sixteen are refused outright: block
-mappings with an empty key, a key on its own line, or an explicit `?` key
-beside a compact nested collection. Two more are answered inexactly. The
-score fell from 100% of 366 to 95.4% of 395, which is not a regression - it
-is the first honest reading.
+thirty-eight cases it skipped were the ones asserting an event stream. That
+was not bad luck: a mapping with an empty key has a null key, JSON cannot
+write one, so the suite gives those cases an event stream instead of a value,
+and they are exactly the shape this parser was weakest on.
+`gtext_yaml_stream_walk()` made twenty-nine of them askable and sixteen were
+refused outright - valid documents this parser called invalid. Fifteen of the
+eighteen failures are now fixed; the two that remain are one gap, an anchor
+whose node is a block mapping with no scalar key. The score went from "100%
+of 366" to 99.5% of 395, and only the second of those is a measurement.
 
 The denominator moved from 368 to 366 along the way, and that was a harness
 bug rather than progress: three suite cases carry an explicit null where the

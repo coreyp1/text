@@ -627,10 +627,11 @@ large. The 153 documents were chosen by working outward from defects already
 found, so the corpus measured what had already been fixed.
 
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
-against this parser. Of the 366 cases it can check - those carrying a `json`
-field, checked by value, and those marked `fail`, checked by refusal - **all
-366 pass**. The other 38 assert an event stream the harness does not emit.
-The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, which is the
+against this parser. Of the 395 cases it can check - those carrying a `json`
+field, checked by value, those carrying a `tree`, checked by event stream,
+and those marked `fail`, checked by refusal - **393 pass**. The eleven left
+over carry no expectation, or one the harness cannot decode. The same harness
+scores js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
 
@@ -659,17 +660,27 @@ document marker ending a block scalar, and the chunk size no longer changing
 what a document means; and a node's anchors and tags, where two of a kind
 with nothing between them name two nodes or none.
 
-The denominator is 366 rather than 368 because of a harness bug, not
+The denominator moved from 368 to 366 because of a harness bug, not
 progress: three cases carry an explicit null where the expected value goes,
 and the harness judged whether the parser had refused the input before it
 tried to decode that, so refusing one scored as a defect and accepting it
 was skipped.
 
-Nothing the harness can check remains outstanding. The last one to go was a
-node carrying two anchors: the second silently replaced the first, which
-lost the outer anchor from the valid half of the same shape - two anchors on
-two different nodes - as well as accepting the invalid half. Telling them
-apart needs two properties pending at once, where the stream had one slot.
+It then moved from 366 to 395 when the harness learned to check an event
+stream, and that is where the interesting part is. The 38 cases it had been
+skipping were not a random sample: the suite gives a case an event stream
+instead of a JSON value exactly when the value cannot be written as JSON - a
+null key, duplicate keys, a key that is not a scalar - which is the same
+ground a parser is most likely to get wrong. Sixteen of them were refused
+outright, valid documents this parser called invalid, while the score read
+"all 366 checked cases pass".
+
+All sixteen are fixed, along with two answered inexactly. What remains is
+one gap in two cases, `26DV` and `6BFJ`: a property whose node turns out to
+be a block mapping with no scalar key. An anchor reaches the parser on the
+first node it can attach to, and the handover that gives it to the collection
+instead only works when that node is a scalar - not when it is an alias,
+which may carry no properties at all, or a flow collection.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

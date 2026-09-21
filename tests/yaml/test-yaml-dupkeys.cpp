@@ -126,6 +126,59 @@ TEST(YamlDupkeys, CoreSchemaNullTildeIsDuplicate) {
 	EXPECT_EQ(error.code, GTEXT_YAML_E_DUPKEY);
 }
 
+/* KEEP_ALL is the only mode that keeps the document.  ERROR removes the
+ * parse and the other two remove a pair; a tool that has to see what was
+ * written - a linter, a formatter, the event stream that scores this library
+ * against yaml-test-suite - needs the pairs the mapping actually holds.
+ *
+ * Several suite cases exist only because of this: ": a" over ": b" has two
+ * null keys and no JSON value to compare against, so the suite gives an
+ * event stream instead, and scoring it means not collapsing the pairs. */
+TEST(YamlDupkeys, KeepAllKeepsBothPairs) {
+	const char *yaml = "a: 1\na: 2\n";
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.dupkeys = GTEXT_YAML_DUPKEY_KEEP_ALL;
+
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	GTEXT_YAML_Document *doc =
+		gtext_yaml_parse(yaml, strlen(yaml), &opts, &error);
+	ASSERT_NE(doc, nullptr) << (error.message ? error.message : "?");
+
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_mapping_size(root), 2u);
+
+	/* A lookup answers with the first of them, because that is the one it
+	   reaches first; the mode is for reading the document, not for looking
+	   things up in it. */
+	const GTEXT_YAML_Node *found = gtext_yaml_mapping_get(root, "a");
+	ASSERT_NE(found, nullptr);
+	int64_t value = 0;
+	ASSERT_TRUE(gtext_yaml_node_as_int(found, &value));
+	EXPECT_EQ(value, 1);
+	gtext_yaml_free(doc);
+}
+
+/* The JSON fast path builds the document out of a JSON DOM, which has no way
+ * to hold two pairs with the same key.  It is turned off for this mode rather
+ * than quietly answering differently from the ordinary path. */
+TEST(YamlDupkeys, KeepAllAlsoAppliesToJsonShapedInput) {
+	const char *yaml = "{\"a\": 1, \"a\": 2}\n";
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.dupkeys = GTEXT_YAML_DUPKEY_KEEP_ALL;
+
+	GTEXT_YAML_Error error;
+	memset(&error, 0, sizeof(error));
+	GTEXT_YAML_Document *doc =
+		gtext_yaml_parse(yaml, strlen(yaml), &opts, &error);
+	ASSERT_NE(doc, nullptr) << (error.message ? error.message : "?");
+	const GTEXT_YAML_Node *root = gtext_yaml_document_root(doc);
+	ASSERT_NE(root, nullptr);
+	EXPECT_EQ(gtext_yaml_mapping_size(root), 2u);
+	gtext_yaml_free(doc);
+}
+
 int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

@@ -1,6 +1,13 @@
 /**
  * @file test-yaml-partial.cpp
  * @brief Tests for partial parsing and error recovery.
+ *
+ * The malformed line these use was ":" on its own, until that stopped being
+ * malformed: c-l-block-map-implicit-entry's other arm is e-node (8.2.2), so
+ * ":" is a mapping entry with no key and yaml-test-suite has three cases
+ * saying so.  "key: a : b" replaces it - a second key beside a value already
+ * on the line, which has no production and is still refused.  What is under
+ * test here is the recovery, not the sentence that trips it.
  */
 
 #include <gtest/gtest.h>
@@ -12,7 +19,7 @@ extern "C" {
 
 TEST(YamlPartial, RecoversTopLevelNodes) {
 	const char *yaml =
-		":\n"
+		"key: a : b\n"
 		"next: 2\n";
 
 	GTEXT_YAML_Document *doc = NULL;
@@ -62,8 +69,8 @@ TEST(YamlPartial, RecoversTopLevelNodes) {
 
 TEST(YamlPartial, CollectsMultipleErrors) {
 	const char *yaml =
-		":\n"
-		":\n"
+		"key: a : b\n"
+		"key: c : d\n"
 		"ok: 1\n";
 
 	GTEXT_YAML_Document *doc = NULL;

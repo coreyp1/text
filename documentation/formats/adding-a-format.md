@@ -122,9 +122,18 @@ it gives the score against a corpus nobody here chose, which is the only
 figure that says how long that table really is. That last part took a while
 to arrive, and when it did it cut the apparent conformance roughly in half:
 a hand-built corpus agreed at 152 of 153 documents, and yaml-test-suite at
-191 of 368. Fixing what it found has since taken that to 360 of 366, which
+191 of 368. Fixing what it found has since taken that to 393 of 395, which
 is the other half of the point: a score nobody here chose is also a list of
 what to do next.
+
+Name the limit of the oracle too, not only the oracle. That harness checked
+366 cases for a long time and skipped 38 of them, and the skipped ones were
+not a random sample: the suite gives a case an event stream instead of a JSON
+value exactly when the value cannot be written as JSON, which is the same
+ground a parser is most likely to get wrong. Sixteen of those 38 turned out
+to be valid documents the parser refused, all the while the score read "all
+366 checked cases pass". Print how much of the corpus was asked, beside how
+much of it passed.
 
 That last sentence is the most useful one on any of the three pages. A format
 page that only lists features is a marketing document. Name the oracle, name

@@ -104,7 +104,14 @@ int main(void) {
   GTEXT_YAML_Error err;
   memset(&err, 0, sizeof(err));
   size_t count = 0;
-  GTEXT_YAML_Document **docs = gtext_yaml_parse_all(buf, n, &count, NULL, &err);
+  /* The suite's event streams are what a parser produces, and a parser has no
+     opinion about key uniqueness - that is a rule about the mapping the
+     events describe (3.2.1.3).  Several cases carry an event stream and no
+     JSON precisely because the value would have duplicate keys, so scoring
+     them means keeping the pairs the document holds. */
+  GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+  opts.dupkeys = GTEXT_YAML_DUPKEY_KEEP_ALL;
+  GTEXT_YAML_Document **docs = gtext_yaml_parse_all(buf, n, &count, &opts, &err);
   if (!docs) {
     printf("FAIL parse: %s\n", err.message ? err.message : "?");
     return 0;

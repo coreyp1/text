@@ -149,7 +149,12 @@ typedef struct {
 	 * For example, "&node" on a line of its own between two "- " entries is
 	 * at the sequence's own indentation, so it introduces nothing and the
 	 * document is in error - even though the scalar it ends up attached to
-	 * sits further in. */
+	 * sits further in.
+	 *
+	 * On an INDICATOR event there is no node yet, and these say instead where
+	 * a property that has not found its node was written - 0 and -1 when
+	 * none is waiting.  A consumer deciding what the indicator opens can then
+	 * see that something is already waiting to name it. */
 	int prop_line;
 	int prop_col;
 	GTEXT_YAML_Scalar_Style scalar_style; /* Preferred scalar style (SCALAR events) */

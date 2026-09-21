@@ -116,11 +116,26 @@ TEST(YamlColonContent, AnAdjacentValueMayBeOnTheNextLine) {
 		std::string("{\"foo\": \"bar\"}"));
 }
 
-/* And a colon that really has no key in front of it is still refused. */
-TEST(YamlColonContent, AColonThatEndsNothingIsStillRefused) {
-	EXPECT_EQ(Render("- :\n"), std::string(""));
-	EXPECT_EQ(Render(":\n"), std::string(""));
-	EXPECT_EQ(Render("a: 1\n: 2\n"), std::string(""));
+/* A colon that begins its line has a key after all: the one nobody wrote.
+   c-l-block-map-implicit-entry is "( ns-s-block-map-implicit-key | e-node )
+   c-l-block-map-implicit-value(n)" (8.2.2), so ":" alone is {null: null} and
+   "- :" is a sequence holding one of those.  yaml-test-suite has all three
+   below - NHX8, UKK6 and NKF9 - and carries an event stream rather than a
+   JSON value for them, because the value has a null key and JSON cannot
+   write one.  They were refused for as long as nothing asked.
+
+   PyYAML and js-yaml refuse them too, so the references are no help here;
+   the grammar and the suite are what settle it. */
+TEST(YamlColonContent, AColonThatBeginsItsLineHasTheEmptyKey) {
+	EXPECT_EQ(Render("- :\n"), std::string("[{null: null}]"));
+	EXPECT_EQ(Render(":\n"), std::string("{null: null}"));
+	EXPECT_EQ(Render("a: 1\n: 2\n"), std::string("{\"a\": 1, null: 2}"));
+	EXPECT_EQ(Render(": a\n"), std::string("{null: \"a\"}"));
+
+	/* Still refused: a ":" with something other than indentation in front of
+	   it on the line is not an entry with no key. */
+	EXPECT_EQ(Render("a:\n- 1\n  b: 2\n"), std::string(""));
+	EXPECT_EQ(Render("key: a : b\n"), std::string(""));
 }
 
 int main(int argc, char **argv) {

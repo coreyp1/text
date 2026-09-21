@@ -34,10 +34,13 @@ the PyYAML comparison are on \ref format_yaml "the YAML format page".
 parser, at the commit pinned in `tools/conformance/YAML_SUITE_COMMIT`. Of the
 suite's **406 cases it checks 395** - those carrying a `json` field, by value,
 those carrying a `tree`, by event stream, and those marked `fail`, by refusal
-- and **377 pass, 95.4% of what was checked**. The same harness scores
+- and **393 pass, 99.5% of what was checked**. The same harness scores
 js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
 calibration that makes the figure readable: neither reference scores 100%
-either.
+either. Those two are driven through the JSON interface alone, so their
+denominator is the old 366 and not 395 - the comparison is not like for like,
+and it runs *against* this parser rather than for it: the 29 extra cases are
+the harder ones.
 
 The eleven cases left over are not a pass and not a failure - they were never
 asked. Nine carry no expectation of any kind, and two carry one the harness
@@ -46,17 +49,42 @@ cannot decode.
 **What the event stream found.** Until `gtext_yaml_stream_walk()` existed, the
 thirty-eight cases asserting an event stream were skipped, and the score was
 "all 366 checked cases pass". Twenty-nine of those thirty-eight can now be
-asked, and **sixteen of them are refused outright** - documents this parser
-calls invalid and the suite says are valid. They are one cluster: a block
-mapping whose key is empty, written on its own line, or written as an
-explicit `?` key next to a compact nested collection. Two more are answered
-but not exactly: an anchor on a block mapping in `26DV`, and a `%21` left
-undecoded in a `%TAG` suffix in `6CK3`.
+asked, and **sixteen of them were refused outright** - documents this parser
+called invalid and the suite says are valid. That was not a coincidence: a
+mapping with an empty key has a null key, JSON cannot write one, so the suite
+gives those cases an event stream and no JSON. The harness had been skipping
+exactly the cases that were failing.
 
-That is the honest shape of it. The skipped tenth of the corpus was not
-uninteresting; it was where the failures were, and the harness reported 100%
-for as long as it never asked. `YTS_MIN_CORPUS` floors the second denominator
-so the corpus cannot quietly shrink back.
+They were one cluster, and all of it is now fixed:
+
+| Shape | Grammar | Cases |
+| --- | --- | --- |
+| A block mapping entry with no key: `: a`, `:`, `- :` | `c-l-block-map-implicit-entry`'s `e-node` arm (8.2.2) | NHX8, UKK6, NKF9, 2JQS, S3PD, 6M2F |
+| A flow collection as an implicit key: `[a]: b` | `c-s-implicit-json-key` (8.2.2) | LX3P, Q9WF |
+| A compact collection as an explicit key on the `?`'s own line: `? earth: blue` | `s-l+block-indented` (8.2.2) | V9D5, M2N8, KK5P |
+| An explicit entry whose key never got a `:` | `c-l-block-map-explicit-entry`'s second `e-node` (8.2.2) | KK5P |
+| A sequence at the mapping's own column as an explicit key | `seq-spaces(n,block-out)` = `n-1` (8.2.1) | 6PBE |
+| `%21` in a `%TAG` suffix | URI escaping in `ns-tag-char` (5.6) | 6CK3 |
+| Two pairs with the same key, kept rather than collapsed | `GTEXT_YAML_DUPKEY_KEEP_ALL`, below | 2JQS, X38W |
+
+**Still failing: two, and they are one gap.** `26DV` and `6BFJ` both write a
+property whose node turns out to be a block mapping with no scalar key:
+
+```yaml
+top3: &node3
+  *alias1 : scalar3     # &node3 anchors the mapping, not the alias
+```
+
+An anchor or tag reaches the parser on the first node it can attach to, and
+the machinery that hands it over to the collection instead
+(`adopt_own_line_anchor()`) only works when that node is a scalar. Here it is
+an alias, which may carry no properties at all, or a flow collection. The
+anchor is dropped. The same gap is why `&a` on its own line over `: 1` is
+still refused rather than anchoring the mapping - refusing beats accepting it
+with the anchor moved silently onto the value.
+
+`YTS_MIN_CORPUS` floors the second denominator so the corpus cannot quietly
+shrink back.
 
 **Recently closed:** a node carrying two anchors, which was the last case the
 harness could check and this parser could not answer. The second anchor
@@ -193,7 +221,50 @@ gtext_yaml_free(doc);
 gtext_yaml_free(clone_doc);
 ```
 
-### 2.3 Writing and Formatting (Implemented)
+### 2.3 Composed Node Events (Implemented)
+
+`gtext_yaml_document_walk()` and `gtext_yaml_stream_walk()` report a parsed
+document as one event per node, in written order, with each node's anchor,
+tag and style attached to the node it belongs to. It is the composed view: a
+consumer that wants to know what the document *is* wants these, while one
+that wants to know what the input *said* wants the streaming parser's
+`GTEXT_YAML_Event`, which is shaped like the input and carries indicators,
+comments, and properties whose node is not yet known.
+
+Aliases are events of their own and are never followed, so a document with a
+cycle in it walks in finite time. The two pieces of provenance the walk needs
+are readable from the DOM as well: `gtext_yaml_node_flow_style()` says
+whether a collection was written `[like, this]` or as a block, and
+`gtext_yaml_document_has_explicit_start()` / `_end()` say whether `---` and
+`...` were written or merely implied.
+
+```c
+static GTEXT_YAML_Status on_event(const GTEXT_YAML_Node_Event *ev, void *user) {
+  (void)user;
+  switch (ev->type) {
+  case GTEXT_YAML_NODE_EVENT_SCALAR:
+    printf("scalar %.*s\n", (int)ev->value_len, ev->value);
+    break;
+  case GTEXT_YAML_NODE_EVENT_ALIAS:
+    printf("alias *%s\n", ev->value);
+    break;
+  default:
+    break;
+  }
+  return GTEXT_YAML_OK;
+}
+
+size_t count = 0;
+GTEXT_YAML_Document **docs = gtext_yaml_parse_all(input, len, &count, NULL, NULL);
+gtext_yaml_stream_walk(docs, count, on_event, NULL);
+```
+
+`tools/conformance/yaml_event_suite.c` is the worked example: it turns these
+events into yaml-test-suite's event notation, which is what lets
+`make conformance` check the tenth of the corpus that asserts an event stream
+rather than a value.
+
+### 2.4 Writing and Formatting (Implemented)
 
 The writer serializes a DOM to a sink and exposes formatting options such as
 indentation, scalar styles, flow vs. block collections, and line-width aware
@@ -250,6 +321,13 @@ GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(&opts, callback, user_data);
 - **`GTEXT_YAML_DUPKEY_ERROR`**: Fail parsing when duplicate keys are encountered — **Default** (spec-compliant)
 - **`GTEXT_YAML_DUPKEY_FIRST_WINS`**: Use the first occurrence of a duplicate key
 - **`GTEXT_YAML_DUPKEY_LAST_WINS`**: Use the last occurrence of a duplicate key
+- **`GTEXT_YAML_DUPKEY_KEEP_ALL`**: Keep both pairs. The only mode that keeps
+  the document - the two above remove a pair and the default removes the
+  parse - so it is the one for a tool that has to see what was written: a
+  linter, a formatter, or the event walk that scores this parser against
+  yaml-test-suite. `gtext_yaml_mapping_get()` then answers with the first of
+  the duplicates, and the JSON fast path is turned off, since a JSON DOM has
+  no way to hold two pairs with the same key.
 
 ```c
 GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
@@ -872,15 +950,15 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and answers **377 of the 395**
+The parser targets YAML 1.2.2 and answers **393 of the 395**
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked - by value, by event stream, or by refusal - measured by
 `make conformance`. That is 395 of the suite's 406; the other eleven carry no
 expectation, or one the harness cannot decode, and are neither passed nor
-failed. The eighteen failures are listed above and are almost all one shape:
-a block mapping with an empty or explicit key. The same harness scores
-js-yaml at 82.0% and PyYAML at 77.3% on the value cases, so neither reference
-reaches 100% on the cases it does check.
+failed. The two failures are one gap, described above: a property whose node
+is a block mapping with no scalar key. The same harness scores js-yaml at
+82.0% and PyYAML at 77.3% on the value cases, so neither reference reaches
+100% on the cases it does check.
 
 That number arrived late and corrected an impression. Fifteen defects had
 been found and fixed by hand-comparison against PyYAML and js-yaml, and a

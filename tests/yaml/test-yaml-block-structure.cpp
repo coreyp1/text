@@ -96,16 +96,22 @@ TEST(YamlBlockStructure, RefusesAKeyInsideACompleteSequenceEntry) {
 
 /* The scalar before a ":" is its key, held provisionally as the previous
    key's value until the ":" claims it. With none outstanding the ":" has no
-   key at all, and "key: a : b" used to yield {"key": "a", "b": null} - the
-   tail of a value silently turned into a pair. A ":" with no space after it
-   is ordinary content and is unaffected. */
+   key *on its line*, and "key: a : b" used to yield {"key": "a", "b": null} -
+   the tail of a value silently turned into a pair. A ":" with no space after
+   it is ordinary content and is unaffected.
+
+   A ":" that begins its own line is the other case and is not an error:
+   c-l-block-map-implicit-entry's other arm is e-node (8.2.2), so the entry's
+   key is the one nobody wrote.  "a: 1" over ": 2" is {"a": 1, null: 2}, which
+   yaml-test-suite case NKF9 spells out.  Both this and the line above were
+   refused with the same message until the event stream asked. */
 TEST(YamlBlockStructure, RefusesAColonWithNoKeyBeforeIt) {
 	EXPECT_EQ(Render("key: a : b\n"), std::string(""));
 	EXPECT_EQ(Render("key: a: b\n"), std::string(""));
-	EXPECT_EQ(Render("a: 1\n: 2\n"), std::string(""));
 	EXPECT_EQ(Render("key: a :b\n"), std::string("{\"key\": \"a :b\"}"));
 	EXPECT_EQ(Render("a: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
 	EXPECT_EQ(Render("? a\n: 1\nb: 2\n"), std::string("{\"a\": 1, \"b\": 2}"));
+	EXPECT_EQ(Render("a: 1\n: 2\n"), std::string("{\"a\": 1, null: 2}"));
 }
 
 /* A document has one root node (3.2.1). Every place that finished a node at

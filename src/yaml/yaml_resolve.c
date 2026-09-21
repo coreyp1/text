@@ -1302,7 +1302,9 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 					if (i > 0) i--;
 					j = i;
 					break;
-				default:
+				case GTEXT_YAML_DUPKEY_KEEP_ALL:
+					/* Both pairs stay.  The caller asked for the document
+					   rather than for a mapping that can be looked up in. */
 					break;
 			}
 		}
@@ -1311,11 +1313,54 @@ static GTEXT_YAML_Status apply_dupkey_policy(
 	return GTEXT_YAML_OK;
 }
 
+/** The value of one hex digit, or -1 if it is not one. */
+static int yaml_hex_value(char c) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+/**
+ * @brief Decode the URI escapes in a shorthand tag's suffix.
+ *
+ * A suffix is made of ns-tag-chars, which exclude "!", "," and the flow
+ * indicators; those are written as "%" and two hex digits and are part of the
+ * tag rather than of its spelling (5.6, 6.8.2.2).  Spec example 6.26 writes
+ * "!e!tag%21", and the tag it names ends in "!".
+ *
+ * A "%" that is not followed by two hex digits is not an escape and is copied
+ * through: refusing it here would turn a tag this library has no opinion
+ * about into a parse error.
+ *
+ * Writes at most @p len bytes and returns how many, since decoding only ever
+ * shortens.
+ */
+static size_t tag_percent_decode(char *out, const char *in, size_t len) {
+	size_t w = 0;
+	for (size_t i = 0; i < len; i++) {
+		if (in[i] == '%' && i + 2 < len) {
+			int hi = yaml_hex_value(in[i + 1]);
+			int lo = yaml_hex_value(in[i + 2]);
+			if (hi >= 0 && lo >= 0) {
+				out[w++] = (char)((hi << 4) | lo);
+				i += 2;
+				continue;
+			}
+		}
+		out[w++] = in[i];
+	}
+	return w;
+}
+
 static const char *resolve_tag_handle(
 	GTEXT_YAML_Document *doc,
 	const char *tag
 ) {
 	if (!doc || !tag) return tag;
+	/* A verbatim tag reaches the DOM as the URI between its brackets and is
+	   used exactly as written (5.3), so anything not beginning "!" is not a
+	   shorthand and has neither a handle to expand nor escapes to decode. */
 	if (tag[0] != '!') return tag;
 	/* "!!" is a handle like any other and may be redefined: %TAG !! makes
 	   the secondary handle mean something else for that document, and then
@@ -1326,17 +1371,16 @@ static const char *resolve_tag_handle(
 	   Nothing changes when %TAG !! is absent: the loop below finds no
 	   handle matching, the tag comes back as written, and tag_suffix()
 	   reads "!!int" as the standard shorthand as before. */
-	if (!doc->tag_handles || doc->tag_handle_count == 0) return tag;
-
+	const size_t tag_len = strlen(tag);
 	const char *best_prefix = NULL;
 	size_t best_len = 0;
 
-	for (size_t i = 0; i < doc->tag_handle_count; i++) {
+	for (size_t i = 0; doc->tag_handles && i < doc->tag_handle_count; i++) {
 		const char *handle = doc->tag_handles[i].handle;
 		const char *prefix = doc->tag_handles[i].prefix;
 		if (!handle || !prefix) continue;
 		size_t hlen = strlen(handle);
-		if (hlen == 0 || hlen > strlen(tag)) continue;
+		if (hlen == 0 || hlen > tag_len) continue;
 		if (strncmp(tag, handle, hlen) != 0) continue;
 		if (hlen > best_len) {
 			best_len = hlen;
@@ -1344,16 +1388,27 @@ static const char *resolve_tag_handle(
 		}
 	}
 
-	if (!best_prefix || best_len == 0) return tag;
+	/* With no %TAG for this handle the tag keeps the spelling it was written
+	   with - "!!int" stays "!!int", which is what tag_suffix() reads - and so
+	   do its escapes.  Decoding them would be wrong there rather than merely
+	   unhelpful: the result still begins with "!", so a "%21" would decode
+	   into the very character that makes a shorthand named, and "!local%21"
+	   would become "!local!", a handle no %TAG ever declared.  6.8.2.2 keeps
+	   "!" out of a suffix for exactly that reason.  Where a %TAG prefix
+	   applies the result is a URI and there is no handle left to confuse. */
+	if (!best_prefix) return tag;
 
-	const char *suffix = tag + best_len;
-	size_t prefix_len = strlen(best_prefix);
-	size_t suffix_len = strlen(suffix);
+	const size_t handle_len = best_len;
+	const char *prefix = best_prefix;
+	const size_t prefix_len = strlen(best_prefix);
+	const char *suffix = tag + handle_len;
+	const size_t suffix_len = tag_len - handle_len;
+
 	char *resolved = (char *)yaml_context_alloc(doc->ctx, prefix_len + suffix_len + 1, 1);
 	if (!resolved) return tag;
-	memcpy(resolved, best_prefix, prefix_len);
-	memcpy(resolved + prefix_len, suffix, suffix_len);
-	resolved[prefix_len + suffix_len] = '\0';
+	memcpy(resolved, prefix, prefix_len);
+	size_t written = tag_percent_decode(resolved + prefix_len, suffix, suffix_len);
+	resolved[prefix_len + written] = '\0';
 	return resolved;
 }
 
