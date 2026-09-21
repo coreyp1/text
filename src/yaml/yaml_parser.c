@@ -137,6 +137,12 @@ typedef struct {
 	 * case 4JVG.  See GTEXT_YAML_Event::outer_anchor. */
 	char *outer_anchor;
 	char *outer_tag;
+	/* True when the property above was held from an ALIAS event rather than a
+	 * second property.  An alias carries none of its own (7.1), so if no
+	 * collection claims this one the fault is that it was written on an
+	 * alias - not that one node was given two.  Only the message differs;
+	 * both are refused. */
+	bool outer_from_alias;
 	bool last_scalar_in_root;           /* True if last scalar stored in root */
 	bool last_scalar_in_temp;           /* True if last scalar stored in temp */
 	size_t last_scalar_temp_depth;      /* Stack depth when scalar added to temp */
@@ -262,6 +268,7 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	p->last_scalar_anchor_own_line = false;
 	p->outer_anchor = NULL;
 	p->outer_tag = NULL;
+	p->outer_from_alias = false;
 	p->pending_leading_comment = NULL;
 	p->last_emitted_node = NULL;
 	p->last_emitted_line = -1;
@@ -1598,6 +1605,7 @@ static GTEXT_YAML_Status adopt_own_line_tag(
 	 *       - 1
 	 */
 	if (p->outer_tag) {
+		p->outer_from_alias = false;
 		size_t held = p->stack.depth - 1;
 		if (!p->stack.temps[held].tag) {
 			p->stack.temps[held].tag = p->outer_tag;
@@ -1681,6 +1689,7 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 	 *       &k1 key1: val1    both arrive on the key
 	 */
 	if (p->outer_anchor) {
+		p->outer_from_alias = false;
 		size_t held = p->stack.depth - 1;
 		if (!p->stack.temps[held].anchor) {
 			p->stack.temps[held].anchor = p->outer_anchor;
@@ -1716,6 +1725,59 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 	p->stack.temps[top].anchor = moved;
 	node->as.scalar.anchor = NULL;
 	p->last_scalar_anchor_own_line = false;
+	return GTEXT_YAML_OK;
+}
+
+/**
+ * @brief Take custody of a property the stream could not place.
+ *
+ * The stream sets a property aside in its outer_* slots when a second one of
+ * its kind arrives on a later line, because a block collection may open
+ * between the two and then they name two nodes rather than one
+ * (stream_defer_property()). It travels on every node event from there, and
+ * the node that finally settles it is the one adopt_own_line_anchor() hands
+ * it to.
+ *
+ * Every event that can carry a node has to pick it up, not just SCALAR. A
+ * mapping whose first key is a flow collection reaches the parser as
+ * SEQUENCE_START, and one whose first key is an alias as ALIAS; both used to
+ * let the property fall on the floor:
+ *
+ *     &mapping                 &mapping is the block mapping's and &key the
+ *     &key [ &item a, b, c ]: value      sequence's (suite case 6BFJ)
+ *
+ * The slots are empty on arrival: parse_callback refuses anything the node
+ * before left behind.
+ */
+static GTEXT_YAML_Status parser_hold_outer_props(
+		parser_state *p, const GTEXT_YAML_Event *event) {
+	if (!p || !event) return GTEXT_YAML_OK;
+	if (!event->outer_anchor && !event->outer_tag) return GTEXT_YAML_OK;
+
+	p->outer_from_alias = event->type == GTEXT_YAML_EVENT_ALIAS;
+
+	if (event->outer_anchor && !p->outer_anchor) {
+		p->outer_anchor = strdup(event->outer_anchor);
+		if (!p->outer_anchor) {
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory holding an anchor";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+	}
+	if (event->outer_tag && !p->outer_tag) {
+		p->outer_tag = strdup(event->outer_tag);
+		if (!p->outer_tag) {
+			p->failed = true;
+			if (p->error) {
+				p->error->code = GTEXT_YAML_E_OOM;
+				p->error->message = "Out of memory holding a tag";
+			}
+			return GTEXT_YAML_E_OOM;
+		}
+	}
 	return GTEXT_YAML_OK;
 }
 
@@ -2232,9 +2294,15 @@ static GTEXT_YAML_Status check_outer_property_claimed(parser_state *p) {
 	p->failed = true;
 	if (p->error) {
 		p->error->code = GTEXT_YAML_E_INVALID;
-		p->error->message = anchors
-			? "Node has more than one anchor"
-			: "Node has more than one tag";
+		if (p->outer_from_alias) {
+			p->error->message = anchors
+				? "An alias node may not carry an anchor"
+				: "An alias node may not carry a tag";
+		} else {
+			p->error->message = anchors
+				? "Node has more than one anchor"
+				: "Node has more than one tag";
+		}
 	}
 	return GTEXT_YAML_E_INVALID;
 }
@@ -2420,13 +2488,26 @@ static GTEXT_YAML_Status parse_callback(
 		return GTEXT_YAML_E_INVALID;
 	}
 
-	/* An outer property is held from the scalar that carried it until the
-	 * block collection that scalar opens is pushed, which happens either
+	/* An outer property is held from the node that carried it until the
+	 * block collection that node opens is pushed, which happens either
 	 * inside that same scalar event (a sequence, whose "-" pushed the level
 	 * before the scalar arrived) or in the ":" that follows it (a mapping).
 	 * Anything else reaching here with one still held means no collection
-	 * opened, so the two properties named the one node. */
-	if (!(type == GTEXT_YAML_EVENT_INDICATOR
+	 * opened, so the two properties named the one node.
+	 *
+	 * Unless the node the property precedes is a flow collection, and then
+	 * the ":" cannot arrive until the collection is closed:
+	 *
+	 *     &mapping                      &mapping waits through five events
+	 *     &key [ &item a, b, c ]: value      before the ":" claims it
+	 *
+	 * Every one of those is inside the flow level the property opened, so
+	 * the level itself says the wait is still legitimate (suite case 6BFJ).
+	 * A flow collection that no ":" follows still fails the check, one event
+	 * after the "]" pops the level. */
+	const bool inside_flow = p->stack.depth > 0
+		&& !p->stack.is_block[p->stack.depth - 1];
+	if (!inside_flow && !(type == GTEXT_YAML_EVENT_INDICATOR
 			&& event->data.indicator == ':')) {
 		GTEXT_YAML_Status held = check_outer_property_claimed(p);
 		if (held != GTEXT_YAML_OK) return held;
@@ -2614,30 +2695,9 @@ static GTEXT_YAML_Status parse_callback(
 			p->last_scalar_anchor_own_line = (event->anchor != NULL
 				&& event->anchor_line > 0 && event->anchor_line < event->line);
 
-			/* A property the stream could not place.  The check at the top of
-			 * this function has already refused anything left over from the
-			 * scalar before, so these slots are empty. */
-			if (event->outer_anchor) {
-				p->outer_anchor = strdup(event->outer_anchor);
-				if (!p->outer_anchor) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory holding an anchor";
-					}
-					return GTEXT_YAML_E_OOM;
-				}
-			}
-			if (event->outer_tag) {
-				p->outer_tag = strdup(event->outer_tag);
-				if (!p->outer_tag) {
-					p->failed = true;
-					if (p->error) {
-						p->error->code = GTEXT_YAML_E_OOM;
-						p->error->message = "Out of memory holding a tag";
-					}
-					return GTEXT_YAML_E_OOM;
-				}
+			{
+				GTEXT_YAML_Status held = parser_hold_outer_props(p, event);
+				if (held != GTEXT_YAML_OK) return held;
 			}
 
 			parser_attach_leading_comment(p, node);
@@ -2772,6 +2832,11 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_SEQUENCE_START: {
 			/* Start building a sequence - we don't know the size yet */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
+
+			{
+				GTEXT_YAML_Status held = parser_hold_outer_props(p, evt);
+				if (held != GTEXT_YAML_OK) return held;
+			}
 
 			/* Checked as this one opens, not as it closes: by the time it
 			 * closes its own level is on the stack and the entry it has to be
@@ -2927,6 +2992,11 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_MAPPING_START: {
 			/* Start building a mapping */
 			const GTEXT_YAML_Event *evt = (const GTEXT_YAML_Event *)event;
+
+			{
+				GTEXT_YAML_Status held = parser_hold_outer_props(p, evt);
+				if (held != GTEXT_YAML_OK) return held;
+			}
 
 			{
 				GTEXT_YAML_Status sep_status = flow_entry_needs_separator(p);
@@ -3097,6 +3167,11 @@ static GTEXT_YAML_Status parse_callback(
 		case GTEXT_YAML_EVENT_ALIAS: {
 			/* Create alias node */
 			const GTEXT_YAML_Parse_Options *opts = p->doc ? &p->doc->options : NULL;
+
+			{
+				GTEXT_YAML_Status held = parser_hold_outer_props(p, event);
+				if (held != GTEXT_YAML_OK) return held;
+			}
 			const char *anchor_name = event->data.alias_name;
 			GTEXT_YAML_Node *node = NULL;
 			bool explicit_handled = false;

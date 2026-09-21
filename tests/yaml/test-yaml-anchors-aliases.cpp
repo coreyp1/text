@@ -231,7 +231,14 @@ TEST(YamlAnchorsAliases, DeeplyNestedAliases) {
     gtext_yaml_stream_free(s);
 }
 
-// Test 13: Chain of aliases (alias referring to another alias)
+// Test 13: Chain of aliases (an alias reached through another alias)
+//
+// The chain has to run through a node of its own.  "first: &first *orig"
+// would be the shorter way to write it and is not YAML: an alias node is "*"
+// and a name and nothing else (c-ns-alias-node, 7.1), so it can carry no
+// anchor to chain from.  This test used to assert the stream accepted that
+// form; PyYAML and js-yaml both refuse it, the latter in so many words
+// ("alias node should not have any properties"), and so does the test below.
 TEST(YamlAnchorsAliases, ChainedAliases) {
     GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
     GTEXT_YAML_Stream *s = gtext_yaml_stream_new(&opts, noop_cb, NULL);
@@ -239,7 +246,7 @@ TEST(YamlAnchorsAliases, ChainedAliases) {
     
     const char *yaml = 
         "original: &orig value\n"
-        "first: &first *orig\n"
+        "first: &first [*orig]\n"
         "second: *first\n";
     
     GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, yaml, strlen(yaml));
@@ -247,6 +254,32 @@ TEST(YamlAnchorsAliases, ChainedAliases) {
     st = gtext_yaml_stream_finish(s);
     EXPECT_EQ(st, GTEXT_YAML_OK);
     gtext_yaml_stream_free(s);
+}
+
+// Test 13b: An alias may not carry a property of its own.
+//
+// Both halves of c-ns-properties, and both places one can stand.  Written on
+// the alias's own line there is nothing else it could name; written on the
+// line above it belongs to the collection that line opens, and that case is
+// covered in test-yaml-events.cpp (suite case 26DV) rather than here.
+TEST(YamlAnchorsAliases, AnAliasNodeCarriesNoProperties) {
+    struct Case { const char *yaml; const char *what; };
+    const Case cases[] = {
+        { "original: &orig value\nfirst: &first *orig\n", "anchor" },
+        { "original: &orig value\nfirst: !!str *orig\n", "tag" },
+        { "original: &orig value\nfirst: !local *orig\n", "local tag" },
+    };
+
+    for (const Case &c : cases) {
+        GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+        GTEXT_YAML_Stream *s = gtext_yaml_stream_new(&opts, noop_cb, NULL);
+        ASSERT_NE(s, nullptr);
+
+        GTEXT_YAML_Status st = gtext_yaml_stream_feed(s, c.yaml, strlen(c.yaml));
+        if (st == GTEXT_YAML_OK) st = gtext_yaml_stream_finish(s);
+        EXPECT_EQ(st, GTEXT_YAML_E_INVALID) << "an alias carrying a " << c.what;
+        gtext_yaml_stream_free(s);
+    }
 }
 
 // Test 14: Anchor on empty sequence

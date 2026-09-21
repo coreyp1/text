@@ -291,3 +291,93 @@ TEST(YamlEvents, TheDocumentMarkersAreAskableOfTheDocumentToo) {
 	EXPECT_FALSE(gtext_yaml_document_has_explicit_start(NULL));
 	EXPECT_FALSE(gtext_yaml_document_has_explicit_end(NULL));
 }
+
+/* A property written at the end of a line introduces whatever the next line
+ * opens.  When that is a block mapping the parser has to hold the property
+ * until the ":" that opens the mapping arrives, and it used to do so only
+ * when the mapping's first key was a plain scalar - the one shape where the
+ * key event and the mapping-opening ":" are adjacent.  An alias key or a flow
+ * collection key put other events in between and the property was lost, or
+ * worse, drifted onto a later node.  Both are suite cases that the event
+ * stream is the only way to ask about: the composed value is identical
+ * either way, so nothing but the anchor's position distinguishes them. */
+TEST(YamlEvents, AnOwnLinePropertyReachesAMappingWhoseFirstKeyIsNotAScalar) {
+	/* Suite case 26DV.  &node3 is the nested mapping's; before the fix it
+	 * came out on scalar3, which says the wrong thing rather than nothing. */
+	EXPECT_EQ(walk("a: &x scalar1\ntop3: &node3\n  *x : scalar3\n"),
+		"+STR\n"
+		"+DOC\n"
+		"+MAP\n"
+		"=VAL :a\n"
+		"=VAL &x :scalar1\n"
+		"=VAL :top3\n"
+		"+MAP &node3\n"
+		"=ALI *x\n"
+		"=VAL :scalar3\n"
+		"-MAP\n"
+		"-MAP\n"
+		"-DOC\n"
+		"-STR\n");
+
+	/* Suite case 6BFJ.  &mapping waits through five events - the sequence
+	 * start, its three entries and its end - before the ":" claims it. */
+	EXPECT_EQ(walk("---\n&mapping\n&key [ &item a, b, c ]: value\n"),
+		"+STR\n"
+		"+DOC ---\n"
+		"+MAP &mapping\n"
+		"+SEQ [] &key\n"
+		"=VAL &item :a\n"
+		"=VAL :b\n"
+		"=VAL :c\n"
+		"-SEQ\n"
+		"=VAL :value\n"
+		"-MAP\n"
+		"-DOC\n"
+		"-STR\n");
+
+	/* A tag travels the same way, and so does a mapping key. */
+	EXPECT_EQ(walk("a: &x 1\ntop: !!map\n  *x : v\n"),
+		"+STR\n"
+		"+DOC\n"
+		"+MAP\n"
+		"=VAL :a\n"
+		"=VAL &x :1\n"
+		"=VAL :top\n"
+		"+MAP <!!map>\n"
+		"=ALI *x\n"
+		"=VAL :v\n"
+		"-MAP\n"
+		"-MAP\n"
+		"-DOC\n"
+		"-STR\n");
+}
+
+/* The other reading of the same input.  A property held for a collection that
+ * never opens named the node in front of it after all, and one written on an
+ * alias named a node that may not have it (7.1).  Both are refused, and the
+ * message says which, because "more than one anchor" is a confusing thing to
+ * read about a document that has only one. */
+TEST(YamlEvents, AHeldPropertyThatNoCollectionClaimsIsRefused) {
+	struct Case { const char *yaml; const char *message; };
+	const Case cases[] = {
+		/* Suite case 4JVG: no collection opens, so both are val2's. */
+		{"top2: &node2\n  &v2 val2\n", "Node has more than one anchor"},
+		{"top2: !!str\n  !!int val2\n", "Node has more than one tag"},
+		/* The alias is the value, not a key, so nothing opens and &node3
+		 * was written on an alias. */
+		{"a: &x 1\ntop: &node3\n  *x\n", "An alias node may not carry an anchor"},
+		{"a: &x 1\nb: &y *x\n", "An alias node may not carry an anchor"},
+		{"a: &x 1\nb: !!str *x\n", "An alias node may not carry a tag"},
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_YAML_Error error;
+		memset(&error, 0, sizeof(error));
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(c.yaml, strlen(c.yaml), NULL, &error);
+		EXPECT_EQ(doc, nullptr) << c.yaml;
+		if (doc) { gtext_yaml_free(doc); continue; }
+		ASSERT_NE(error.message, nullptr) << c.yaml;
+		EXPECT_STREQ(error.message, c.message) << c.yaml;
+	}
+}

@@ -629,8 +629,10 @@ found, so the corpus measured what had already been fixed.
 `make conformance` runs [yaml-test-suite](https://github.com/yaml/yaml-test-suite)
 against this parser. Of the 395 cases it can check - those carrying a `json`
 field, checked by value, those carrying a `tree`, checked by event stream,
-and those marked `fail`, checked by refusal - **393 pass**. The eleven left
-over carry no expectation, or one the harness cannot decode. The same harness
+and those marked `fail`, checked by refusal - **all 395 pass**. The eleven
+left over carry no expectation, or one the harness cannot decode; they are
+counted separately rather than folded into the rate, so the figure to quote
+is "395 of the 395 checkable, out of 406 shipped" and never a bare 100%. The same harness
 scores js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
 calibration that makes the number readable: neither reference scores 100%
 either.
@@ -675,12 +677,32 @@ ground a parser is most likely to get wrong. Sixteen of them were refused
 outright, valid documents this parser called invalid, while the score read
 "all 366 checked cases pass".
 
-All sixteen are fixed, along with two answered inexactly. What remains is
-one gap in two cases, `26DV` and `6BFJ`: a property whose node turns out to
-be a block mapping with no scalar key. An anchor reaches the parser on the
-first node it can attach to, and the handover that gives it to the collection
-instead only works when that node is a scalar - not when it is an alias,
-which may carry no properties at all, or a flow collection.
+All sixteen are fixed, along with two answered inexactly.
+
+The last two to go, `26DV` and `6BFJ`, were one gap: a property written at
+the end of a line, whose node turns out to be a block mapping whose first key
+is not a scalar. A property reaches the parser on the first node it can
+attach to, and the handover that gives it to the collection instead ran only
+on a `SCALAR` event - the one shape where the key and the `:` that opens the
+mapping are adjacent. An alias key or a flow collection key puts other events
+between the two, and the property was dropped, or in `26DV` carried on to a
+later scalar, which says the wrong thing rather than nothing:
+
+```yaml
+top3: &node3
+  *alias1 : scalar3   # &node3 is the nested mapping's, not scalar3's
+```
+
+Three things were needed. Every event that can carry a node now takes custody
+of a held property, not just `SCALAR`. The check that a held property was
+claimed - one event later at most - now waits through the flow collection it
+precedes, because a `[` cannot reach its `:` in one event. And the stream
+hands a property past an alias rather than onto it: an alias node is `*` and
+a name and nothing else (`c-ns-alias-node`, 7.1), so a property on an alias's
+own line is an error, and one on the line above belongs to what that line
+opens. A tag written that way used to be dropped without a word and an anchor
+carried on to the next node; both are now refused, and the message says an
+alias may carry no property rather than reporting a second one.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

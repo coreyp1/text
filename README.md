@@ -217,7 +217,8 @@ See [the CSV page](@ref format_csv).
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
 input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
 conversion. The API may change before 1.0. `make conformance` scores it
-against yaml-test-suite: **393 of the 395 checkable cases, 99.5%**.
+against yaml-test-suite: **395 of the 395 checkable cases**, out of the 406
+the suite ships.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is
@@ -344,7 +345,7 @@ working outward from defects already found, so it measured the things that
 had already been fixed.
 
 **yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **99.5%** of the 395 cases that can be checked by
+this parser against it: **all 395** of the cases that can be checked by
 value, by event stream, or by refusal. For calibration, the same harness
 scores **js-yaml at 82.0%** and **PyYAML at 77.3%** on the value cases -
 neither reference scores anything like 100% here, which is what makes the
@@ -388,10 +389,11 @@ was not bad luck: a mapping with an empty key has a null key, JSON cannot
 write one, so the suite gives those cases an event stream instead of a value,
 and they are exactly the shape this parser was weakest on.
 `gtext_yaml_stream_walk()` made twenty-nine of them askable and sixteen were
-refused outright - valid documents this parser called invalid. Fifteen of the
-eighteen failures are now fixed; the two that remain are one gap, an anchor
-whose node is a block mapping with no scalar key. The score went from "100%
-of 366" to 99.5% of 395, and only the second of those is a measurement.
+refused outright - valid documents this parser called invalid. All eighteen
+failures are fixed. The score went from "100% of 366" to 100% of 395, and
+only the second of those is a measurement: the first was a rate over a
+denominator that had quietly dropped a tenth of the corpus, and that tenth
+held every defect.
 
 The denominator moved from 368 to 366 along the way, and that was a harness
 bug rather than progress: three suite cases carry an explicit null where the

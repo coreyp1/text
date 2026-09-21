@@ -34,7 +34,7 @@ the PyYAML comparison are on \ref format_yaml "the YAML format page".
 parser, at the commit pinned in `tools/conformance/YAML_SUITE_COMMIT`. Of the
 suite's **406 cases it checks 395** - those carrying a `json` field, by value,
 those carrying a `tree`, by event stream, and those marked `fail`, by refusal
-- and **393 pass, 99.5% of what was checked**. The same harness scores
+- and **all 395 pass**. The same harness scores
 js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
 calibration that makes the figure readable: neither reference scores 100%
 either. Those two are driven through the JSON interface alone, so their
@@ -66,22 +66,41 @@ They were one cluster, and all of it is now fixed:
 | A sequence at the mapping's own column as an explicit key | `seq-spaces(n,block-out)` = `n-1` (8.2.1) | 6PBE |
 | `%21` in a `%TAG` suffix | URI escaping in `ns-tag-char` (5.6) | 6CK3 |
 | Two pairs with the same key, kept rather than collapsed | `GTEXT_YAML_DUPKEY_KEEP_ALL`, below | 2JQS, X38W |
+| A property whose node is a block mapping with no scalar key | `c-ns-properties` (7.1) reaching a `SEQUENCE_START` or `ALIAS` | 26DV, 6BFJ |
 
-**Still failing: two, and they are one gap.** `26DV` and `6BFJ` both write a
-property whose node turns out to be a block mapping with no scalar key:
+**The last two.** `26DV` and `6BFJ` were one gap: a property written at the
+end of a line, whose node turns out to be a block mapping whose first key is
+not a scalar.
 
 ```yaml
 top3: &node3
   *alias1 : scalar3     # &node3 anchors the mapping, not the alias
 ```
 
-An anchor or tag reaches the parser on the first node it can attach to, and
-the machinery that hands it over to the collection instead
-(`adopt_own_line_anchor()`) only works when that node is a scalar. Here it is
-an alias, which may carry no properties at all, or a flow collection. The
-anchor is dropped. The same gap is why `&a` on its own line over `: 1` is
-still refused rather than anchoring the mapping - refusing beats accepting it
-with the anchor moved silently onto the value.
+A property reaches the parser on the first node it can attach to, and the
+handover that gives it to the collection instead (`adopt_own_line_anchor()`)
+ran only on a `SCALAR` event - the one shape where the key and the `:` that
+opens the mapping are adjacent. An alias key or a flow collection key puts
+other events between the two. `26DV` carried `&node3` on to `scalar3`, which
+says the wrong thing rather than nothing; `6BFJ` dropped its anchor.
+
+Three changes closed it. `parser_hold_outer_props()` is now called from every
+event that can carry a node, not just `SCALAR`. The check that a held
+property was claimed - one event later at most - waits through the flow
+collection it precedes, since a `[` cannot reach its `:` in one event. And
+`stream_emit_alias()` hands a property past an alias instead of onto it: an
+alias node is `*` and a name and nothing else (`c-ns-alias-node`, 7.1), so a
+property on the alias's own line is an error and one on the line above
+belongs to what that line opens. A tag written on an alias used to be dropped
+without a word and an anchor carried on to the next node; both are refused
+now, and the message says an alias may carry no property rather than
+reporting a second one. js-yaml agrees in so many words: *alias node should
+not have any properties*.
+
+What is still refused, deliberately, is `&a` on its own line over `: 1` -
+accepting it would move the anchor silently onto the value, and refusing
+beats that. The parser can see the property there because `prop_line` and
+`prop_col` travel on `INDICATOR` events for exactly this purpose.
 
 `YTS_MIN_CORPUS` floors the second denominator so the corpus cannot quietly
 shrink back.
@@ -950,7 +969,7 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and answers **393 of the 395**
+The parser targets YAML 1.2.2 and answers **all 395 of the**
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
 checked - by value, by event stream, or by refusal - measured by
 `make conformance`. That is 395 of the suite's 406; the other eleven carry no

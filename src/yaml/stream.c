@@ -421,10 +421,41 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
   memcpy(buf, name, namelen);
   buf[namelen] = '\0';
 
+  /* An alias node carries no properties of its own: it is "*" and a name and
+     nothing else (c-ns-alias-node, 7.1).  So a property still pending when
+     one arrives names some other node, and which one its line says.
+
+     On the alias's own line there is nothing else for it to name, and the
+     document is in error - the tag used to be dropped here without a word
+     and the anchor carried on to whatever came next:
+
+         b: &y *x         &y has no node; "*x" is not one it may have
+
+     On an earlier line it introduces whatever this line opens, and the alias
+     is only the first thing inside it:
+
+         top3: &node3          &node3 is the nested mapping's, and the alias
+           *alias1 : scalar3   is its key (suite case 26DV)
+
+     Which of the two is not known until the token after the alias, so it
+     travels to the parser in the outer slot - the same journey, and the same
+     arbiter, as a property a second one displaces. */
+  GTEXT_YAML_Status defer = stream_defer_property(
+    s, tok, &s->pending_anchor, &s->pending_anchor_line,
+    &s->outer_anchor, &s->outer_anchor_line,
+    "An alias node may not carry an anchor");
+  if (defer != GTEXT_YAML_OK) return defer;
+  defer = stream_defer_property(
+    s, tok, &s->pending_tag, &s->pending_tag_line,
+    &s->outer_tag, &s->outer_tag_line,
+    "An alias node may not carry a tag");
+  if (defer != GTEXT_YAML_OK) return defer;
+
   GTEXT_YAML_Event alias_ev;
   memset(&alias_ev, 0, sizeof(alias_ev));
   alias_ev.type = GTEXT_YAML_EVENT_ALIAS;
   alias_ev.data.alias_name = buf;
+  stream_attach_pending(s, &alias_ev);
   alias_ev.offset = tok->offset;
   alias_ev.line = tok->line;
   alias_ev.col = tok->col;
@@ -439,12 +470,7 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
     if (cb_rc != GTEXT_YAML_OK) return cb_rc;
   }
 
-  if (s->pending_tag) {
-    free(s->pending_tag);
-    s->pending_tag = NULL;
-    s->pending_tag_line = 0;
-  }
-
+  stream_clear_pending(s);
   return GTEXT_YAML_OK;
 }
 
