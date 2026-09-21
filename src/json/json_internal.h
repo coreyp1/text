@@ -137,6 +137,39 @@ typedef struct {
 } json_number;
 
 /**
+ * @brief A JSON number as an exact decimal: mantissa * 10^exponent
+ *
+ * JSON numbers are decimal text. Keywords that ask an arithmetic question
+ * about one - `multipleOf` is the only one - have to ask it in decimal, or
+ * they answer a different question than the document wrote.
+ */
+typedef struct {
+  uint64_t mantissa; ///< Significant digits, trailing zeros moved to exponent
+  int64_t exponent;  ///< Power of ten the mantissa is scaled by
+  int negative;      ///< 1 if the lexeme carried a minus sign
+} json_decimal;
+
+/**
+ * @brief Read a number lexeme as an exact decimal
+ *
+ * @param lexeme The number token, as the document spelled it
+ * @param len Its length
+ * @param out Output decimal
+ * @return 1 if it was read exactly, 0 if it does not fit (more than 19
+ *   significant digits, an absurd exponent, or not a bare number lexeme)
+ */
+GTEXT_INTERNAL_API int json_decimal_from_lexeme(
+    const char * lexeme, size_t len, json_decimal * out);
+
+/**
+ * @brief Is `value` an exact integer multiple of `divisor`?
+ *
+ * @return 1 yes, 0 no, -1 undecidable (a NULL argument or a zero divisor)
+ */
+GTEXT_INTERNAL_API int json_decimal_is_multiple_of(
+    const json_decimal * value, const json_decimal * divisor);
+
+/**
  * @brief Parse a JSON number token
  *
  * This function parses a JSON number token, performing:
@@ -893,6 +926,12 @@ typedef struct json_schema_node {
       items_schema; ///< Schema for array items (NULL if none)
 
   // Enum/const validation
+  /**
+   * 1 if `enum` was given at all. Distinct from a non-zero enum_count,
+   * because `"enum": []` is a schema that nothing satisfies rather than a
+   * schema that asserts nothing.
+   */
+  int has_enum;
   GTEXT_JSON_Value **
       enum_values;      ///< Array of allowed enum values (NULL if none)
   size_t enum_count;    ///< Number of enum values
@@ -927,6 +966,14 @@ typedef struct json_schema_node {
   double exclusive_maximum;  ///< Exclusive upper bound
   int has_multiple_of;       ///< 1 if multipleOf is set
   double multiple_of;        ///< Divisor; must be greater than zero
+  /**
+   * The divisor as the schema spelled it, when the schema kept its lexeme.
+   * `multipleOf` is a decimal question and `multiple_of` above is a binary
+   * approximation of the divisor, so the exact form is preferred whenever
+   * both it and the instance have one.
+   */
+  json_decimal multiple_of_decimal;
+  int has_multiple_of_decimal;
 
   // Object size constraints
   int has_min_properties; ///< 1 if minProperties is set

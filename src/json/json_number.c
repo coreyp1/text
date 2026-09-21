@@ -387,3 +387,174 @@ GTEXT_INTERNAL_API void json_number_destroy(json_number * num) {
     num->flags &= ~JSON_NUMBER_HAS_LEXEME;
   }
 }
+
+/*
+ * A JSON number as an exact decimal: mantissa * 10^exponent.
+ *
+ * JSON numbers are decimal text, and `multipleOf` asks a decimal question -
+ * "is 0.0075 a multiple of 0.0001" is asking whether 75 * 0.0001 is 0.0075,
+ * which in decimal it plainly is.  Answered in binary it is not, because
+ * neither value is exactly representable and the error does not cancel.  So
+ * the question is answered over the digits the document actually wrote.
+ *
+ * Only what fits: a mantissa of more than 19 significant digits, or one that
+ * overflows on the way in, reports failure and the caller falls back.  This
+ * is not a bignum, and pretending otherwise by silently truncating digits
+ * would answer a different question than the one asked.
+ */
+GTEXT_INTERNAL_API int json_decimal_from_lexeme(
+    const char * lexeme, size_t len, json_decimal * out) {
+  if (!lexeme || !out || len == 0) {
+    return 0;
+  }
+  size_t i = 0;
+  int negative = 0;
+  if (lexeme[i] == '-' || lexeme[i] == '+') {
+    negative = (lexeme[i] == '-');
+    i++;
+  }
+
+  uint64_t mantissa = 0;
+  int digits = 0;      // significant digits accumulated
+  int frac_digits = 0; // digits taken after the decimal point
+  int seen_digit = 0;
+  int in_fraction = 0;
+  for (; i < len; i++) {
+    char c = lexeme[i];
+    if (c == '.') {
+      if (in_fraction) {
+        return 0;
+      }
+      in_fraction = 1;
+      continue;
+    }
+    if (!json_is_digit(c)) {
+      break;
+    }
+    seen_digit = 1;
+    if (mantissa == 0 && c == '0') {
+      /* A leading zero contributes no significant digit, but a zero after
+       * the point still shifts everything right of it. */
+      if (in_fraction) {
+        frac_digits++;
+      }
+      continue;
+    }
+    if (digits >= 19 || mantissa > (UINT64_MAX - 9) / 10) {
+      return 0;
+    }
+    mantissa = mantissa * 10 + (uint64_t)(c - '0');
+    digits++;
+    if (in_fraction) {
+      frac_digits++;
+    }
+  }
+  if (!seen_digit) {
+    return 0;
+  }
+
+  int64_t exponent = -(int64_t)frac_digits;
+  if (i < len && (lexeme[i] == 'e' || lexeme[i] == 'E')) {
+    i++;
+    int exp_negative = 0;
+    if (i < len && (lexeme[i] == '-' || lexeme[i] == '+')) {
+      exp_negative = (lexeme[i] == '-');
+      i++;
+    }
+    int64_t value = 0;
+    if (i >= len || !json_is_digit(lexeme[i])) {
+      return 0;
+    }
+    for (; i < len && json_is_digit(lexeme[i]); i++) {
+      if (value > 1000000) {
+        /* Far past any exponent the divisibility loops below will walk;
+         * saying so here keeps them bounded. */
+        return 0;
+      }
+      value = value * 10 + (lexeme[i] - '0');
+    }
+    exponent += exp_negative ? -value : value;
+  }
+  if (i != len) {
+    return 0; // trailing text: not a bare number lexeme
+  }
+
+  /* Trailing zeros come off the mantissa and go onto the exponent, which
+   * keeps both divisibility loops short for values like 1e8 written out. */
+  while (mantissa != 0 && mantissa % 10 == 0) {
+    mantissa /= 10;
+    exponent += 1;
+  }
+  if (mantissa == 0) {
+    exponent = 0;
+  }
+
+  out->mantissa = mantissa;
+  out->exponent = exponent;
+  out->negative = negative;
+  return 1;
+}
+
+/*
+ * Is `value` an exact integer multiple of `divisor`?
+ *
+ * Returns 1 for yes, 0 for no, and -1 only when it was handed something it
+ * could not read.  A caller that gets -1 has been told nothing and must
+ * decide some other way; folding that into "no" would refuse an instance over
+ * an implementation limit rather than over the schema.
+ *
+ * value = Mv * 10^Ev and divisor = Md * 10^Ed, so the question is whether
+ * Md divides Mv * 10^(Ev-Ed).  Rather than compute that product - which
+ * overflows for any interesting exponent - Md is split into 2^a * 5^b * Q
+ * with Q coprime to 10.  The three factors are pairwise coprime, so the
+ * product divides exactly when all three do, and 10^gap can only ever help
+ * with the first two:
+ *
+ *   Q divides Mv, and v2(Mv) + gap >= a, and v5(Mv) + gap >= b
+ *
+ * where v2 and v5 count how many times 2 and 5 divide Mv.  Every term fits in
+ * a uint64 no matter how far apart the exponents are, so there is no limit to
+ * report and no arithmetic to guard.
+ *
+ * Sign is irrelevant: -6 is as much a multiple of 3 as 6 is.
+ */
+static int json_decimal_valuation(uint64_t value, uint64_t prime) {
+  int count = 0;
+  while (value != 0 && value % prime == 0) {
+    value /= prime;
+    count++;
+  }
+  return count;
+}
+
+GTEXT_INTERNAL_API int json_decimal_is_multiple_of(
+    const json_decimal * value, const json_decimal * divisor) {
+  if (!value || !divisor || divisor->mantissa == 0) {
+    return -1;
+  }
+  if (value->mantissa == 0) {
+    return 1; // zero is a multiple of everything
+  }
+
+  int64_t gap = value->exponent - divisor->exponent;
+  int a = json_decimal_valuation(divisor->mantissa, 2);
+  int b = json_decimal_valuation(divisor->mantissa, 5);
+
+  uint64_t coprime = divisor->mantissa;
+  for (int i = 0; i < a; i++) {
+    coprime /= 2;
+  }
+  for (int i = 0; i < b; i++) {
+    coprime /= 5;
+  }
+  if (value->mantissa % coprime != 0) {
+    return 0;
+  }
+  if ((int64_t)json_decimal_valuation(value->mantissa, 2) + gap < a) {
+    return 0;
+  }
+  if ((int64_t)json_decimal_valuation(value->mantissa, 5) + gap < b) {
+    return 0;
+  }
+  return 1;
+}

@@ -825,6 +825,14 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
         return GTEXT_JSON_E_INVALID;
       }
 
+      /*
+       * Recorded before the count is looked at: `"enum": []` is a valid
+       * schema and no instance satisfies it, because the assertion is that
+       * the instance equals one of the listed values and there are none.
+       * Keying validation off enum_count alone made an empty enum compile
+       * away to nothing and accept everything, which is the opposite answer.
+       */
+      node->has_enum = 1;
       size_t enum_count = gtext_json_array_size(value);
       if (enum_count > 0) {
         if (node->enum_capacity < enum_count) {
@@ -1433,6 +1441,11 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
         }
         node->has_multiple_of = 1;
         node->multiple_of = d;
+        node->has_multiple_of_decimal =
+            (value->type == GTEXT_JSON_NUMBER && value->as.number.lexeme
+                && json_decimal_from_lexeme(value->as.number.lexeme,
+                    value->as.number.lexeme_len,
+                    &node->multiple_of_decimal));
       }
     }
     // --- object and array size assertions -----------------------------
@@ -1631,9 +1644,84 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     // requires an implementation to ignore.
   }
 
+  /*
+   * `items` names the tail when `prefixItems` is present.
+   *
+   * 2020-12 core section 10.3.1.2 is explicit: `items` applies to every
+   * element "at an index greater than the length of prefixItems".  This
+   * compiled object-valued `items` to items_schema unconditionally, which is
+   * draft-07's rule, and so `{"prefixItems": [{}, {}, {}], "items": false}`
+   * called every array invalid - including the empty one.  That is not a
+   * near-miss: it rejects documents the specification calls valid, and the
+   * header described the equivalence as deliberate.
+   *
+   * The decision is made here rather than in the `items` branch because
+   * object keys arrive in document order, and a schema is free to write
+   * `items` before `prefixItems`.
+   *
+   * The test is prefix_items_count rather than "prefixItems was present", and
+   * the two differ only for `"prefixItems": []`, which covers no element - so
+   * `items` starts at index 0 either way and the readings agree.
+   */
+  if (node->prefix_items_count > 0 && node->items_schema) {
+    if (node->additional_items) {
+      /*
+       * `additionalItems` is draft-07's name for this slot and `items` is
+       * 2020-12's, so a schema carrying both has named it twice, and the two
+       * drafts disagree about which one to honor: 2020-12 ignores
+       * `additionalItems` as an unknown keyword, draft-07 ignores
+       * `prefixItems` and lets `items` govern every element.  Nothing in the
+       * document says which draft it was written for, and picking one of two
+       * meanings in silence is the failure this engine exists not to have.
+       */
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+            .message = "Schema uses both \"items\" after \"prefixItems\" and "
+                       "\"additionalItems\" for the same elements; these are "
+                       "two drafts' names for one keyword and they do not "
+                       "agree here"};
+      }
+      return GTEXT_JSON_E_INVALID;
+    }
+    node->additional_items = node->items_schema;
+    node->items_schema = NULL;
+  }
+
   return GTEXT_JSON_OK;
 }
 
+
+/*
+ * Does `instance` satisfy this node's `multipleOf`?
+ *
+ * Asked in decimal whenever both sides kept the digits they were written
+ * with, because that is the question JSON Schema validation section 6.2.1
+ * asks: `0.0075` is 75 lots of `0.0001` in the decimal the document wrote,
+ * and is not a whole number of them in the binary either value rounds to.
+ * This used fmod on doubles and so called the spec's own example invalid.
+ *
+ * The binary path remains for the cases the decimal one cannot serve: a
+ * lexeme longer than a uint64 mantissa holds, and a value built through the
+ * DOM API or parsed with preserve_number_lexeme turned off, neither of which
+ * has digits to read.  It is a fallback rather than a second policy - it
+ * answers the same question less exactly - and `has_multiple_of_decimal`
+ * says which one answered.
+ */
+static int json_schema_is_multiple_of(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance, double v) {
+  if (node->has_multiple_of_decimal && instance->type == GTEXT_JSON_NUMBER
+      && instance->as.number.lexeme) {
+    json_decimal value;
+    if (json_decimal_from_lexeme(instance->as.number.lexeme,
+            instance->as.number.lexeme_len, &value)) {
+      int exact = json_decimal_is_multiple_of(&value, &node->multiple_of_decimal);
+      if (exact >= 0) {
+        return exact;
+      }
+    }
+  }
+  return fmod(v, node->multiple_of) == 0.0;
+}
 
 /*
  * Run one compiled pattern over one string.
@@ -1877,7 +1965,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
   }
 
   // Check enum
-  if (node->enum_count > 0) {
+  if (node->has_enum) {
     int found = 0;
     for (size_t i = 0; i < node->enum_count; i++) {
       if (json_value_equal(instance, node->enum_values[i])) {
@@ -1976,20 +2064,12 @@ static GTEXT_JSON_Status json_schema_validate_depth(
           }
           return GTEXT_JSON_E_SCHEMA;
         }
-        if (node->has_multiple_of) {
-          /* fmod is exact for values that divide evenly in binary, and the
-           * spec's own examples (0.0001 and the like) are not representable,
-           * so a tolerance would trade one class of wrong answer for
-           * another.  An exact remainder is the behavior other validators
-           * have, and is what a caller can reason about. */
-          double r = fmod(v, node->multiple_of);
-          if (r != 0.0) {
-            if (err) {
-              *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
-                  .message = "Number is not a multiple of multipleOf"};
-            }
-            return GTEXT_JSON_E_SCHEMA;
+        if (node->has_multiple_of && !json_schema_is_multiple_of(node, instance, v)) {
+          if (err) {
+            *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA,
+                .message = "Number is not a multiple of multipleOf"};
           }
+          return GTEXT_JSON_E_SCHEMA;
         }
       }
     }

@@ -31,7 +31,8 @@
  * - properties: Object property schemas (recursive validation)
  * - required: List of required property names
  * - items: Array item schema (all items must match)
- * - enum: Array of allowed values (exact match)
+ * - enum: Array of allowed values (exact match). An empty array is a
+ *   schema no instance satisfies, not a schema that asserts nothing
  * - const: Single allowed value (exact match)
  * - minimum/maximum: Numeric constraints
  * - minLength/maxLength: String length constraints
@@ -39,7 +40,12 @@
  * - uniqueItems: Array elements must be pairwise distinct, by structural
  *   equality
  * - exclusiveMinimum/exclusiveMaximum: Strict numeric bounds
- * - multipleOf: Exact divisibility; the divisor must be greater than zero
+ * - multipleOf: Exact divisibility; the divisor must be greater than zero.
+ *   Asked in decimal over the digits the document wrote, because that is
+ *   the question: 0.0075 is 75 lots of 0.0001, and is not a whole number
+ *   of them in the binary either value rounds to. A value whose lexeme was
+ *   not kept, or which needs more than 19 significant digits, falls back to
+ *   binary remainder
  * - minProperties/maxProperties: Object size constraints
  * - dependentRequired: One property's presence requires others
  * - allOf/anyOf/oneOf/not: Boolean applicators. oneOf is exactly one, so two
@@ -50,8 +56,14 @@
  *   ("#" and "#/..."). Recursive references work; targets are compiled once
  *   and shared. A reference that does not resolve, an external URI and a
  *   named anchor are all refused at compile time
- * - prefixItems and additionalItems, with draft-07's array-valued "items"
- *   compiling to the same thing
+ * - prefixItems and items, where "items" applies to the elements at an
+ *   index past the end of "prefixItems" and to every element when there is
+ *   no "prefixItems". draft-07's array-valued "items" compiles to
+ *   prefixItems and its "additionalItems" to the same slot "items" fills,
+ *   so a schema written either way validates the same. A schema carrying
+ *   both "additionalItems" and an "items" that follows "prefixItems" has
+ *   named one slot twice, in two drafts that disagree about which wins, and
+ *   is refused
  * - contains, minContains, maxContains
  * - additionalProperties, propertyNames
  * - dependentSchemas, and draft-07's "dependencies" in either of its forms

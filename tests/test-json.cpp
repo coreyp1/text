@@ -9663,6 +9663,109 @@ TEST(JsonSchemaKeywords, ArrayApplicators) {
 	    "{\"contains\":{\"type\":\"string\"},\"minContains\":0}", "[1]"));
 }
 
+TEST(JsonSchemaKeywords, ItemsAppliesAfterPrefixItems) {
+	// 2020-12 core section 10.3.1.2: `items` applies to the elements at an
+	// index past the end of `prefixItems`, not to every element. Applying it
+	// to all of them called `[]` invalid against a schema that constrains
+	// only a fourth element onwards.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{},{},{}],\"items\":false}", "[]"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{},{},{}],\"items\":false}", "[1,2]"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{},{},{}],\"items\":false}", "[1,2,3]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{},{},{}],\"items\":false}", "[1,2,3,4]"));
+
+	// The index the tail starts at is the length of prefixItems, so the two
+	// schemas below constrain different elements of the same array.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],\"items\":{\"type\":\"integer\"}}",
+	    "[\"x\",1,2]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],\"items\":{\"type\":\"integer\"}}",
+	    "[\"x\",\"y\"]"));
+
+	// Without prefixItems, `items` still applies to every element - that is
+	// the same rule, not a second one, and it is what draft-07 wrote.
+	EXPECT_FALSE(
+	    schema_accepts("{\"items\":{\"type\":\"integer\"}}", "[1,\"a\"]"));
+
+	// There is no empty prefixItems to reason about: 2020-12 requires a
+	// non-empty array, and this engine already refuses one.
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	const char * src = "{\"prefixItems\":[],\"items\":{\"type\":\"integer\"}}";
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(sv, nullptr);
+	EXPECT_EQ(gtext_json_schema_compile(sv, nullptr), nullptr);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaKeywords, TheTailIsNotNamedTwice) {
+	// `additionalItems` is draft-07's name for the slot `items` fills in
+	// 2020-12. A schema carrying both has named it twice, and the drafts
+	// disagree about which to honor, so it is refused rather than resolved
+	// in silence.
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Error perr;
+	memset(&perr, 0, sizeof(perr));
+	const char * src =
+	    "{\"prefixItems\":[{}],\"items\":false,\"additionalItems\":{}}";
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, &perr);
+	ASSERT_NE(sv, nullptr);
+
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	EXPECT_EQ(gtext_json_schema_compile(sv, &serr), nullptr);
+	EXPECT_EQ(serr.code, GTEXT_JSON_E_INVALID);
+	gtext_json_error_free(&serr);
+	gtext_json_free(sv);
+}
+
+TEST(JsonSchemaKeywords, AnEmptyEnumAcceptsNothing) {
+	// The assertion is that the instance equals one of the listed values.
+	// With none listed, nothing satisfies it. Keying this off the number of
+	// values made an empty enum compile away and accept everything, which is
+	// the opposite answer.
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "1"));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "\"x\""));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "null"));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "{}"));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "[]"));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[]}", "true"));
+
+	// A non-empty enum is unaffected.
+	EXPECT_TRUE(schema_accepts("{\"enum\":[1,2]}", "1"));
+	EXPECT_FALSE(schema_accepts("{\"enum\":[1,2]}", "3"));
+}
+
+TEST(JsonSchemaKeywords, MultipleOfIsAskedInDecimal) {
+	// JSON numbers are decimal text and this is a decimal question. In the
+	// binary both values round to, 0.0075 is not a whole number of 0.0001 -
+	// which is the specification's own example, and fmod called it invalid.
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.0001}", "0.0075"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.1}", "0.3"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":1e-8}", "12391239123"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.01}", "1.21"));
+
+	// Exact means exact: the near misses are still refused.
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":0.0001}", "0.00751"));
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":0.1}", "0.35"));
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":1.5}", "4.5001"));
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":2}", "7"));
+
+	// Sign is not part of the question, and zero is a multiple of anything.
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":3}", "-6"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.0001}", "0"));
+
+	// Exponent notation on either side names the same values as the digits.
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":1e2}", "3e2"));
+	EXPECT_FALSE(schema_accepts("{\"multipleOf\":1e2}", "350"));
+	EXPECT_TRUE(schema_accepts("{\"multipleOf\":0.5}", "1.5"));
+}
+
 TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {
 	// `dependencies` is the union of what 2020-12 split in two, so each entry
 	// is compiled into whichever of the pair it means.
