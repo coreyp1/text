@@ -76,6 +76,12 @@
  * - dependentSchemas, and draft-07's "dependencies" in either of its forms
  * - Boolean schemas: "true" accepts everything and "false" nothing, anywhere
  *   a schema is allowed, the root included
+ * - unevaluatedItems and unevaluatedProperties, which apply to whatever the
+ *   rest of the same schema object did not reach. What counts as reached is
+ *   carried across the in-place applicators - allOf, anyOf, oneOf,
+ *   if/then/else, $ref, dependentSchemas - and a subschema that failed
+ *   contributes nothing, so an anyOf branch that named half the properties
+ *   and then failed has not evaluated them
  *
  * - pattern, patternProperties: only when the caller supplies a
  *   regular-expression provider through GTEXT_JSON_Schema_Options. Without
@@ -85,8 +91,6 @@
  *
  * Unsupported standard keywords (rejected at compile time):
  * - pattern, patternProperties, when no provider was supplied
- * - unevaluatedItems, unevaluatedProperties - these need annotation results
- *   to be collected across applicators, which nothing here does yet
  * - $recursiveRef, $dynamicRef - the 2019-09 and 2020-12 dynamic-scope
  *   references
  * - idn-hostname as a `format`, when format assertion is asked for: it needs

@@ -40,6 +40,9 @@ static void json_schema_node_free(json_schema_node * node) {
     free(node->required_keys);
   }
 
+  json_schema_node_free(node->unevaluated_items);
+  json_schema_node_free(node->unevaluated_properties);
+
   // Free the asserted format's name
   free(node->format_name);
 
@@ -222,8 +225,7 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
  * prevent.  A schema using one is refused at compile time instead.
  */
 static const char * const json_schema_unsupported_keywords[] = {
-    "$recursiveRef", "$dynamicRef", "unevaluatedItems",
-    "unevaluatedProperties", NULL};
+    "$recursiveRef", "$dynamicRef", NULL};
 
 /*
  * `format`, `contentEncoding`, `contentMediaType` and `contentSchema` were in
@@ -1579,6 +1581,20 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
     // gets, and for the same reason: a `pattern` that is read and ignored
     // makes a schema that looks like it constrains its data not do so, with
     // nothing to tell the caller.
+    else if (json_matches(key, key_len, "unevaluatedItems")) {
+      GTEXT_JSON_Status status =
+          json_schema_compile_sub(&node->unevaluated_items, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
+    else if (json_matches(key, key_len, "unevaluatedProperties")) {
+      GTEXT_JSON_Status status = json_schema_compile_sub(
+          &node->unevaluated_properties, value, cc, err);
+      if (status != GTEXT_JSON_OK) {
+        return status;
+      }
+    }
     else if (json_matches(key, key_len, "format")) {
       /*
        * An annotation under the default policy, so nothing is kept and the
@@ -2274,9 +2290,76 @@ static size_t json_schema_string_length(const char * bytes, size_t byte_len) {
   return characters;
 }
 
+/*
+ * What a schema object has already reached, for the two keywords that ask.
+ *
+ * `unevaluatedItems` and `unevaluatedProperties` apply to whatever nothing
+ * else in scope applied to, so validation has to carry that around. One byte
+ * per element of an array instance or per property of an object one, which
+ * makes "was this reached" a lookup rather than a search and costs nothing
+ * for the instances that have no unevaluated keyword above them - no
+ * annotations are collected at all unless some node asks for them.
+ *
+ * The rule that makes this more than bookkeeping: a subschema that *failed*
+ * contributes nothing. An `anyOf` whose first branch matched half the
+ * properties and then failed has not evaluated them, and merging only on
+ * success is what keeps that straight.
+ */
+typedef struct {
+  unsigned char * marks;
+  size_t count;
+} json_schema_eval;
+
+static GTEXT_JSON_Status json_schema_eval_init(
+    json_schema_eval * eval, const GTEXT_JSON_Value * instance) {
+  eval->marks = NULL;
+  eval->count = 0;
+  if (!instance) {
+    return GTEXT_JSON_OK;
+  }
+  if (instance->type == GTEXT_JSON_ARRAY) {
+    eval->count = gtext_json_array_size(instance);
+  }
+  else if (instance->type == GTEXT_JSON_OBJECT) {
+    eval->count = gtext_json_object_size(instance);
+  }
+  if (eval->count == 0) {
+    return GTEXT_JSON_OK;
+  }
+  eval->marks = (unsigned char *)calloc(eval->count, 1);
+  return eval->marks ? GTEXT_JSON_OK : GTEXT_JSON_E_OOM;
+}
+
+static void json_schema_eval_clear(json_schema_eval * eval) {
+  free(eval->marks);
+  eval->marks = NULL;
+  eval->count = 0;
+}
+
+static void json_schema_eval_mark(json_schema_eval * eval, size_t index) {
+  if (eval && eval->marks && index < eval->count) {
+    eval->marks[index] = 1;
+  }
+}
+
+static void json_schema_eval_merge(
+    json_schema_eval * into, const json_schema_eval * from) {
+  if (!into || !into->marks || !from->marks) {
+    return;
+  }
+  size_t n = into->count < from->count ? into->count : from->count;
+  for (size_t i = 0; i < n; i++) {
+    into->marks[i] |= from->marks[i];
+  }
+}
+
+static GTEXT_JSON_Status json_schema_validate_body(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err);
+
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, GTEXT_JSON_Error * err);
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err);
 
 /*
  * Kept so the existing call sites read the same.  Every recursive call goes
@@ -2286,12 +2369,136 @@ static GTEXT_JSON_Status json_schema_validate_depth(
 static GTEXT_JSON_Status json_schema_validate_node(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
     GTEXT_JSON_Error * err) {
-  return json_schema_validate_depth(node, instance, 0, err);
+  return json_schema_validate_depth(node, instance, 0, NULL, err);
 }
 
+/*
+ * Apply `unevaluatedItems` and `unevaluatedProperties` to what is left.
+ *
+ * Runs after everything else in the schema object, which is not an
+ * optimisation but the definition: the set these two apply to is "whatever
+ * the rest of this schema did not reach", and it is not known until the rest
+ * has run. What they do reach becomes evaluated in turn, so a parent that
+ * asks the same question of the same instance sees them as covered.
+ */
+static GTEXT_JSON_Status json_schema_apply_unevaluated(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+  if (node->unevaluated_items && instance->type == GTEXT_JSON_ARRAY) {
+    size_t count = gtext_json_array_size(instance);
+    for (size_t i = 0; i < count; i++) {
+      if (eval->marks && i < eval->count && eval->marks[i]) {
+        continue;
+      }
+      const GTEXT_JSON_Value * item = gtext_json_array_get(instance, i);
+      if (!item) {
+        continue;
+      }
+      GTEXT_JSON_Status status =
+          json_schema_validate_depth(node->unevaluated_items, item, depth + 1,
+              NULL, err);
+      if (status != GTEXT_JSON_OK) {
+        if (err && err->code == GTEXT_JSON_E_SCHEMA) {
+          err->message = "An item is not allowed by unevaluatedItems";
+        }
+        return status;
+      }
+      json_schema_eval_mark(eval, i);
+    }
+  }
+  if (node->unevaluated_properties && instance->type == GTEXT_JSON_OBJECT) {
+    size_t count = gtext_json_object_size(instance);
+    for (size_t i = 0; i < count; i++) {
+      if (eval->marks && i < eval->count && eval->marks[i]) {
+        continue;
+      }
+      const GTEXT_JSON_Value * value = gtext_json_object_value(instance, i);
+      if (!value) {
+        continue;
+      }
+      GTEXT_JSON_Status status = json_schema_validate_depth(
+          node->unevaluated_properties, value, depth + 1, NULL, err);
+      if (status != GTEXT_JSON_OK) {
+        if (err && err->code == GTEXT_JSON_E_SCHEMA) {
+          err->message = "A property is not allowed by unevaluatedProperties";
+        }
+        return status;
+      }
+      json_schema_eval_mark(eval, i);
+    }
+  }
+  return GTEXT_JSON_OK;
+}
+
+/*
+ * Validate one schema against one instance.
+ *
+ * A node with neither unevaluated keyword writes its annotations straight
+ * into whatever its caller passed, which is how an `allOf` branch's
+ * `properties` becomes visible to an `unevaluatedProperties` several levels
+ * above it. A node that has one keeps its own set instead, because those two
+ * see what their *own* schema object reached and not what a sibling did.
+ */
 static GTEXT_JSON_Status json_schema_validate_depth(
     const json_schema_node * node, const GTEXT_JSON_Value * instance,
-    int depth, GTEXT_JSON_Error * err) {
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+  if (!node || !instance
+      || (!node->unevaluated_items && !node->unevaluated_properties)) {
+    return json_schema_validate_body(node, instance, depth, eval, err);
+  }
+
+  json_schema_eval local;
+  if (json_schema_eval_init(&local, instance) != GTEXT_JSON_OK) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory tracking what a schema evaluated"};
+    }
+    return GTEXT_JSON_E_OOM;
+  }
+  GTEXT_JSON_Status status =
+      json_schema_validate_body(node, instance, depth, &local, err);
+  if (status == GTEXT_JSON_OK) {
+    status = json_schema_apply_unevaluated(node, instance, depth, &local, err);
+  }
+  if (status == GTEXT_JSON_OK) {
+    json_schema_eval_merge(eval, &local);
+  }
+  json_schema_eval_clear(&local);
+  return status;
+}
+
+/*
+ * One in-place applicator: the same instance, a different schema.
+ *
+ * Its annotations join the caller's only if it passed, which is the rule that
+ * makes `anyOf` and `oneOf` come out right.
+ */
+static GTEXT_JSON_Status json_schema_validate_inplace(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
+  if (!eval || !eval->marks) {
+    return json_schema_validate_depth(node, instance, depth, NULL, err);
+  }
+  json_schema_eval sub;
+  if (json_schema_eval_init(&sub, instance) != GTEXT_JSON_OK) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory tracking what a schema evaluated"};
+    }
+    return GTEXT_JSON_E_OOM;
+  }
+  GTEXT_JSON_Status status =
+      json_schema_validate_depth(node, instance, depth, &sub, err);
+  if (status == GTEXT_JSON_OK) {
+    json_schema_eval_merge(eval, &sub);
+  }
+  json_schema_eval_clear(&sub);
+  return status;
+}
+
+static GTEXT_JSON_Status json_schema_validate_body(
+    const json_schema_node * node, const GTEXT_JSON_Value * instance,
+    int depth, json_schema_eval * eval, GTEXT_JSON_Error * err) {
   if (depth >= JSON_SCHEMA_MAX_VALIDATE_DEPTH) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_DEPTH,
@@ -2324,8 +2531,8 @@ static GTEXT_JSON_Status json_schema_validate_depth(
   // other keywords and all of them apply, which is what happens here: the
   // reference is checked and then the rest of this node continues.
   if (node->ref_target) {
-    GTEXT_JSON_Status status = json_schema_validate_depth(
-        node->ref_target, instance, depth + 1, err);
+    GTEXT_JSON_Status status = json_schema_validate_inplace(
+        node->ref_target, instance, depth + 1, eval, err);
     if (status != GTEXT_JSON_OK) {
       return status;
     }
@@ -2342,7 +2549,8 @@ static GTEXT_JSON_Status json_schema_validate_depth(
     for (size_t i = 0; i < node->all_of_count; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_depth(node->all_of[i], instance, depth + 1, &sub)
+      if (json_schema_validate_inplace(
+              node->all_of[i], instance, depth + 1, eval, &sub)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&sub);
         if (err) {
@@ -2357,14 +2565,22 @@ static GTEXT_JSON_Status json_schema_validate_depth(
 
   if (node->any_of_count > 0) {
     int matched = 0;
-    for (size_t i = 0; i < node->any_of_count && !matched; i++) {
+    for (size_t i = 0; i < node->any_of_count; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_depth(node->any_of[i], instance, depth + 1, &sub)
+      if (json_schema_validate_inplace(
+              node->any_of[i], instance, depth + 1, eval, &sub)
           == GTEXT_JSON_OK) {
         matched = 1;
       }
       gtext_json_error_free(&sub);
+      /* Every branch that matches contributes what it evaluated, so the
+       * later ones are run even once one has matched - but only when
+       * somebody is collecting, since otherwise the verdict is settled and
+       * the rest is wasted work. */
+      if (matched && (!eval || !eval->marks)) {
+        break;
+      }
     }
     if (!matched) {
       if (err) {
@@ -2380,7 +2596,8 @@ static GTEXT_JSON_Status json_schema_validate_depth(
     for (size_t i = 0; i < node->one_of_count; i++) {
       GTEXT_JSON_Error sub;
       memset(&sub, 0, sizeof(sub));
-      if (json_schema_validate_depth(node->one_of[i], instance, depth + 1, &sub)
+      if (json_schema_validate_inplace(
+              node->one_of[i], instance, depth + 1, eval, &sub)
           == GTEXT_JSON_OK) {
         matches++;
       }
@@ -2403,8 +2620,10 @@ static GTEXT_JSON_Status json_schema_validate_depth(
   if (node->not_schema) {
     GTEXT_JSON_Error sub;
     memset(&sub, 0, sizeof(sub));
-    GTEXT_JSON_Status inner =
-        json_schema_validate_depth(node->not_schema, instance, depth + 1, &sub);
+    /* `not` contributes no annotations: it succeeds exactly when its
+     * subschema failed, and a subschema that failed evaluated nothing. */
+    GTEXT_JSON_Status inner = json_schema_validate_depth(
+        node->not_schema, instance, depth + 1, NULL, &sub);
     gtext_json_error_free(&sub);
     if (inner == GTEXT_JSON_OK) {
       if (err) {
@@ -2420,7 +2639,11 @@ static GTEXT_JSON_Status json_schema_validate_depth(
   if (node->if_schema) {
     GTEXT_JSON_Error sub;
     memset(&sub, 0, sizeof(sub));
-    int cond = json_schema_validate_depth(node->if_schema, instance, depth + 1, &sub)
+    /* A passing `if` contributes what it evaluated; a failing one does not,
+     * which is the same rule as everywhere else and is why this cannot just
+     * pass `eval` in and ignore the result. */
+    int cond = json_schema_validate_inplace(
+                   node->if_schema, instance, depth + 1, eval, &sub)
         == GTEXT_JSON_OK;
     gtext_json_error_free(&sub);
     const json_schema_node * branch =
@@ -2428,7 +2651,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
     if (branch) {
       GTEXT_JSON_Error berr;
       memset(&berr, 0, sizeof(berr));
-      if (json_schema_validate_depth(branch, instance, depth + 1, &berr)
+      if (json_schema_validate_inplace(branch, instance, depth + 1, eval, &berr)
           != GTEXT_JSON_OK) {
         gtext_json_error_free(&berr);
         if (err) {
@@ -2698,10 +2921,11 @@ static GTEXT_JSON_Status json_schema_validate_depth(
         continue;
       }
       GTEXT_JSON_Status status = json_schema_validate_depth(
-          node->prefix_items[i], item, depth + 1, err);
+          node->prefix_items[i], item, depth + 1, NULL, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
+      json_schema_eval_mark(eval, i);
     }
     if (node->additional_items && arr_size > node->prefix_items_count) {
       for (size_t i = node->prefix_items_count; i < arr_size; i++) {
@@ -2710,10 +2934,11 @@ static GTEXT_JSON_Status json_schema_validate_depth(
           continue;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->additional_items, item, depth + 1, err);
+            node->additional_items, item, depth + 1, NULL, err);
         if (status != GTEXT_JSON_OK) {
           return status;
         }
+        json_schema_eval_mark(eval, i);
       }
     }
 
@@ -2730,9 +2955,13 @@ static GTEXT_JSON_Status json_schema_validate_depth(
         GTEXT_JSON_Error sub;
         memset(&sub, 0, sizeof(sub));
         if (json_schema_validate_depth(
-                node->contains_schema, item, depth + 1, &sub)
+                node->contains_schema, item, depth + 1, NULL, &sub)
             == GTEXT_JSON_OK) {
           matches++;
+          /* `contains` evaluates the items it matched and no others, which
+           * is the one applicator whose annotation depends on the instance
+           * rather than on the schema's shape. */
+          json_schema_eval_mark(eval, i);
         }
         gtext_json_error_free(&sub);
       }
@@ -2761,11 +2990,12 @@ static GTEXT_JSON_Status json_schema_validate_depth(
           continue;
         }
 
-        GTEXT_JSON_Status status =
-            json_schema_validate_depth(node->items_schema, item, depth + 1, err);
+        GTEXT_JSON_Status status = json_schema_validate_depth(
+            node->items_schema, item, depth + 1, NULL, err);
         if (status != GTEXT_JSON_OK) {
           return status;
         }
+        json_schema_eval_mark(eval, i);
       }
     }
     break;
@@ -2844,7 +3074,7 @@ static GTEXT_JSON_Status json_schema_validate_depth(
           return GTEXT_JSON_E_OOM;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->property_names, key_val, depth + 1, err);
+            node->property_names, key_val, depth + 1, NULL, err);
         gtext_json_free(key_val);
         if (status != GTEXT_JSON_OK) {
           if (err && err->code == GTEXT_JSON_E_SCHEMA) {
@@ -2901,8 +3131,9 @@ static GTEXT_JSON_Status json_schema_validate_depth(
             continue;
           }
           covered = 1;
-          status = json_schema_validate_depth(entry->schema, pv, depth + 1,
-              err);
+          status = json_schema_validate_depth(
+              entry->schema, pv, depth + 1, NULL, err);
+          json_schema_eval_mark(eval, i);
           if (status != GTEXT_JSON_OK) {
             if (err && err->code == GTEXT_JSON_E_SCHEMA) {
               err->message =
@@ -2916,7 +3147,8 @@ static GTEXT_JSON_Status json_schema_validate_depth(
           continue;
         }
         GTEXT_JSON_Status status = json_schema_validate_depth(
-            node->additional_properties, pv, depth + 1, err);
+            node->additional_properties, pv, depth + 1, NULL, err);
+        json_schema_eval_mark(eval, i);
         if (status != GTEXT_JSON_OK) {
           if (err && err->code == GTEXT_JSON_E_SCHEMA) {
             err->message = "A property is not allowed by additionalProperties";
@@ -2932,26 +3164,58 @@ static GTEXT_JSON_Status json_schema_validate_depth(
       if (!gtext_json_object_get(instance, dep->key, strlen(dep->key))) {
         continue;
       }
-      GTEXT_JSON_Status status =
-          json_schema_validate_depth(dep->schema, instance, depth + 1, err);
+      GTEXT_JSON_Status status = json_schema_validate_inplace(
+          dep->schema, instance, depth + 1, eval, err);
       if (status != GTEXT_JSON_OK) {
         return status;
       }
     }
 
-    // Validate properties
+    /* Validate properties.
+     *
+     * Walked over the instance rather than over the schema when annotations
+     * are being collected, because what has to be recorded is the *instance*
+     * position each named property sits at, and a lookup by key gives back a
+     * value with no position attached. */
     if (node->properties_count > 0) {
-      for (size_t i = 0; i < node->properties_count; i++) {
-        const json_schema_property * prop = &node->properties[i];
-        const GTEXT_JSON_Value * prop_val =
-            gtext_json_object_get(instance, prop->key, prop->key_len);
+      if (eval && eval->marks) {
+        size_t count = gtext_json_object_size(instance);
+        for (size_t i = 0; i < count; i++) {
+          size_t klen = 0;
+          const char * kname = gtext_json_object_key(instance, i, &klen);
+          const GTEXT_JSON_Value * prop_val =
+              gtext_json_object_value(instance, i);
+          if (!kname || !prop_val) {
+            continue;
+          }
+          for (size_t p = 0; p < node->properties_count; p++) {
+            const json_schema_property * prop = &node->properties[p];
+            if (prop->key_len != klen || memcmp(prop->key, kname, klen) != 0) {
+              continue;
+            }
+            GTEXT_JSON_Status status = json_schema_validate_depth(
+                prop->schema, prop_val, depth + 1, NULL, err);
+            if (status != GTEXT_JSON_OK) {
+              return status;
+            }
+            json_schema_eval_mark(eval, i);
+            break;
+          }
+        }
+      }
+      else {
+        for (size_t i = 0; i < node->properties_count; i++) {
+          const json_schema_property * prop = &node->properties[i];
+          const GTEXT_JSON_Value * prop_val =
+              gtext_json_object_get(instance, prop->key, prop->key_len);
 
-        if (prop_val) {
-          // Property exists, validate it
-          GTEXT_JSON_Status status =
-              json_schema_validate_depth(prop->schema, prop_val, depth + 1, err);
-          if (status != GTEXT_JSON_OK) {
-            return status;
+          if (prop_val) {
+            // Property exists, validate it
+            GTEXT_JSON_Status status = json_schema_validate_depth(
+                prop->schema, prop_val, depth + 1, NULL, err);
+            if (status != GTEXT_JSON_OK) {
+              return status;
+            }
           }
         }
       }

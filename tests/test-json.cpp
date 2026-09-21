@@ -9189,8 +9189,8 @@ TEST(JsonSchemaStrictness, RejectsStandardKeywordsItCannotEnforce) {
 	const Case cases[] = {
 	    {"pattern", "{\"type\":\"string\",\"pattern\":\"^a+$\"}"},
 	    {"patternProperties", "{\"patternProperties\":{\"^a\":{}}}"},
-	    {"unevaluatedProperties", "{\"unevaluatedProperties\":false}"},
-	    {"unevaluatedItems", "{\"unevaluatedItems\":false}"},
+	    {"$dynamicRef", "{\"$dynamicRef\":\"#meta\"}"},
+	    {"$recursiveRef", "{\"$recursiveRef\":\"#\"}"},
 	};
 
 	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
@@ -10155,6 +10155,122 @@ TEST(JsonSchemaFormat, UrisAreParsedAsAGrammar) {
 	EXPECT_FALSE(format_accepts("uri-template", "\"{v:0}\""));
 	EXPECT_FALSE(format_accepts("uri-template", "\"http://example.com/dictionary/{term:1}/{term\""));
 	EXPECT_FALSE(format_accepts("uri-template", "\"{foo,}\""));
+}
+
+TEST(JsonSchemaUnevaluated, AppliesToWhatNothingElseReached) {
+	// `unevaluatedProperties` sees what the rest of the same schema object
+	// did, including through in-place applicators - which is the whole
+	// difficulty: `additionalProperties` can be decided from this keyword's
+	// own value, and this one cannot.
+	const char * schema =
+	    "{\"type\":\"object\",\"properties\":{\"foo\":{\"type\":\"string\"}},"
+	    "\"unevaluatedProperties\":false}";
+	EXPECT_TRUE(schema_accepts(schema, "{\"foo\":\"a\"}"));
+	EXPECT_FALSE(schema_accepts(schema, "{\"foo\":\"a\",\"bar\":1}"));
+
+	// An allOf branch's `properties` counts, even though it is a different
+	// schema object.
+	const char * nested =
+	    "{\"allOf\":[{\"properties\":{\"foo\":{}}}],"
+	    "\"properties\":{\"bar\":{}},\"unevaluatedProperties\":false}";
+	EXPECT_TRUE(schema_accepts(nested, "{\"foo\":1,\"bar\":2}"));
+	EXPECT_FALSE(schema_accepts(nested, "{\"foo\":1,\"bar\":2,\"baz\":3}"));
+
+	// And through a $ref, which is an in-place applicator like any other.
+	const char * reffed =
+	    "{\"$defs\":{\"one\":{\"properties\":{\"foo\":{}}}},"
+	    "\"$ref\":\"#/$defs/one\",\"unevaluatedProperties\":false}";
+	EXPECT_TRUE(schema_accepts(reffed, "{\"foo\":1}"));
+	EXPECT_FALSE(schema_accepts(reffed, "{\"foo\":1,\"bar\":2}"));
+}
+
+TEST(JsonSchemaUnevaluated, AFailedBranchEvaluatedNothing) {
+	// The rule that makes this more than bookkeeping. The first anyOf branch
+	// names `foo` and then fails on `bar`; it has not evaluated `foo`, and an
+	// implementation that merged its annotations anyway would call the
+	// instance below valid.
+	const char * schema =
+	    "{\"anyOf\":["
+	    "{\"properties\":{\"foo\":{}},\"required\":[\"bar\"]},"
+	    "{\"properties\":{\"baz\":{}}}],"
+	    "\"unevaluatedProperties\":false}";
+	EXPECT_FALSE(schema_accepts(schema, "{\"foo\":1,\"baz\":2}"));
+	EXPECT_TRUE(schema_accepts(schema, "{\"baz\":2}"));
+	// With `bar` present the first branch passes and `foo` is evaluated - but
+	// `bar` is not. `required` names a property; it does not apply a schema
+	// to one, and only applying a schema evaluates anything.
+	EXPECT_FALSE(schema_accepts(schema, "{\"foo\":1,\"bar\":2}"));
+	EXPECT_TRUE(schema_accepts(
+	    "{\"anyOf\":[{\"properties\":{\"foo\":{},\"bar\":{}},"
+	    "\"required\":[\"bar\"]},{\"properties\":{\"baz\":{}}}],"
+	    "\"unevaluatedProperties\":false}",
+	    "{\"foo\":1,\"bar\":2}"));
+
+	// `not` succeeds exactly when its subschema failed, so it evaluates
+	// nothing whatever the subschema named.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"not\":{\"properties\":{\"foo\":{\"type\":\"integer\"}},"
+	    "\"required\":[\"bar\"]},\"unevaluatedProperties\":false}",
+	    "{\"foo\":1}"));
+}
+
+TEST(JsonSchemaUnevaluated, IfContributesOnlyWhenItPassed) {
+	const char * schema =
+	    "{\"if\":{\"properties\":{\"foo\":{\"const\":1}},\"required\":[\"foo\"]},"
+	    "\"then\":{\"properties\":{\"bar\":{}}},"
+	    "\"unevaluatedProperties\":false}";
+	// The `if` passes, so both it and `then` have evaluated something.
+	EXPECT_TRUE(schema_accepts(schema, "{\"foo\":1,\"bar\":2}"));
+	// The `if` fails and there is no `else`, so nothing was evaluated.
+	EXPECT_FALSE(schema_accepts(schema, "{\"foo\":2}"));
+}
+
+TEST(JsonSchemaUnevaluated, ItemsAndContains) {
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],\"unevaluatedItems\":false}",
+	    "[\"a\"]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],\"unevaluatedItems\":false}",
+	    "[\"a\",2]"));
+
+	// `contains` evaluates the items it matched and no others, which is the
+	// one applicator whose annotation depends on the instance.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"unevaluatedItems\":false}",
+	    "[\"a\",\"b\"]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"contains\":{\"type\":\"string\"},\"unevaluatedItems\":false}",
+	    "[\"a\",1]"));
+
+	// `unevaluatedItems` as a schema rather than as a refusal.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],"
+	    "\"unevaluatedItems\":{\"type\":\"integer\"}}",
+	    "[\"a\",1,2]"));
+	EXPECT_FALSE(schema_accepts(
+	    "{\"prefixItems\":[{\"type\":\"string\"}],"
+	    "\"unevaluatedItems\":{\"type\":\"integer\"}}",
+	    "[\"a\",1,\"b\"]"));
+}
+
+TEST(JsonSchemaUnevaluated, WhatItReachedCountsAsEvaluated) {
+	// An inner `unevaluatedProperties` evaluates what it applies to, so an
+	// outer one looking at the same instance sees those as covered.
+	EXPECT_TRUE(schema_accepts(
+	    "{\"allOf\":[{\"properties\":{\"foo\":{}},"
+	    "\"unevaluatedProperties\":true}],"
+	    "\"unevaluatedProperties\":false}",
+	    "{\"foo\":1,\"bar\":2}"));
+}
+
+TEST(JsonSchemaUnevaluated, NestedSchemasSeeOnlyTheirOwn) {
+	// The inner schema object's `unevaluatedProperties` sees what that object
+	// reached, not what its parent's `properties` did. Here `foo` is named by
+	// the outer schema and the inner one has never heard of it.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"properties\":{\"foo\":{}},"
+	    "\"allOf\":[{\"unevaluatedProperties\":false}]}",
+	    "{\"foo\":1}"));
 }
 
 TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {

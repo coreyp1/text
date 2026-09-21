@@ -347,9 +347,6 @@ This list had gone stale: most of what it called planned has been
 implemented, and a list of gaps that names things which are not gaps is worse
 than no list, because it is read as current. What remains unimplemented is:
 
-- **Annotation-collecting applicators**: `unevaluatedProperties` and
-  `unevaluatedItems`, which need annotation results carried across
-  applicators - a different shape of evaluation from anything here now
 - **Dynamic references**: `$recursiveRef`, `$recursiveAnchor` and
   `$dynamicRef`. `$dynamicAnchor` is registered as an ordinary anchor, so a
   `$ref` to one inside the same resource resolves; what is missing is the

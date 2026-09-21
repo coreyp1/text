@@ -1091,6 +1091,17 @@ typedef struct json_schema_node {
   struct json_schema_node * property_names;
 
   /**
+   * `unevaluatedItems` and `unevaluatedProperties`.
+   *
+   * These are the only keywords that need to know what the *rest* of this
+   * schema object did. Everything else can be decided from the instance and
+   * its own value; these two apply to whatever no other keyword in scope
+   * reached, so validation has to carry that around and hand it to them.
+   */
+  struct json_schema_node * unevaluated_items;
+  struct json_schema_node * unevaluated_properties;
+
+  /**
    * The `format` this node asserts, or NULL. Owned, and set only under
    * GTEXT_JSON_FORMAT_ASSERT - in the default annotation policy the keyword
    * constrains nothing and nothing is kept.
