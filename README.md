@@ -116,9 +116,11 @@ pipe at all.
 
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
 JSON Schema 2020-12, which answers all 1301 assertions in
-JSON-Schema-Test-Suite's required draft2020-12 files and gets none of them
-wrong; `make conformance-json-schema` measures it, and the gate is the whole
-suite rather than a floor set just under it.
+JSON-Schema-Test-Suite's required draft2020-12 files and all 162 of its
+optional ones, and gets none of them wrong; `make conformance-json-schema`
+measures it, and the gate is the whole required suite rather than a floor set
+just under it. `$schema` selects a draft as well as a vocabulary set, so a
+`$ref` into a 2019-09 or draft-07 document is read as that draft.
 
 The dialect describes itself, so the last four of those assertions ask a
 schema to validate another schema through a `$ref` to the published

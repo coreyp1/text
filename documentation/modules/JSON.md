@@ -349,11 +349,44 @@ than no list, because it is read as current. What remains unimplemented is:
 
 - **2019-09's dynamic references**: `$recursiveRef` and `$recursiveAnchor`,
   which 2020-12 replaced. `$dynamicRef` and `$dynamicAnchor` are implemented
-- **Other drafts**: `$schema` selects vocabularies, but it does not select a
-  draft. A `$ref` to a draft-07 document is compiled with 2020-12's keyword
-  meanings, and the two differ over `items`
-A schema using either of those is refused at compile time rather than
-validated with the keyword ignored.
+
+A schema using either is refused at compile time rather than validated with
+the keyword ignored.
+
+### `$schema` selects a draft
+
+A `$ref` can leave the document and land in one written years earlier, and
+that document is read as what it says it is. The dialect is scoped exactly as
+the base URI is: it applies to the resource that declares it and everything
+inside, and the resource outside is unaffected, so the same keyword can mean
+different things either side of a boundary within one compile.
+
+2020-12, 2019-09, draft-07 and draft-06 are read. What differs between them
+and is honoured here:
+
+- a keyword the draft did not have yet is an unknown member and is ignored -
+  `prefixItems`, `$dynamicRef` and `$dynamicAnchor` before 2020-12;
+  `unevaluatedItems`, `unevaluatedProperties`, `dependentSchemas`,
+  `dependentRequired`, `minContains` and `maxContains` before 2019-09;
+  `if`, `then` and `else` before draft-07
+- before 2019-09, a schema object containing `$ref` **is** that reference:
+  every other keyword beside it is ignored. 2019-09 made `$ref` an applicator
+  like any other, so its siblings apply
+- an array-valued `items` with `additionalItems`, which is how the older
+  drafts spell what 2020-12 calls `prefixItems` and `items`, compiles to the
+  same slots in every draft
+
+draft-04 and earlier are **refused**, and the error names the draft. draft-04
+spells `exclusiveMinimum` as a boolean that modifies `minimum`, and `$id` as
+`id`; reading one of those as if it were draft-06 does not produce a wrong
+keyword, it produces a wrong answer about the instance, which is exactly what
+this engine refuses rather than guesses at.
+
+Identifiers are resolved the same way in every draft: `$id`, `$anchor` and
+`$defs` establish resources and names whatever the dialect says. draft-07 has
+no `$anchor` and spells a location-independent identifier as an `$id` holding
+only a fragment, and that spelling is not implemented - a draft-07 document
+that uses one has a name this engine will not find.
 
 `$vocabulary` is implemented. A metaschema named by `$schema` and reachable
 through the resolver says which vocabularies a schema written against it

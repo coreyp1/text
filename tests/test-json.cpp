@@ -12182,6 +12182,207 @@ TEST(JsonSchemaInteger, ADomBuiltNumberHasNoLexemeAndStillWorks) {
 	gtext_json_free(doc);
 }
 
+// ===========================================================================
+// `$schema` selects a draft, not just a set of vocabularies
+// ===========================================================================
+//
+// A `$ref` can leave the document and land in one written years earlier, and
+// that document has to be read as what it says it is. The engine used to
+// record `$schema` and then compile everything with 2020-12's meanings, so a
+// 2019-09 schema's `prefixItems` - a member that draft never defined - was
+// enforced as a 2020-12 keyword.
+//
+// The dialect is scoped exactly as the base URI is: it applies to the resource
+// that declares it and to everything inside, and the resource outside is
+// unaffected.
+
+namespace {
+
+/** Compile `src` with `resolver` attached, or return nullptr. */
+GTEXT_JSON_Schema * compile_with(const char * src, StubResolver * resolver,
+    GTEXT_JSON_Error * err = nullptr) {
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	GTEXT_JSON_Schema_Resolver vt;
+	if (resolver) {
+		vt.ctx = resolver;
+		vt.get_fn = StubResolver::get;
+		opts.resolver = &vt;
+	}
+	GTEXT_JSON_Value * doc = parse_doc(src);
+	EXPECT_NE(doc, nullptr) << src;
+	if (!doc) {
+		return nullptr;
+	}
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, err);
+	gtext_json_free(doc);
+	return schema;
+}
+
+bool schema_accepts(GTEXT_JSON_Schema * schema, const char * instance) {
+	GTEXT_JSON_Value * v = parse_doc(instance);
+	EXPECT_NE(v, nullptr) << instance;
+	bool ok = v
+	    && gtext_json_schema_validate(schema, v, nullptr) == GTEXT_JSON_OK;
+	gtext_json_free(v);
+	return ok;
+}
+
+} // namespace
+
+TEST(JsonSchemaDraft, PrefixItemsIsNotAKeywordIn2019_09) {
+	// The suite's optional/cross-draft case. The referenced document says it
+	// is 2019-09, where `prefixItems` does not exist, so [1,2,3] satisfies it
+	// - and would not if the reference were read as 2020-12.
+	StubResolver resolver;
+	resolver.add("http://example.com/2019.json",
+	    "{\"$id\":\"http://example.com/2019.json\","
+	    "\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"prefixItems\":[{\"type\":\"string\"}]}");
+
+	GTEXT_JSON_Schema * schema = compile_with(
+	    "{\"type\":\"array\",\"$ref\":\"http://example.com/2019.json\"}",
+	    &resolver);
+	ASSERT_NE(schema, nullptr);
+	EXPECT_TRUE(schema_accepts(schema, "[1, 2, 3]"));
+	EXPECT_TRUE(schema_accepts(schema, "[\"a\"]"));
+	gtext_json_schema_free(schema);
+}
+
+TEST(JsonSchemaDraft, TheDialectIsScopedToTheResourceThatDeclaresIt) {
+	// The same keyword, in the same compile, meaning different things either
+	// side of a resource boundary. A dialect that leaked outward would make
+	// the outer document's `prefixItems` stop working the moment it referred
+	// to an older one.
+	StubResolver resolver;
+	resolver.add("http://example.com/2019.json",
+	    "{\"$id\":\"http://example.com/2019.json\","
+	    "\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"prefixItems\":[{\"type\":\"string\"}]}");
+
+	GTEXT_JSON_Schema * schema = compile_with(
+	    "{\"allOf\":[{\"$ref\":\"http://example.com/2019.json\"},"
+	    "{\"prefixItems\":[{\"type\":\"number\"}]}]}",
+	    &resolver);
+	ASSERT_NE(schema, nullptr);
+	// The outer branch is 2020-12 and does constrain the first element.
+	EXPECT_TRUE(schema_accepts(schema, "[1]"));
+	EXPECT_FALSE(schema_accepts(schema, "[\"a\"]"));
+	gtext_json_schema_free(schema);
+}
+
+TEST(JsonSchemaDraft, BeforeTwentyNineteenARefIgnoresItsSiblings) {
+	// Core section 8.2.4.1 in draft-07: "All other properties in a "$ref"
+	// object MUST be ignored." 2019-09 made `$ref` an applicator like any
+	// other. Reading a draft-07 document under the newer rule adds
+	// constraints its author did not write.
+	GTEXT_JSON_Schema * seven = compile_with(
+	    "{\"$schema\":\"http://json-schema.org/draft-07/schema#\","
+	    "\"definitions\":{\"any\":{}},"
+	    "\"$ref\":\"#/definitions/any\",\"maximum\":5}",
+	    nullptr);
+	ASSERT_NE(seven, nullptr);
+	EXPECT_TRUE(schema_accepts(seven, "10"));
+	gtext_json_schema_free(seven);
+
+	// The identical document, said to be 2019-09, where the sibling applies.
+	GTEXT_JSON_Schema * newer = compile_with(
+	    "{\"$schema\":\"https://json-schema.org/draft/2019-09/schema\","
+	    "\"$defs\":{\"any\":{}},"
+	    "\"$ref\":\"#/$defs/any\",\"maximum\":5}",
+	    nullptr);
+	ASSERT_NE(newer, nullptr);
+	EXPECT_FALSE(schema_accepts(newer, "10"));
+	EXPECT_TRUE(schema_accepts(newer, "1"));
+	gtext_json_schema_free(newer);
+}
+
+TEST(JsonSchemaDraft, KeywordsThatDidNotExistYetAreIgnored) {
+	struct Case {
+		const char * dialect;
+		const char * keyword;
+		const char * schema;
+		const char * instance;
+	};
+	// Each of these constrains the instance under 2020-12 and does not exist
+	// in the draft named beside it.
+	const Case cases[] = {
+	    {"https://json-schema.org/draft/2019-09/schema", "prefixItems",
+	        "\"prefixItems\":[{\"type\":\"string\"}]", "[1]"},
+	    {"http://json-schema.org/draft-07/schema#", "unevaluatedProperties",
+	        "\"unevaluatedProperties\":false", "{\"a\":1}"},
+	    {"http://json-schema.org/draft-07/schema#", "dependentRequired",
+	        "\"dependentRequired\":{\"a\":[\"b\"]}", "{\"a\":1}"},
+	    {"http://json-schema.org/draft-07/schema#", "minContains",
+	        "\"contains\":{\"type\":\"string\"},\"minContains\":2",
+	        "[\"x\", 1]"},
+	    {"http://json-schema.org/draft-06/schema#", "if",
+	        "\"if\":{\"type\":\"number\"},\"then\":{\"maximum\":1}", "5"},
+	};
+	for (const Case & c : cases) {
+		std::string src = std::string("{\"$schema\":\"") + c.dialect + "\","
+		    + c.schema + "}";
+		GTEXT_JSON_Schema * schema = compile_with(src.c_str(), nullptr);
+		ASSERT_NE(schema, nullptr) << c.keyword;
+		EXPECT_TRUE(schema_accepts(schema, c.instance))
+		    << c.keyword << " should not be a keyword in " << c.dialect;
+		gtext_json_schema_free(schema);
+
+		// And the same document under 2020-12, where it is a keyword, to
+		// prove the case would otherwise have failed.
+		std::string modern =
+		    std::string("{\"$schema\":"
+		                "\"https://json-schema.org/draft/2020-12/schema\",")
+		    + c.schema + "}";
+		GTEXT_JSON_Schema * now = compile_with(modern.c_str(), nullptr);
+		ASSERT_NE(now, nullptr) << c.keyword;
+		EXPECT_FALSE(schema_accepts(now, c.instance)) << c.keyword;
+		gtext_json_schema_free(now);
+	}
+}
+
+TEST(JsonSchemaDraft, DraftsThisEngineCannotReadAreRefused) {
+	// draft-04 spells `exclusiveMinimum` as a boolean that modifies
+	// `minimum`, and `$id` as `id`. Reading one of those as if it were
+	// draft-06 does not produce a wrong keyword, it produces a wrong answer
+	// about the instance - so it is refused, the way every other keyword this
+	// engine cannot honour is.
+	const char * old_drafts[] = {
+	    "http://json-schema.org/draft-04/schema#",
+	    "http://json-schema.org/draft-03/schema#",
+	    "http://json-schema.org/schema#",
+	};
+	for (const char * dialect : old_drafts) {
+		std::string src =
+		    std::string("{\"$schema\":\"") + dialect + "\",\"minimum\":1}";
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * schema = compile_with(src.c_str(), nullptr, &err);
+		EXPECT_EQ(schema, nullptr) << dialect;
+		EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED) << dialect;
+		// Named, so the caller is told which draft rather than only that
+		// something was wrong with their `$schema`.
+		EXPECT_NE(err.context_snippet, nullptr) << dialect;
+		gtext_json_schema_free(schema);
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(JsonSchemaDraft, AnUnknownDialectIsStillReadAsTheStandardOne) {
+	// A `$schema` naming a metaschema nobody can supply is overwhelmingly a
+	// schema written against the standard dialect that said so. Refusing
+	// those would be a worse answer than assuming the usual one, and it is
+	// the behaviour that was there before drafts were dispatched on.
+	GTEXT_JSON_Schema * schema = compile_with(
+	    "{\"$schema\":\"https://example.com/my-dialect\","
+	    "\"prefixItems\":[{\"type\":\"string\"}]}",
+	    nullptr);
+	ASSERT_NE(schema, nullptr);
+	EXPECT_FALSE(schema_accepts(schema, "[1]"));
+	EXPECT_TRUE(schema_accepts(schema, "[\"a\"]"));
+	gtext_json_schema_free(schema);
+}
+
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

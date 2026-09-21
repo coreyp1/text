@@ -269,6 +269,85 @@ static const struct {
         JSON_VOCAB_CONTENT},
     {NULL, 0}};
 
+/*
+ * Which draft a schema is written against.
+ *
+ * `$schema` names a dialect, and a dialect is more than a set of
+ * vocabularies: the older drafts predate `$vocabulary` entirely, and they
+ * disagree with 2020-12 about what some keywords mean rather than only about
+ * which exist. The numbers increase with time so that "at least this draft"
+ * is a comparison.
+ *
+ * Only back to draft-06. draft-04 and draft-03 spell `exclusiveMinimum` as a
+ * boolean that modifies `minimum`, and draft-04 spells `$id` as `id`; reading
+ * one of those as if it were draft-06 does not produce a wrong keyword, it
+ * produces a wrong answer about the instance. They are refused, which is the
+ * same thing this engine does with every other keyword it cannot honour.
+ */
+typedef enum {
+  JSON_DRAFT_06 = 6,
+  JSON_DRAFT_07 = 7,
+  JSON_DRAFT_2019_09 = 2019,
+  JSON_DRAFT_2020_12 = 2020
+} json_schema_draft;
+
+static const struct {
+  const char * uri;
+  json_schema_draft draft;
+} json_schema_dialects[] = {
+    {"https://json-schema.org/draft/2020-12/schema", JSON_DRAFT_2020_12},
+    {"https://json-schema.org/draft/2019-09/schema", JSON_DRAFT_2019_09},
+    /* The older ones are `http`, and their own `$id` carries the empty
+     * fragment, so both spellings turn up in real documents. */
+    {"http://json-schema.org/draft-07/schema#", JSON_DRAFT_07},
+    {"http://json-schema.org/draft-07/schema", JSON_DRAFT_07},
+    {"http://json-schema.org/draft-06/schema#", JSON_DRAFT_06},
+    {"http://json-schema.org/draft-06/schema", JSON_DRAFT_06},
+    {NULL, JSON_DRAFT_2020_12}};
+
+/* Named so that the refusal can say which draft it was, rather than "an
+ * unsupported dialect". */
+static const struct {
+  const char * uri;
+  const char * name;
+} json_schema_dialects_refused[] = {
+    {"http://json-schema.org/draft-04/schema#", "draft-04"},
+    {"http://json-schema.org/draft-04/schema", "draft-04"},
+    {"http://json-schema.org/draft-03/schema#", "draft-03"},
+    {"http://json-schema.org/draft-03/schema", "draft-03"},
+    {"http://json-schema.org/schema#", "draft-04"},
+    {NULL, NULL}};
+
+/*
+ * The draft each keyword was introduced in.
+ *
+ * A keyword that did not exist yet is not a keyword: it is an unknown member,
+ * and unknown members are ignored. This is the same rule as the vocabulary
+ * check below, applied along the other axis - a dialect can leave a keyword
+ * out by not declaring its vocabulary, or by predating it.
+ *
+ * Only the keywords whose absence changes an answer are listed. The
+ * annotation keywords arrived at various times too, and since this engine
+ * ignores them in every draft it would make no difference.
+ */
+static const struct {
+  const char * keyword;
+  json_schema_draft since;
+} json_schema_keyword_since[] = {
+    {"prefixItems", JSON_DRAFT_2020_12},
+    {"$dynamicRef", JSON_DRAFT_2020_12},
+    {"$dynamicAnchor", JSON_DRAFT_2020_12},
+    {"unevaluatedItems", JSON_DRAFT_2019_09},
+    {"unevaluatedProperties", JSON_DRAFT_2019_09},
+    {"dependentSchemas", JSON_DRAFT_2019_09},
+    {"dependentRequired", JSON_DRAFT_2019_09},
+    {"maxContains", JSON_DRAFT_2019_09},
+    {"minContains", JSON_DRAFT_2019_09},
+    {"if", JSON_DRAFT_07},
+    {"then", JSON_DRAFT_07},
+    {"else", JSON_DRAFT_07},
+    {NULL, JSON_DRAFT_06}};
+
 /* Which vocabulary each keyword belongs to. A keyword not listed here is one
  * this engine ignores anyway, so no lookup is needed for it. */
 static const struct {
@@ -334,6 +413,18 @@ static int json_schema_keyword_in_use(
     }
   }
   return 1; // not ours to gate
+}
+
+/* Does this draft have this keyword at all? */
+static int json_schema_keyword_in_draft(
+    json_schema_draft draft, const char * key, size_t key_len) {
+  for (size_t i = 0; json_schema_keyword_since[i].keyword; i++) {
+    const char * name = json_schema_keyword_since[i].keyword;
+    if (strlen(name) == key_len && memcmp(name, key, key_len) == 0) {
+      return draft >= json_schema_keyword_since[i].since;
+    }
+  }
+  return 1;
 }
 
 /*
@@ -416,6 +507,15 @@ typedef struct {
   int depth;
   /** Which vocabularies this schema's dialect uses. */
   unsigned int vocabularies;
+  /**
+   * Which draft the schema in scope is written against.
+   *
+   * Scoped the same way `base_uri` is, and for the same reason: a `$ref` can
+   * reach a document written against an older draft, and that document has to
+   * be read as what it says it is. A schema that declares no `$schema` inherits
+   * the dialect of the resource that contains it.
+   */
+  json_schema_draft draft;
   /**
    * The base URI in scope, which is the nearest enclosing `$id` resolved
    * against the one outside it. Borrowed from the resource table, which
@@ -1135,22 +1235,58 @@ static GTEXT_JSON_Status json_schema_resolve_ref(json_schema_node ** out,
  * the honest one: the metaschema has said the schema cannot be understood
  * without it.
  */
-static GTEXT_JSON_Status json_schema_read_vocabularies(
-    json_schema_compile_ctx * cc, GTEXT_JSON_Error * err) {
-  const GTEXT_JSON_Value * doc = cc->schema->doc;
+static GTEXT_JSON_Status json_schema_read_dialect(
+    json_schema_compile_ctx * cc, const GTEXT_JSON_Value * doc,
+    GTEXT_JSON_Error * err) {
   if (!doc || doc->type != GTEXT_JSON_OBJECT) {
     return GTEXT_JSON_OK;
   }
   const GTEXT_JSON_Value * dialect = gtext_json_object_get(doc, "$schema", 7);
   if (!dialect || dialect->type != GTEXT_JSON_STRING) {
-    return GTEXT_JSON_OK;
+    return GTEXT_JSON_OK; // inherit whatever is in scope
   }
-  static const char * const standard =
-      "https://json-schema.org/draft/2020-12/schema";
-  if (dialect->as.string.len == strlen(standard)
-      && memcmp(dialect->as.string.data, standard, dialect->as.string.len)
-          == 0) {
-    return GTEXT_JSON_OK;
+
+  /*
+   * A draft this engine knows by name. `$vocabulary` is not consulted for
+   * these: 2020-12 and 2019-09 declare exactly the vocabularies this dialect
+   * table records, and the drafts before them have no `$vocabulary` at all -
+   * their keyword set is the draft, not a declaration inside it.
+   */
+  for (size_t i = 0; json_schema_dialects[i].uri; i++) {
+    const char * uri = json_schema_dialects[i].uri;
+    if (strlen(uri) == dialect->as.string.len
+        && memcmp(uri, dialect->as.string.data, dialect->as.string.len) == 0) {
+      cc->draft = json_schema_dialects[i].draft;
+      cc->vocabularies = JSON_VOCAB_DEFAULT;
+      return GTEXT_JSON_OK;
+    }
+  }
+
+  /*
+   * A draft whose keywords this engine would have to read differently rather
+   * than merely ignore. Refused, which is what it does with every other
+   * keyword it cannot honour: reading draft-04's boolean `exclusiveMinimum`
+   * as draft-06's number does not produce a wrong keyword, it produces a
+   * wrong answer about the instance.
+   */
+  for (size_t i = 0; json_schema_dialects_refused[i].uri; i++) {
+    const char * uri = json_schema_dialects_refused[i].uri;
+    if (strlen(uri) == dialect->as.string.len
+        && memcmp(uri, dialect->as.string.data, dialect->as.string.len) == 0) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+            .message = "Schema is written against a draft this "
+                       "implementation does not read"};
+        size_t n = strlen(json_schema_dialects_refused[i].name);
+        char * name = (char *)malloc(n + 1);
+        if (name) {
+          memcpy(name, json_schema_dialects_refused[i].name, n + 1);
+          err->context_snippet = name;
+          err->context_snippet_len = n;
+        }
+      }
+      return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+    }
   }
 
   char * uri = json_uri_resolve(cc->base_uri, strlen(cc->base_uri),
@@ -1247,6 +1383,10 @@ static GTEXT_JSON_Status json_schema_read_vocabularies(
     }
   }
   cc->vocabularies = mask;
+  /* A dialect assembled out of 2020-12's vocabularies is a 2020-12 dialect;
+   * the `$vocabulary` keyword itself does not exist before 2019-09, so
+   * anything that has one is at least that new. */
+  cc->draft = JSON_DRAFT_2020_12;
   return GTEXT_JSON_OK;
 }
 
@@ -1345,6 +1485,8 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
     const GTEXT_JSON_Value * schema_doc, json_schema_compile_ctx * cc,
     GTEXT_JSON_Error * err) {
   const char * saved = cc->base_uri;
+  unsigned int saved_vocabularies = cc->vocabularies;
+  json_schema_draft saved_draft = cc->draft;
   if (schema_doc && schema_doc->type == GTEXT_JSON_OBJECT) {
     const GTEXT_JSON_Value * id = gtext_json_object_get(schema_doc, "$id", 3);
     if (id && id->type == GTEXT_JSON_STRING) {
@@ -1363,9 +1505,22 @@ static GTEXT_JSON_Status json_schema_compile_node(json_schema_node * node,
       }
     }
   }
-  GTEXT_JSON_Status status =
-      json_schema_compile_body(node, schema_doc, cc, err);
+  /*
+   * After the `$id`, because a relative `$schema` is resolved against the
+   * base this resource establishes and not against the one outside it.
+   *
+   * The dialect is scoped exactly as the base URI is. A `$ref` that leaves
+   * this document can land in one written against an older draft, and that
+   * document has to be read as what it says it is - which is the whole
+   * difference between dispatching on `$schema` and merely recording it.
+   */
+  GTEXT_JSON_Status status = json_schema_read_dialect(cc, schema_doc, err);
+  if (status == GTEXT_JSON_OK) {
+    status = json_schema_compile_body(node, schema_doc, cc, err);
+  }
   cc->base_uri = saved;
+  cc->vocabularies = saved_vocabularies;
+  cc->draft = saved_draft;
   return status;
 }
 
@@ -1504,6 +1659,8 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
   }
 
   size_t obj_size = gtext_json_object_size(schema_doc);
+  const int has_sibling_ref = cc->draft < JSON_DRAFT_2019_09
+      && gtext_json_object_get(schema_doc, "$ref", 4) != NULL;
   for (size_t i = 0; i < obj_size; i++) {
     const char * key;
     size_t key_len;
@@ -1516,6 +1673,23 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
      * including by the check below that refuses the ones this engine cannot
      * enforce, because there is nothing to enforce. */
     if (!json_schema_keyword_in_use(cc->vocabularies, key, key_len)) {
+      continue;
+    }
+    /* Nor is a keyword the draft in scope does not have yet. `prefixItems`
+     * inside a 2019-09 document is not "items with a different name", it is
+     * a member that draft never defined. */
+    if (!json_schema_keyword_in_draft(cc->draft, key, key_len)) {
+      continue;
+    }
+    /*
+     * Before 2019-09, a schema object containing `$ref` is that reference and
+     * nothing else: every other keyword beside it is ignored. 2019-09 made
+     * `$ref` an applicator like any other, so its siblings apply. Reading a
+     * draft-07 document under the newer rule adds constraints its author did
+     * not write.
+     */
+    if (cc->draft < JSON_DRAFT_2019_09 && has_sibling_ref
+        && !json_matches(key, key_len, "$ref")) {
       continue;
     }
 
@@ -4055,13 +4229,11 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
       .schema = schema,
       .depth = 0,
       .vocabularies = JSON_VOCAB_DEFAULT,
+      .draft = JSON_DRAFT_2020_12,
       .base_uri = root_base};
 
-  status = json_schema_read_vocabularies(&cc, err);
-  if (status != GTEXT_JSON_OK) {
-    gtext_json_schema_free(schema);
-    return NULL;
-  }
+  /* The root's own `$schema` is read by compile_node like any other
+   * resource's, so there is no separate pass for it here. */
   status = json_schema_compile_node(schema->root, schema->doc, &cc, err);
   if (status != GTEXT_JSON_OK) {
     gtext_json_schema_free(schema);
