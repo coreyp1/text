@@ -16,7 +16,10 @@
  *
  * Genuinely unknown keywords - vendor extensions, and the annotation
  * keywords title, description, default, examples, $comment, readOnly,
- * writeOnly and deprecated - are ignored, as JSON Schema requires. So are
+ * writeOnly and deprecated - are ignored, as JSON Schema requires. So is a
+ * keyword from a vocabulary the schema's dialect does not use: $vocabulary
+ * in the metaschema $schema names decides that, and a vocabulary declared
+ * required that this engine does not have is refused. So are
  * contentEncoding, contentMediaType and contentSchema, which 2020-12 defines
  * as annotations rather than assertions, and format, which is an annotation
  * unless GTEXT_JSON_Schema_Options::format asks for it to be asserted. So are

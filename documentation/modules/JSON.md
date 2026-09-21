@@ -349,14 +349,28 @@ than no list, because it is read as current. What remains unimplemented is:
 
 - **2019-09's dynamic references**: `$recursiveRef` and `$recursiveAnchor`,
   which 2020-12 replaced. `$dynamicRef` and `$dynamicAnchor` are implemented
-- **Vocabularies**: `$vocabulary` is ignored, along with `$schema`, since only
-  one dialect is implemented
+- **Other drafts**: `$schema` selects vocabularies, but it does not select a
+  draft. A `$ref` to a draft-07 document is compiled with 2020-12's keyword
+  meanings, and the two differ over `items`
 - **The published metaschemas**: a `$ref` to
   `https://json-schema.org/draft/2020-12/schema` is a reference that leaves
   the document like any other, so it resolves only through a resolver that
   supplies it. Nothing is built in
 A schema using any of those is refused at compile time rather than validated
 with the keyword ignored.
+
+`$vocabulary` is implemented. A metaschema named by `$schema` and reachable
+through the resolver says which vocabularies a schema written against it
+uses, and a keyword from a vocabulary not in use is not a keyword - it is an
+unknown member, and unknown members are ignored. A vocabulary declared
+required that this engine does not have is refused, which is the
+specification's rule and the honest one: the metaschema has said the schema
+cannot be understood without it. Declaring the format-assertion vocabulary
+turns `format` into an assertion, which is the mechanism the specification
+provides for that.
+
+When `$schema` names a metaschema no resolver can supply, the standard
+dialect is assumed rather than the schema refused.
 
 `format` and the `content*` family are no longer on that list. All four are
 annotations in 2020-12, so a validator that ignores them is conformant and

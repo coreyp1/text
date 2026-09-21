@@ -218,6 +218,124 @@ static GTEXT_JSON_Status json_schema_parse_type(json_schema_node * node,
 }
 
 /*
+ * The vocabularies of 2020-12, as a bitmask.
+ *
+ * A metaschema's `$vocabulary` says which of these a schema written against
+ * it uses, and a keyword from a vocabulary that is not in use is not a
+ * keyword - it is an unknown member, and unknown members are ignored. That is
+ * how `{"minimum": 10}` can be inert: not because `minimum` was
+ * misunderstood, but because the metaschema did not ask for the vocabulary it
+ * belongs to.
+ */
+typedef enum {
+  JSON_VOCAB_CORE = 1u,
+  JSON_VOCAB_APPLICATOR = 2u,
+  JSON_VOCAB_UNEVALUATED = 4u,
+  JSON_VOCAB_VALIDATION = 8u,
+  JSON_VOCAB_META_DATA = 16u,
+  JSON_VOCAB_FORMAT_ANNOTATION = 32u,
+  JSON_VOCAB_FORMAT_ASSERTION = 64u,
+  JSON_VOCAB_CONTENT = 128u
+} json_schema_vocab;
+
+/* What a schema with no `$schema`, or the standard one, uses. The assertion
+ * vocabulary is deliberately not here: 2020-12 defines the dialect with
+ * format-annotation, and a validator that asserted by default would be
+ * refusing instances the dialect calls valid. */
+#define JSON_VOCAB_DEFAULT                                                     \
+  (JSON_VOCAB_CORE | JSON_VOCAB_APPLICATOR | JSON_VOCAB_UNEVALUATED            \
+      | JSON_VOCAB_VALIDATION | JSON_VOCAB_META_DATA                           \
+      | JSON_VOCAB_FORMAT_ANNOTATION | JSON_VOCAB_CONTENT)
+
+static const struct {
+  const char * uri;
+  unsigned int bit;
+} json_schema_vocab_uris[] = {
+    {"https://json-schema.org/draft/2020-12/vocab/core", JSON_VOCAB_CORE},
+    {"https://json-schema.org/draft/2020-12/vocab/applicator",
+        JSON_VOCAB_APPLICATOR},
+    {"https://json-schema.org/draft/2020-12/vocab/unevaluated",
+        JSON_VOCAB_UNEVALUATED},
+    {"https://json-schema.org/draft/2020-12/vocab/validation",
+        JSON_VOCAB_VALIDATION},
+    {"https://json-schema.org/draft/2020-12/vocab/meta-data",
+        JSON_VOCAB_META_DATA},
+    {"https://json-schema.org/draft/2020-12/vocab/format-annotation",
+        JSON_VOCAB_FORMAT_ANNOTATION},
+    {"https://json-schema.org/draft/2020-12/vocab/format-assertion",
+        JSON_VOCAB_FORMAT_ASSERTION},
+    {"https://json-schema.org/draft/2020-12/vocab/content",
+        JSON_VOCAB_CONTENT},
+    {NULL, 0}};
+
+/* Which vocabulary each keyword belongs to. A keyword not listed here is one
+ * this engine ignores anyway, so no lookup is needed for it. */
+static const struct {
+  const char * keyword;
+  unsigned int vocab;
+} json_schema_keyword_vocab[] = {
+    {"$id", JSON_VOCAB_CORE}, {"$schema", JSON_VOCAB_CORE},
+    {"$ref", JSON_VOCAB_CORE}, {"$anchor", JSON_VOCAB_CORE},
+    {"$dynamicRef", JSON_VOCAB_CORE}, {"$dynamicAnchor", JSON_VOCAB_CORE},
+    {"$vocabulary", JSON_VOCAB_CORE}, {"$comment", JSON_VOCAB_CORE},
+    {"$defs", JSON_VOCAB_CORE},
+
+    {"prefixItems", JSON_VOCAB_APPLICATOR}, {"items", JSON_VOCAB_APPLICATOR},
+    {"contains", JSON_VOCAB_APPLICATOR},
+    {"additionalProperties", JSON_VOCAB_APPLICATOR},
+    {"properties", JSON_VOCAB_APPLICATOR},
+    {"patternProperties", JSON_VOCAB_APPLICATOR},
+    {"dependentSchemas", JSON_VOCAB_APPLICATOR},
+    {"propertyNames", JSON_VOCAB_APPLICATOR}, {"if", JSON_VOCAB_APPLICATOR},
+    {"then", JSON_VOCAB_APPLICATOR}, {"else", JSON_VOCAB_APPLICATOR},
+    {"allOf", JSON_VOCAB_APPLICATOR}, {"anyOf", JSON_VOCAB_APPLICATOR},
+    {"oneOf", JSON_VOCAB_APPLICATOR}, {"not", JSON_VOCAB_APPLICATOR},
+    /* draft-07's spellings compile to the same places, so they answer to the
+     * same vocabulary. */
+    {"additionalItems", JSON_VOCAB_APPLICATOR},
+    {"dependencies", JSON_VOCAB_APPLICATOR},
+    {"definitions", JSON_VOCAB_APPLICATOR},
+
+    {"unevaluatedItems", JSON_VOCAB_UNEVALUATED},
+    {"unevaluatedProperties", JSON_VOCAB_UNEVALUATED},
+
+    {"type", JSON_VOCAB_VALIDATION}, {"const", JSON_VOCAB_VALIDATION},
+    {"enum", JSON_VOCAB_VALIDATION}, {"multipleOf", JSON_VOCAB_VALIDATION},
+    {"maximum", JSON_VOCAB_VALIDATION},
+    {"exclusiveMaximum", JSON_VOCAB_VALIDATION},
+    {"minimum", JSON_VOCAB_VALIDATION},
+    {"exclusiveMinimum", JSON_VOCAB_VALIDATION},
+    {"maxLength", JSON_VOCAB_VALIDATION},
+    {"minLength", JSON_VOCAB_VALIDATION}, {"pattern", JSON_VOCAB_VALIDATION},
+    {"maxItems", JSON_VOCAB_VALIDATION}, {"minItems", JSON_VOCAB_VALIDATION},
+    {"uniqueItems", JSON_VOCAB_VALIDATION},
+    {"maxContains", JSON_VOCAB_VALIDATION},
+    {"minContains", JSON_VOCAB_VALIDATION},
+    {"maxProperties", JSON_VOCAB_VALIDATION},
+    {"minProperties", JSON_VOCAB_VALIDATION},
+    {"required", JSON_VOCAB_VALIDATION},
+    {"dependentRequired", JSON_VOCAB_VALIDATION},
+
+    {"format", JSON_VOCAB_FORMAT_ANNOTATION | JSON_VOCAB_FORMAT_ASSERTION},
+
+    {"contentEncoding", JSON_VOCAB_CONTENT},
+    {"contentMediaType", JSON_VOCAB_CONTENT},
+    {"contentSchema", JSON_VOCAB_CONTENT},
+    {NULL, 0}};
+
+/* Is this keyword in a vocabulary the schema's dialect uses? */
+static int json_schema_keyword_in_use(
+    unsigned int vocabularies, const char * key, size_t key_len) {
+  for (size_t i = 0; json_schema_keyword_vocab[i].keyword; i++) {
+    const char * name = json_schema_keyword_vocab[i].keyword;
+    if (strlen(name) == key_len && memcmp(name, key, key_len) == 0) {
+      return (json_schema_keyword_vocab[i].vocab & vocabularies) != 0;
+    }
+  }
+  return 1; // not ours to gate
+}
+
+/*
  * Standard JSON Schema keywords this engine does not enforce.
  *
  * Every one of these changes which instances are valid.  Ignoring such a
@@ -295,6 +413,8 @@ typedef struct {
   const GTEXT_JSON_Schema_Options * opts;
   GTEXT_JSON_Schema * schema;
   int depth;
+  /** Which vocabularies this schema's dialect uses. */
+  unsigned int vocabularies;
   /**
    * The base URI in scope, which is the nearest enclosing `$id` resolved
    * against the one outside it. Borrowed from the resource table, which
@@ -902,6 +1022,125 @@ static GTEXT_JSON_Status json_schema_resolve_ref(json_schema_node ** out,
   return GTEXT_JSON_OK;
 }
 
+/*
+ * Which vocabularies this schema's dialect uses, from its `$schema`.
+ *
+ * `$vocabulary` lives in the *metaschema* - the document `$schema` names -
+ * and not in the schema itself, so answering this means fetching that
+ * document. It arrives through the caller's resolver like any other, and when
+ * there is no resolver, or it does not know the URI, the standard dialect is
+ * assumed rather than the schema refused: a `$schema` naming a metaschema
+ * nobody can fetch is overwhelmingly a schema written against the standard
+ * dialect that said so, and refusing those would be a worse answer than
+ * assuming the usual one.
+ *
+ * A vocabulary listed as required that this engine does not implement is the
+ * one case that is refused. That is the specification's rule and it is also
+ * the honest one: the metaschema has said the schema cannot be understood
+ * without it.
+ */
+static GTEXT_JSON_Status json_schema_read_vocabularies(
+    json_schema_compile_ctx * cc, GTEXT_JSON_Error * err) {
+  const GTEXT_JSON_Value * doc = cc->schema->doc;
+  if (!doc || doc->type != GTEXT_JSON_OBJECT) {
+    return GTEXT_JSON_OK;
+  }
+  const GTEXT_JSON_Value * dialect = gtext_json_object_get(doc, "$schema", 7);
+  if (!dialect || dialect->type != GTEXT_JSON_STRING) {
+    return GTEXT_JSON_OK;
+  }
+  static const char * const standard =
+      "https://json-schema.org/draft/2020-12/schema";
+  if (dialect->as.string.len == strlen(standard)
+      && memcmp(dialect->as.string.data, standard, dialect->as.string.len)
+          == 0) {
+    return GTEXT_JSON_OK;
+  }
+
+  char * uri = json_uri_resolve(cc->base_uri, strlen(cc->base_uri),
+      dialect->as.string.data, dialect->as.string.len);
+  if (!uri) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+          .message = "Out of memory resolving $schema"};
+    }
+    return GTEXT_JSON_E_OOM;
+  }
+  /*
+   * Fetched, but deliberately not registered as one of this schema's
+   * resources. A metaschema is consulted, not compiled: it is full of
+   * references to the published meta-schemas, and registering it put its
+   * `$dynamicAnchor` into the table of anchors to compile - which then tried
+   * to compile the whole of it and failed on the first `$ref` out to
+   * json-schema.org. Consulting a document must not drag it in.
+   */
+  const GTEXT_JSON_Value * meta = NULL;
+  for (size_t i = 0; i < cc->schema->resources_count; i++) {
+    if (strcmp(cc->schema->resources[i].uri, uri) == 0) {
+      meta = cc->schema->resources[i].value;
+      break;
+    }
+  }
+  if (!meta && cc->opts->resolver && cc->opts->resolver->get_fn) {
+    meta = cc->opts->resolver->get_fn(
+        cc->opts->resolver->ctx, uri, strlen(uri));
+  }
+  free(uri);
+  if (!meta || meta->type != GTEXT_JSON_OBJECT) {
+    return GTEXT_JSON_OK;
+  }
+  const GTEXT_JSON_Value * vocab =
+      gtext_json_object_get(meta, "$vocabulary", 11);
+  if (!vocab || vocab->type != GTEXT_JSON_OBJECT) {
+    return GTEXT_JSON_OK;
+  }
+
+  /* Core is always in use: a metaschema that left it out could not say so. */
+  unsigned int mask = JSON_VOCAB_CORE;
+  size_t count = gtext_json_object_size(vocab);
+  for (size_t i = 0; i < count; i++) {
+    size_t key_len = 0;
+    const char * key = gtext_json_object_key(vocab, i, &key_len);
+    const GTEXT_JSON_Value * required = gtext_json_object_value(vocab, i);
+    if (!key) {
+      continue;
+    }
+    unsigned int bit = 0;
+    for (size_t k = 0; json_schema_vocab_uris[k].uri; k++) {
+      if (strlen(json_schema_vocab_uris[k].uri) == key_len
+          && memcmp(json_schema_vocab_uris[k].uri, key, key_len) == 0) {
+        bit = json_schema_vocab_uris[k].bit;
+        break;
+      }
+    }
+    if (bit != 0) {
+      mask |= bit;
+      continue;
+    }
+    bool is_required = false;
+    if (required) {
+      gtext_json_get_bool(required, &is_required);
+    }
+    if (is_required) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+            .message = "The metaschema requires a vocabulary this "
+                       "implementation does not have"};
+        char * name = (char *)malloc(key_len + 1);
+        if (name) {
+          memcpy(name, key, key_len);
+          name[key_len] = '\0';
+          err->context_snippet = name;
+          err->context_snippet_len = key_len;
+        }
+      }
+      return GTEXT_JSON_E_SCHEMA_UNSUPPORTED;
+    }
+  }
+  cc->vocabularies = mask;
+  return GTEXT_JSON_OK;
+}
+
 /* Compile one subschema into a freshly allocated node. */
 static GTEXT_JSON_Status json_schema_compile_sub(json_schema_node ** out,
     const GTEXT_JSON_Value * doc, json_schema_compile_ctx * cc,
@@ -1162,6 +1401,14 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
     gtext_json_object_key(schema_doc, i, &key_len);
     key = gtext_json_object_key(schema_doc, i, NULL);
     const GTEXT_JSON_Value * value = gtext_json_object_value(schema_doc, i);
+
+    /* A keyword from a vocabulary this dialect does not use is not a
+     * keyword. It is an unknown member, and unknown members are ignored -
+     * including by the check below that refuses the ones this engine cannot
+     * enforce, because there is nothing to enforce. */
+    if (!json_schema_keyword_in_use(cc->vocabularies, key, key_len)) {
+      continue;
+    }
 
     if (json_matches(key, key_len, "type")) {
       GTEXT_JSON_Status status = json_schema_parse_type(node, value, err);
@@ -1800,7 +2047,12 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
        * carry it, with no way to find out.  A name outside the vocabulary is
        * ignored, because the specification requires that.
        */
-      if (cc->opts->format == GTEXT_JSON_FORMAT_ASSERT
+      /* Either the caller asked, or the dialect did: a metaschema that
+       * declares the format-assertion vocabulary is saying that `format`
+       * asserts in schemas written against it, which is the mechanism the
+       * specification provides for exactly this. */
+      if ((cc->opts->format == GTEXT_JSON_FORMAT_ASSERT
+              || (cc->vocabularies & JSON_VOCAB_FORMAT_ASSERTION))
           && value->type == GTEXT_JSON_STRING) {
         const char * name = value->as.string.data;
         size_t name_len = value->as.string.len;
@@ -3669,7 +3921,14 @@ GTEXT_API GTEXT_JSON_Schema * gtext_json_schema_compile_with_options(
       .opts = opts,
       .schema = schema,
       .depth = 0,
+      .vocabularies = JSON_VOCAB_DEFAULT,
       .base_uri = root_base};
+
+  status = json_schema_read_vocabularies(&cc, err);
+  if (status != GTEXT_JSON_OK) {
+    gtext_json_schema_free(schema);
+    return NULL;
+  }
   status = json_schema_compile_node(schema->root, schema->doc, &cc, err);
   if (status != GTEXT_JSON_OK) {
     gtext_json_schema_free(schema);

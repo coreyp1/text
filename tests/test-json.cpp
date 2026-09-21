@@ -10324,6 +10324,87 @@ TEST(JsonSchemaDynamicRef, WithoutBookendingItIsAnOrdinaryReference) {
 	    "\"s\""));
 }
 
+TEST(JsonSchemaVocabulary, AKeywordFromAnUnusedVocabularyIsNotAKeyword) {
+	// The metaschema declares core and applicator and not validation, so
+	// `minimum` is an unknown member of the schema object - not a
+	// misunderstood keyword, just one this dialect never asked for. Ignoring
+	// unknown members is what the specification requires.
+	StubResolver remote;
+	remote.add("http://x/meta-no-validation",
+	    "{\"$id\":\"http://x/meta-no-validation\",\"$vocabulary\":{"
+	    "\"https://json-schema.org/draft/2020-12/vocab/core\":true,"
+	    "\"https://json-schema.org/draft/2020-12/vocab/applicator\":true}}");
+	const char * schema =
+	    "{\"$schema\":\"http://x/meta-no-validation\","
+	    "\"properties\":{\"n\":{\"minimum\":10},\"bad\":false}}";
+
+	EXPECT_TRUE(ref_accepts(schema, "{\"n\":1}", nullptr, &remote));
+	// The applicator vocabulary is in use, so `properties` still applies.
+	EXPECT_FALSE(ref_accepts(schema, "{\"bad\":1}", nullptr, &remote));
+
+	// With the standard dialect, the same schema constrains the number.
+	EXPECT_FALSE(schema_accepts(
+	    "{\"properties\":{\"n\":{\"minimum\":10}}}", "{\"n\":1}"));
+}
+
+TEST(JsonSchemaVocabulary, ARequiredVocabularyItLacksIsRefused) {
+	StubResolver remote;
+	remote.add("http://x/meta-custom",
+	    "{\"$id\":\"http://x/meta-custom\",\"$vocabulary\":{"
+	    "\"https://json-schema.org/draft/2020-12/vocab/core\":true,"
+	    "\"http://x/vocab/invented\":true}}");
+	const char * src = "{\"$schema\":\"http://x/meta-custom\"}";
+	GTEXT_JSON_Parse_Options po = gtext_json_parse_options_default();
+	GTEXT_JSON_Value * sv = gtext_json_parse(src, strlen(src), &po, nullptr);
+	ASSERT_NE(sv, nullptr);
+
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	GTEXT_JSON_Schema_Resolver resolver = {&remote, StubResolver::get};
+	opts.resolver = &resolver;
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_schema_compile_with_options(sv, &opts, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+	ASSERT_NE(err.context_snippet, nullptr);
+	EXPECT_STREQ(err.context_snippet, "http://x/vocab/invented");
+	gtext_json_error_free(&err);
+	gtext_json_free(sv);
+
+	// Declared optional, the same vocabulary is simply not used.
+	StubResolver optional;
+	optional.add("http://x/meta-custom",
+	    "{\"$id\":\"http://x/meta-custom\",\"$vocabulary\":{"
+	    "\"https://json-schema.org/draft/2020-12/vocab/core\":true,"
+	    "\"https://json-schema.org/draft/2020-12/vocab/validation\":true,"
+	    "\"http://x/vocab/invented\":false}}");
+	EXPECT_TRUE(ref_accepts("{\"$schema\":\"http://x/meta-custom\","
+	                        "\"type\":\"number\"}",
+	    "1", nullptr, &optional));
+	EXPECT_FALSE(ref_accepts("{\"$schema\":\"http://x/meta-custom\","
+	                         "\"type\":\"number\"}",
+	    "\"s\"", nullptr, &optional));
+}
+
+TEST(JsonSchemaVocabulary, TheDialectCanTurnFormatAssertionOn) {
+	// The specification's own mechanism for it, and the reason `format`
+	// asserting is not simply an option this library invented.
+	StubResolver remote;
+	remote.add("http://x/meta-format-assert",
+	    "{\"$id\":\"http://x/meta-format-assert\",\"$vocabulary\":{"
+	    "\"https://json-schema.org/draft/2020-12/vocab/core\":true,"
+	    "\"https://json-schema.org/draft/2020-12/vocab/format-assertion\":true}}");
+	EXPECT_FALSE(ref_accepts("{\"$schema\":\"http://x/meta-format-assert\","
+	                         "\"format\":\"ipv4\"}",
+	    "\"not an address\"", nullptr, &remote));
+	EXPECT_TRUE(ref_accepts("{\"$schema\":\"http://x/meta-format-assert\","
+	                        "\"format\":\"ipv4\"}",
+	    "\"192.168.0.1\"", nullptr, &remote));
+
+	// Without that declaration it is an annotation, as the standard dialect
+	// says.
+	EXPECT_TRUE(schema_accepts("{\"format\":\"ipv4\"}", "\"not an address\""));
+}
+
 TEST(JsonSchemaKeywords, Draft07DependenciesTakesEitherForm) {
 	// `dependencies` is the union of what 2020-12 split in two, so each entry
 	// is compiled into whichever of the pair it means.
