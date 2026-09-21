@@ -1115,6 +1115,43 @@ static GTEXT_YAML_Node *dom_new_scalar(
 	   the parser refused the writer's own output.  A tag is an assertion
 	   about the value, and this one can be false, so it is checked here the
 	   way the parser checks it on the way in. */
+	/* A tag names the type whose syntax 10.3.2 defines, and the constructor
+	   is where a caller's claim about it is checked - the parser checks the
+	   same claim on the way in, and refuses "!!int \"\"".  Without this the
+	   writer put such a node out as '!!int ""' and this parser refused the
+	   writer's own output.
+
+	   "!!str" takes any text, and the type the tag names is the type the node
+	   already has, so only a mismatch has to be looked for. */
+	if (tag && *tag && type != GTEXT_YAML_STRING) {
+		const GTEXT_YAML_Node_Type from_text =
+			gtext_yaml_plain_text_classify(value, value ? length : 0,
+				NULL, NULL, NULL);
+		bool ok;
+		switch (type) {
+			case GTEXT_YAML_NULL:
+				ok = (from_text == GTEXT_YAML_NULL);
+				break;
+			case GTEXT_YAML_BOOL:
+				ok = (from_text == GTEXT_YAML_BOOL);
+				break;
+			/* An integer spelling is a float spelling too: 10.3.2's float row
+			   makes its fraction optional, so "!!float 12" is a float of 12
+			   even though the text on its own resolves to an int. */
+			case GTEXT_YAML_FLOAT:
+				ok = (from_text == GTEXT_YAML_FLOAT
+					|| from_text == GTEXT_YAML_INT);
+				break;
+			case GTEXT_YAML_INT:
+				ok = (from_text == GTEXT_YAML_INT);
+				break;
+			default:
+				ok = true;
+				break;
+		}
+		if (!ok) return NULL;
+	}
+
 	if (tag_is_binary(tag)) {
 		const unsigned char *data = NULL;
 		size_t data_len = 0;

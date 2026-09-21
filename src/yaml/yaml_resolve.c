@@ -1699,11 +1699,26 @@ static GTEXT_YAML_Status resolve_scalar(
 				}
 			}
 			if (!parse_float_value(value, len, yaml_use_1_1(doc, opts), &out)) {
-				if (error) {
-					error->code = GTEXT_YAML_E_INVALID;
-					error->message = "Invalid float scalar for explicit tag";
+				/* 10.3.2's float row is
+				   "[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ..." - the
+				   fraction is optional, so "12" is in it.  Implicit
+				   resolution still answers *int* for that text, because the
+				   int row is tried first; an explicit "!!float 12" is asking
+				   for the other reading and is a float of 12.  Both
+				   references agree, and this refused it. */
+				int64_t as_int = 0;
+				if (parse_int_value(value, len, yaml_use_1_1(doc, opts), true,
+						yaml_use_1_1(doc, opts), yaml_use_1_1(doc, opts),
+						&as_int)) {
+					out = (double)as_int;
 				}
-				return GTEXT_YAML_E_INVALID;
+				else {
+					if (error) {
+						error->code = GTEXT_YAML_E_INVALID;
+						error->message = "Invalid float scalar for explicit tag";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
 			}
 			node->type = GTEXT_YAML_FLOAT;
 			node->as.scalar.type = GTEXT_YAML_FLOAT;
@@ -1711,6 +1726,18 @@ static GTEXT_YAML_Status resolve_scalar(
 			return GTEXT_YAML_OK;
 		}
 		if (strcmp(suffix, "null") == 0) {
+			/* An explicit tag names the type whose syntax 10.3.2 defines, and
+			   the null row is "~ | null | Null | NULL | <empty>" and nothing
+			   else - the same reasoning the "!!int" branch already carries.
+			   This took any content at all, so "!!null x" was a null and the
+			   "x" went nowhere; js-yaml refuses it. */
+			if (!parse_null_value(value, len, false)) {
+				if (error) {
+					error->code = GTEXT_YAML_E_INVALID;
+					error->message = "Invalid null scalar for explicit tag";
+				}
+				return GTEXT_YAML_E_INVALID;
+			}
 			node->type = GTEXT_YAML_NULL;
 			node->as.scalar.type = GTEXT_YAML_NULL;
 			return GTEXT_YAML_OK;

@@ -234,6 +234,14 @@ the vertical tab and the form feed are not c-printable, so no parsed scalar
 holds one, but the DOM API takes any `char *` and `strtod()` skips them like a
 space. `"\v6662."` was the float 6662.
 
+And `!!binary` turned out to be only the first tag the constructor was not
+checking: `!!int ""` was built without complaint and written as `!!int ""`,
+which this parser refuses. Chasing the six shapes that did that found two
+where the *parser* was the one in the wrong - `!!float 12` refused, where
+10.3.2's float row makes its fraction optional and both references give 12.0,
+and `!!null x` accepted, where the null row is five spellings and nothing
+else.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -314,7 +322,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — thirty-seven library defects and three of its own,
+has already earned that — forty library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

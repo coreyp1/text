@@ -1245,6 +1245,28 @@ The writer has a `writer_write_separator()` that knows whether a block scalar
 has already terminated the line; the document separator was the one place not
 going through it.
 
+### A tag is an assertion the constructor did not check, twice more
+
+`!!binary` was the first of these; the rest of the tagged scalar types had the
+same gap. The parser refuses `!!int ""` - an explicit tag names the type whose
+syntax 10.3.2 defines, and the content has to be in it - but the DOM
+constructor took any text at all, so the writer put such a node out as
+`!!int ""` and this parser refused the writer's own output. Six shapes did
+that: `!!int`, `!!bool` and `!!float` over an empty value or over `abc`.
+
+Two of them turned out to be the *parser's* answer being wrong rather than the
+constructor's being absent:
+
+- **`!!float 12` was refused.** 10.3.2's float row is
+  `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?` - the
+  fraction is optional, so `12` is in it. Implicit resolution answers *int*
+  for that text only because the int row is tried first; an explicit
+  `!!float` is asking for the other reading. Both references give 12.0.
+- **`!!null x` was accepted**, and the `x` went nowhere. The null row is
+  `~ | null | Null | NULL | <empty>` and nothing else. js-yaml refuses it;
+  PyYAML accepts it, being 1.1, which is the sort of disagreement that makes
+  a single oracle dangerous.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

@@ -763,6 +763,89 @@ TEST(YamlWriterContract, ADeclaredHandleDoesNotCarryToTheNextDocument) {
 		<< "wrote: " << ignored;
 }
 
+/* A tag names the type whose syntax 10.3.2 defines, and the constructor is
+   where a caller's claim about it is checked - the parser checks the same
+   claim on the way in and refuses '!!int ""'. Without this the writer put
+   such a node out as '!!int ""' and this parser refused the writer's own
+   output, which is how the fuzzer found it.
+
+   Two of these rows were the parser's answer being wrong rather than the
+   constructor's being absent. "!!float 12" is a float of 12: 10.3.2's float
+   row makes its fraction optional, so "12" is in it, and implicit resolution
+   answers *int* there only because the int row is tried first. And "!!null x"
+   is not a null - the null row is "~ | null | Null | NULL | <empty>" and
+   nothing else. Both references agree on the first; js-yaml on the second,
+   with PyYAML lax because 1.1 is. */
+TEST(YamlWriterContract, ATaggedScalarHasToBeWhatItsTagSays) {
+	struct Case { const char *tag; const char *text; bool ok; };
+	const Case cases[] = {
+		{ "!!int", "", false },     { "!!int", "abc", false },
+		{ "!!int", "12", true },
+		{ "!!bool", "", false },    { "!!bool", "12", false },
+		{ "!!bool", "true", true },
+		{ "!!float", "", false },   { "!!float", "abc", false },
+		{ "!!float", "1.5", true },
+		/* An integer spelling is a float spelling too. */
+		{ "!!float", "12", true },
+		{ "!!null", "", true },     { "!!null", "~", true },
+		{ "!!null", "NULL", true }, { "!!null", "x", false },
+		/* A string takes any text at all, which is what makes it the
+		   failsafe. */
+		{ "!!str", "", true },      { "!!str", "abc", true },
+		{ "!!str", "12", true },
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node =
+			gtext_yaml_node_new_scalar(doc, c.text, c.tag, nullptr);
+		EXPECT_EQ(node != nullptr, c.ok)
+			<< c.tag << " <<" << c.text << ">>";
+
+		/* And the parser has to agree, on the node's own spelling. */
+		if (node) {
+			gtext_yaml_document_set_root(doc, node);
+			Written w = write_doc(doc);
+			ASSERT_EQ(w.status, GTEXT_YAML_OK) << c.tag << " <<" << c.text << ">>";
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(w.text.c_str(), w.text.size(), &opts, &err);
+			EXPECT_NE(back, nullptr) << "wrote " << w.text
+				<< " which this parser refuses: "
+				<< (err.message ? err.message : "");
+			gtext_yaml_error_free(&err);
+			if (back) gtext_yaml_free(back);
+		}
+		gtext_yaml_free(doc);
+	}
+
+	/* The parser's own answers, which two of the rows above depend on. */
+	struct Parse { const char *yaml; bool ok; GTEXT_YAML_Node_Type type; };
+	const Parse parses[] = {
+		{ "!!float 12", true, GTEXT_YAML_FLOAT },
+		{ "!!float 1.5", true, GTEXT_YAML_FLOAT },
+		{ "!!null x", false, GTEXT_YAML_NULL },
+		{ "!!null", true, GTEXT_YAML_NULL },
+		{ "!!int 12", true, GTEXT_YAML_INT },
+	};
+	for (const Parse &pc : parses) {
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(pc.yaml, strlen(pc.yaml), &opts, &err);
+		EXPECT_EQ(doc != nullptr, pc.ok) << pc.yaml << ": "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+		if (doc) {
+			EXPECT_EQ(gtext_yaml_node_type(gtext_yaml_document_root(doc)),
+				pc.type) << pc.yaml;
+			gtext_yaml_free(doc);
+		}
+	}
+}
+
 /* A document has exactly one root - l-bare-document is a single
    s-l+block-node (9.2) - and a second one has nowhere to go.
 
