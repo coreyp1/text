@@ -623,6 +623,95 @@ static bool tab_stands_for_indentation(const GTEXT_YAML_Scanner *s)
 }
 
 /* convert ASCII hex character to value, or -1 if invalid */
+/* True where the scanner stands on the first character of an anchor or alias
+   name - directly after the "&" or "*" that introduced it.
+
+   ns-anchor-name is ns-anchor-char+ and ns-anchor-char is ns-char minus
+   c-flow-indicator (6.9.2), so nothing that is special anywhere else is
+   special in that position: not a "#", which starts no comment there; not a
+   "|" or ">", which start no block scalar; not a quote, an "!", an "&" or a
+   "*".  Each of those was being taken for what it means elsewhere, which left
+   the anchor name empty and the document in error. */
+static bool scanner_at_property_name(const GTEXT_YAML_Scanner *s) {
+  return (s->last_indicator == '&' || s->last_indicator == '*')
+      && s->offset == s->last_indicator_offset + 1;
+}
+
+/* And the same question for a tag.
+ *
+ *   c-ns-shorthand-tag ::= c-tag-handle ns-tag-char+
+ *   ns-tag-char        ::= ns-uri-char - "!" - c-flow-indicator
+ *
+ * so the character directly after "!" is the first of the tag's name unless it
+ * is one of those - "!-" is the tag "!-", and the "-" was being taken for a
+ * block entry indicator instead, which made "!- []" a sequence entry beside a
+ * node already on its line rather than a tagged flow sequence.  "!-[]" parsed,
+ * because there the "[" ends the name before anything can misread it; putting
+ * a space in was enough to break it, which is what the writer does.
+ *
+ * "!" itself is left alone: "!!str" reaches the name through the
+ * space-delimiter rule already, and "<" opens a verbatim tag. */
+static bool scanner_at_tag_name(const GTEXT_YAML_Scanner *s, int c) {
+  if (s->last_indicator != '!') return false;
+  if (s->offset != s->last_indicator_offset + 1) return false;
+  if (c == '!' || c == '<') return false;
+  /* ns-tag-char, stated rather than left to what the branches below happen
+     not to catch: ns-uri-char less "!" and the flow indicators.  "|" and ">"
+     are not ns-uri-char, so "!|" is not a tag and the block scalar below is
+     right to take it. */
+  if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9')) {
+    return true;
+  }
+  switch (c) {
+    case '-': case '%': case '#': case ';': case '/': case '?': case ':':
+    case '@': case '&': case '=': case '+': case '$': case '_': case '.':
+    case '~': case '*': case '\'': case '(': case ')':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/* ns-uri-char, 5.6:
+
+     ns-uri-char ::= "%" ns-hex-digit{2} | ns-word-char | "#" | ";" | "/"
+                   | "?" | ":" | "@" | "&" | "=" | "+" | "$" | "," | "_"
+                   | "." | "!" | "~" | "*" | "'" | "(" | ")" | "[" | "]"
+
+   c-verbatim-tag is "!" "<" ns-uri-char+ ">", and only the "+" of that was
+   being enforced: a space, a tab, a brace, a quotation mark, a non-ASCII byte
+   and a bare "%" all travelled through as part of the tag.  That matters to
+   the writer as much as to the reader - a tag it cannot spell has to be
+   refused rather than mangled, and this says which ones those are.
+
+   @p at is an offset from the scanner cursor, so the two hex digits of an
+   escape can be looked at without copying. */
+static int hexval(int c);
+
+static bool scanner_uri_char_ok(const GTEXT_YAML_Scanner *s, size_t at) {
+  const unsigned char c = (unsigned char)s->input.data[s->cursor + at];
+  if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9')) {
+    return true;
+  }
+  switch (c) {
+    case '-': case '#': case ';': case '/': case '?': case ':': case '@':
+    case '&': case '=': case '+': case '$': case ',': case '_': case '.':
+    case '!': case '~': case '*': case '\'': case '(': case ')':
+    case '[': case ']':
+      return true;
+    case '%':
+      /* An escape is one URI character written as three, so both digits have
+         to be there for the "%" to be one at all. */
+      if (s->cursor + at + 2 >= s->input.len) return false;
+      return hexval((unsigned char)s->input.data[s->cursor + at + 1]) >= 0
+          && hexval((unsigned char)s->input.data[s->cursor + at + 2]) >= 0;
+    default:
+      return false;
+  }
+}
+
 static int hexval(int c)
 {
   if (c >= '0' && c <= '9') return c - '0';
@@ -859,17 +948,31 @@ static int scanner_check_printable(GTEXT_YAML_Scanner *s, int final)
     else if ((c >> 4) == 0xE) { cp = c & 0x0Fu; need = 3; }
     else if ((c >> 3) == 0x1E) { cp = c & 0x07u; need = 4; }
     else {
-      /* A stray continuation or an invalid lead byte. gtext_utf8_validate()
-         is the authority on well-formedness and runs over the assembled
-         scalar; leave it to say so rather than guessing at a code point. */
+      /* A stray continuation or an invalid lead byte.  While input may still
+         arrive, gtext_utf8_validate() is the authority on well-formedness and
+         runs over the assembled scalar, so leave it to say so rather than
+         guessing at a code point.  At the end of the stream there is nothing
+         further to wait for and nowhere else it will be looked at: bytes on a
+         directive or a comment line never become a scalar, so "%" followed by
+         a lone 0xC2 was accepted as a document - and refused on the next read
+         if a line break happened to follow it. */
+      if (final) {
+        scanner_set_error(s, GTEXT_YAML_E_INVALID,
+            "Character not allowed in a YAML stream");
+        s->printable_checked = i;
+        return 0;
+      }
       i++;
       continue;
     }
 
     if (i + need > s->input.len) {
       if (!final) break;   /* the rest arrives with the next feed */
-      i++;                 /* truncated at end of input; not ours to report */
-      continue;
+      /* Truncated with the stream over, so it names no character at all. */
+      scanner_set_error(s, GTEXT_YAML_E_INVALID,
+          "Character not allowed in a YAML stream");
+      s->printable_checked = i;
+      return 0;
     }
     for (size_t k = 1; k < need; k++) {
       cp = (cp << 6) | (b[i + k] & 0x3Fu);
@@ -1266,7 +1369,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       }
       return GTEXT_YAML_E_INVALID;
     }
-    if (c == '#') {
+    if (c == '#' && !scanner_at_property_name(s)
+        && !scanner_at_tag_name(s, c)) {
       if (!saw_separation && s->col != 1) {
         if (err) {
           err->code = GTEXT_YAML_E_INVALID;
@@ -1426,7 +1530,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   }
 
   /* Special-case block scalars '|' and '>' to parse them into a scalar token. */
-  if (c == '|' || c == '>') {
+  if ((c == '|' || c == '>') && !scanner_at_property_name(s)) {
     int style = c; /* '|' literal, '>' folded */
     /* Ask for the whole block before taking any of it - see
        block_scalar_complete().  Nothing has been consumed yet, so the next
@@ -1978,6 +2082,24 @@ block_scalar_collected:
     if (!is_indicator) goto scan_plain_scalar;
   }
 
+  /* ns-anchor-name is ns-anchor-char+, and ns-anchor-char is ns-char minus
+     c-flow-indicator (6.9.2) - so the character directly after "&" or "*" is
+     the first character of the name whatever it is.  "&!x", "&&x", "&*x",
+     "&#x", "&%x", "&|x", "&>x" and the two quotes name anchors, and taking
+     that character as an indicator of its own left the name empty and the
+     document in error.  Nine of the ninety-four printable ASCII characters
+     were refused in that position.
+
+     The same rule inside a name was already here - "&an:chor" is one anchor,
+     not an anchor and a scalar - and this is that rule at the first position,
+     where it had not been applied.  The five flow indicators are excluded,
+     because those really do end the name. */
+  if ((scanner_at_property_name(s)
+       && c != ',' && c != '[' && c != ']' && c != '{' && c != '}')
+      || scanner_at_tag_name(s, c)) {
+    goto scan_plain_scalar;
+  }
+
   /* General single-byte indicators (e.g., '-', ':', '*', '&', ',', etc.) */
   if (is_indicator_char(c)) {
     /* A property or an alias is one thing, not two.  Ask for the rest of it
@@ -2228,26 +2350,6 @@ block_scalar_collected:
             look += 2;
             continue;
           }
-          /* hex escape: \xNN (2 hex digits) */
-          if (esc == 'x') {
-            /* need two hex digits beyond the 'x' */
-            if (s->cursor + look + 3 >= s->input.len) { want_more = true; break; }
-            int h1 = (unsigned char)s->input.data[s->cursor + look + 2];
-            int h2 = (unsigned char)s->input.data[s->cursor + look + 3];
-            int v1 = hexval(h1);
-            int v2 = hexval(h2);
-            if (v1 < 0 || v2 < 0) {
-              /* invalid hex -> conservative treat as literal chars */
-              char c1 = (char)h1; char c2 = (char)h2;
-              if (!gtext_yaml_dynbuf_append(&scalar, &c1, 1) || !gtext_yaml_dynbuf_append(&scalar, &c2, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-              ws_start = scalar.len;
-              look += 4; continue;
-            }
-            char outc = (char)((v1 << 4) | v2);
-            if (!gtext_yaml_dynbuf_append(&scalar, &outc, 1)) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
-            ws_start = scalar.len;
-            look += 4; continue;
-          }
           /* "\N", "\_", "\L" and "\P" are the named non-ASCII escapes of
              5.7: next line, non-breaking space, line separator and
              paragraph separator. */
@@ -2273,16 +2375,45 @@ block_scalar_collected:
             look += 2;
             continue;
           }
-          /* unicode escapes: \uNNNN (4 hex) and \UNNNNNNNN (8 hex) */
-          if (esc == 'u' || esc == 'U') {
-            int need = (esc == 'u') ? 4 : 8;
+          /* The three numeric escapes of 5.7, which differ only in how many
+             hex digits they take:
+
+               ns-esc-8-bit      ::= "x" ns-hex-digit{2}
+               ns-esc-16-bit     ::= "u" ns-hex-digit{4}
+               ns-esc-32-bit     ::= "U" ns-hex-digit{8}
+
+             All three name a *character*, so all three are encoded the same
+             way.  "\x" used to be handled separately and wrote the raw byte,
+             which is right below U+0080 and wrong above it: "\x92" produced
+             a lone 0x92, and a lone continuation byte is not UTF-8.  The
+             writer spells a C1 control "\x92", so the parser refused what
+             the writer had just produced. */
+          if (esc == 'x' || esc == 'u' || esc == 'U') {
+            int need = (esc == 'x') ? 2 : (esc == 'u') ? 4 : 8;
             if (s->cursor + look + 1 + need >= s->input.len) { want_more = true; break; }
             unsigned int code = 0;
+            bool bad_hex = false;
             for (int i = 0; i < need; ++i) {
               int h = (unsigned char)s->input.data[s->cursor + look + 2 + i];
               int v = hexval(h);
-              if (v < 0) { code = 0xFFFD; break; } /* replacement char on invalid hex */
+              if (v < 0) { bad_hex = true; break; }
               code = (code << 4) | (unsigned int)v;
+            }
+            /* A digit that is not a hex digit does not make some other
+               escape; the production simply does not match, and 5.7 has no
+               alternative for it.  This used to copy the digits through for
+               "\x" and substitute U+FFFD for "\u", so "\xZZ" read back as
+               "ZZ" and "\uZZZZ" as a replacement character. */
+            if (bad_hex) {
+              if (err) {
+                err->code = GTEXT_YAML_E_BAD_ESCAPE;
+                err->message = "Escape needs hex digits in double-quoted scalar";
+                err->offset = off;
+                err->line = line;
+                err->col = col;
+              }
+              gtext_yaml_dynbuf_free(&scalar);
+              return GTEXT_YAML_E_BAD_ESCAPE;
             }
             /* encode codepoint into UTF-8 bytes */
             char utf8buf[4]; int utf8len = 0;
@@ -2418,6 +2549,17 @@ scan_plain_scalar:
       }
       const char vc = s->input.data[s->cursor + vlen];
       vlen++;
+      if (vc != '>' && !scanner_uri_char_ok(s, vlen - 1)) {
+        if (err) {
+          err->code = GTEXT_YAML_E_INVALID;
+          err->message = "Verbatim tag holds a character that is not a URI character";
+          err->offset = off;
+          err->line = line;
+          err->col = col;
+        }
+        gtext_yaml_dynbuf_free(&scalar);
+        return GTEXT_YAML_E_INVALID;
+      }
       if (vc == '>') {
         /* c-verbatim-tag ::= "!" "<" ns-uri-char+ ">" - one character at
            least, so "!<>" names nothing and is not a tag.  It was being
@@ -2653,7 +2795,12 @@ scan_plain_scalar:
          and left the anchor "&:@*!$\"<foo>:" of suite case W5VH empty. */
       if (c == ' ' || c == '\t' || c == '\r' || c == '\n') break;
       if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break;
-      if (scalar.len == 0 && c == '!' && s->last_indicator != '!') break;
+      /* A "!" is ns-char like any other, so it is part of an anchor or alias
+         name rather than the start of a tag: "&!x" names the anchor "!x". */
+      if (scalar.len == 0 && c == '!' && s->last_indicator != '!'
+          && s->last_indicator != '&' && s->last_indicator != '*') {
+        break;
+      }
     } else {
       /* Flow context.  A plain scalar here may contain white space just as it
          may in block context - 7.3.3's ns-plain-char does not exclude it, and

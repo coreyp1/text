@@ -623,7 +623,15 @@ static GTEXT_YAML_Status write_indent(
   return GTEXT_YAML_OK;
 }
 
+/* A node's tag, or NULL when it carries none.
+ *
+ * An empty string is none.  It used to be treated as a tag by everything that
+ * asked - the node had "properties", so a scalar with nothing else to write
+ * wrote nothing at all and an entry holding one disappeared from its sequence
+ * - while write_tag() wrote no characters for it.  The DOM API will store
+ * whatever it is given, so the check belongs where the writer reads it. */
 static const char *node_tag(const GTEXT_YAML_Node *node) {
+  const char *tag = NULL;
   if (!node) return NULL;
   switch (node->type) {
     case GTEXT_YAML_STRING:
@@ -631,17 +639,21 @@ static const char *node_tag(const GTEXT_YAML_Node *node) {
     case GTEXT_YAML_INT:
     case GTEXT_YAML_FLOAT:
     case GTEXT_YAML_NULL:
-      return node->as.scalar.tag;
+      tag = node->as.scalar.tag;
+      break;
     case GTEXT_YAML_SEQUENCE:
     case GTEXT_YAML_OMAP:
     case GTEXT_YAML_PAIRS:
-      return node->as.sequence.tag;
+      tag = node->as.sequence.tag;
+      break;
     case GTEXT_YAML_MAPPING:
     case GTEXT_YAML_SET:
-      return node->as.mapping.tag;
+      tag = node->as.mapping.tag;
+      break;
     default:
       return NULL;
   }
+  return (tag && *tag) ? tag : NULL;
 }
 
 static const char *node_anchor(const GTEXT_YAML_Node *node) {
@@ -786,28 +798,57 @@ static bool tag_is_writable_shorthand(const char *tag) {
   return tag_suffix_is_safe((const char *)p);
 }
 
+static int hex_digit_value(unsigned char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+/* Whether a tag can be written between "!<" and ">" and read back as itself.
+
+   c-verbatim-tag is "!" "<" ns-uri-char+ ">", and a verbatim tag is used
+   exactly as written (5.3) - the reader does not decode its escapes, because
+   there is no handle left to expand and nothing that says an escape here was
+   ever an escape rather than three characters of the URI.  So the writer must
+   not encode either: the bytes between the brackets are the tag.
+
+   This used to percent-encode "%" on the way out, on the premise that the
+   reader had decoded it on the way in.  The reader decodes only where a %TAG
+   prefix was substituted, so the encoding had no matching decode and a tag
+   holding a "%" gained a layer of escaping on every round trip: "!a%21b"
+   became "!a%2521b", then "!a%252521b". */
+static bool tag_is_writable_verbatim(const char *tag) {
+  if (!tag || !*tag) return false;
+  for (const unsigned char *p = (const unsigned char *)tag; *p; p++) {
+    if (tag_char_is_safe(*p, false)) continue;
+    if (*p == '%' && hex_digit_value(p[1]) >= 0 && hex_digit_value(p[2]) >= 0) {
+      p += 2;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 static GTEXT_YAML_Status write_tag_verbatim(
     yaml_writer_state * state, const char * tag) {
-  static const char hex[] = "0123456789ABCDEF";
   GTEXT_YAML_Status status = write_str(state, "!<");
   if (status != GTEXT_YAML_OK) return status;
-  for (const unsigned char *p = (const unsigned char *)tag; *p; p++) {
-    /* '%' is escaped along with the unsafe bytes: the parser decoded the
-       escapes on the way in, so a literal '%' in the tag we hold has to come
-       back out as %25 or the next read will decode something that was never
-       written. */
-    if (*p != '%' && tag_char_is_safe(*p, false)) {
-      status = write_bytes(state, (const char *)p, 1);
-    } else {
-      char buf[3];
-      buf[0] = '%';
-      buf[1] = hex[(*p >> 4) & 0x0F];
-      buf[2] = hex[*p & 0x0F];
-      status = write_bytes(state, buf, sizeof(buf));
-    }
-    if (status != GTEXT_YAML_OK) return status;
-  }
+  status = write_str(state, tag);
+  if (status != GTEXT_YAML_OK) return status;
   return write_str(state, ">");
+}
+
+/* A tag in the "tag:yaml.org,2002:" namespace has to name a type the spec
+   defines; that namespace is not the author's to extend, and the resolver
+   refuses "!!bogus" on the way in whatever the options say.  The writer used
+   to emit any suffix at all, so a node carrying "!!-.#" - which the DOM API
+   will hold, since it validates nothing - came out as a document this very
+   parser refuses.  The list is gtext_yaml_tag_is_defined_standard()'s, not a
+   second copy of it. */
+static bool standard_tag_suffix_is_defined(const char *suffix) {
+  return suffix && *suffix && gtext_yaml_tag_is_defined_standard(suffix);
 }
 
 static GTEXT_YAML_Status write_tag(
@@ -816,24 +857,130 @@ static GTEXT_YAML_Status write_tag(
   if (!tag || !*tag) return GTEXT_YAML_OK;
 
   if (tag[0] == '!') {
+    if (tag[1] == '!' && !standard_tag_suffix_is_defined(tag + 2)) {
+      return GTEXT_YAML_E_INVALID;
+    }
     if (tag_is_writable_shorthand(tag)) {
       return write_str(state, tag);
     }
-  } else if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0 &&
-      tag_suffix_is_safe(tag + sizeof(yaml_prefix) - 1)) {
-    GTEXT_YAML_Status status = write_str(state, "!!");
-    if (status != GTEXT_YAML_OK) return status;
-    return write_str(state, tag + sizeof(yaml_prefix) - 1);
+  } else if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0) {
+    if (!standard_tag_suffix_is_defined(tag + sizeof(yaml_prefix) - 1)) {
+      return GTEXT_YAML_E_INVALID;
+    }
+    if (tag_suffix_is_safe(tag + sizeof(yaml_prefix) - 1)) {
+      GTEXT_YAML_Status status = write_str(state, "!!");
+      if (status != GTEXT_YAML_OK) return status;
+      return write_str(state, tag + sizeof(yaml_prefix) - 1);
+    }
   }
 
+  /* Like an anchor name, a tag has one spelling and no fallback.  A tag that
+     is not ns-uri-char+ cannot be written at all, and writing an
+     approximation of it is worse than saying so. */
+  if (!tag_is_writable_verbatim(tag)) return GTEXT_YAML_E_INVALID;
   return write_tag_verbatim(state, tag);
 }
 
+/* c-printable, 5.1: the characters a YAML stream is allowed to hold at all.
+   Everything outside it - NUL and the rest of C0, DEL, the C1 block apart
+   from NEL, the surrogates and the two non-characters at the end of the BMP -
+   has no spelling in a stream except an escape, and only the double-quoted
+   style has escapes.  The writer used to emit them raw, which produced a
+   document its own parser refuses. */
+static bool codepoint_is_printable(uint32_t cp) {
+  if (cp == 0x09 || cp == 0x0A || cp == 0x0D) return true;
+  if (cp >= 0x20 && cp <= 0x7E) return true;
+  if (cp == 0x85) return true;
+  if (cp >= 0xA0 && cp <= 0xD7FF) return true;
+  if (cp >= 0xE000 && cp <= 0xFFFD) return true;
+  if (cp >= 0x10000 && cp <= 0x10FFFF) return true;
+  return false;
+}
+
+/* True when every character of the value may stand in a stream unescaped.
+   A byte that is not valid UTF-8 counts as unprintable: it has no code point,
+   so there is nothing to escape it as either, and forcing the double-quoted
+   style at least keeps it inside quotes. */
+static bool scalar_is_printable(const char *value, size_t len) {
+  if (!value) return true;
+  const unsigned char *p = (const unsigned char *)value;
+  size_t i = 0;
+  while (i < len) {
+    uint32_t cp = 0;
+    size_t n = 0;
+    if (utf8_decode_one(p + i, len - i, &cp, &n) != 1) return false;
+    if (!codepoint_is_printable(cp)) return false;
+    i += n;
+  }
+  return true;
+}
+
+/* ns-anchor-name, 6.9.2:
+
+     c-ns-anchor-property ::= "&" ns-anchor-name
+     ns-anchor-name       ::= ns-anchor-char+
+     ns-anchor-char       ::= ns-char - c-flow-indicator
+
+   ns-char is a printable character that is neither white space nor a line
+   break nor the byte order mark, so an anchor name holds none of those, none
+   of "[]{},", and is never empty.
+
+   The writer used to emit "&" followed by whatever string it had been handed.
+   An anchor of "a b" wrote "&a b", which reads back as the anchor "a" with
+   the rest of the line shifted into the value; an anchor of "a[b" wrote a
+   document that does not parse at all.  There is nothing to fall back to
+   here - unlike a scalar style, an anchor has exactly one spelling - so a
+   name that cannot be written is refused. */
+static bool anchor_name_is_writable(const char *name) {
+  if (!name || !*name) return false;
+  size_t len = strlen(name);
+  size_t i = 0;
+  while (i < len) {
+    uint32_t cp = 0;
+    size_t n = 0;
+    if (utf8_decode_one((const unsigned char *)name + i, len - i, &cp, &n) != 1) {
+      return false;
+    }
+    if (!codepoint_is_printable(cp)) return false;  /* c-printable */
+    if (cp == 0x0A || cp == 0x0D) return false;     /* b-char */
+    if (cp == 0x20 || cp == 0x09) return false;     /* s-white */
+    if (cp == 0xFEFF) return false;                 /* c-byte-order-mark */
+    if (cp == '[' || cp == ']' || cp == '{' || cp == '}' || cp == ',') {
+      return false;                                 /* c-flow-indicator */
+    }
+    i += n;
+  }
+  return true;
+}
+
+/* Whether a value has to be quoted rather than written plain.
+ *
+ * This is a whitelist, and deliberately a conservative one: quoting text that
+ * would have been safe plain is only a matter of style, and the by-event
+ * round trip holds the writer to the *text* of every scalar, which quoting
+ * preserves.
+ *
+ * There is one exception, and it is not a matter of style. Quoting changes
+ * the value whenever the plain text would have resolved to something other
+ * than a string, because only a plain scalar is resolved by its contents
+ * (10.3.2). So every character that can appear in a resolvable plain scalar
+ * has to be here: "~" is the null the 10.3.2 table gives first, and "+" leads
+ * the core schema's integer and float rows ("[-+]? [0-9]+"). Neither is a
+ * c-indicator, so neither needs quoting in the first place - and quoting them
+ * turned null into the string "~" and the integer +1 into the string "+1". */
 static bool scalar_needs_quotes(const char *value, size_t len) {
   if (!value || len == 0) return true;
+  /* ns-plain-first admits "-" only when an ns-plain-safe character follows -
+     it is a c-indicator otherwise, and a lone "-" on a line is a block
+     sequence entry.  The string "-" was being written plain and read back as
+     a sequence holding one empty node. */
+  if (value[0] == '-' && (len == 1 || value[1] == ' ' || value[1] == '\t')) {
+    return true;
+  }
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)value[i];
-    if (!(isalnum(c) || c == '_' || c == '-' || c == '.')) {
+    if (!(isalnum(c) || c == '_' || c == '-' || c == '.'
+          || c == '~' || c == '+')) {
       return true;
     }
   }
@@ -865,20 +1012,54 @@ static GTEXT_YAML_Status write_escaped_scalar(
       case '\t':
         status = write_str(state, "\\t");
         break;
-      default:
-        if (c < 0x20) {
-          char buf[6];
-          buf[0] = '\\';
-          buf[1] = 'u';
-          buf[2] = '0';
-          buf[3] = '0';
-          buf[4] = hex[(c >> 4) & 0x0F];
-          buf[5] = hex[c & 0x0F];
-          status = write_bytes(state, buf, sizeof(buf));
-        } else {
-          status = write_bytes(state, (const char *)&c, 1);
+      default: {
+        /* Decode before deciding: what 5.1 forbids is a character, not a
+           byte, so the C1 block has to be recognised through its two-byte
+           UTF-8 spelling rather than by looking at 0xC2. */
+        uint32_t cp = 0;
+        size_t n = 0;
+        int ok = utf8_decode_one(
+            (const unsigned char *)value + i, len - i, &cp, &n);
+        if (ok == 1 && codepoint_is_printable(cp)) {
+          status = write_bytes(state, value + i, n);
+          i += n - 1;
+          break;
         }
+        if (ok != 1) {
+          /* Not UTF-8 at all, and there is no spelling for it: a YAML stream
+             is a stream of characters, and the escapes of 5.7 all name a code
+             point.  Writing "\xFF" for the byte 0xFF would read back as
+             U+00FF - two bytes, a different value - so the byte is refused
+             rather than quietly changed into a character that happens to
+             share its number.  Every path that could carry one arrives here,
+             because scalar_is_printable() is false for invalid UTF-8 and
+             forces the double-quoted style. */
+          return GTEXT_YAML_E_INVALID;
+        }
+        char buf[10];
+        size_t blen = 0;
+        buf[blen++] = '\\';
+        if (cp <= 0xFF) {
+          buf[blen++] = 'x';
+          buf[blen++] = hex[(cp >> 4) & 0x0F];
+          buf[blen++] = hex[cp & 0x0F];
+        }
+        else if (cp <= 0xFFFF) {
+          buf[blen++] = 'u';
+          for (int shift = 12; shift >= 0; shift -= 4) {
+            buf[blen++] = hex[(cp >> shift) & 0x0F];
+          }
+        }
+        else {
+          buf[blen++] = 'U';
+          for (int shift = 28; shift >= 0; shift -= 4) {
+            buf[blen++] = hex[(cp >> shift) & 0x0F];
+          }
+        }
+        status = write_bytes(state, buf, blen);
+        i += n - 1;
         break;
+      }
     }
     if (status != GTEXT_YAML_OK) return status;
   }
@@ -895,9 +1076,10 @@ static bool scalar_fits_single_quotes(const char *value, size_t len) {
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)value[i];
     if (c == '\t') continue;
-    if (c < 0x20 || c == 0x7F) return false;
+    if (c < 0x20) return false;
   }
-  return true;
+  /* Everything 5.1 forbids needs an escape, and single quotes have none. */
+  return scalar_is_printable(value, len);
 }
 
 static GTEXT_YAML_Status write_single_quoted_scalar(
@@ -1121,6 +1303,87 @@ static GTEXT_YAML_Status write_block_scalar(
   return GTEXT_YAML_OK;
 }
 
+/* Which style a scalar can actually be written in, and the block plan that
+   goes with it if the answer is a block one.
+
+   Both writers ask this.  They used to decide it separately - the spelling
+   helpers below were made common, but the choice of spelling was not - and a
+   rule added to one of them did not reach the other.  Every reason to reject
+   a style lives here now, in the order the reasons override each other.
+
+   `style` is what the caller would prefer, after the options and the node's
+   own remembered style have been consulted. */
+static GTEXT_YAML_Scalar_Style plan_scalar_style(
+    GTEXT_YAML_Scalar_Style style,
+    const char *value,
+    size_t len,
+    bool is_binary,
+    /* Whether the node says it is a string, as distinct from a scalar whose
+       text happens to be one.  Only a string needs protecting from its own
+       spelling. */
+    bool is_string,
+    bool canonical,
+    bool in_flow,
+    bool pretty,
+    int line_width,
+    size_t content_indent,
+    int parent_indent,
+    yaml_block_plan *plan) {
+  memset(plan, 0, sizeof(*plan));
+
+  if (canonical) return GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+
+  /* First, because it is the only question with one answer: a character 5.1
+     forbids has no spelling in a stream except an escape, and the
+     double-quoted style is the only one that has escapes. */
+  if (!scalar_is_printable(value, len)) {
+    return GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+    if (!is_binary && scalar_needs_quotes(value, len)) {
+      style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+    }
+    /* A string whose text spells a number, a bool or a null has to be
+       quoted, or the plain spelling resolves it back to that instead.
+       gtext_yaml_node_new_scalar() makes a string of whatever it is given,
+       so a caller who built the string "1" and wrote it got the integer 1
+       back. */
+    else if (is_string
+             && gtext_yaml_plain_text_resolves_to_non_string(value, len)) {
+      style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+    }
+    else if (!in_flow && pretty && line_width > 0 &&
+             len > (size_t)line_width) {
+      style = GTEXT_YAML_SCALAR_STYLE_FOLDED;
+    }
+  }
+
+  /* A flow collection is one line's worth of syntax; a block scalar ends its
+     own line, so there is nowhere inside one to put it. */
+  if (in_flow && (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
+      style == GTEXT_YAML_SCALAR_STYLE_FOLDED)) {
+    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  /* A block style is only a spelling of the value if the value has one.  Ask
+     before committing to it, rather than writing something that reads back
+     as a different string. */
+  if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
+      style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
+    plan_block_scalar(value, len, content_indent, parent_indent,
+                      style == GTEXT_YAML_SCALAR_STYLE_FOLDED, plan);
+    if (!plan->usable) style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED &&
+      !scalar_fits_single_quotes(value, len)) {
+    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  return style;
+}
+
 static const char *node_leading_comment(const GTEXT_YAML_Node *node) {
   if (!node) return NULL;
   switch (node->type) {
@@ -1288,6 +1551,12 @@ static GTEXT_YAML_Status write_properties(
     bool trailing_space) {
   bool canonical = state->opts && state->opts->canonical;
 
+  /* An empty tag string is no tag.  It used to be one everywhere but in
+     write_tag(), which wrote nothing for it - so a node carrying "" was given
+     a tag's spacing and none of its text, and an entry holding one vanished
+     from the sequence it was in. */
+  if (tag && !*tag) tag = NULL;
+
   if (!tag && node_requires_tag(type)) {
     tag = default_tag_for_type(type);
   }
@@ -1297,6 +1566,7 @@ static GTEXT_YAML_Status write_properties(
   }
 
   if (anchor) {
+    if (!anchor_name_is_writable(anchor)) return GTEXT_YAML_E_INVALID;
     GTEXT_YAML_Status status = write_str(state, "&");
     if (status != GTEXT_YAML_OK) return status;
     status = write_str(state, anchor);
@@ -1404,6 +1674,10 @@ static GTEXT_YAML_Status write_scalar_node(
     style = node->as.scalar.scalar_style;
   }
 
+  /* The null spellings are asked about before any other style question.  "~"
+     is not a character scalar_needs_quotes() would leave alone, and quoting
+     it would put the one-character string "~" into the document in place of
+     the null the document held. */
   if (!canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN &&
       node->type == GTEXT_YAML_NULL) {
     if (!value || value[0] == '\0') {
@@ -1426,48 +1700,16 @@ static GTEXT_YAML_Status write_scalar_node(
     return write_str(state, value);
   }
 
+  yaml_block_plan block;
+  style = plan_scalar_style(
+      style, value, value_len, is_binary,
+      node->type == GTEXT_YAML_STRING, canonical, flow,
+      state->opts && state->opts->pretty, writer_line_width(state->opts),
+      indent + (size_t)writer_indent_spaces(state->opts),
+      state->block_parent_indent, &block);
+
   status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
-
-  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
-    if (!is_binary && scalar_needs_quotes(value, value_len)) {
-      style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-    } else if (!flow && state->opts && state->opts->pretty) {
-      int line_width = writer_line_width(state->opts);
-      if (line_width > 0 && value_len > (size_t)line_width) {
-        style = GTEXT_YAML_SCALAR_STYLE_FOLDED;
-      }
-    }
-  }
-
-  if (flow && (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
-      style == GTEXT_YAML_SCALAR_STYLE_FOLDED)) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
-
-  /* A block style is only a spelling of the value if the value has one.  Ask
-     before committing to it, and fall back to quotes when the answer is no -
-     rather than writing something that reads back as a different string. */
-  yaml_block_plan block;
-  memset(&block, 0, sizeof(block));
-  if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
-      style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
-    plan_block_scalar(
-        value,
-        value_len,
-        indent + (size_t)writer_indent_spaces(state->opts),
-        state->block_parent_indent,
-        style == GTEXT_YAML_SCALAR_STYLE_FOLDED,
-        &block);
-    if (!block.usable) {
-      style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-    }
-  }
-
-  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED &&
-      !scalar_fits_single_quotes(value, value_len)) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
 
   switch (style) {
     case GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED:
@@ -1746,7 +1988,8 @@ static GTEXT_YAML_Status write_alias_node(
   if (!name && node->as.alias.target) {
     name = node_anchor(node->as.alias.target);
   }
-  if (!name) {
+  /* An alias names an anchor, so it is held to the same production. */
+  if (!anchor_name_is_writable(name)) {
     return GTEXT_YAML_E_INVALID;
   }
 
@@ -1973,6 +2216,10 @@ struct GTEXT_YAML_Writer {
   size_t stack_capacity;
   bool in_document;
   bool wrote_doc;
+  /* Set once the line break that separates the next document from the last
+     one has been written.  A directive is written before its document's
+     "---", so whichever of the two comes first owes that break. */
+  bool doc_separated;
   bool error;
 };
 
@@ -2273,44 +2520,24 @@ static GTEXT_YAML_Status writer_emit_scalar(
      scalar: the container's own indent, or -1 at the root of a document. */
   view.block_parent_indent = top ? (int)top->indent : -1;
 
-  if (writer->opts.canonical) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
   if (!writer->opts.canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
     style = event->scalar_style;
   }
-  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && scalar_needs_quotes(value, len)) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && !in_flow && writer->opts.pretty) {
-    int width = writer_line_width(&writer->opts);
-    if (width > 0 && len > (size_t)width) {
-      style = GTEXT_YAML_SCALAR_STYLE_FOLDED;
-    }
-  }
-
-  if (in_flow && (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
-      style == GTEXT_YAML_SCALAR_STYLE_FOLDED)) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
 
   yaml_block_plan block;
-  memset(&block, 0, sizeof(block));
-  if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
-      style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
-    plan_block_scalar(
-        value,
-        len,
-        base_indent + (size_t)writer_indent_spaces(&writer->opts),
-        view.block_parent_indent,
-        style == GTEXT_YAML_SCALAR_STYLE_FOLDED,
-        &block);
-    if (!block.usable) style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
-
-  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED &&
-      !scalar_fits_single_quotes(value, len)) {
-    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
-  }
+  style = plan_scalar_style(
+      style, value, len,
+      /* An event carries no !!binary flag of its own; the tag is the only
+         thing that says so, and plan_scalar_style is asked about the value
+         either way.  Nor does it say the scalar is a string: an event stream
+         reports a scalar as written and leaves resolution to its consumer, so
+         a plain one stays plain here and a quoted one arrives already
+         quoted. */
+      false, false,
+      writer->opts.canonical, in_flow, writer->opts.pretty,
+      writer_line_width(&writer->opts),
+      base_indent + (size_t)writer_indent_spaces(&writer->opts),
+      view.block_parent_indent, &block);
 
   GTEXT_YAML_Status st = GTEXT_YAML_OK;
   switch (style) {
@@ -2353,7 +2580,7 @@ static GTEXT_YAML_Status writer_emit_alias(
   }
 
   const char *name = event->data.alias_name;
-  if (!name) {
+  if (!anchor_name_is_writable(name)) {
     return GTEXT_YAML_E_INVALID;
   }
   if (writer_write_char(writer, '*') != 0) {
@@ -2367,6 +2594,63 @@ static GTEXT_YAML_Status writer_emit_alias(
   writer->key_absorbs_colon = true;
 
   writer_finish_value(writer, is_key);
+  return GTEXT_YAML_OK;
+}
+
+/* A directive holds one line and no white space inside any of its parts, so
+   a space or a break in one would run the line into the next and change what
+   the directive says. */
+static bool directive_word_is_writable(const char *word) {
+  if (!word || !*word) return false;
+  for (const unsigned char *p = (const unsigned char *)word; *p; p++) {
+    if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '#') {
+      return false;
+    }
+  }
+  /* And it has to be characters at all, held to 5.1 like any other part of
+     the stream. */
+  return scalar_is_printable(word, strlen(word));
+}
+
+/* "%YAML 1.2" and "%TAG !e! tag:example.com,2000:app/".
+
+   These used to be dropped without a word, and that is a correctness failure
+   rather than a fidelity one.  The event stream reports a tag as it was
+   written (5.3), so "!e!foo" arrives still spelled with its handle; dropping
+   the "%TAG !e! ..." that declared the handle leaves a document whose handle
+   is undefined, which this very parser then refuses.  Feeding the parser's
+   own events straight back to the writer produced a document it could not
+   read. */
+static GTEXT_YAML_Status writer_emit_directive(
+    GTEXT_YAML_Writer *writer,
+    const GTEXT_YAML_Event *event) {
+  /* A directive belongs to the document it precedes (9.2); there is nowhere
+     inside one to put it. */
+  if (writer->in_document) return GTEXT_YAML_E_STATE;
+
+  const char *parts[3] = {
+    event->data.directive.name,
+    event->data.directive.value,
+    event->data.directive.value2,
+  };
+  if (!directive_word_is_writable(parts[0])) return GTEXT_YAML_E_INVALID;
+
+  const char *newline = writer_newline(&writer->opts);
+  if (writer->wrote_doc && !writer->doc_separated) {
+    if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
+    writer->doc_separated = true;
+  }
+
+  if (writer_write_char(writer, '%') != 0) return GTEXT_YAML_E_WRITE;
+  for (int i = 0; i < 3; i++) {
+    if (!parts[i] || !*parts[i]) continue;
+    if (i > 0) {
+      if (!directive_word_is_writable(parts[i])) return GTEXT_YAML_E_INVALID;
+      if (writer_write_char(writer, ' ') != 0) return GTEXT_YAML_E_WRITE;
+    }
+    if (writer_write_string(writer, parts[i]) != 0) return GTEXT_YAML_E_WRITE;
+  }
+  if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
   return GTEXT_YAML_OK;
 }
 
@@ -2663,13 +2947,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
       if (writer->in_document) {
         return GTEXT_YAML_E_STATE;
       }
-      if (writer->wrote_doc) {
+      if (writer->wrote_doc && !writer->doc_separated) {
         if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
       }
       if (writer_write_string(writer, "---") != 0) return GTEXT_YAML_E_WRITE;
       if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
       writer->in_document = true;
       writer->wrote_doc = true;
+      writer->doc_separated = false;
       return GTEXT_YAML_OK;
     }
     case GTEXT_YAML_EVENT_DOCUMENT_END: {
@@ -2686,7 +2971,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
       return GTEXT_YAML_OK;
     }
     case GTEXT_YAML_EVENT_DIRECTIVE:
-      return GTEXT_YAML_OK;
+      return writer_emit_directive(writer, event);
     case GTEXT_YAML_EVENT_COMMENT:
       return writer_emit_comment(writer, event);
     case GTEXT_YAML_EVENT_SEQUENCE_START:
@@ -2702,7 +2987,19 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
     case GTEXT_YAML_EVENT_ALIAS:
       return writer_emit_alias(writer, event);
     case GTEXT_YAML_EVENT_INDICATOR:
-      return GTEXT_YAML_OK;
+      /* The writer takes *composed* events: a mapping is MAPPING_START, its
+         pairs, MAPPING_END.  The streaming parser does not produce those for
+         block collections - it reports the ":" and the "-" as indicators and
+         leaves composing to its consumer, which is what GTEXT_YAML_Event's
+         own documentation says of them.  The two are therefore not a pipe,
+         and this used to answer an indicator with OK and write nothing: a
+         caller who joined them got no error and a document with its block
+         structure gone, so "a: 1" over "b: 2" came out as "a1b2".
+
+         There is nothing to render here and no way to guess what was meant,
+         so it is refused.  A consumer that composes the stream's events -
+         which is what the DOM parser is - never sends one. */
+      return GTEXT_YAML_E_INVALID;
     default:
       return GTEXT_YAML_E_INVALID;
   }

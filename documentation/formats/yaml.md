@@ -566,57 +566,108 @@ implement 1.2 strictly will reject or ignore them.
 @anchor yaml-tested-scope
 ## Tested scope
 
-**Tests.** 92 test files under `tests/yaml/`, carrying 582 of the suite's
-2172 test cases across 106 binaries, all passing. They cover the scalar styles,
-collections, anchors and aliases including the cycle and exponential-expansion
-cases, merge keys, the tag types, directives, multi-document streams, UTF-8
-and the other encodings, the DOM accessors and mutation, cloning, the writer,
-the pull reader, chunked scanning, partial input, the limits, safe mode,
-1.1 mode, config mode, and YAML-to-JSON conversion. `tests/yaml/test-yaml-real-world.cpp`
-parses Docker Compose, Kubernetes and GitHub Actions shapes.
+**Tests.** 99 test files under `tests/yaml/`, all passing. They cover the
+scalar styles, collections, anchors and aliases including the cycle and
+exponential-expansion cases, merge keys, the tag types, directives,
+multi-document streams, UTF-8 and the other encodings, the DOM accessors and
+mutation, cloning, the writers, the pull reader, chunked scanning, partial
+input, the limits, safe mode, 1.1 mode, config mode, and YAML-to-JSON
+conversion. `tests/yaml/test-yaml-real-world.cpp` parses Docker Compose,
+Kubernetes and GitHub Actions shapes.
 
-**Fixtures** are thin: `tests/data/yaml/` holds 14 formatting files plus one
-binary regression case. Most tests carry their YAML inline as string
-literals, which keeps them readable but means there is no corpus to run
-another parser against.
+**Fixtures.** `tests/data/yaml/` holds the formatting files, one binary
+regression case, and `spec-1.2.2.corpus` - the cases found by reading the
+specification rather than by running the suite, which
+`tests/yaml/test-yaml-spec-corpus.cpp` scores without needing the network.
+Most tests carry their YAML inline as string literals, which keeps them
+readable.
 
-**Fuzzing.** `tests/fuzz/fuzz_yaml.cpp` under libFuzzer with ASan and UBSan,
-from 13 tracked seeds. It has been the most productive single tool applied to
-this parser: two separate infinite loops in the block-scalar scanner, a
-use-after-free, undefined behavior on empty quoted scalars and several leaked
-token buffers. `tests/fuzz/README.md` records each.
+**Fuzzing.** Two harnesses under libFuzzer with ASan and UBSan.
 
-**Memory.** The suite runs clean under valgrind and under ASan/UBSan.
+`tests/fuzz/fuzz_yaml.cpp` parses and walks, from 13 tracked seeds. It was
+the most productive single tool applied to this parser: two separate infinite
+loops in the block-scalar scanner, a use-after-free, undefined behavior on
+empty quoted scalars and several leaked token buffers. `tests/fuzz/README.md`
+records each.
+
+`tests/fuzz/fuzz_yaml_writer.cpp` holds the writers to the property all four
+of their known defects broke - *if the writer says OK, the bytes it wrote
+must parse, and must hold the same values*. It reaches them along four paths,
+and the distinction matters: documents that came from parsing, which is what
+a round trip over the suite measures, and documents built through the DOM
+API, which is where the interesting failures were. A corpus of YAML text can
+only carry values the parser accepts, so a DEL never reaches a writer from
+the first direction and is ordinary in the second. The fifth path is the
+streaming parser feeding the streaming writer with no DOM in between.
+
+**Memory.** The suite runs clean under valgrind and under ASan/UBSan, with
+`-fno-sanitize-recover=undefined` so a finding fails the run it is found in.
 
 **Reach of the oracles, and where it ends.** This is the section to read
 before trusting the word "conformant" anywhere near this parser.
 
-- **The [YAML test suite](https://github.com/yaml/yaml-test-suite) is not
-  wired up.** It is the only broad measure of YAML conformance that exists,
-  and without it the compliance percentage is not low or high - it is
-  *unmeasured*. Every positive claim on this page reaches exactly as far as
-  the cases listed above.
-- **No differential testing against libyaml or PyYAML** is automated. PyYAML
-  was used by hand to establish the truncation table above, which is how that
-  bug was characterized - and it was found on the first handful of inputs
-  tried, which is the strongest available argument that running a real corpus
-  would find more.
+- **[yaml-test-suite](https://github.com/yaml/yaml-test-suite) measures the
+  reader only.** `make conformance` scores it - see
+  [Status](#yaml-status) - but the suite is a corpus of *inputs* and tests no
+  writer at all. `make conformance-roundtrip` is what runs it backwards.
+- **A corpus measures the corpus.** Passing all 395 checkable cases is a
+  statement about 406 documents, not about the grammar; see
+  [Where the suite ends](#yaml-where-the-suite-ends) for the divergences found
+  by reading 1.2.2 instead, none of which appears anywhere in the suite.
+- **Differential testing is scored, not automated into a gate.** The same
+  harness scores js-yaml and PyYAML alongside this parser, which is the
+  calibration that makes the figure readable; nothing fails a build on a
+  disagreement with either.
 - **Fuzzing proves absence of crashes, not correctness.** It found the
-  hangs and the memory errors; it cannot find a parser that confidently
-  returns the wrong string, which is precisely the defect above.
+  hangs and the memory errors; on its own it cannot find a parser that
+  confidently returns the wrong string. What it *can* find is a writer whose
+  output its own parser refuses, which is why `fuzz_yaml_writer.cpp` asserts
+  that and not merely that nothing crashed.
 - **No benchmarks.** Parsing speed and memory use are unmeasured. Treat the
   parser as suitable for configuration-sized documents.
+
+## Known defects
+
+One is open, found by the writer fuzzer and not yet fixed.
+
+**A flow collection cannot be a block mapping's key on any line but the
+first.**
+
+```yaml
+a: 1
+{}: 2       # refused: "Mapping key beside a node already on this line"
+[x]: 3      # the same
+```
+
+`{}: 1` on its own parses. So does `a: 1` over `b: 2`. It is the combination
+that fails, and the reason is visible: the guard that a block key must stand
+where a block entry may start measures `last_scalar_offset`, and a key that is
+a flow collection has no scalar of its own - so the offset is whatever scalar
+came before, on the previous line. Two guards beside it already carry a
+`has_flow_key` exception for exactly this; this one does not.
+
+Supplying the flow collection's own source offset is not sufficient - the
+refusal survives it - so something else on that path is measuring the line
+rather than the key. That is as far as it has been traced.
+
+The shape is legal YAML and rare in practice; nothing this library writes
+produces it except from a DOM built by hand, which is how it was found. The
+three lines above are the whole reproducer. It is not kept as a fuzz seed,
+because a tracked seed that traps would stop `make fuzz-run-yaml-writer`
+before it fuzzed anything - but the harness will find it again, so a run of
+that target ending on this shape is a known result and not a new one.
 
 ## Not implemented
 
 - **Comment preservation on write.** Comments can be retained in the DOM but
-  are not re-emitted.
+  the DOM writer does not re-emit them. The streaming writer does write a
+  COMMENT event it is given.
 - **Scalar style preservation.** A parse-write cycle normalizes style.
 - **Timestamp parsing into a time type**, as above.
-- **YAML test suite integration**, as above - the largest single gap.
 - **Benchmarks**, as above.
 - **Native Windows (MSVC)** is untested; MSYS2/MinGW is exercised.
 
+@anchor yaml-status
 ## Status
 
 Alpha. The API may change before 1.0. The parser is appropriate for
@@ -713,6 +764,50 @@ opens. A tag written that way used to be dropped without a word and an anchor
 carried on to the next node; both are now refused, and the message says an
 alias may carry no property rather than reporting a second one.
 
+@anchor yaml-where-the-suite-ends
+## The other parser
+
+`gtext_yaml_parse()` has two implementations. Input that is also JSON is
+handed to the JSON parser and converted - faster, and on by default;
+everything else goes through the YAML scanner. Two implementations of one
+contract drift, and this one had:
+
+| input | the fast path gave | the general parser gives |
+| --- | --- | --- |
+| `[""]` | `[null]` | `[""]` |
+| `{"a":""}` | `{"a":null}` | `{"a":""}` |
+| `["0x10"]` | `[16]` | `["0x10"]` |
+| `{"":""}` | `{"null":null}` | `{"":""}` |
+
+One rule accounts for all four. A scalar is resolved by its contents only
+when it was written plain (10.3.2) - that is the whole point of quoting - and
+a node built by the fast path carried no style, so every JSON string was
+resolved as though it had been written bare. The general parser was taught
+this some time ago; the page above records it, under the block scalars. The
+second implementation never heard it.
+
+**Nothing measured it, and the reason is the useful part.** `make conformance`
+asks for `GTEXT_YAML_DUPKEY_KEEP_ALL`, because the suite has duplicate-key
+cases it must not collapse - and that is the one setting which turns the fast
+path off. All 395 cases had only ever gone the other way. An entire parser,
+on by default, was outside every figure this page quotes.
+
+`make conformance-fastpath` now runs the two against each other over the
+suite, asking no expectation of either side, only that they agree. It reports
+**5**. Four hundred and one of the suite's 406 documents are not JSON and
+never reach the fast path at all, so a hundred per cent there is a statement
+about five documents - and none of the four shapes above is among them. A
+corpus of YAML is a thin corpus of JSON. The target is worth having because it
+will catch drift in what it does cover and costs nothing, but the gate that
+holds the two paths together is
+`tests/yaml/test-yaml-json-fastpath.cpp`, which asks the question directly:
+the fast path and the general parser must give the same answer for every
+document, and a quoted scalar stays a string.
+
+The file already held five tests of the fast path. Every one of them checked
+it *on its own*, which is how it came to disagree with the other parser
+without anything noticing.
+
 ## Where the suite ends
 
 Passing all 395 checkable cases is a statement about 406 documents, not about
@@ -796,8 +891,8 @@ The first measurement of this scored 90.4% and 83.0%. What was wrong:
   came out as `tag:example.com,2000:app/foo` with no `!<...>` around it, so it
   re-read as a mapping key, or failed on the comma. Every tag now goes out as
   one of 5.6's three spellings: a shorthand where the tag has one, `!!x` for
-  the standard namespace, and the verbatim `!<uri>` otherwise, with anything
-  outside `ns-uri-char` percent-encoded.
+  the standard namespace, and the verbatim `!<uri>` otherwise. (The verbatim
+  form was percent-encoded at first; see below for why it is not any more.)
 - **Block scalars had no chomping indicator and no indentation indicator.** A
   value with no trailing line break gained one, a value with three kept one,
   and a first line beginning with a space lost the space. The writer now
@@ -829,7 +924,192 @@ The first measurement of this scored 90.4% and 83.0%. What was wrong:
 The streaming writer had all of the same faults and a few of its own, because
 it was a second implementation of the same rules and had drifted from the
 first. It is not one any more: the spelling of a scalar, a tag, a property and
-a block scalar lives in one place and both writers call it.
+a block scalar lives in one place, the *choice* of spelling lives in one more
+(`plan_scalar_style`), and both writers call both.
+
+### What running it backwards still could not see
+
+Four more writer defects were found afterwards, and they share a shape worth
+naming: **a corpus of YAML text can only carry values the parser accepts.**
+Every measurement above reaches a writer through a document that was parsed,
+and that is not the writers' domain - the DOM API takes any `char *` a caller
+hands it. A DEL never arrives from the first direction and is ordinary in the
+second.
+
+- **A character 5.1 forbids was written raw.** The escape loop escaped
+  `c < 0x20` and stopped there, so DEL, the C1 block apart from NEL, and the
+  two non-characters at the end of the BMP went out as themselves - 34 code
+  points for which the parser refused the writer's own output, correctly,
+  since `c-printable` had been enforced two commits earlier.
+- **An anchor name was never checked.** The writer emitted `&` followed by
+  whatever string it held. An anchor of `a b` wrote `&a b`, which reads back
+  as the anchor `a` with the rest of the line as the value; an anchor of
+  `a[b` wrote a document that does not parse. Unlike a scalar style, an
+  anchor has one spelling and no fallback, so a name outside `ns-anchor-name`
+  is now refused rather than mangled. The same holds for a tag outside
+  `ns-uri-char+`; for a tag in the `tag:yaml.org,2002:` namespace naming a
+  type the spec does not define, since that namespace is not the author's to
+  extend and the resolver refuses `!!bogus` on the way in whatever the options
+  say; and for a scalar that is not UTF-8, because a YAML stream is a stream
+  of *characters* and every escape of 5.7 names a code point - the byte 0xFF
+  has no spelling, and `\xFF` would read back as U+00FF, two bytes and a
+  different value.
+- **A tag gained a layer of escaping on every round trip.** The writer
+  percent-encoded `%` unconditionally, on the premise that the reader decodes
+  it. The reader decodes only where a `%TAG` prefix was substituted - and
+  deliberately so, since a decoded `%21` in a shorthand would become the very
+  character that makes a handle. With no matching decode, `!a%21b` became
+  `!a%2521b`, then `!a%252521b`, without bound. A verbatim tag is used
+  exactly as written (5.3), so it is now written exactly as held.
+- **The streaming writer answered a `%YAML`, a `%TAG` and an `:` with OK and
+  wrote nothing.** Those were two cases of one habit - returning success for
+  an event it had no code for - and the second is the worse of the two. See
+  below.
+
+### Two event APIs that were not a pipe
+
+`gtext_yaml_writer_event()` takes a `GTEXT_YAML_Event`. So does the callback
+of `gtext_yaml_stream_new()`. The types fit, the names match, and joining them
+is the obvious thing to write:
+
+```c
+GTEXT_YAML_Status on_event(GTEXT_YAML_Stream *s, const void *ev, void *user) {
+  return gtext_yaml_writer_event((GTEXT_YAML_Writer *)user, ev);
+}
+```
+
+That returned `GTEXT_YAML_OK` throughout and wrote `a1b2` for
+
+```yaml
+a: 1
+b: 2
+```
+
+**They are not two ends of a pipe.** The writer takes *composed* events - a
+collection is `MAPPING_START`, its pairs, `MAPPING_END` - which is the shape
+`gtext_yaml_stream_walk()` produces from a parsed document. The streaming
+parser reports structure *as it was written* instead: the `:` of a block
+mapping, the `-` of a block sequence, and even the `,` between two flow
+entries arrive as `GTEXT_YAML_EVENT_INDICATOR`, and composing them is the
+consumer's job - which is what the DOM parser is. A lone scalar is the whole
+of what crosses unchanged.
+
+Nothing said so, and the writer's silence was what made it look as though
+something did. An indicator is refused now, at the first event that cannot be
+written rather than quietly at every one of them, and the header says what the
+function takes.
+
+This was looked for as a gap in the measurement - the round trip drives the
+streaming writer from a walk of the tree, so the event-API path was scored
+nowhere - and it is not one. Scoring that pairing over the suite gives 36.9%,
+which measures the mismatch and not the writer. `tools/conformance/yaml_roundtrip.c`
+keeps a `-e` flag that runs it, as a diagnostic and not as a mode:
+`make conformance-roundtrip` still scores the three writers there are.
+
+`tests/fuzz/fuzz_yaml_writer.cpp` searches the same space without a list, and
+holds the writers to the property all of those defects broke: *if the writer
+says OK, the bytes it wrote must parse, and must hold the same values.* A
+refusal is always a permitted answer - not every value has a YAML spelling,
+and saying so is correct; what is never permitted is claiming success and
+producing something this library cannot read back.
+
+Its first find was a bug in itself rather than in the library, which is worth
+recording as its own kind of result: the event API resolves nothing, so it
+accepts an alias to an anchor nobody declared, and the writer is right to hand
+back something equally unresolvable. The two that followed were real - the
+non-UTF-8 scalar above, and the verbatim tag below, from a tag of `!&!`.
+
+Three more parser defects came out of the same work:
+
+- **`\x` wrote a byte where 5.7 names a character.** `ns-esc-8-bit` is
+  handled with `\u` and `\U` now; it used to be handled apart from them and
+  wrote the raw byte, which is right below U+0080 and wrong above it. `"\x92"`
+  produced a lone 0x92, and a lone continuation byte is not UTF-8 - so the
+  parser refused `"a\x92b"`, which is exactly what the writer produces for a
+  C1 control. A `\x` or `\u` without its hex digits is an error too; it used
+  to copy the digits through and substitute U+FFFD respectively.
+- **`c-verbatim-tag` was not held to `ns-uri-char+`.** Only the `+` was
+  enforced, from the earlier fix for `!<>`. A space, a tab, a brace, a
+  quotation mark, a non-ASCII byte and a bare `%` all travelled through as
+  part of the tag.
+- **Nine characters could not begin an anchor name.** `ns-anchor-char` is
+  `ns-char` minus the flow indicators, so `&!x`, `&&x`, `&*x`, `&#x`, `&%x`,
+  `&|x`, `&>x` and the two quotes all name anchors. Each was taken for what it
+  means somewhere else - a tag, a comment, a directive, a block scalar - and
+  the name came out empty. The rule *inside* a name was already right;
+  this was the same rule at the first position. The writer is what asked the
+  question, by spelling an anchor a caller gave it.
+- **A shorthand tag's name could not begin with `-`, `?`, `:`, `#` or several
+  others.**
+  `c-ns-shorthand-tag` is a handle and then `ns-tag-char+`, which is
+  `ns-uri-char` less `!` and the flow indicators - so `!-` is the tag `!-`,
+  and the `-` was being taken for a block entry indicator instead. `!-[]`
+  parsed, because the `[` ends the name before anything can misread it; only
+  putting a space after the tag showed it, which is exactly what the writer
+  does. `#` went the same way, since it starts no comment where no white space
+  precedes it. The rule is `ns-tag-char` now rather than whatever the branches
+  below it happened not to catch, so `!|` is still a block scalar - `|` is not
+  a URI character. The same rule at the first position of an *anchor* name is
+  two entries below; this is it for tags.
+- **A truncated UTF-8 sequence at the end of the stream was let through.**
+  The gate that enforces `c-printable` runs over the decoded character stream
+  as bytes arrive and holds a sequence a feed cut in half, which is right
+  while more input may come; at the end of the stream it was still holding it,
+  and skipping it, on the grounds that `gtext_utf8_validate()` would catch it
+  once the scalar was assembled. Bytes on a directive or a comment line never
+  become a scalar, so nothing ever did: `%` followed by a lone 0xC2 was a
+  document, and the same bytes with a line break after them were not. It
+  surfaced because the writer emitted the directive back and the parser then
+  refused what it had just accepted.
+- **Quoting a scalar changed its value.** Only a plain scalar is resolved by
+  its contents (10.3.2), so the writer may quote for style anywhere except
+  where the plain text would have resolved to something other than a string -
+  and the whitelist deciding that had left out two characters that can appear
+  in one. `~` is the null the 10.3.2 table gives first and `+` leads the core
+  schema's integer and float rows, so null came back as the string `"~"` and
+  the integer `+1` as `"+1"`. Neither character is a `c-indicator`; neither
+  needed quoting at all.
+- **And not quoting one changed it too.** The same whitelist admitted `-`
+  unconditionally, but `ns-plain-first` admits it only when an
+  `ns-plain-safe` character follows - a lone `-` on a line is a block
+  sequence entry. The string `"-"` went out plain and came back as a sequence
+  holding one empty node.
+- **A scalar built through the DOM API had no type worth the name, and the
+  writer had to guess.** `gtext_yaml_node_new_scalar()` made a *string* of
+  whatever it was given, which is a default rather than an assertion, and it
+  made both halves wrong: `gtext_yaml_node_type()` said "string" of a node
+  holding `1`, and the writer, told it was a string, wrote it plain - so it
+  came back as the integer `1`. There was no way through the API to write a
+  string that looks like a number. The plain constructor takes the type from
+  the text now, as a parse of the same characters would;
+  `gtext_yaml_node_new_scalar_typed()` is where a caller says otherwise; and a
+  string the text would not have produced goes out quoted.
+
+  Three smaller faults sat behind that one, each found by the writer fuzzer
+  once the one in front of it was gone:
+
+  - **A tag did not stop the text from deciding.** A tag is what says what
+    kind of scalar a node is; only a non-specific tag on a node written plain
+    hands the question to the contents (10.3.2). So `!` over an empty scalar
+    is the empty *string* - which is what a re-read gives - and the
+    constructor was answering null.
+  - **A type was set without the value that goes with it.** A node marked
+    integer kept a zeroed union, so `gtext_yaml_node_as_int()` answered 0 for
+    a scalar of `1`, and every conversion built on it - `gtext_yaml_to_json()`
+    included - answered the same.
+  - **An empty tag string was a tag everywhere but where it was written.** A
+    node carrying `""` was given a tag's spacing and none of its text, and a
+    scalar with nothing else to write wrote nothing at all - so an entry
+    holding one disappeared from the sequence it was in.
+- **A verbatim tag stopped being one as soon as its brackets came off.** They
+  were stripped in the stream layer, and after that nothing distinguished
+  `!<!a!>` from the shorthand `!a!` - so it was held to the rule that a handle
+  must be declared, and refused for a `%TAG` nobody had written; and with
+  `%TAG ! tag:e.com,2000:` in force, `!<!a>` was expanded by it into
+  `tag:e.com,2000:a`. 5.3 says a verbatim tag is used exactly as written. The
+  brackets travel as far as the resolver now, which is the only thing that
+  ever knew to take them off; `gtext_yaml_node_tag()` still answers the bare
+  URI. The writer fuzzer found this one, from a tag of `!&!`.
 
 Three parser defects turned up the same way, none of them visible to a test
 that only reads:

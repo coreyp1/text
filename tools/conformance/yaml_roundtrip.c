@@ -137,12 +137,48 @@ static GTEXT_YAML_Status relay(const GTEXT_YAML_Node_Event *ev, void *user) {
   return r->status;
 }
 
+/* Drive the streaming writer from the streaming *parser*.  A diagnostic, not
+ * a scored mode - "-e" is here to show why it is not one.
+ *
+ * Every scored mode reaches the writer through a DOM: the input is parsed into
+ * documents and then walked.  That looked like a gap, since a caller holding
+ * a GTEXT_YAML_Event from gtext_yaml_stream_* can hand it straight to
+ * gtext_yaml_writer_event() and the types fit.  They are not two ends of a
+ * pipe: the writer takes composed events, and the streaming parser does not
+ * produce them for a block collection - it reports the ":" and the "-" as
+ * indicators and leaves composing to its consumer.  Run this over the suite
+ * and it scores 36.9%, which measures the mismatch rather than the writer.
+ *
+ * What the attempt did find is that the writer used to answer both an
+ * INDICATOR and a DIRECTIVE event with OK and write nothing, so a caller who
+ * joined the two got no error and a document with its block structure gone.
+ * Both are handled now - the indicator refused, the directive written - and
+ * that is pinned in tests/yaml/test-yaml-writer-contract.cpp rather than
+ * here. */
+typedef struct {
+  GTEXT_YAML_Writer *writer;
+  GTEXT_YAML_Status status;
+} Pipe;
+
+static GTEXT_YAML_Status pipe_event(
+    GTEXT_YAML_Stream *s, const void *event, void *user) {
+  (void)s;
+  Pipe *p = (Pipe *)user;
+  if (p->status != GTEXT_YAML_OK) return p->status;
+  p->status = gtext_yaml_writer_event(
+      p->writer, (const GTEXT_YAML_Event *)event);
+  return p->status;
+}
+
 int main(int argc, char **argv) {
   /* "-w" prints the written YAML and stops, so a caller can compare the two
      sides any way it likes - by value as well as by event.  "-s" writes the
      same document through the streaming writer instead of the DOM one. */
   const int write_only = (argc > 1 && strcmp(argv[1], "-w") == 0);
   const int streaming = (argc > 1 && strcmp(argv[argc - 1], "-s") == 0);
+  /* "-e" is the same streaming writer, fed from the streaming parser rather
+     than from a walk of the tree. */
+  const int from_events = (argc > 1 && strcmp(argv[argc - 1], "-e") == 0);
   static char in[1 << 20];
   size_t n = fread(in, 1, sizeof(in) - 1, stdin);
   in[n] = 0;
@@ -181,7 +217,29 @@ int main(int argc, char **argv) {
       wopts.flow_style = GTEXT_YAML_FLOW_STYLE_BLOCK;
     }
     GTEXT_YAML_Status wst;
-    if (streaming) {
+    if (from_events) {
+      Pipe pipe;
+      pipe.status = GTEXT_YAML_OK;
+      pipe.writer = gtext_yaml_writer_new(sink, &wopts);
+      if (!pipe.writer) {
+        printf("FAIL write: no writer\n");
+        gtext_yaml_sink_buffer_free(&sink);
+        return 0;
+      }
+      GTEXT_YAML_Stream *st = gtext_yaml_stream_new(&popts, pipe_event, &pipe);
+      if (!st) {
+        printf("FAIL write: no stream\n");
+        gtext_yaml_writer_free(pipe.writer);
+        gtext_yaml_sink_buffer_free(&sink);
+        return 0;
+      }
+      wst = gtext_yaml_stream_feed(st, in, n);
+      if (wst == GTEXT_YAML_OK) wst = gtext_yaml_stream_finish(st);
+      if (wst == GTEXT_YAML_OK) wst = pipe.status;
+      if (wst == GTEXT_YAML_OK) wst = gtext_yaml_writer_finish(pipe.writer);
+      gtext_yaml_stream_free(st);
+      gtext_yaml_writer_free(pipe.writer);
+    } else if (streaming) {
       Relay r;
       r.status = GTEXT_YAML_OK;
       r.writer = gtext_yaml_writer_new(sink, &wopts);

@@ -152,6 +152,21 @@ GTEXT_API void gtext_yaml_writer_free(GTEXT_YAML_Writer * writer);
 
 /**
  * @brief Feed a streaming event to the writer.
+ *
+ * The writer takes **composed** events: a collection is a SEQUENCE_START or
+ * MAPPING_START, its children, and the matching end. `gtext_yaml_stream_walk()`
+ * produces exactly that shape from a parsed document.
+ *
+ * The streaming *parser* does not. For a block collection it reports the `:`
+ * and the `-` as GTEXT_YAML_EVENT_INDICATOR and leaves composing to its
+ * consumer, so `gtext_yaml_stream_*` and this function are not two ends of a
+ * pipe however alike their types look. An INDICATOR event is refused with
+ * GTEXT_YAML_E_INVALID rather than ignored: it used to be answered with OK
+ * and nothing written, which gave a caller who joined the two no error and a
+ * document with its block structure gone.
+ *
+ * DIRECTIVE and COMMENT events are written where they stand. A directive
+ * belongs to the document it precedes (9.2) and is refused inside one.
  */
 GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
 	GTEXT_YAML_Writer * writer,

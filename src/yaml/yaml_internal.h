@@ -20,6 +20,41 @@
 /* Forward declarations */
 typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
 
+/* True when @p suffix names one of the types the "tag:yaml.org,2002:"
+   namespace defines.  That namespace is not the author's to extend, so a tag
+   in it naming anything else is a malformed document - which the resolver
+   refuses on the way in and the writer refuses on the way out. */
+GTEXT_INTERNAL_API bool gtext_yaml_tag_is_defined_standard(const char *suffix);
+
+/* True when @p value, written as a plain scalar, would resolve to something
+   other than a string under the 1.2 core schema.  The writer asks so that a
+   string node whose text spells a number or a null goes out in quotes rather
+   than coming back as the number. */
+GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string(
+	const char *value,
+	size_t len
+);
+
+/* The type @p value would resolve to if it were written as a plain scalar
+   under the 1.2 core schema.  The DOM constructors use it so that a node
+   built from text reports the same type a parsed one would. */
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
+	const char *value,
+	size_t len
+);
+
+/* The same, and the value that goes with the type: a node that says it is an
+   integer has to hold one, or gtext_yaml_node_as_int() and every conversion
+   built on it answer with whatever the union was left at.  Out parameters may
+   be NULL. */
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
+	const char *value,
+	size_t len,
+	bool *bool_out,
+	int64_t *int_out,
+	double *float_out
+);
+
 GTEXT_INTERNAL_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_effective(
 	const GTEXT_YAML_Parse_Options *opts
 );

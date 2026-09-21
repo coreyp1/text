@@ -221,6 +221,19 @@ GTEXT_API GTEXT_YAML_Node_Type gtext_yaml_node_type(const GTEXT_YAML_Node * n);
 GTEXT_API const char * gtext_yaml_node_as_string(const GTEXT_YAML_Node * n);
 
 /**
+ * @brief Return the length in bytes of a scalar node's value.
+ *
+ * `\0` is one of the escapes 5.7 defines, so a scalar may hold a NUL and a
+ * parsed document may hand one back. gtext_yaml_node_as_string() returns a
+ * C string, which cannot express that: everything from the NUL onwards is
+ * unreachable through it. Read the pointer it returns together with this
+ * length to get the whole value.
+ *
+ * Returns 0 for a non-scalar node and for a scalar with no value.
+ */
+GTEXT_API size_t gtext_yaml_node_scalar_length(const GTEXT_YAML_Node * n);
+
+/**
  * @brief Return scalar value as a boolean.
  *
  * Returns false if the node is NULL, not a boolean, or @p out is NULL.
@@ -888,6 +901,62 @@ GTEXT_API bool gtext_yaml_document_set_root(
 GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar(
 	GTEXT_YAML_Document * doc,
 	const char * value,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a new scalar node from a value of a given length.
+ *
+ * The same as gtext_yaml_node_new_scalar(), except that the value is not
+ * taken to end at its first NUL. A scalar may hold one - `\0` is an escape
+ * 5.7 defines - and this is the constructor that can express that. Read such
+ * a value back with gtext_yaml_node_scalar_length().
+ *
+ * @param doc Document that will own the node
+ * @param value Value bytes (will be copied)
+ * @param length How many bytes of @p value to take
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New scalar node, or NULL on error
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar_n(
+	GTEXT_YAML_Document * doc,
+	const char * value,
+	size_t length,
+	const char * tag,
+	const char * anchor
+);
+
+/**
+ * @brief Create a scalar node and say what kind of scalar it is.
+ *
+ * gtext_yaml_node_new_scalar() takes the type from the text, which is what a
+ * parsed document would report for the same characters: `"1"` builds an
+ * integer, `"x"` a string. That is right for a node that is text written
+ * plain, and it is the common case.
+ *
+ * It is not always what a caller means. The *string* `"1"` is a different
+ * value from the integer `1`, and YAML spells the difference with quotes:
+ * only a plain scalar is resolved by its contents (10.3.2). Pass
+ * @ref GTEXT_YAML_STRING here and the writer quotes it, so it comes back a
+ * string. Pass @ref GTEXT_YAML_INT for text that does not look like one and
+ * the node says integer while the document says otherwise - the type is the
+ * caller's to assert, and asserting it wrongly is the caller's to avoid.
+ *
+ * @param doc Document that will own the node
+ * @param value Value bytes (will be copied); may hold a NUL
+ * @param length How many bytes of @p value to take
+ * @param type One of GTEXT_YAML_STRING, BOOL, INT, FLOAT or NULL
+ * @param tag Optional tag string (may be NULL)
+ * @param anchor Optional anchor name (may be NULL)
+ * @return New scalar node, or NULL on error or a non-scalar @p type
+ */
+GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar_typed(
+	GTEXT_YAML_Document * doc,
+	const char * value,
+	size_t length,
+	GTEXT_YAML_Node_Type type,
 	const char * tag,
 	const char * anchor
 );

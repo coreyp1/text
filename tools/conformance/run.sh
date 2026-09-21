@@ -90,6 +90,20 @@ roundtrip)
 	done
 	exec python3 "$root/tools/conformance/yaml_roundtrip.py" "$suite" "$runner" "$rt"
 	;;
+fastpath)
+	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
+	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
+	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
+	generated=$(dirname "$(dirname "$archive")")/generated
+	fp=$suite/../yts-fastpath
+	cc -O1 -o "$fp" "$root/tools/conformance/yaml_fastpath_diff.c" \
+		-I"$root/include" -I"$generated" $cflags "$archive" $libs -lm \
+		-Wl,-rpath,"$PREFIX/lib/ghoti.io"
+	exec python3 "$root/tools/conformance/yaml_fastpath.py" "$suite" "$fp"
+	;;
 js)
 	js=$(find / -maxdepth 8 -type d -name js-yaml 2>/dev/null | head -1)
 	[ -n "$js" ] || { echo "js-yaml not found" >&2; exit 1; }

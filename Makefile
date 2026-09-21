@@ -583,7 +583,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1288,10 +1288,11 @@ endef
 
 $(eval $(call fuzz-rule,fuzz_json,json))
 $(eval $(call fuzz-rule,fuzz_yaml,yaml))
+$(eval $(call fuzz-rule,fuzz_yaml_writer,yaml-writer))
 $(eval $(call fuzz-rule,fuzz_csv,csv))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz: fuzz-run-json fuzz-run-yaml fuzz-run-csv
+fuzz: fuzz-run-json fuzz-run-yaml fuzz-run-yaml-writer fuzz-run-csv
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 fuzz-clean:
@@ -1309,6 +1310,10 @@ conformance-roundtrip:
 	@PREFIX="$(PREFIX)" YTS_RT_BLOCK=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
 	@echo "--- the streaming writer ---"
 	@PREFIX="$(PREFIX)" YTS_RT_STREAM=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+
+conformance-fastpath: ## Check the YAML JSON fast path against the general parser
+conformance-fastpath:
+	@PREFIX="$(PREFIX)" YTS_FP_MIN=100 tools/conformance/run.sh fastpath
 
 conformance-json: ## Score the JSON parser against JSONTestSuite (clones it on first use)
 conformance-json:
@@ -1439,7 +1444,7 @@ conformance-json-schema:
 	@PREFIX="$(PREFIX)" tools/conformance/run-json-schema.sh
 
 conformance-all: ## Score every parser against its external corpus
-conformance-all: conformance conformance-json conformance-csv conformance-json-schema
+conformance-all: conformance conformance-fastpath conformance-json conformance-csv conformance-json-schema
 
 coverage: ## Build instrumented, run the tests, and report line coverage
 # Cleans first because the object files would otherwise be reused without the

@@ -561,7 +561,12 @@ Double-quoted scalars support escape sequences:
 - `\uXXXX` - Unicode code point (4 hex digits)
 - `\UXXXXXXXX` - Unicode code point (8 hex digits)
 
-**Note:** Some escape sequences (`\0`, `\a`, `\b`, `\f`, `\v`, `\e`) are defined in YAML 1.2.2 but not yet implemented in this parser.
+All of 5.7 is implemented: `\0`, `\a`, `\b`, `\t`, `\n`, `\v`, `\f`, `\r`,
+`\e`, a space, `"`, `/`, `\\`, `\N`, `\_`, `\L`, `\P`, `\xNN`, `\uNNNN` and
+`\UNNNNNNNN`. All three numeric escapes name a *character* and are encoded as
+one - `"\x92"` is U+0092, not a lone byte 0x92 - and each is an error without
+its hex digits. Anything else after a backslash is a malformed document
+rather than a literal.
 
 ### 5.4 Literal Scalars (`|`)
 
@@ -974,22 +979,64 @@ All tests pass with zero memory leaks (valgrind-verified).
 **What the writers are measured against.** `make conformance-roundtrip` writes
 every suite document this parser accepts back out and re-reads it, through the
 DOM writer in flow style, the DOM writer in block style, and the streaming
-writer. All three keep 282 of 282 by value, which is the figure the target
+writer. All keep 282 of 282 by value, which is the figure the target
 holds them to; block style also keeps every anchor, tag and scalar spelling.
 The two flow figures stop at 280 by event for one reason, which is in the
 grammar rather than in the writer: `ns-flow-seq-entry` has no empty
 alternative, so a flow sequence entry that is the empty node with no
 properties has to be written `~`.
 
+**`gtext_yaml_stream_*` does not feed `gtext_yaml_writer_event()`**, however
+alike the two look - both speak `GTEXT_YAML_Event`. The writer takes composed
+events; the streaming parser reports the `:`, the `-` and the `,` as
+indicators and leaves composing to its consumer. Joining them used to return
+OK throughout and write `a1b2` for a two-key mapping. An indicator is refused
+now rather than ignored. `gtext_yaml_stream_walk()` is what produces events a
+writer can take.
+
 None of that is visible to `make conformance`, because yaml-test-suite is a
-corpus of inputs and tests no writer at all. What the first backwards run
-found - and what it cost to fix - is on \ref format_yaml "the YAML format
-page". `make test` runs the same property over the shapes that were wrong.
+corpus of inputs and tests no writer at all. What both backwards runs found -
+and what it cost to fix - is on \ref format_yaml "the YAML format page".
+`make test` runs the same properties over the shapes that were wrong, and
+`tests/fuzz/fuzz_yaml_writer.cpp` searches for the rest.
+
+**A corpus of inputs measures only half of a writer.** A document handed to a
+writer did not have to come from parsing; the DOM API takes any `char *`. So a
+value the parser would have refused never reaches a writer from the corpus
+direction and is ordinary from the API one, and that is where four further
+defects lived - a character 5.1 forbids written raw, an unchecked anchor
+name, a tag gaining a layer of percent-encoding on every round trip, and the
+dropped directives above.
+
+### Building scalars
+
+`gtext_yaml_node_new_scalar()` takes the node's type from its text, which is
+what a parse of the same characters would report: `"1"` builds an integer,
+`"x"` a string. Use `gtext_yaml_node_new_scalar_typed()` to say otherwise -
+the *string* `"1"` is a different value from the integer `1`, and YAML spells
+the difference with quotes, which the writer then supplies.
+`gtext_yaml_node_new_scalar_n()` and `gtext_yaml_node_scalar_length()` are for
+values holding a NUL, which `\0` makes a legal thing for a scalar to hold.
+
+### Two parsers, one contract
+
+`gtext_yaml_parse()` hands input that is also JSON to the JSON parser and
+converts the result - faster, and on by default. It is a second
+implementation, and it had drifted: a JSON string became a scalar with no
+style, and a scalar is resolved by its contents only when it was written
+plain, so `["0x10"]` came back as `[16]` and `[""]` as `[null]`.
+
+`make conformance` cannot see the fast path at all - it asks for
+`GTEXT_YAML_DUPKEY_KEEP_ALL`, the one setting that turns it off - and
+`make conformance-fastpath` reaches only five of the suite's 406 documents,
+because a corpus of YAML is a thin corpus of JSON.
+`tests/yaml/test-yaml-json-fastpath.cpp` is what holds the two together.
 
 ### Planned Features
 
 - **Comment preservation on write**: comments can be retained in the DOM
-  (`retain_comments`) but are not re-emitted by the writer.
+  (`retain_comments`) but are not re-emitted by the DOM writer. The streaming
+  writer does write a COMMENT event it is given.
 - **Scalar style preservation**: a parse-write cycle normalizes style, so a
   round trip is semantically faithful but not textually faithful.
 - **YAML test suite integration**: shipped; see Compatibility below.

@@ -636,6 +636,32 @@ static void map_json_error(const GTEXT_JSON_Error *json_err, GTEXT_YAML_Error *y
 	yaml_err->actual_token = NULL;
 }
 
+/* A JSON string is a *string*, and the resolver has to be told so.
+ *
+ * It resolves a scalar by its contents only when the scalar was written
+ * plain - "only a plain scalar is resolved by its contents", 10.3.2, which is
+ * the whole point of quoting - and a node built here carries no style, so
+ * every JSON string was being resolved as though it had been written bare:
+ * ["0x10"] came back as [16], [""] as [null], and the key of {"": ""} as the
+ * string "null".
+ *
+ * The general parser was taught this rule some time ago. This path is a
+ * second implementation that never heard it, and nothing measured it: the
+ * conformance runner asks for GTEXT_YAML_DUPKEY_KEEP_ALL, which is the one
+ * setting that turns the fast path off, so all 395 cases have only ever gone
+ * the other way. */
+static GTEXT_YAML_Node *json_string_node(
+	yaml_context *ctx,
+	const char *value,
+	size_t length
+) {
+	GTEXT_YAML_Node *node = yaml_node_new_scalar(ctx, value, length, NULL, NULL);
+	if (node) {
+		node->as.scalar.scalar_style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+	}
+	return node;
+}
+
 static GTEXT_YAML_Node *json_to_yaml_node(
 	yaml_context *ctx,
 	const GTEXT_JSON_Value *json,
@@ -690,7 +716,7 @@ static GTEXT_YAML_Node *json_to_yaml_node(
 				}
 				return NULL;
 			}
-			return yaml_node_new_scalar(ctx, value, value_len, NULL, NULL);
+			return json_string_node(ctx, value, value_len);
 		}
 		case GTEXT_JSON_ARRAY: {
 			size_t count = gtext_json_array_size(json);
@@ -724,7 +750,7 @@ static GTEXT_YAML_Node *json_to_yaml_node(
 					}
 					return NULL;
 				}
-				node->as.mapping.pairs[i].key = yaml_node_new_scalar(ctx, key, key_len, NULL, NULL);
+				node->as.mapping.pairs[i].key = json_string_node(ctx, key, key_len);
 				if (!node->as.mapping.pairs[i].key) return NULL;
 				node->as.mapping.pairs[i].value = json_to_yaml_node(ctx, value, error);
 				if (!node->as.mapping.pairs[i].value) return NULL;
@@ -4104,7 +4130,19 @@ static GTEXT_YAML_Status parse_callback(
 					/* The key has to stand where a block entry may start,
 					 * for the same reason a "-" does: in
 					 * "x: { y: z }in: valid" the second key sits beside a
-					 * flow mapping that is already a complete node. */
+					 * flow mapping that is already a complete node.
+					 *
+					 * It measures the last *scalar*, which is wrong for a key
+					 * that is a flow collection - there is no scalar of its
+					 * own, so the offset is whatever came before, and
+					 * "a: 1" over "{}: 2" is refused for a key standing beside
+					 * a node it is nowhere near.  "{}: 1" alone parses,
+					 * because then there is no earlier scalar to confuse it
+					 * with.  Passing the flow collection's own source offset
+					 * here is not enough to fix it; something else on this
+					 * path is also measuring the line rather than the key, and
+					 * it has not been found yet.  The YAML format page records
+					 * it under "Known defects". */
 					if (in_block_mapping
 							&& !block_key_may_start_at(p, p->last_scalar_offset)) {
 						p->failed = true;

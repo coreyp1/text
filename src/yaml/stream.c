@@ -999,10 +999,19 @@ process_token:
             && tag_tok.u.scalar.ptr[0] == '<'
             && tag_tok.u.scalar.ptr[tag_tok.u.scalar.len - 1] == '>') {
           /* A verbatim tag: "!<X>" is the tag X exactly as written, with no
-             handle to expand (5.3). Keep the URI and drop the brackets. */
-          tag_len = tag_tok.u.scalar.len - 2;
+             handle to expand and no escapes to decode (5.3).
+             The brackets are kept, and they are what says so.  Stripping them
+             here left a verbatim tag indistinguishable from a shorthand by
+             the time anything looked at it, and a URI beginning "!" is a
+             legal one - "!<!a!>" was read as a shorthand naming the handle
+             "!a!", and refused for a %TAG nobody had written; with a
+             "%TAG ! ..." in force, "!<!a>" was expanded by it.  Both are
+             wrong: 5.3 says a verbatim tag is used as written.
+             gtext_yaml_node_tag() still answers the bare URI - the resolver
+             takes the brackets off once it has seen them. */
+          tag_len = tag_tok.u.scalar.len;
           if (tag_len > sizeof(buf) - 1) tag_len = sizeof(buf) - 1;
-          memcpy(buf, tag_tok.u.scalar.ptr + 1, tag_len);
+          memcpy(buf, tag_tok.u.scalar.ptr, tag_len);
           buf[tag_len] = '\0';
         } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
           tag_len = tag_tok.u.scalar.len;

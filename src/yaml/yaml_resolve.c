@@ -40,7 +40,11 @@ static const char *tag_suffix(const char *tag) {
    them.  "value" and "yaml" are named by the 1.1 type repository but no
    schema here resolves them, and both reference implementations refuse
    them, so they are not on this list. */
-static bool is_defined_yaml_tag(const char *suffix) {
+/* The types the "tag:yaml.org,2002:" namespace names.  The writer asks this
+   too - a tag in that namespace naming no type the spec defines is a
+   malformed document, and writing one produces something this library then
+   refuses to read - so the list lives in one place rather than two. */
+GTEXT_INTERNAL_API bool gtext_yaml_tag_is_defined_standard(const char *suffix) {
 	static const char *defined[] = {
 		"str",
 		"bool",
@@ -79,7 +83,7 @@ static bool is_standard_tag(const char *tag) {
 	if (!suffix) return false;
 	if (suffix[0] == '\0') return true;
 
-	return is_defined_yaml_tag(suffix);
+	return gtext_yaml_tag_is_defined_standard(suffix);
 }
 
 /**
@@ -125,10 +129,16 @@ static bool tag_handle_undeclared(
 static GTEXT_YAML_Status enforce_tag_policy(
 	const GTEXT_YAML_Document *doc,
 	const char *tag,
+	bool verbatim,
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Error *error
 ) {
-	if (tag_handle_undeclared(doc, tag)) {
+	/* The handle rule is a rule about a *shorthand*, and a verbatim tag is
+	   not one: "!<!a!>" is the tag "!a!" written out in full, and no %TAG
+	   declares anything for it (5.3, 6.8.2.2).  It was being held to the rule
+	   anyway, because by the time it arrived here nothing said which spelling
+	   it had come from. */
+	if (!verbatim && tag_handle_undeclared(doc, tag)) {
 		if (error) {
 			error->code = GTEXT_YAML_E_INVALID;
 			error->message = "Tag shorthand uses a handle no %TAG declared";
@@ -141,7 +151,7 @@ static GTEXT_YAML_Status enforce_tag_policy(
 	   "!!" somewhere else has already been expanded by the time the tag
 	   arrives here, so this only sees tags genuinely in the namespace. */
 	const char *suffix = tag_suffix(tag);
-	if (suffix && suffix[0] != '\0' && !is_defined_yaml_tag(suffix)) {
+	if (suffix && suffix[0] != '\0' && !gtext_yaml_tag_is_defined_standard(suffix)) {
 		if (error) {
 			error->code = GTEXT_YAML_E_INVALID;
 			error->message = "Unknown tag in the tag:yaml.org,2002 namespace";
@@ -1427,9 +1437,21 @@ static const char *resolve_tag_handle(
 	const char *tag
 ) {
 	if (!doc || !tag) return tag;
-	/* A verbatim tag reaches the DOM as the URI between its brackets and is
-	   used exactly as written (5.3), so anything not beginning "!" is not a
-	   shorthand and has neither a handle to expand nor escapes to decode. */
+	/* A verbatim tag arrives still wrapped in its brackets, because that is
+	   the only thing that distinguishes it: "!<!a!>" is the tag "!a!" exactly
+	   as written (5.3), and a URI beginning "!" is otherwise indistinguishable
+	   from a shorthand.  The brackets come off here and nothing else happens
+	   to it - no handle to expand, no escapes to decode. */
+	const size_t len = strlen(tag);
+	if (len >= 2 && tag[0] == '<' && tag[len - 1] == '>') {
+		char *bare = (char *)yaml_context_alloc(doc->ctx, len - 1, 1);
+		if (!bare) return tag;
+		memcpy(bare, tag + 1, len - 2);
+		bare[len - 2] = '\0';
+		return normalize_standard_tag(doc, bare);
+	}
+	/* Anything else not beginning "!" is not a shorthand and has neither a
+	   handle to expand nor escapes to decode. */
 	if (tag[0] != '!') return normalize_standard_tag(doc, tag);
 	/* "!!" is a handle like any other and may be redefined: %TAG !! makes
 	   the secondary handle mean something else for that document, and then
@@ -1525,13 +1547,16 @@ static GTEXT_YAML_Status resolve_scalar(
 	value = node->as.scalar.value;
 	len = node->as.scalar.length;
 	tag = node->as.scalar.tag;
+	/* Read before resolving: the brackets are what say the tag was written
+	   verbatim, and resolve_tag_handle() takes them off. */
+	const bool tag_was_verbatim = tag && tag[0] == '<';
 	resolved_tag = tag ? resolve_tag_handle(doc, tag) : NULL;
 	if (resolved_tag && resolved_tag != tag) {
 		node->as.scalar.tag = resolved_tag;
 		tag = resolved_tag;
 	}
 
-	tag_status = enforce_tag_policy(doc, tag, opts, error);
+	tag_status = enforce_tag_policy(doc, tag, tag_was_verbatim, opts, error);
 	if (tag_status != GTEXT_YAML_OK) return tag_status;
 	if (!opts || !opts->resolve_tags) return GTEXT_YAML_OK;
 
@@ -1794,6 +1819,78 @@ static GTEXT_YAML_Status resolve_scalar(
 	return GTEXT_YAML_OK;
 }
 
+/* Would this text, written as a plain scalar, come back as something other
+   than a string?
+ *
+ * The writer asks, because quoting is not only a matter of style: only a
+ * plain scalar is resolved by its contents (10.3.2), so a string node whose
+ * text happens to spell a number has to be written in quotes or it comes back
+ * as the number.  gtext_yaml_node_new_scalar() makes a string of whatever it
+ * is given, so a caller who builds the string "1" and writes it was getting
+ * the integer 1 back.
+ *
+ * The 1.2 core schema is the one that matters here: the writer emits 1.2, and
+ * a document written under it is read back under it.  These are the same
+ * predicates resolve_scalar() uses a few lines above, not a second copy of
+ * the tables. */
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
+	const char *value,
+	size_t len,
+	bool *bool_out,
+	int64_t *int_out,
+	double *float_out
+) {
+	bool b = false;
+	int64_t i = 0;
+	double f = 0.0;
+	GTEXT_YAML_Node_Type type = GTEXT_YAML_STRING;
+
+	if (!value) {
+		type = GTEXT_YAML_STRING;
+	}
+	else if (len == 0) {
+		type = GTEXT_YAML_NULL;   /* 7.2's empty node */
+	}
+	else if (parse_null_value(value, len, false)) {
+		type = GTEXT_YAML_NULL;
+	}
+	else if (parse_bool_value(value, len, false, false, &b)) {
+		type = GTEXT_YAML_BOOL;
+	}
+	else if (has_disallowed_leading_zero(value, len, false)) {
+		type = GTEXT_YAML_STRING;
+	}
+	/* allow_base_prefix is on for the core schema, which is the default and
+	   what the writer emits: "0x1f" and "0o17" are 1.2 integers.  The 1.1
+	   forms - underscores, "0b101", "0X1F" - are not, and a document written
+	   here is not read back in 1.1 mode. */
+	else if (parse_int_value(value, len, false, true, false, false, &i)) {
+		type = GTEXT_YAML_INT;
+	}
+	else if (parse_float_value(value, len, false, &f)) {
+		type = GTEXT_YAML_FLOAT;
+	}
+
+	if (bool_out) *bool_out = b;
+	if (int_out) *int_out = i;
+	if (float_out) *float_out = f;
+	return type;
+}
+
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
+	const char *value,
+	size_t len
+) {
+	return gtext_yaml_plain_text_classify(value, len, NULL, NULL, NULL);
+}
+
+GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string(
+	const char *value,
+	size_t len
+) {
+	return gtext_yaml_plain_text_type(value, len) != GTEXT_YAML_STRING;
+}
+
 static GTEXT_YAML_Status resolve_node(
 	GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Node **node_ptr,
@@ -1816,12 +1913,18 @@ static GTEXT_YAML_Status resolve_node(
 		case GTEXT_YAML_SEQUENCE:
 		case GTEXT_YAML_OMAP:
 		case GTEXT_YAML_PAIRS:
+		{
+			/* Read before resolving: the brackets are what say the tag
+			   was written verbatim, and resolve_tag_handle() takes
+			   them off. */
+			const bool was_verbatim = node->as.sequence.tag
+				&& node->as.sequence.tag[0] == '<';
 			if (node->as.sequence.tag) {
 				node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
 			}
 			{
 				const char *tag = node->as.sequence.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, opts, error);
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
 				if (tag_status != GTEXT_YAML_OK) return tag_status;
 			}
 			for (size_t i = 0; i < node->as.sequence.count; i++) {
@@ -1901,14 +2004,21 @@ static GTEXT_YAML_Status resolve_node(
 				if (custom != GTEXT_YAML_OK) return custom;
 			}
 			return GTEXT_YAML_OK;
+		}
 		case GTEXT_YAML_MAPPING:
 		case GTEXT_YAML_SET:
+		{
+			/* Read before resolving: the brackets are what say the tag
+			   was written verbatim, and resolve_tag_handle() takes
+			   them off. */
+			const bool was_verbatim = node->as.mapping.tag
+				&& node->as.mapping.tag[0] == '<';
 			if (node->as.mapping.tag) {
 				node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
 			}
 			{
 				const char *tag = node->as.mapping.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, opts, error);
+				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
 				if (tag_status != GTEXT_YAML_OK) return tag_status;
 			}
 			for (size_t i = 0; i < node->as.mapping.count; i++) {
@@ -2008,6 +2118,7 @@ static GTEXT_YAML_Status resolve_node(
 				if (custom != GTEXT_YAML_OK) return custom;
 			}
 			return apply_dupkey_policy(doc, node, opts, error);
+		}
 		case GTEXT_YAML_ALIAS:
 		default:
 			return GTEXT_YAML_OK;

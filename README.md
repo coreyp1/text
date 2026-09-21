@@ -171,7 +171,7 @@ resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1,534 tests across 109 binaries with zero failures, clean
+The test suite runs 1,552 tests across 110 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 76.9% line coverage. The UBSan half of
 that only became a claim worth making once `-fno-sanitize-recover=undefined`
 was added: without it UBSan prints a diagnostic and runs on past the defect,
@@ -229,15 +229,45 @@ anywhere in the suite.
 **The write side is measured too.** yaml-test-suite is a corpus of inputs and
 tests no writer at all, so `make conformance-roundtrip` runs it backwards:
 every document the parser accepts is written out again and re-read, through
-each of the three writers. All three keep **282 of 282 by value**, and block
-style keeps every anchor, tag and scalar spelling as well. The first time that
-was measured it was 90.4%, and 83.0% in block style: a resolved tag went out
-as bare text, block scalars had no chomping indicator, folding turned line
-breaks into spaces, an empty node became `~`, and an alias key took the colon
-with it. Running the suite backwards also found three parser defects, one of
-which was that `gtext_yaml_stream_feed()` stopped at the first alias and the
-rest of the document was read only by a second, drifted copy of the same
-loop. `make test` runs the same property over the shapes that were wrong.
+each of the writers. All keep **282 of 282 by value**, and block style keeps
+every anchor, tag and scalar spelling as well. The first time that was
+measured it was 90.4%, and 83.0% in block style: a resolved tag went out as
+bare text, block scalars had no chomping indicator, folding turned line breaks
+into spaces, an empty node became `~`, and an alias key took the colon with
+it. Running the suite backwards also found three parser defects, one of which
+was that `gtext_yaml_stream_feed()` stopped at the first alias and the rest of
+the document was read only by a second, drifted copy of the same loop.
+
+**And a corpus of inputs still measures only half of that.** A document the
+writer is given did not have to come from parsing - the DOM API takes any
+`char *` - so a value the parser would refuse never reaches a writer from the
+corpus direction and is ordinary from the API one. Four more writer defects
+lived there: a character the spec forbids written raw, so the parser refused
+the writer's own output; an anchor name emitted without being checked, so
+`a b` wrote `&a b` and read back as a different document; a tag gaining a
+layer of percent-encoding on every round trip, without bound; and the
+streaming writer answering an event it had no code for with OK and writing
+nothing - which for a `%TAG` directive left a document whose tag handles were
+undefined, and for the `:` of a block mapping left a caller who had joined the
+streaming parser to the streaming writer with no error and `a1b2` where a
+mapping had been. `tests/fuzz/fuzz_yaml_writer.cpp` now searches that space,
+holding the writers to the property all of them broke - *if the writer says
+OK, the bytes it wrote must parse, and must hold the same values* - and
+`make test` runs the shapes that were wrong. It has already found one more, in
+the parser: a verbatim tag lost the fact that it was verbatim as soon as its
+brackets came off, so `!<!a!>` was read as a shorthand naming a handle nobody
+had declared.
+
+**And one more parser than anybody was counting.** `gtext_yaml_parse()` hands
+input that is also JSON to the JSON parser and converts the result, which is
+faster and on by default. That second implementation never learned a rule the
+first one had: a scalar is resolved by its contents only when it was written
+plain, which is the whole point of quoting. So `["0x10"]` came back as `[16]`,
+`[""]` as `[null]`, and the key of `{"": ""}` as the string `"null"` - while
+the same documents read correctly the other way. `make conformance` could not
+have seen it: that runner asks for `KEEP_ALL` duplicate keys, which is the one
+setting that turns the fast path off, so all 395 cases had only ever taken the
+other route.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is

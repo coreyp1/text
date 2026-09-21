@@ -510,3 +510,202 @@ b:
 &anchor c
 @error Scalar with no
 @end
+
+# --- 6.9.2: ns-anchor-char is ns-char minus c-flow-indicator ---------------
+# The first character of an anchor or alias name was the one place the rule
+# was not applied. Nine of the ninety-four printable ASCII characters were
+# refused there - ! " # % & ' * | > - because each was taken for what it
+# means somewhere else: a tag, a quoted scalar, a comment, a directive,
+# another anchor, an alias, a block scalar. The name came out empty and the
+# document was in error.
+#
+# None of these shapes is in yaml-test-suite. The writer is what produced
+# them: it will spell any anchor a caller gives it, and a round trip of a
+# document built through the DOM API is what asked the question.
+
+@case an anchor name may begin with "!"
+@yaml
+&!x v
+@json
+"v"
+@end
+
+@case an anchor name may begin with "&"
+@yaml
+&&x v
+@json
+"v"
+@end
+
+@case an anchor name may begin with "*"
+@yaml
+&*x v
+@json
+"v"
+@end
+
+@case an anchor name may begin with "#", which starts no comment there
+@yaml
+&#x v
+@json
+"v"
+@end
+
+@case an anchor name may begin with a block scalar indicator
+@yaml
+&|x v
+@json
+"v"
+@end
+
+@case an anchor name may begin with a quote
+@yaml
+&"x v
+@json
+"v"
+@end
+
+@case an alias is held to the same production
+@yaml
+a: &!x 1
+b: *!x
+@json
+{"a":1,"b":1}
+@end
+
+@case but a flow indicator still ends the name
+@yaml
+&[x v
+@error Parse error
+@end
+
+# --- 5.7: the numeric escapes all name a character, not a byte -------------
+# "\x" was handled apart from "\u" and "\U" and wrote the raw byte, which is
+# right below U+0080 and wrong above it: "\x92" produced a lone 0x92, and a
+# lone continuation byte is not UTF-8. The writer spells a C1 control
+# "\x92", so the parser refused what the writer had just produced.
+
+@case a hex escape names a character and is encoded as one
+@yaml
+"a\\x92b"
+@json
+"a\u0092b"
+@end
+
+@case the 8-bit and 16-bit escapes agree above U+007F
+@yaml
+- "\\xE9"
+- "\\u00E9"
+@json
+["\u00e9","\u00e9"]
+@end
+
+@case an escape needs its hex digits
+@yaml
+"a\\xZZb"
+@error hex digits
+@end
+
+@case and the 16-bit one likewise, rather than giving U+FFFD
+@yaml
+"a\\uZZZZb"
+@error hex digits
+@end
+
+# --- 5.6 / 5.3: c-verbatim-tag is "!" "<" ns-uri-char+ ">" -----------------
+# Only the "+" of that was enforced. A space, a tab, a brace, a quotation
+# mark, a non-ASCII byte and a bare "%" all travelled through as part of the
+# tag.
+
+@case a verbatim tag may not hold a space
+@yaml
+!<a b> v
+@error URI character
+@end
+
+@case a verbatim tag may not hold a non-ASCII character
+@yaml
+!<café> v
+@error URI character
+@end
+
+@case a "%" in a verbatim tag needs two hex digits
+@yaml
+!<a%zzb> v
+@error URI character
+@end
+
+@case and with them it is one URI character
+@yaml
+!<a%21b> v
+@json
+"v"
+@end
+
+# --- 5.3: a verbatim tag is used exactly as written ------------------------
+# The brackets were stripped in the stream layer, and after that nothing
+# distinguished "!<!a!>" from the shorthand "!a!". The writer fuzzer found it
+# from a tag of "!&!".
+
+@case a verbatim tag is not a shorthand, whatever its URI looks like
+@yaml
+!<!a!> v
+@json
+"v"
+@end
+
+@case and no %TAG expands one
+@yaml
+%TAG ! tag:e.com,2000:
+---
+!<!a> v
+@json
+"v"
+@end
+
+# --- 6.9.1: a shorthand tag's name may begin with any ns-tag-char -----------
+# "!-" is the tag "!-", and the "-" was being taken for a block entry
+# indicator. "!-[]" parsed - the "[" ends the name before anything can misread
+# it - so only putting a space after the tag showed it, which is exactly what
+# the writer does.
+
+@case a tag name may begin with "-"
+@yaml
+!- []
+@json
+[]
+@end
+
+@case and with ":"
+@yaml
+!:x []
+@json
+[]
+@end
+
+@case and with "?"
+@yaml
+!?x []
+@json
+[]
+@end
+
+@case but a flow indicator still ends it
+@yaml
+!x[]
+@json
+[]
+@end
+
+@case and with "#", which starts no comment there
+@yaml
+!#x []
+@json
+[]
+@end
+
+@case but "|" is not a URI character, so it still opens a block scalar
+@yaml
+!| 1
+@error block scalar header
+@end

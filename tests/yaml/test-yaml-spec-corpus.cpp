@@ -249,7 +249,7 @@ TEST(YamlSpecCorpus, TheCorpusLoads) {
 	/* A floor, not a count: adding a case must not mean editing this line,
 	 * but an empty or truncated corpus has to be loud. */
 	EXPECT_GE(cases.size(), 50u)
-		<< "the corpus has shrunk; it held 54 cases when written";
+		<< "the corpus has shrunk; it held 76 cases when written";
 }
 
 TEST(YamlSpecCorpus, EveryCaseHoldsToTheSpecification) {

@@ -300,6 +300,29 @@ const char *gtext_yaml_node_as_string(const GTEXT_YAML_Node *n) {
 	}
 }
 
+/**
+ * @brief The length of a scalar's value in bytes.
+ *
+ * "\0" is an escape 5.7 defines, so a scalar may hold a NUL and a parsed
+ * document may hand one back.  gtext_yaml_node_as_string() was the only way
+ * to read a scalar and returns a C string, so that value could be written and
+ * parsed but never read: everything from the NUL on was unreachable.  The DOM
+ * has always kept the length; this is what says so.
+ */
+size_t gtext_yaml_node_scalar_length(const GTEXT_YAML_Node *n) {
+	if (!n) return 0;
+	switch (n->type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			return n->as.scalar.value ? n->as.scalar.length : 0;
+		default:
+			return 0;
+	}
+}
+
 GTEXT_API bool gtext_yaml_node_as_bool(const GTEXT_YAML_Node *n, bool *out) {
 	if (!n || !out) return false;
 	if (n->type != GTEXT_YAML_BOOL) return false;
@@ -1018,17 +1041,156 @@ GTEXT_API bool gtext_yaml_document_set_root(
 /**
  * @brief Create a new scalar node.
  */
+/* A scalar built from text is the text written plain, so its type is what the
+   text resolves to - exactly what a parsed document would report for the same
+   characters, and what the writer needs to know to leave it unquoted.
+ *
+ * The factory made a string of everything, which is a default rather than an
+ * assertion and made both halves wrong: gtext_yaml_node_type() said "string"
+ * of a node holding "1", and the writer, told it was a string, had to quote it
+ * or the integer 1 came back.  Neither is what the caller asked for, because
+ * the caller was never asked.  gtext_yaml_node_new_scalar_typed() is where
+ * they say. */
+static GTEXT_YAML_Node *dom_new_scalar(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	size_t length,
+	GTEXT_YAML_Node_Type type,
+	const char *tag,
+	const char *anchor
+) {
+	if (!doc || !doc->ctx) return NULL;
+	GTEXT_YAML_Node *node =
+		yaml_node_new_scalar(doc->ctx, value, value ? length : 0, tag, anchor);
+	if (!node) return NULL;
+	node->type = type;
+	node->as.scalar.type = type;
+	/* A node that says it is an integer has to hold one.  Setting the type
+	   and leaving the union at zero made gtext_yaml_node_as_int() answer 0
+	   for a scalar of "1", and every conversion built on it - to_json
+	   included - answered the same. */
+	switch (type) {
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT: {
+			bool b = false;
+			int64_t i = 0;
+			double f = 0.0;
+			const GTEXT_YAML_Node_Type from_text =
+				gtext_yaml_plain_text_classify(
+					value, value ? length : 0, &b, &i, &f);
+			if (type == GTEXT_YAML_BOOL) node->as.scalar.bool_value = b;
+			else if (type == GTEXT_YAML_INT) node->as.scalar.int_value = i;
+			else node->as.scalar.float_value = f;
+			/* An integer written as a float, or the other way about, still
+			   has a value; only text that is neither leaves the union at its
+			   zero, and the caller asserted the type knowing that. */
+			if (type == GTEXT_YAML_FLOAT && from_text == GTEXT_YAML_INT) {
+				node->as.scalar.float_value = (double)i;
+			}
+			else if (type == GTEXT_YAML_INT && from_text == GTEXT_YAML_FLOAT) {
+				node->as.scalar.int_value = (int64_t)f;
+			}
+			break;
+		}
+		default:
+			break;
+	}
+	/* A string whose text would resolve to something else has to go out
+	   quoted, and the writer reads the style to know it.  Everything else
+	   stays plain. */
+	if (type == GTEXT_YAML_STRING
+			&& !(tag && *tag)
+			&& gtext_yaml_plain_text_resolves_to_non_string(
+				value, value ? length : 0)) {
+		node->as.scalar.scalar_style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+	}
+	return node;
+}
+
+/* A tag decides what kind of scalar a node is; the text only decides it when
+   there is no tag (10.3.2).  The non-specific "!" resolves to
+   tag:yaml.org,2002:str for a scalar - that is what writing "!" in front of
+   one means - so "! " and an empty scalar is the empty *string*, not null,
+   which is what a re-read says and what the constructor did not.
+
+   A tag this library does not resolve leaves the question to the text: it
+   names a type the caller has defined, and a custom constructor will settle
+   it if one is registered. */
+static GTEXT_YAML_Node_Type dom_scalar_type(
+	const char *value,
+	size_t length,
+	const char *tag
+) {
+	if (!tag || !*tag) return gtext_yaml_plain_text_type(value, length);
+	if (strcmp(tag, "!") == 0) return GTEXT_YAML_STRING;
+
+	const char *suffix = NULL;
+	static const char yaml_prefix[] = "tag:yaml.org,2002:";
+	if (tag[0] == '!' && tag[1] == '!') suffix = tag + 2;
+	else if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0) {
+		suffix = tag + sizeof(yaml_prefix) - 1;
+	}
+	/* A tag this library does not resolve still stops the text from deciding.
+	   10.3.2 resolves by contents only where the tag is non-specific and the
+	   node was written plain; with any other tag the failsafe answer for a
+	   scalar is a string, and that is what a re-read gives - so "!&!" over an
+	   empty scalar is the empty string, not null. */
+	if (!suffix) return GTEXT_YAML_STRING;
+
+	if (strcmp(suffix, "str") == 0) return GTEXT_YAML_STRING;
+	if (strcmp(suffix, "bool") == 0) return GTEXT_YAML_BOOL;
+	if (strcmp(suffix, "int") == 0) return GTEXT_YAML_INT;
+	if (strcmp(suffix, "float") == 0) return GTEXT_YAML_FLOAT;
+	if (strcmp(suffix, "null") == 0) return GTEXT_YAML_NULL;
+	if (strcmp(suffix, "binary") == 0) return GTEXT_YAML_STRING;
+	if (strcmp(suffix, "timestamp") == 0) return GTEXT_YAML_STRING;
+	return GTEXT_YAML_STRING;
+}
+
 GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_scalar(
 	GTEXT_YAML_Document *doc,
 	const char *value,
 	const char *tag,
 	const char *anchor
 ) {
-	if (!doc || !doc->ctx) return NULL;
-	
-	/* Use internal node factory */
 	size_t value_len = value ? strlen(value) : 0;
-	return yaml_node_new_scalar(doc->ctx, value, value_len, tag, anchor);
+	return dom_new_scalar(doc, value, value_len,
+		dom_scalar_type(value, value_len, tag), tag, anchor);
+}
+
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_scalar_n(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	size_t length,
+	const char *tag,
+	const char *anchor
+) {
+	if (!value) length = 0;
+	return dom_new_scalar(doc, value, length,
+		dom_scalar_type(value, length, tag), tag, anchor);
+}
+
+GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_new_scalar_typed(
+	GTEXT_YAML_Document *doc,
+	const char *value,
+	size_t length,
+	GTEXT_YAML_Node_Type type,
+	const char *tag,
+	const char *anchor
+) {
+	switch (type) {
+		case GTEXT_YAML_STRING:
+		case GTEXT_YAML_BOOL:
+		case GTEXT_YAML_INT:
+		case GTEXT_YAML_FLOAT:
+		case GTEXT_YAML_NULL:
+			break;
+		default:
+			return NULL;   /* not a scalar type */
+	}
+	if (!value) length = 0;
+	return dom_new_scalar(doc, value, length, type, tag, anchor);
 }
 
 /**
