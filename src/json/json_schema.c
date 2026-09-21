@@ -17,6 +17,7 @@
 #include <ghoti.io/text/json/json_dom.h>
 #include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_schema.h>
+#include "metaschema/metaschema_internal.h"
 
 static void json_schema_node_free(json_schema_node * node) {
   if (!node) {
@@ -816,6 +817,92 @@ static GTEXT_JSON_Status json_schema_scan_resources(GTEXT_JSON_Schema * schema,
 }
 
 /*
+ * The embedded meta-schema for `uri`, parsed on first use, or NULL.
+ *
+ * The 2020-12 dialect describes itself: a schema that wants to say "this
+ * instance is a valid schema" writes `{"$ref":
+ * "https://json-schema.org/draft/2020-12/schema"}`, and that reference has to
+ * resolve to something before it can mean anything. The nine documents are
+ * shipped with this library so that it does, without a resolver and without a
+ * socket. Fetching them instead would put a network request in the middle of
+ * a compile, aimed at a URI read out of the document being compiled, which is
+ * the one thing the resolver seam exists to prevent.
+ *
+ * Embedding is safe here in a way it would not be for, say, the Unicode
+ * tables: these URIs do not version. The reference model of 2020-12 rests on
+ * each of them naming one fixed document, so a committed copy cannot fall
+ * behind a newer one.
+ *
+ * The caller's resolver is asked first and wins, which is the answer to
+ * "whose document is it": a caller who deliberately serves something at one
+ * of these URIs - a mirror, a dialect of their own - is not overruled by a
+ * copy they never asked for.
+ *
+ * A parse failure here is a bug in the generated file rather than anything
+ * the caller did, so it is reported as such rather than as "no such schema",
+ * which would send the caller looking at their `$ref`.
+ */
+static GTEXT_JSON_Status json_schema_embedded_document(
+    json_schema_compile_ctx * cc, const char * uri, size_t uri_len,
+    const GTEXT_JSON_Value ** out, GTEXT_JSON_Error * err) {
+  *out = NULL;
+
+  const json_metaschema_doc * doc = NULL;
+  for (size_t i = 0; i < json_metaschema_doc_count; i++) {
+    if (strlen(json_metaschema_docs[i].uri) == uri_len
+        && memcmp(json_metaschema_docs[i].uri, uri, uri_len) == 0) {
+      doc = &json_metaschema_docs[i];
+      break;
+    }
+  }
+  if (!doc) {
+    return GTEXT_JSON_OK;
+  }
+
+  GTEXT_JSON_Schema * schema = cc->schema;
+
+  /* One slot per document, so "have I parsed this one already" is an index
+   * rather than a search. The root meta-schema's `allOf` reaches seven of the
+   * other eight and several of those refer to each other, so meeting one
+   * twice is the common case rather than the exception. */
+  if (!schema->embedded) {
+    schema->embedded = (GTEXT_JSON_Value **)calloc(
+        json_metaschema_doc_count, sizeof(GTEXT_JSON_Value *));
+    if (!schema->embedded) {
+      if (err) {
+        *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_OOM,
+            .message = "Out of memory holding an embedded meta-schema"};
+      }
+      return GTEXT_JSON_E_OOM;
+    }
+    schema->embedded_count = json_metaschema_doc_count;
+  }
+
+  size_t slot = (size_t)(doc - json_metaschema_docs);
+  if (schema->embedded[slot]) {
+    *out = schema->embedded[slot];
+    return GTEXT_JSON_OK;
+  }
+
+  GTEXT_JSON_Parse_Options popts = gtext_json_parse_options_default();
+  GTEXT_JSON_Error perr;
+  memset(&perr, 0, sizeof(perr));
+  GTEXT_JSON_Value * parsed =
+      gtext_json_parse(doc->text, doc->len, &popts, &perr);
+  if (!parsed) {
+    if (err) {
+      *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
+          .message = "An embedded meta-schema did not parse"};
+    }
+    return GTEXT_JSON_E_INVALID;
+  }
+
+  schema->embedded[slot] = parsed;
+  *out = parsed;
+  return GTEXT_JSON_OK;
+}
+
+/*
  * Find the schema a resolved absolute URI names.
  *
  * Two steps, because a URI is a resource and a location inside it. The
@@ -848,33 +935,42 @@ static const GTEXT_JSON_Value * json_schema_find_target(
     }
   }
   if (!root) {
-    /* Not in this document. The caller's resolver is the only place a schema
-     * from somewhere else can come from; without one, or with one that does
-     * not know this URI, the reference does not resolve. */
+    /* Not in this document. Two places it can come from: the caller's
+     * resolver, and the meta-schemas this library embeds. The resolver is
+     * asked first, so that a caller who deliberately serves one of those URIs
+     * is not overruled by a copy they did not ask for. Without either, the
+     * reference does not resolve. */
+    char * without = json_uri_without_fragment(uri, uri_len);
+    if (!without) {
+      return NULL;
+    }
+    const GTEXT_JSON_Value * doc = NULL;
     if (cc->opts->resolver && cc->opts->resolver->get_fn) {
-      char * without = json_uri_without_fragment(uri, uri_len);
-      if (!without) {
+      doc = cc->opts->resolver->get_fn(
+          cc->opts->resolver->ctx, without, base_len);
+    }
+    if (!doc
+        && json_schema_embedded_document(cc, without, base_len, &doc, err)
+            != GTEXT_JSON_OK) {
+      free(without);
+      return NULL;
+    }
+    if (doc) {
+      /* Scanned with the URI it was asked for as its base - not the one
+       * that was asked about, which still carries the fragment - so that an
+       * `$id` inside it is resolved relative to where it came from. */
+      const char * interned = NULL;
+      GTEXT_JSON_Status status =
+          json_schema_add_resource(schema, without, doc, err, &interned);
+      if (status == GTEXT_JSON_OK && interned) {
+        status = json_schema_scan_resources(schema, doc, interned, 0, err);
+      }
+      if (status != GTEXT_JSON_OK) {
         return NULL;
       }
-      const GTEXT_JSON_Value * doc =
-          cc->opts->resolver->get_fn(cc->opts->resolver->ctx, without, base_len);
-      if (doc) {
-        /* Scanned with the URI it was asked for as its base - not the one
-         * that was asked about, which still carries the fragment - so that an
-         * `$id` inside it is resolved relative to where it came from. */
-        const char * interned = NULL;
-        GTEXT_JSON_Status status =
-            json_schema_add_resource(schema, without, doc, err, &interned);
-        if (status == GTEXT_JSON_OK && interned) {
-          status = json_schema_scan_resources(schema, doc, interned, 0, err);
-        }
-        if (status != GTEXT_JSON_OK) {
-          return NULL;
-        }
-        return json_schema_find_target(cc, uri, err);
-      }
-      free(without);
+      return json_schema_find_target(cc, uri, err);
     }
+    free(without);
     return NULL;
   }
   if (fragment_len == 0) {
@@ -1084,6 +1180,19 @@ static GTEXT_JSON_Status json_schema_read_vocabularies(
   if (!meta && cc->opts->resolver && cc->opts->resolver->get_fn) {
     meta = cc->opts->resolver->get_fn(
         cc->opts->resolver->ctx, uri, strlen(uri));
+  }
+  if (!meta) {
+    /* The same embedded documents a `$ref` reaches. A dialect built out of a
+     * subset of the standard vocabularies names one of them as its `$schema`,
+     * and there is no reason that should need a resolver either. A failure to
+     * parse one is reported; not finding one is not a failure, because the
+     * next line treats an unknown dialect as the standard one. */
+    GTEXT_JSON_Status status = json_schema_embedded_document(
+        cc, uri, strlen(uri), &meta, err);
+    if (status != GTEXT_JSON_OK) {
+      free(uri);
+      return status;
+    }
   }
   free(uri);
   if (!meta || meta->type != GTEXT_JSON_OBJECT) {
@@ -4000,6 +4109,14 @@ GTEXT_API void gtext_json_schema_free(GTEXT_JSON_Schema * schema) {
       free(schema->resources[i].uri);
     }
     free(schema->resources);
+  }
+  /* After `resources`, which borrows pointers into these. Slots for
+   * documents no reference reached are NULL, which gtext_json_free() takes. */
+  if (schema->embedded) {
+    for (size_t i = 0; i < schema->embedded_count; i++) {
+      gtext_json_free(schema->embedded[i]);
+    }
+    free(schema->embedded);
   }
   if (schema->dynamic_anchors) {
     for (size_t i = 0; i < schema->dynamic_anchors_count; i++) {

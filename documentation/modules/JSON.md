@@ -352,12 +352,8 @@ than no list, because it is read as current. What remains unimplemented is:
 - **Other drafts**: `$schema` selects vocabularies, but it does not select a
   draft. A `$ref` to a draft-07 document is compiled with 2020-12's keyword
   meanings, and the two differ over `items`
-- **The published metaschemas**: a `$ref` to
-  `https://json-schema.org/draft/2020-12/schema` is a reference that leaves
-  the document like any other, so it resolves only through a resolver that
-  supplies it. Nothing is built in
-A schema using any of those is refused at compile time rather than validated
-with the keyword ignored.
+A schema using either of those is refused at compile time rather than
+validated with the keyword ignored.
 
 `$vocabulary` is implemented. A metaschema named by `$schema` and reachable
 through the resolver says which vocabularies a schema written against it
@@ -369,8 +365,42 @@ cannot be understood without it. Declaring the format-assertion vocabulary
 turns `format` into an assertion, which is the mechanism the specification
 provides for that.
 
-When `$schema` names a metaschema no resolver can supply, the standard
-dialect is assumed rather than the schema refused.
+When `$schema` names a metaschema neither the resolver nor the embedded set
+can supply, the standard dialect is assumed rather than the schema refused.
+
+### The published metaschemas are embedded
+
+The 2020-12 dialect describes itself, so "is this a valid schema?" is a
+question written in JSON Schema: `{"$ref":
+"https://json-schema.org/draft/2020-12/schema"}` applied to the schema being
+asked about. All nine published documents - the root and the eight under
+`.../2020-12/meta/` - ship inside this library, so that reference resolves
+with no resolver configured.
+
+This is the opposite of what the IDNA tables do with the Unicode Character
+Database, and the difference is the point. The UCD versions: 17.0.0
+supersedes 16.0.0, and a committed copy would be a stale copy of somebody
+else's data, so only the *derivation* is committed and the data is fetched.
+These URIs do not version. The whole reference model of 2020-12 rests on each
+of them naming one fixed document forever, so there is nothing to fall behind
+- and the alternative to embedding them is a validator that opens a
+connection in the middle of a compile, to a URI it read out of the document
+it was handed.
+
+A resolver, when there is one, is asked first and wins. A caller serving one
+of those URIs themselves - a mirror, a stricter variant - is not overruled by
+a copy they never asked for.
+
+The meta-schemas constrain `$id` and `$anchor` with `pattern`, so a `$ref`
+that reaches them needs a regular-expression provider too. Without one the
+compile is refused, for the same reason `pattern` is refused anywhere else.
+
+The bytes are the published ones, verbatim. `tools/metaschema/fetch.sh`
+retrieves them into the ignored `third_party/`, `tools/metaschema/gen_metaschema.py`
+turns them into the committed `src/json/metaschema/metaschema_docs.c`, and
+`make check-metaschema` regenerates and diffs. That gate is also the content
+check: because nothing is reformatted, any difference at all is a difference
+from what json-schema.org publishes.
 
 `format` and the `content*` family are no longer on that list. All four are
 annotations in 2020-12, so a validator that ignores them is conformant and
@@ -381,7 +411,7 @@ which checks `date-time`, `date`, `time` and `duration` through
 ghoti.io-chron, `regex` through the caller's regular-expression provider, and
 the address, name, mailbox, URI and pointer formats here. Under that policy a
 name in the vocabulary it cannot check is refused rather than ignored, which
-is `idn-hostname` and `regex` with no provider.
+is now only `regex` with no provider.
 
 `hostname` and `idn-hostname` are IDNA2008 - RFC 5890 to 5893 - and an
 `xn--` label is decoded and checked as the U-label it encodes, including the

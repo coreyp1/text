@@ -305,7 +305,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle
+TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-metaschema
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -577,7 +577,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1288,6 +1288,8 @@ conformance-csv:
 UCD_VERSION := $(shell cat tools/idna/UCD_VERSION 2>/dev/null)
 UCD_DIR := third_party/ucd/$(UCD_VERSION)
 IDNA_TABLES := src/idna/tables
+METASCHEMA_DIR := third_party/json-schema/2020-12
+METASCHEMA_SRC := src/json/metaschema
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \
@@ -1333,6 +1335,39 @@ check-idna-oracle: ## Compare the derived IDNA property against an independent i
 		exit 0; \
 	fi; \
 	python3 tools/idna/oracle.py
+
+check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.org publishes
+# The nine documents under $(METASCHEMA_SRC) are somebody else's, embedded so
+# that a schema which validates another schema needs no resolver and no
+# socket. That makes this file the one place in the repository where a silent
+# edit would change what "a valid 2020-12 schema" means, with nothing to
+# compare against. Regenerating from the published documents and diffing is
+# the comparison; it is also a content check, since the bytes are verbatim and
+# any difference at all is a difference from what is published.
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		printf "check-metaschema: skipped (no python3)\n"; \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(METASCHEMA_DIR)" ]; then \
+		printf "check-metaschema: skipped (no $(METASCHEMA_DIR); run tools/metaschema/fetch.sh)\n"; \
+		exit 0; \
+	fi; \
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	if ! python3 tools/metaschema/gen_metaschema.py --out "$$tmp" >/dev/null 2>"$$tmp/err"; then \
+		printf "\033[0;31m\n### The meta-schema generator failed ###\033[0m\n" >&2; \
+		cat "$$tmp/err" >&2; \
+		exit 1; \
+	fi; \
+	if ! diff -u $(METASCHEMA_SRC)/metaschema_docs.c "$$tmp/metaschema_docs.c" >"$$tmp/diff" 2>&1; then \
+		printf "\033[0;31m\n### The embedded meta-schemas are not what is published ###\033[0m\n" >&2; \
+		head -40 "$$tmp/diff" >&2; \
+		printf "\nEither the committed file was edited, or the fetched documents are\n" >&2; \
+		printf "not the published ones. Refetch and regenerate with:\n" >&2; \
+		printf "  tools/metaschema/fetch.sh && tools/metaschema/gen_metaschema.py\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mEmbedded meta-schemas are byte-identical to what json-schema.org publishes.\033[0m\n"
 
 conformance-json-schema: ## Score the schema engine against JSON-Schema-Test-Suite (clones it on first use)
 conformance-json-schema:

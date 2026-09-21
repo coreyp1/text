@@ -1276,6 +1276,23 @@ struct GTEXT_JSON_Schema {
   size_t dynamic_anchors_capacity;
 
   /**
+   * Meta-schema documents this library embeds, parsed on first use.
+   *
+   * A `$ref` that leaves the document is normally the caller's resolver to
+   * answer, but the nine documents of the 2020-12 dialect are shipped here,
+   * so a schema that validates another schema against its own dialect needs
+   * no resolver and no network.
+   *
+   * One slot per embedded document, allocated whole the first time any of
+   * them is reached and NULL for every one that is not; `embedded_count` is
+   * the number of slots rather than the number parsed. They are owned for the
+   * schema's lifetime rather than freed when the compile ends, because
+   * `resources` borrows pointers into them.
+   */
+  GTEXT_JSON_Value ** embedded;
+  size_t embedded_count;
+
+  /**
    * The caller's regular-expression provider, copied at compile time, and
    * whether there was one. Nodes point at this copy rather than at the
    * caller's options structure, which they are not promised outlives them.

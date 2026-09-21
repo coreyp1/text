@@ -11807,6 +11807,237 @@ TEST(JsonSchemaRegexSeam, TheProviderSeesTheBytesItWasPromised) {
 	gtext_json_free(doc);
 }
 
+// ===========================================================================
+// The embedded meta-schemas
+// ===========================================================================
+//
+// The 2020-12 dialect describes itself, so "is this a valid schema?" is a
+// question written in JSON Schema: `{"$ref":
+// "https://json-schema.org/draft/2020-12/schema"}` applied to the schema you
+// are asking about. That only means something if the reference resolves, and
+// the nine published documents of the dialect are shipped with this library so
+// that it does - without a resolver, and without this library ever opening a
+// connection to a URI it read out of a document somebody handed it.
+//
+// These meta-schemas use `pattern`, so the tests below supply the toy regular
+// expression provider. That is not an artefact of the fixture: without a
+// provider the question genuinely cannot be answered, and the last test here
+// pins that down rather than letting it look like an accident.
+
+namespace {
+
+/** A schema-of-schemas, with the toy provider `pattern` needs. */
+struct MetaFixture {
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider vtable;
+	GTEXT_JSON_Schema_Options opts;
+	GTEXT_JSON_Value * doc = nullptr;
+	GTEXT_JSON_Schema * schema = nullptr;
+	GTEXT_JSON_Error err;
+
+	explicit MetaFixture(const char * src) {
+		vtable = toy_vtable(&provider);
+		opts = gtext_json_schema_options_default();
+		opts.regex = &vtable;
+		memset(&err, 0, sizeof(err));
+		doc = parse_doc(src);
+		if (doc) {
+			schema = gtext_json_schema_compile_with_options(doc, &opts, &err);
+		}
+	}
+	~MetaFixture() {
+		gtext_json_schema_free(schema);
+		gtext_json_free(doc);
+		// The refusal path fills in context_snippet, which is heap-allocated
+		// and this library's to free rather than the caller's to ignore.
+		gtext_json_error_free(&err);
+	}
+
+	/** Is `instance` - itself a schema, in these tests - accepted? */
+	bool accepts(const char * instance) {
+		GTEXT_JSON_Value * v = parse_doc(instance);
+		EXPECT_NE(v, nullptr) << instance;
+		if (!v) {
+			return false;
+		}
+		bool ok = gtext_json_schema_validate(schema, v, nullptr)
+		    == GTEXT_JSON_OK;
+		gtext_json_free(v);
+		return ok;
+	}
+};
+
+} // namespace
+
+TEST(JsonSchemaMetaschema, ResolvesWithoutAResolver) {
+	// The point of embedding: no resolver, no network, and the reference
+	// still resolves. Before this, the only way to ask whether a schema was
+	// a valid schema was to hand the library a copy of the meta-schema it
+	// already had to agree with.
+	MetaFixture f("{\"$ref\":\"https://json-schema.org/draft/2020-12/schema\"}");
+	ASSERT_EQ(f.opts.resolver, nullptr);
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{\"type\":\"string\"}"));
+	EXPECT_TRUE(f.accepts("true"));
+	EXPECT_TRUE(f.accepts("{\"properties\":{\"a\":{\"minimum\":1}}}"));
+
+	// `type` takes a name from a fixed list, or an array of them.
+	EXPECT_FALSE(f.accepts("{\"type\":null}"));
+	EXPECT_FALSE(f.accepts("{\"type\":\"strong\"}"));
+	// `minimum` is a number; `required` is an array of strings.
+	EXPECT_FALSE(f.accepts("{\"minimum\":\"1\"}"));
+	EXPECT_FALSE(f.accepts("{\"required\":[1]}"));
+	// A schema is an object or a boolean, and nothing else.
+	EXPECT_FALSE(f.accepts("[]"));
+	EXPECT_FALSE(f.accepts("\"string\""));
+}
+
+TEST(JsonSchemaMetaschema, ReachesTheVocabularyMetaschemasItReferences) {
+	// The root document is seven `$ref`s and a handful of deprecated
+	// keywords; every constraint it applies comes from a document it points
+	// at, by a *relative* reference resolved against its own `$id`. If only
+	// the root were embedded this would compile and then assert nothing.
+	MetaFixture f("{\"$ref\":\"https://json-schema.org/draft/2020-12/schema\"}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	// One constraint from each vocabulary meta-schema, so that a missing
+	// document shows up as a test failure rather than as a schema that
+	// accepts everything.
+	EXPECT_FALSE(f.accepts("{\"$id\":42}"));                 // core
+	EXPECT_FALSE(f.accepts("{\"allOf\":{}}"));               // applicator
+	EXPECT_FALSE(f.accepts("{\"unevaluatedItems\":1}"));     // unevaluated
+	EXPECT_FALSE(f.accepts("{\"maxLength\":-1}"));           // validation
+	EXPECT_FALSE(f.accepts("{\"deprecated\":\"yes\"}"));     // meta-data
+	EXPECT_FALSE(f.accepts("{\"format\":7}"));               // format
+	EXPECT_FALSE(f.accepts("{\"contentMediaType\":7}"));     // content
+}
+
+TEST(JsonSchemaMetaschema, EnforcesTheCorePatternOnAnIdentifier) {
+	// `$id` is a URI-reference whose fragment, if any, must be empty
+	// (meta/core: "Non-empty fragments not allowed", `^[^#]*#?$`). This is
+	// the one place in the dialect where a `pattern` decides the answer, so
+	// it is also what proves the regular expression is reaching the provider
+	// rather than being skipped.
+	MetaFixture f("{\"$ref\":\"https://json-schema.org/draft/2020-12/schema\"}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{\"$id\":\"https://example.com/s.json\"}"));
+	EXPECT_TRUE(f.accepts("{\"$id\":\"https://example.com/s.json#\"}"));
+	EXPECT_FALSE(f.accepts("{\"$id\":\"https://example.com/s.json#frag\"}"));
+	EXPECT_GT(f.provider.searches, 0);
+}
+
+TEST(JsonSchemaMetaschema, ResolvesAVocabularyMetaschemaOnItsOwn) {
+	// The seven are documents in their own right, and a schema may name one
+	// directly - a dialect assembled from a subset of the vocabularies does
+	// exactly that.
+	MetaFixture f(
+	    "{\"$ref\":\"https://json-schema.org/draft/2020-12/meta/validation\"}");
+	ASSERT_NE(f.schema, nullptr) << (f.err.message ? f.err.message : "");
+
+	EXPECT_TRUE(f.accepts("{\"maxLength\":3}"));
+	EXPECT_FALSE(f.accepts("{\"maxLength\":-1}"));
+	// The validation vocabulary has nothing to say about `allOf`, so a bad
+	// one passes here and would not pass the root meta-schema. Naming a
+	// single vocabulary has to mean only that vocabulary.
+	EXPECT_TRUE(f.accepts("{\"allOf\":{}}"));
+}
+
+TEST(JsonSchemaMetaschema, TheCallersResolverWins) {
+	// Embedding a document is not the same as claiming it. A caller who
+	// serves one of these URIs themselves - a mirror, a dialect of their own,
+	// a deliberately strict variant - must not be quietly overruled by a copy
+	// they never asked for.
+	StubResolver resolver;
+	resolver.add("https://json-schema.org/draft/2020-12/schema", "false");
+	GTEXT_JSON_Schema_Resolver vt;
+	vt.ctx = &resolver;
+	vt.get_fn = StubResolver::get;
+
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider rvt = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.resolver = &vt;
+	opts.regex = &rvt;
+
+	GTEXT_JSON_Value * doc =
+	    parse_doc("{\"$ref\":\"https://json-schema.org/draft/2020-12/schema\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	// `false` rejects everything, including a schema the embedded copy would
+	// have accepted.
+	GTEXT_JSON_Value * v = parse_doc("{\"type\":\"string\"}");
+	ASSERT_NE(v, nullptr);
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_E_SCHEMA);
+	EXPECT_EQ(resolver.asked.size(), 1u);
+
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaMetaschema, EmbedsNineDocumentsAndNotTheWholeWeb) {
+	// A reference that leaves the document still does not resolve. What was
+	// added is nine documents, not a fetcher, and a URI that merely looks
+	// like one of them is refused the way it always was.
+	ToyProvider provider;
+	GTEXT_JSON_Regex_Provider rvt = toy_vtable(&provider);
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	opts.regex = &rvt;
+
+	const char * elsewhere[] = {
+	    "{\"$ref\":\"https://example.com/schema\"}",
+	    "{\"$ref\":\"https://json-schema.org/draft/2019-09/schema\"}",
+	    "{\"$ref\":\"https://json-schema.org/draft/2020-12/meta/nonesuch\"}",
+	    "{\"$ref\":\"https://json-schema.org/draft/2020-12/schema/\"}",
+	};
+	for (const char * src : elsewhere) {
+		GTEXT_JSON_Value * doc = parse_doc(src);
+		ASSERT_NE(doc, nullptr) << src;
+		GTEXT_JSON_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Schema * schema =
+		    gtext_json_schema_compile_with_options(doc, &opts, &err);
+		EXPECT_EQ(schema, nullptr) << src;
+		gtext_json_schema_free(schema);
+		gtext_json_free(doc);
+		gtext_json_error_free(&err);
+	}
+}
+
+TEST(JsonSchemaMetaschema, NeedsARegexProviderAndSaysSo) {
+	// meta/core constrains `$id` and `$anchor` with `pattern`, so without a
+	// provider this library cannot answer the question at all. It refuses,
+	// which is the same answer it gives for `pattern` anywhere else - the
+	// alternative would be to report a schema as valid on the strength of
+	// two constraints that were never checked.
+	GTEXT_JSON_Schema_Options opts = gtext_json_schema_options_default();
+	ASSERT_EQ(opts.regex, nullptr);
+
+	GTEXT_JSON_Value * doc =
+	    parse_doc("{\"$ref\":\"https://json-schema.org/draft/2020-12/schema\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Schema * schema =
+	    gtext_json_schema_compile_with_options(doc, &opts, &err);
+	EXPECT_EQ(schema, nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_SCHEMA_UNSUPPORTED);
+	// Named, so that a caller who hits this knows which keyword stopped them
+	// rather than being told only that something did.
+	ASSERT_NE(err.context_snippet, nullptr);
+	EXPECT_STREQ(err.context_snippet, "pattern");
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	gtext_json_error_free(&err);
+}
+
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

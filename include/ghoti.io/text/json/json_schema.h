@@ -65,7 +65,10 @@
  *   "#name", "other.json" and an absolute URI all work. Recursive references
  *   work; targets are compiled once and shared. A reference that leaves the
  *   document is fetched through GTEXT_JSON_Schema_Options::resolver, and
- *   refused at compile time when there is none or it does not know the URI
+ *   refused at compile time when there is none or it does not know the URI -
+ *   except for the nine published 2020-12 meta-schemas, which are embedded, so
+ *   that a schema saying "this instance is a valid schema" resolves without a
+ *   resolver and without a socket
  * - prefixItems and items, where "items" applies to the elements at an
  *   index past the end of "prefixItems" and to every element when there is
  *   no "prefixItems". draft-07's array-valued "items" compiles to
@@ -102,8 +105,9 @@
  * - pattern, patternProperties, when no provider was supplied
  * - $recursiveRef and $recursiveAnchor - 2019-09's dynamic-scope references,
  *   which 2020-12 replaced
- * - idn-hostname as a `format`, when format assertion is asked for: it needs
- *   IDNA tables this library does not carry
+ * - regex as a `format`, when format assertion is asked for and no provider
+ *   was supplied. It is the only format name this library declines; every
+ *   other one in the vocabulary is checked
  *
  * Note on $ref depth: a schema that refers to itself without consuming any
  * instance, such as {"$ref":"#"}, compiles successfully and fails validation
@@ -226,6 +230,29 @@ typedef struct {
  * Without a resolver, a reference that leaves the document is refused at
  * compile time - the same refusal as any other reference that does not
  * resolve, and for the same reason.
+ *
+ * There is one exception, and it is a set of nine fixed documents rather than
+ * a hole in the rule. The 2020-12 meta-schemas - the root at
+ * `https://json-schema.org/draft/2020-12/schema` and the eight under
+ * `.../2020-12/meta/` - are embedded in this library, so a schema that says
+ * "this instance is a valid schema" resolves with no resolver present. That
+ * is not a convenience: the dialect describes itself, so the alternative is a
+ * validator that opens a connection during a compile, to a URI it read out of
+ * the document it was handed. These URIs also do not version - the reference
+ * model rests on each naming one fixed document forever - so an embedded copy
+ * cannot fall behind a newer one, which is why the Unicode tables this
+ * library derives are treated the other way round.
+ *
+ * A resolver supplied here is still asked first and still wins, for those
+ * URIs as for any other. Serving your own copy - a mirror, a stricter
+ * variant - is a thing a caller may legitimately want to do, and a bundled
+ * document that could not be overridden would be this library deciding it
+ * knows better.
+ *
+ * The meta-schemas constrain `$id` and `$anchor` with `pattern`, so a `$ref`
+ * that reaches them needs `regex` set as well. Without a provider the compile
+ * is refused, because reporting a schema as valid on the strength of two
+ * constraints that were never checked is worse than declining to answer.
  */
 typedef struct {
   /**

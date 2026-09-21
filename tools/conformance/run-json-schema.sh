@@ -47,7 +47,11 @@ if PKG_CONFIG_PATH="$pc" pkg-config --exists ghoti.io-regex-0; then
 	# and `patternProperties` are refused and the score legitimately drops,
 	# and a gate that fired on that would be reporting a missing package as a
 	# regression.
-	: "${JSS_MIN:=99.6}"
+	#
+	# It is the whole required suite. A floor set just under the current score
+	# leaves room to lose an assertion without anybody noticing, and there is
+	# no longer a required assertion this engine is entitled to miss.
+	: "${JSS_MIN:=100}"
 	export JSS_MIN
 else
 	echo "regular expressions: none installed - pattern groups will not run"

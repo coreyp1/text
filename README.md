@@ -109,12 +109,18 @@ size limit applies before the file is in memory; writes are atomic, going to a
 temporary file beside the destination and replacing it only once complete.
 
 JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
-JSON Schema 2020-12, which answers 1297 of the 1301 assertions in
+JSON Schema 2020-12, which answers all 1301 assertions in
 JSON-Schema-Test-Suite's required draft2020-12 files and gets none of them
-wrong; `make conformance-json-schema` measures it. The four it does not reach
-are behind a `$ref` to the published metaschema, which is a reference that
-leaves the document and so arrives through the caller's resolver - this
-library vendors nobody else's documents and opens no sockets of its own.
+wrong; `make conformance-json-schema` measures it, and the gate is the whole
+suite rather than a floor set just under it.
+
+The dialect describes itself, so the last four of those assertions ask a
+schema to validate another schema through a `$ref` to the published
+meta-schema. All nine of those documents are embedded, verbatim and under a
+byte-diff gate, so that reference resolves without a resolver: the dialect's
+URIs do not version, and the alternative is a validator that opens a
+connection during a compile to a URI it read out of the document it was
+handed. A caller's resolver is still asked first and still wins.
 
 The schema engine refuses a schema whose keywords it cannot enforce rather
 than ignoring them, since a schema that looks like it constrains its data and
