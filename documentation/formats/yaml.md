@@ -1185,6 +1185,16 @@ and six rows of it fail without the fix.
 The scanner holds such an indicator for one character rather than looking
 ahead, because a scanner fed in chunks cannot reliably see the next byte.
 
+The parser had the same gap one layer up, and the fuzzer found it next. The
+test for "does this collection begin its own line?" - which is what keeps
+`a: [b, c]` from reading as two entries - was `block_key_may_start_at()`,
+which skips `-`, `?`, `:` and `*` without asking what follows them. That is
+deliberate where it is used for its own guard, since an alias event's offset
+points past its `*`. It is wrong here: `-: {a: 1}` looked like a flow mapping
+standing at the start of its line, so the collection was taken for the next
+entry's key and the value it really was went missing. The two tests are
+separate functions now, because they are separate questions.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

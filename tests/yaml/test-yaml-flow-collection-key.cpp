@@ -139,6 +139,17 @@ const Case kCases[] = {
 	{"a: [b, c]\n", "{\"a\": [\"b\", \"c\"]}"},
 	{"a: &k [b]\n", "{\"a\": [\"b\"]}"},
 
+	/* And "begins its own line" has to apply the same rule the scanner does:
+	   a "-", "?" or ":" is an indicator only where white space follows it.
+	   The test skipped them without asking, so "-: {a: 1}" looked like a flow
+	   mapping standing at the start of its line, the collection was taken for
+	   the next entry's key, and the value it really was went missing. */
+	{"-: {a: 1}\n", "{\"-\": {\"a\": 1}}"},
+	{"-: !<t> {a: 1}\n", "{\"-\": {\"a\": 1}}"},
+	{"-: [1]\nx: 2\n", "{\"-\": [1], \"x\": 2}"},
+	{"?: {a: 1}\n", "{\"?\": {\"a\": 1}}"},
+	{"- {}: 1\n", "[{{}: 1}]"},
+
 	/* The entry above has no value written, so the flow key follows a key
 	   that is still waiting for one.  These were not refused before - they
 	   were accepted with the wrong shape, the second entry nested inside the

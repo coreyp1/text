@@ -1539,23 +1539,64 @@ static bool block_value_is_missing(parser_state *p, int col) {
  * column it is the next key - and both references agree.
  */
 static int line_key_col_from_offset(const parser_state *p, size_t offset);
-static bool block_key_may_start_at(const parser_state *p, size_t offset);
+
+/* Whether the node at @p offset is the first thing on its line.
+ *
+ * "First" allows indentation, the "-", "?" and ":" of the entries that
+ * contain it compactly, and the node's own properties - nothing else.  An
+ * indicator counts as one only where white space follows it: "- x" is an
+ * entry holding x, while "-: 1" is a mapping whose key is the plain scalar
+ * "-".  block_key_may_start_at() skips those characters without that test,
+ * which is deliberate where it is used - an alias event's offset points past
+ * its "*" - but wrong here: it made "-: {a: 1}" look like a flow mapping
+ * standing at the start of its line, so the collection was taken for the next
+ * entry's key and the value it really was went missing.
+ */
+static bool block_node_begins_line(const parser_state *p, size_t offset) {
+	const char *buffer = NULL;
+	size_t line_start = 0;
+	size_t i = 0;
+
+	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
+	if (offset > p->ctx->input_buffer_len) return false;
+	buffer = p->ctx->input_buffer;
+
+	line_start = offset;
+	while (line_start > 0) {
+		const char ch = buffer[line_start - 1];
+		if (ch == '\n' || ch == '\r') break;
+		line_start--;
+	}
+
+	i = line_start;
+	while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t')) i++;
+	while (i + 1 < offset
+			&& (buffer[i] == '-' || buffer[i] == '?' || buffer[i] == ':')
+			&& (buffer[i + 1] == ' ' || buffer[i + 1] == '\t')) {
+		i++;
+		while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t')) i++;
+	}
+	/* An anchor and a tag, in either order, each running to white space. */
+	for (int prop = 0; prop < 2 && i < offset; ++prop) {
+		if (buffer[i] != '&' && buffer[i] != '!') break;
+		while (i < offset && buffer[i] != ' ' && buffer[i] != '\t') i++;
+		while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t')) i++;
+	}
+	return i >= offset;
+}
 
 /* Where the entry a node at @p offset begins, for comparing against a block
    mapping's indentation.
 
    Usually that is the node's own column.  It is further left exactly when the
    node begins its own line and carries properties, because a property is part
-   of the key it precedes: "&a [x]" is a key starting at the "&".
-   block_key_may_start_at() is the test for "begins its own line" - it allows
-   indentation, the indicators a compact entry may put in front, and up to two
-   properties, and nothing else.  Asking line_key_col_from_offset()
-   unconditionally instead answers about the line's *first* node, which for
-   "a: [b, c]" is the "a" - and that made the flow sequence look like the next
-   key rather than a's value. */
+   of the key it precedes: "&a [x]" is a key starting at the "&".  Asking
+   line_key_col_from_offset() unconditionally instead answers about the line's
+   *first* node, which for "a: [b, c]" is the "a" - and that made the flow
+   sequence look like the next key rather than a's value. */
 static int block_entry_col(const parser_state *p, size_t offset, int node_col) {
 	int col;
-	if (!block_key_may_start_at(p, offset)) return node_col;
+	if (!block_node_begins_line(p, offset)) return node_col;
 	col = line_key_col_from_offset(p, offset);
 	return col >= 0 ? col : node_col;
 }
