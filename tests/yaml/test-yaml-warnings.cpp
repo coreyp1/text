@@ -168,3 +168,77 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+/* 6.8.1 splits the version question in two. A minor version this parser does
+ * not implement is still parsed - the minor versions are meant to stay
+ * compatible - but the document should not go by in silence, so it warns. A
+ * *major* version it does not implement is refused outright, which is an
+ * error rather than a warning and is pinned in the spec corpus.
+ *
+ * Checked through the callback rather than through the parse: "%YAML 1.7"
+ * parses either way, so a test that only asked whether it parsed would have
+ * passed with no warning code at all. */
+TEST(YamlWarnings, NewerMinorVersionWarnsAndStillParses) {
+  struct Case { const char *yaml; bool warns; };
+  const Case cases[] = {
+    {"%YAML 1.2\n---\nv\n", false},
+    {"%YAML 1.1\n---\nv\n", false},
+    {"%YAML 1.3\n---\nv\n", true},
+    {"%YAML 1.7\n---\nv\n", true},
+    {"%YAML 1.12345\n---\nv\n", true},
+  };
+
+  for (const Case &c : cases) {
+    warning_capture cap;
+    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+    opts.warning_callback = warning_callback;
+    opts.warning_user_data = &cap;
+
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Document *doc =
+        gtext_yaml_parse(c.yaml, strlen(c.yaml), &opts, &err);
+    ASSERT_NE(doc, nullptr) << c.yaml
+        << ": " << (err.message ? err.message : "parse failed");
+    EXPECT_EQ(has_warning(cap, GTEXT_YAML_WARNING_YAML_VERSION), c.warns)
+        << c.yaml;
+    gtext_yaml_free(doc);
+  }
+}
+
+TEST(YamlWarnings, TheVersionWarningObeysTheMaskAndTheErrorPromotion) {
+  const char *yaml = "%YAML 1.7\n---\nv\n";
+
+  /* Masked off: parsed, and the callback never hears about it. */
+  {
+    warning_capture cap;
+    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+    opts.warning_callback = warning_callback;
+    opts.warning_user_data = &cap;
+    opts.warning_mask =
+        GTEXT_YAML_WARNING_MASK(GTEXT_YAML_WARNING_YAML_VERSION);
+
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Document *doc =
+        gtext_yaml_parse(yaml, strlen(yaml), &opts, &err);
+    ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+    EXPECT_FALSE(has_warning(cap, GTEXT_YAML_WARNING_YAML_VERSION));
+    gtext_yaml_free(doc);
+  }
+
+  /* Promoted: refused, with the warning's own message. */
+  {
+    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+    opts.warnings_as_errors = true;
+
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Document *doc =
+        gtext_yaml_parse(yaml, strlen(yaml), &opts, &err);
+    EXPECT_EQ(doc, nullptr);
+    if (doc) { gtext_yaml_free(doc); return; }
+    ASSERT_NE(err.message, nullptr);
+    EXPECT_NE(strstr(err.message, "minor version"), nullptr) << err.message;
+  }
+}
