@@ -767,3 +767,49 @@ a: 1.
 @json
 {"a":"1.\\n5"}
 @end
+
+# ---------------------------------------------------------------------------
+# 8.2  "-", "?" and ":" are indicators only where white space follows
+#
+# c-l-block-seq-entry is "-" s-l+block-indented, and s-l+block-indented begins
+# with separation: "- x" is an entry holding x. Without the space there is no
+# separation and no entry, so "-" is an ns-plain-first character like any
+# other and "-: 1" is a mapping whose key is the plain scalar "-".
+#
+# This is here because it was broken by a fix to something else, and nothing
+# caught it: the suite has "-: 1" nowhere, and a scanner change that skipped
+# every leading "-" as an indicator measured the mapping at the "1" instead of
+# at column zero. One entry still parsed; a second was refused for not being
+# on its key's line.
+# ---------------------------------------------------------------------------
+
+@case a "-" with no space after it begins a plain scalar, not an entry
+@yaml
+-: 1
+x: 2
+@json
+{"-":1,"x":2}
+@end
+
+@case the same for a run of them
+@yaml
+--: 1
+x: 2
+@json
+{"--":1,"x":2}
+@end
+
+@case a "?" with no space after it is likewise plain
+@yaml
+?: 1
+x: 2
+@json
+{"?":1,"x":2}
+@end
+
+@case and with the space it is an entry
+@yaml
+- x: 1
+@json
+[{"x":1}]
+@end

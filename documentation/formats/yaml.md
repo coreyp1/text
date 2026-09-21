@@ -1161,6 +1161,30 @@ JSON fast path, the writer's quoting whitelist and the DOM constructor. It is
 worth stating once more as a place to look: **anything this library decides
 from a scalar's text has to ask what style it was written in first.**
 
+### A regression of this page's own making
+
+`-`, `?` and `:` are the indicators a compact entry may put in front of its
+node, and `line_node_col` - added two sections above to answer where a key
+begins - skipped every one of them. It should skip them only where white
+space follows: `c-l-block-seq-entry` is `"-" s-l+block-indented` and
+`s-l+block-indented` begins with separation, so `- x` is an entry holding `x`
+while **`-: 1` is a mapping whose key is the plain scalar `-`**.
+
+Measuring that mapping at the `1` rather than at column zero left one entry
+parsing and a second refused for not being on its key's line:
+
+```yaml
+-: 1
+x: 2        # refused: "Mapping key not on same line as ':'"
+```
+
+It survived three commits, because the suite has `-: 1` nowhere and neither
+did any test here. Four cases are in `tests/data/yaml/spec-1.2.2.corpus` now,
+and six rows of it fail without the fix.
+
+The scanner holds such an indicator for one character rather than looking
+ahead, because a scanner fed in chunks cannot reliably see the next byte.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

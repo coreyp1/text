@@ -63,6 +63,13 @@ struct GTEXT_YAML_Scanner {
      written, and a continuation line that should have folded was refused
      instead.  -1 until this line has one. */
   int line_node_col;
+  /* Column of a "-", "?" or ":" seen while still looking for this line's
+     node, and not yet known to be an indicator.  Which it is depends on the
+     character after it: "- x" is an entry holding x, while "-: 1" is a
+     mapping whose key is the plain scalar "-".  Holding it for one character
+     answers that without looking ahead, which a scanner fed in chunks cannot
+     reliably do. */
+  int pending_indicator_col;
   /* Whether the last token was a JSON-like node - a quoted scalar or a
      closing "]" or "}".  Inside a flow collection a ":" straight after one of
      those is a mapping indicator even with nothing between them
@@ -149,6 +156,7 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
     s->col = 1;
     s->indent_ws = 1;
     s->line_node_col = -1;
+  s->pending_indicator_col = -1;
     s->suppress_lf = 1;
     return '\n';
   }
@@ -161,6 +169,7 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
     s->col = 1;
     s->indent_ws = 1;
     s->line_node_col = -1;
+  s->pending_indicator_col = -1;
     return '\n';
   }
   s->suppress_lf = 0;
@@ -174,10 +183,29 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
   /* The node this line carries begins at the first character that is not
      indentation and not one of the indicators a compact entry may put in
      front of it: "- &a x" is a node beginning at the "&", two indicators and
-     a space along.  Tabs count as separation, not as the node. */
-  if (s->line_node_col < 0 && c != ' ' && c != '\t'
-      && c != '-' && c != '?' && c != ':') {
-    s->line_node_col = s->col - 1;
+     a space along.  Tabs count as separation, not as the node.
+
+     A "-", "?" or ":" is an indicator only where white space follows it.
+     "-: 1" is a mapping whose key is the plain scalar "-", and treating the
+     dash as an indicator measured that mapping at the "1" - so a second
+     entry under it was refused for not being on its key's line. */
+  if (s->line_node_col < 0) {
+    const bool separates = (c == ' ' || c == '\t');
+    if (s->pending_indicator_col >= 0) {
+      if (separates) {
+        s->pending_indicator_col = -1;   /* it was an indicator */
+      }
+      else {
+        s->line_node_col = s->pending_indicator_col;
+        s->pending_indicator_col = -1;
+      }
+    }
+    else if (c == '-' || c == '?' || c == ':') {
+      s->pending_indicator_col = s->col - 1;
+    }
+    else if (!separates) {
+      s->line_node_col = s->col - 1;
+    }
   }
   s->col++;
   /* When we've consumed enough that we can free the earlier prefix, do so. */
@@ -1184,6 +1212,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->node_indent = -1;  /* nothing open yet: the document root */
   s->last_scalar_col = 0;
   s->line_node_col = -1;
+  s->pending_indicator_col = -1;
   s->last_json_like = false;
   s->last_indicator = 0;
   return s;
