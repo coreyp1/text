@@ -269,9 +269,22 @@ have seen it: that runner asks for `KEEP_ALL` duplicate keys, which is the one
 setting that turns the fast path off, so all 395 cases had only ever taken the
 other route.
 
+**The writer keeps finding parser defects, which is not what it is for.** A
+flow collection could not be a block mapping's key on any line but the first -
+`{}: 1` parsed, `a: 1` over `{}: 2` did not - because three separate places
+measured the last *scalar* to find out where the key stood, and a key that is
+a flow collection has no scalar of its own. `{}` has none at all, so what they
+measured was whatever came before, on whatever line that was. Two were in the
+parser and one in the scanner, and each became visible only once the one in
+front of it was gone. A fourth was worse than a refusal: `a:` over `{}: 1` was
+*accepted*, with `{}` nested inside `a`, because the rule that a node standing
+at the key's own column is the next entry's key had never been given to the
+four places a completed collection is added to its parent.
+
 Comparison against other implementations keeps finding defects here, so treat
-this module as the least settled of the three. Every one found so far is
-fixed, and what they have in
+this module as the least settled of the three. One is open and written down -
+the string `---` is written plain and reads back as a document marker - and
+the rest are fixed. What they have in
 common is worth stating plainly: most did not fail on valid input, they
 quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
 were truncated. Tags were dropped from block-style collections. A mapping key

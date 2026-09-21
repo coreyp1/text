@@ -289,6 +289,52 @@ TEST(YamlWriterContract, ABuiltScalarHasTheTypeItsTextWouldParseAs) {
 	}
 }
 
+/* White space at either end of a built scalar's text makes it a string, and
+   the reason is worth stating: a plain scalar's content has none - ns-plain
+   begins and ends with an ns-char (7.3.3) - so no plain spelling of such text
+   exists, only a quoted one, and quoted is string (10.3.2).
+
+   strtoll() skips leading white space, which is how " 3", "\t3" and "\n3"
+   came to answer "the integer 3" for a node the writer then quoted and the
+   reader read back as a string. The trailing end was already right, which is
+   why only half of this ever showed. It is not a question the corpus can put:
+   a parse of " 3" is the integer 3, because the scanner takes the space off
+   before any of this is asked - the text only reaches here through the DOM
+   API, and the writer fuzzer is what put it there. */
+TEST(YamlWriterContract, OuterWhiteSpaceMakesABuiltScalarAString) {
+	const char *texts[] = {
+		" 3", "\t3", "\n3", "3 ", "3\n", "\ntrue", " ~", " ", "\n",
+	};
+	for (const char *text : texts) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node =
+			gtext_yaml_node_new_scalar(doc, text, nullptr, nullptr);
+		ASSERT_NE(node, nullptr) << ::testing::PrintToString(std::string(text));
+		EXPECT_EQ(gtext_yaml_node_type(node), GTEXT_YAML_STRING)
+			<< ::testing::PrintToString(std::string(text));
+
+		/* And what the writer produces reads back as the same string - which
+		   is the property the fuzzer checks, stated for these nine. */
+		gtext_yaml_document_set_root(doc, node);
+		Written w = write_doc(doc);
+		ASSERT_EQ(w.status, GTEXT_YAML_OK)
+			<< ::testing::PrintToString(std::string(text));
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(w.text.c_str(), w.text.size(), &opts, &err);
+		ASSERT_NE(back, nullptr) << "wrote " << w.text;
+		gtext_yaml_error_free(&err);
+		const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+		EXPECT_EQ(gtext_yaml_node_type(r), GTEXT_YAML_STRING) << "wrote " << w.text;
+		const char *got = gtext_yaml_node_as_string(r);
+		EXPECT_STREQ(got ? got : "", text) << "wrote " << w.text;
+		gtext_yaml_free(back);
+		gtext_yaml_free(doc);
+	}
+}
+
 /* But a scalar the parser resolved to a number stays plain: quoting it would
    make a string of it, which is the same fault in the other direction. */
 TEST(YamlWriterContract, AResolvedScalarIsNotQuotedIntoAString) {

@@ -1833,6 +1833,22 @@ static GTEXT_YAML_Status resolve_scalar(
  * a document written under it is read back under it.  These are the same
  * predicates resolve_scalar() uses a few lines above, not a second copy of
  * the tables. */
+/**
+ * @brief Whether white space stands at either end of @p value.
+ *
+ * A plain scalar's content has none: ns-plain(n,c) begins and ends with an
+ * ns-char (7.3.3), and what surrounds it is separation the scanner has
+ * already taken off.  So text carrying any is text no plain scalar could
+ * have held - only a quoted one can spell it, and a quoted scalar is a
+ * string (10.3.2).
+ */
+static bool plain_text_has_outer_space(const char *value, size_t len) {
+	const char *ws = " \t\r\n";
+
+	if (!value || len == 0) return false;
+	return strchr(ws, value[0]) != NULL || strchr(ws, value[len - 1]) != NULL;
+}
+
 GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	const char *value,
 	size_t len,
@@ -1850,6 +1866,14 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	}
 	else if (len == 0) {
 		type = GTEXT_YAML_NULL;   /* 7.2's empty node */
+	}
+	else if (plain_text_has_outer_space(value, len)) {
+		/* strtoll() skips leading white space, so " 3", "\t3" and "\n3" all
+		   answered "the integer 3" - for a node the writer then quoted,
+		   because no plain spelling of that text exists, and the reader read
+		   back as the string it now was.  The trailing end was already
+		   right, which is why only one half of this ever showed. */
+		type = GTEXT_YAML_STRING;
 	}
 	else if (parse_null_value(value, len, false)) {
 		type = GTEXT_YAML_NULL;

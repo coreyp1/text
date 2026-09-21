@@ -630,32 +630,29 @@ before trusting the word "conformant" anywhere near this parser.
 
 One is open, found by the writer fuzzer and not yet fixed.
 
-**A flow collection cannot be a block mapping's key on any line but the
-first.**
+**A string of `---` is written plain, and reads back as a document marker.**
 
-```yaml
-a: 1
-{}: 2       # refused: "Mapping key beside a node already on this line"
-[x]: 3      # the same
+```
+built:  the string "---"
+wrote:  ---
+read:   null
 ```
 
-`{}: 1` on its own parses. So does `a: 1` over `b: 2`. It is the combination
-that fails, and the reason is visible: the guard that a block key must stand
-where a block entry may start measures `last_scalar_offset`, and a key that is
-a flow collection has no scalar of its own - so the offset is whatever scalar
-came before, on the previous line. Two guards beside it already carry a
-`has_flow_key` exception for exactly this; this one does not.
+`c-directives-end` is a line of exactly those three characters (9.1.2), so a
+scalar whose content is `---` has no plain spelling at the start of a
+document: it has to be quoted, and the writer does not know it. The
+`scalar_needs_quotes` whitelist is about characters, and every one of these is
+`-`, which the leading-`-` guard admits because what follows it is not white
+space. `...` is presumably the same shape, and is not yet confirmed.
 
-Supplying the flow collection's own source offset is not sufficient - the
-refusal survives it - so something else on that path is measuring the line
-rather than the key. That is as far as it has been traced.
+It is not kept as a fuzz seed, because a tracked seed that traps would stop
+`make fuzz-run-yaml-writer` before it fuzzed anything - but the harness will
+find it again in about fifteen minutes, so a run of that target ending on this
+shape is a known result and not a new one.
 
-The shape is legal YAML and rare in practice; nothing this library writes
-produces it except from a DOM built by hand, which is how it was found. The
-three lines above are the whole reproducer. It is not kept as a fuzz seed,
-because a tracked seed that traps would stop `make fuzz-run-yaml-writer`
-before it fuzzed anything - but the harness will find it again, so a run of
-that target ending on this shape is a known result and not a new one.
+The flow-collection-key defect that stood here is fixed; it is described under
+*Running it backwards* below, along with the two others that came out from
+behind it.
 
 ## Not implemented
 
@@ -965,6 +962,80 @@ second.
   wrote nothing.** Those were two cases of one habit - returning success for
   an event it had no code for - and the second is the worse of the two. See
   below.
+
+### Three places that asked the wrong node where it stood
+
+The writer fuzzer's next run found a *parser* defect, and then two more behind
+it. All three are one mistake made three times, which is the reason they are
+written up together: **a key that is a flow collection has no scalar of its
+own, and three separate places measured the last scalar to find out where the
+key stood.** `{}` has no scalar at all, so what they measured was whatever
+came before - on whatever line that was.
+
+```yaml
+a: 1
+{}: 2       # was refused; so was "[x]: 3" in its place
+```
+
+`{}: 1` on its own always parsed, because with nothing in front of it there
+was no earlier scalar to be measured instead. It was the *combination* that
+failed, which is what made it hard to see.
+
+- **`last_scalar_offset`, in the guard that a block key must stand where a
+  block entry may start.** That guard is what refuses `x: { y: z }in: valid`,
+  and it was refusing this too - for a key standing beside a node it was
+  nowhere near, namely the `1` on the line above.
+- **`last_scalar_key_col`, in `key_indent`.** With the offset fixed, the
+  nested spelling still failed: `outer:` over `  {}: 1` measured the key at
+  the column of `outer`, which matched the enclosing mapping's indentation
+  when it should not have, and the entry was refused for having no key at all.
+- **`last_scalar_col`, in the scanner's `node_indent`.** That sets the
+  boundary a plain scalar folds across. With no scalar on the `{}: 1` line it
+  came from the line above, so in `outer:` over `  {}: 1` over `  b: 2` the
+  `b` folded into the value `1` and its own `:` was then orphaned. The
+  scanner now tracks `last_key_col`, which a closing `]` or `}` sets to the
+  column its collection opened at.
+
+The third changed one thing outside this shape, and correctly: `[x]: 1` now
+measures from the `[` rather than from the `x`, so a continuation line one
+column further in folds where it used to be refused. js-yaml agrees.
+
+A fourth sat behind those, and is a different mistake in the same area. A node
+standing at the key's own column while a value is still expected is the *next
+entry's key*, not that value - the rule that makes `a:` over `b: 1` two
+entries. The scalar case had it; the four places a completed collection is
+added to its parent did not, so
+
+```yaml
+a:
+{}: 1
+```
+
+put the flow mapping where `a`'s value goes. That one was never refused - it
+was accepted with the wrong shape, `{}` nested inside `a`, which is the worse
+failure of the two. The rule is now one function, and it asks which style the
+collection is: a **block** sequence *may* stand at its own key's column and
+still be the value, because that is what `key:` over `- a` means (8.2.1). Not
+making that distinction cost eight documents of yaml-test-suite, all of them
+zero-indented sequences, which is how the exception got written down.
+
+Every row of `tests/yaml/test-yaml-flow-collection-key.cpp` was checked
+against js-yaml, refusals included.
+
+### A built scalar with white space at either end
+
+Also from the writer fuzzer, and the same lesson as the DOM constructor's
+other faults: `strtoll()` skips leading white space, so `" 3"`, `"\t3"` and
+`"\n3"` all answered *the integer 3*. The writer then quoted them - correctly,
+since no plain spelling of that text exists - and the reader read back the
+string. A plain scalar's content has white space at neither end, since
+ns-plain begins and ends with an ns-char (7.3.3), so text carrying any can
+only be a quoted scalar, and a quoted scalar is a string (10.3.2). The
+trailing end was already right, which is why only half of this ever showed.
+
+No corpus can put this question: a parse of `" 3"` *is* the integer 3, because
+the scanner takes the space off before any of it is asked. The text only
+reaches the classifier through the DOM API.
 
 ### Two event APIs that were not a pipe
 

@@ -1517,6 +1517,62 @@ static bool block_value_is_missing(parser_state *p, int col) {
 	return col <= p->stack.indents[top];
 }
 
+/**
+ * @brief Give the key above its null value when this collection is the next key.
+ *
+ * A flow collection standing at the key's own column while a value is still
+ * expected is the next entry's key rather than that value:
+ *
+ *     a:
+ *     {}: 1
+ *
+ * is two entries, not one whose value is "{}".  The scalar case has had this
+ * rule for as long as the block mapping has; the four places a completed
+ * collection is added to its parent did not, so the flow mapping went where
+ * a's value goes, and the ":" after it then found an even list in front of
+ * it with no key of its own left to claim.
+ *
+ * A *block* sequence is the exception, and the reason this asks which style
+ * the collection is: it may stand at its own key's column and still be that
+ * key's value, which is what "key:" over "- a" means (8.2.1).  A flow
+ * collection has no such spelling - indented it is the value, at the key's
+ * column it is the next key - and both references agree.
+ */
+static GTEXT_YAML_Status block_value_supply_if_missing(
+	parser_state *p,
+	const GTEXT_YAML_Node *node,
+	int col
+) {
+	GTEXT_YAML_Flow_Style style;
+
+	if (!node) return GTEXT_YAML_OK;
+	switch (node->type) {
+		case GTEXT_YAML_SEQUENCE:
+		case GTEXT_YAML_OMAP:
+		case GTEXT_YAML_PAIRS:
+			style = node->as.sequence.flow_style;
+			break;
+		case GTEXT_YAML_MAPPING:
+		case GTEXT_YAML_SET:
+			style = node->as.mapping.flow_style;
+			break;
+		default:
+			return GTEXT_YAML_OK;
+	}
+	if (style != GTEXT_YAML_FLOW_STYLE_FLOW) return GTEXT_YAML_OK;
+	if (!block_value_is_missing(p, col)) return GTEXT_YAML_OK;
+	if (!mapping_supply_null_value(p)) {
+		p->failed = true;
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_OOM;
+			p->error->message = "Out of memory completing mapping value";
+		}
+		return GTEXT_YAML_E_OOM;
+	}
+	p->stack.states[p->stack.depth - 1] = STATE_MAPPING_KEY;
+	return GTEXT_YAML_OK;
+}
+
 
 static int line_key_col_from_offset(const parser_state *p, size_t offset) {
 	const char *buffer = NULL;
@@ -2246,6 +2302,9 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 		GTEXT_YAML_Status root_status = set_document_root(p, node);
 		if (root_status != GTEXT_YAML_OK) return root_status;
 	} else {
+		GTEXT_YAML_Status supplied =
+			block_value_supply_if_missing(p, node, source_col);
+		if (supplied != GTEXT_YAML_OK) return supplied;
 		if (!temp_add(p, node)) {
 			if (p->error) {
 				p->error->code = GTEXT_YAML_E_OOM;
@@ -3150,7 +3209,9 @@ static GTEXT_YAML_Status parse_callback(
 					return explicit_status;
 				}
 				if (!explicit_handled) {
-					/* Add to parent's temp */
+					GTEXT_YAML_Status supplied =
+						block_value_supply_if_missing(p, node, source_col);
+					if (supplied != GTEXT_YAML_OK) return supplied;
 					if (!temp_add(p, node)) {
 						p->failed = true;
 						if (p->error) {
@@ -3309,6 +3370,9 @@ static GTEXT_YAML_Status parse_callback(
 					return explicit_status;
 				}
 				if (!explicit_handled) {
+					GTEXT_YAML_Status supplied =
+						block_value_supply_if_missing(p, node, source_col);
+					if (supplied != GTEXT_YAML_OK) return supplied;
 					if (!temp_add(p, node)) {
 						p->failed = true;
 						if (p->error) {
@@ -3547,6 +3611,9 @@ static GTEXT_YAML_Status parse_callback(
 						GTEXT_YAML_Status root_status = set_document_root(p, node);
 						if (root_status != GTEXT_YAML_OK) return root_status;
 					} else {
+						GTEXT_YAML_Status supplied =
+							block_value_supply_if_missing(p, node, source_col);
+						if (supplied != GTEXT_YAML_OK) return supplied;
 						if (!temp_add(p, node)) {
 							p->failed = true;
 							if (p->error) {
@@ -4104,12 +4171,22 @@ static GTEXT_YAML_Status parse_callback(
 						}
 					}
 
-					/* Both guards below measure the last *scalar*, which says
+					/* Everything below measures the last *scalar*, which says
 					 * nothing about a key that is a flow collection: "[a]: b"
 					 * has no scalar of its own standing before the ":" and
-					 * "{}: b" has none at all. */
-					const bool has_flow_key =
-						flow_key_candidate(p, event->line) != NULL;
+					 * "{}: b" has none at all, so the last scalar is whatever
+					 * came before - on whatever line that was.  Where there
+					 * is a flow key, measure the collection instead, at the
+					 * position the parser recorded when it built it. */
+					GTEXT_YAML_Node *flow_key =
+						flow_key_candidate(p, event->line);
+					const bool has_flow_key = flow_key != NULL;
+					size_t key_start_offset = p->last_scalar_offset;
+
+					if (has_flow_key) {
+						node_get_source_location(
+							flow_key, &key_start_offset, NULL, &key_indent);
+					}
 
 					if (key_indent < 0 && !has_flow_key) {
 						if (p->error) {
@@ -4132,19 +4209,13 @@ static GTEXT_YAML_Status parse_callback(
 					 * "x: { y: z }in: valid" the second key sits beside a
 					 * flow mapping that is already a complete node.
 					 *
-					 * It measures the last *scalar*, which is wrong for a key
-					 * that is a flow collection - there is no scalar of its
-					 * own, so the offset is whatever came before, and
-					 * "a: 1" over "{}: 2" is refused for a key standing beside
-					 * a node it is nowhere near.  "{}: 1" alone parses,
-					 * because then there is no earlier scalar to confuse it
-					 * with.  Passing the flow collection's own source offset
-					 * here is not enough to fix it; something else on this
-					 * path is also measuring the line rather than the key, and
-					 * it has not been found yet.  The YAML format page records
-					 * it under "Known defects". */
+					 * "a: 1" over "{}: 2" was refused here, for a key
+					 * standing beside a node it is nowhere near: the scalar
+					 * measured was the "1" on the line above.  "{}: 1" alone
+					 * parsed, because with nothing in front of it there was
+					 * no earlier scalar to be measured instead. */
 					if (in_block_mapping
-							&& !block_key_may_start_at(p, p->last_scalar_offset)) {
+							&& !block_key_may_start_at(p, key_start_offset)) {
 						p->failed = true;
 						if (p->error) {
 							p->error->code = GTEXT_YAML_E_INVALID;
@@ -4177,16 +4248,10 @@ static GTEXT_YAML_Status parse_callback(
 
 					key_node = detach_last_scalar(p);
 					if (!key_node) {
+						/* The key is the collection, and key_indent already
+						   holds where it begins rather than where the last
+						   scalar inside it happened to be. */
 						key_node = detach_last_flow_node(p, event->line);
-						if (key_node) {
-							/* The key is the collection, so the entry is
-							 * indented where the collection begins - not
-							 * where the last scalar inside it happened to
-							 * be, which is what key_indent holds. */
-							int flow_col = 0;
-							node_get_source_location(key_node, NULL, NULL, &flow_col);
-							key_indent = flow_col;
-						}
 					}
 					if (!key_node) {
 						if (p->error) {

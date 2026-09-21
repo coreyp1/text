@@ -132,20 +132,40 @@ harness prints what the writer produced and both JSON renderings before it
 traps. That is the difference between an artifact worth keeping and one worth
 deleting.
 
-One find is open rather than fixed: a flow collection cannot be a block
-mapping's key on any line but the first (`a: 1` over `{}: 2`). It is recorded
-on the YAML format page under *Known defects*, with its three-line reproducer.
-It is deliberately **not** kept as a seed here - a tracked seed that traps
-would stop this target before it fuzzed anything - so a run that ends on that
-shape is a known result, not a new one.
+The next run went after the parser instead. A flow collection could not be a
+block mapping's key on any line but the first (`a: 1` over `{}: 2`), and three
+separate places turned out to be measuring the last *scalar* to find out where
+that key stood - which says nothing about a key that is a flow collection,
+since `{}` has no scalar at all. Two were in the parser and one in the
+scanner, and each was only visible once the one in front of it was gone. A
+fourth sat behind those: `a:` over `{}: 1` was not refused at all, it was
+accepted with `{}` nested inside `a`, because the rule that a node at the
+key's own column is the *next key* had never been given to the four places a
+completed collection is added to its parent. Giving it to them without asking
+which style the collection is costs eight documents of yaml-test-suite, all
+zero-indented sequences - `key:` over `- a` is a block sequence standing at
+its own key's column and still being the value.
 
-**This target is not yet quiet, and the table above says so rather than
+Then a built scalar of `"\n3"`, which `gtext_yaml_node_type()` called the
+integer 3 because `strtoll()` skips leading white space. The writer quoted it,
+correctly - no plain spelling of that text exists - and the reader read back
+the string. A plain scalar has white space at neither end (7.3.3), so text
+that carries any can only be quoted, and quoted is string.
+
+One find is open rather than fixed: the string `---` is written plain, and
+reads back as a document marker. It is recorded on the YAML format page under
+*Known defects*. It is deliberately **not** kept as a seed here - a tracked
+seed that traps would stop this target before it fuzzed anything - so a run
+that ends on that shape is a known result, not a new one.
+
+**This target is not yet quiet, and the notes above say so rather than
 pretending otherwise.** Every run of it so far has found something, each fix
 exposing the next - which is what a new harness does on a surface nothing had
 fuzzed before, and is the strongest available argument that the surface needed
-one. The corpus under `corpus/yaml-writer/` is the record; a run that goes the
-full `FUZZ_TIME` without a find will be the first, and the count here should be
-updated when it happens.
+one. The most recent went nineteen thousand executions in fifteen minutes
+before it found the `---` above. The corpus under `corpus/yaml-writer/` is the
+record; a run that goes the full `FUZZ_TIME` without a find will be the first,
+and this paragraph should be updated when it happens.
 
 ## The options byte
 
@@ -215,8 +235,10 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — fifteen library defects and two of its own,
-listed above.
+has already earned that — twenty library defects and two of its own, listed
+above. Most of the twenty are in the *reader*, which is not what this harness
+was built to test: a writer is an instrument for asking a parser questions a
+corpus of inputs cannot phrase, and it turns out to ask a lot of them.
 
 CSV is much slower per execution because the harness reads back every field of
 every parsed table; that is deliberate, since indexing is where a row/column

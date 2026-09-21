@@ -46,6 +46,16 @@ struct GTEXT_YAML_Scanner {
   int line_indent;        /* column of the first non-space on this line, 0-based */
   int node_indent;        /* indentation of the block node being built, -1 at the root */
   int last_scalar_col;    /* 0-based column the last scalar token started at */
+  /* 0-based column where the node a ":" might be closing began.  For a
+     scalar that is the scalar's own column; for a flow collection standing
+     as an implicit key ("{}: 1") it is the column of its "[" or "{".  A flow
+     collection has no scalar of its own to stand for it - "{}" has none at
+     all - so taking the last scalar's column took whatever came before, on
+     whatever line that was, and the node indentation derived from it let a
+     later line at the mapping's own indentation fold into the value above
+     it: "outer:" over "  {}: 1" over "  b: 2" swallowed the "b". */
+  int last_key_col;
+  int flow_start_col;     /* where the outermost open flow collection began */
   /* Whether the last token was a JSON-like node - a quoted scalar or a
      closing "]" or "}".  Inside a flow collection a ":" straight after one of
      those is a mapping indicator even with nothing between them
@@ -1156,6 +1166,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->context_depth = 0; /* Start in block context */
   s->node_indent = -1;  /* nothing open yet: the document root */
   s->last_scalar_col = 0;
+  s->last_key_col = 0;
+  s->flow_start_col = 0;
   s->last_json_like = false;
   s->last_indicator = 0;
   return s;
@@ -1952,6 +1964,7 @@ block_scalar_collected:
     }
 
     s->last_scalar_col = col - 1; /* col is 1-based */
+    s->last_key_col = col - 1;
       tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (style == '>')
       ? GTEXT_YAML_SCALAR_STYLE_FOLDED
@@ -2112,12 +2125,16 @@ block_scalar_collected:
     }
 
     /* Update context stack for flow collection boundaries */
-    if (c == '[') {
-      scanner_push_context(s, YAML_CONTEXT_FLOW_SEQUENCE);
-    } else if (c == '{') {
-      scanner_push_context(s, YAML_CONTEXT_FLOW_MAPPING);
+    if (c == '[' || c == '{') {
+      /* Only the outermost one is a key candidate; the brackets inside it
+         are part of that one node. */
+      if (s->context_depth == 0) s->flow_start_col = col - 1;
+      scanner_push_context(s, c == '['
+        ? YAML_CONTEXT_FLOW_SEQUENCE
+        : YAML_CONTEXT_FLOW_MAPPING);
     } else if (c == ']' || c == '}') {
       scanner_pop_context(s);
+      if (s->context_depth == 0) s->last_key_col = s->flow_start_col;
     }
     
     const bool opens_block_node = (c == ':' || c == '-' || c == '?')
@@ -2155,7 +2172,7 @@ block_scalar_collected:
          refused for being deeper than its mapping with no key to hold it
          (suite case JTV5). */
       s->node_indent = (c == ':' && (col - 1) != s->line_indent)
-        ? s->last_scalar_col
+        ? s->last_key_col
         : (col - 1);
       /* "?" opens an explicit key, whose value arrives on a later line at the
          same column ("? a" over ": 1").  Without this the key's scalar folded
@@ -2489,6 +2506,7 @@ block_scalar_collected:
     gtext_yaml_dynbuf_free(&scalar);
 
     s->last_scalar_col = col - 1; /* col is 1-based */
+    s->last_key_col = col - 1;
     s->last_json_like = true;
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = (quote == '\'')
@@ -2601,6 +2619,7 @@ scan_plain_scalar:
     gtext_yaml_dynbuf_free(&scalar);
     s->token_payload = vout;
     s->last_scalar_col = col - 1;
+    s->last_key_col = col - 1;
     tok->type = GTEXT_YAML_TOKEN_SCALAR;
     tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
     tok->u.scalar.ptr = vout;
@@ -3023,6 +3042,7 @@ scan_plain_scalar:
   /* after consume (quiet) */
 
   s->last_scalar_col = col - 1; /* col is 1-based */
+  s->last_key_col = col - 1;
   tok->type = GTEXT_YAML_TOKEN_SCALAR;
   tok->scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   s->token_payload = out;

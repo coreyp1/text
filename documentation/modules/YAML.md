@@ -1018,6 +1018,12 @@ the difference with quotes, which the writer then supplies.
 `gtext_yaml_node_new_scalar_n()` and `gtext_yaml_node_scalar_length()` are for
 values holding a NUL, which `\0` makes a legal thing for a scalar to hold.
 
+"Text a parse would report" is not the same as "text you could hand the
+parser". White space at either end makes it a string, whatever the rest says:
+`" 3"` is the *string* `" 3"`, not the integer 3, because a plain scalar's
+content has white space at neither end (7.3.3) and only a quoted scalar can
+spell it - which is what the writer emits, and what a re-read gives back.
+
 ### Two parsers, one contract
 
 `gtext_yaml_parse()` hands input that is also JSON to the JSON parser and
