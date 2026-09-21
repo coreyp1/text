@@ -186,6 +186,15 @@ typedef struct {
 	char *pending_leading_comment;      /* Pending leading comment (malloc'd) */
 	GTEXT_YAML_Node *last_emitted_node; /* Last node created for inline comments */
 	int last_emitted_line;              /* Line for last_emitted_node */
+	/* Set by stack_push() when the nesting limit is reached, so its callers -
+	   which all report an allocation failure - can say what actually
+	   happened.  max_depth was being counted at the "[" and "{" of a *flow*
+	   collection only, in the stream layer, and block structure never touched
+	   it: "- " five thousand times parsed to a DOM five thousand deep, which
+	   is exactly the input a limit exists for.  It surfaced because the
+	   writer turned that block nesting into flow nesting, which *is* counted,
+	   so the writer's own output was then refused. */
+	bool depth_exceeded;
 } parser_state;
 
 /* Stack states */
@@ -1099,6 +1108,26 @@ static bool finalize_tag_handles(parser_state *p, GTEXT_YAML_Document *doc) {
  * @brief Push a node onto the stack (for tracking nesting).
  * Saves the current temp state and clears temp for the new level.
  */
+/* What a failed stack_push() means.  Every caller used to report an
+   allocation failure, which is right for the one cause it used to have and
+   wrong for the limit. */
+static GTEXT_YAML_Status stack_push_failed(
+	parser_state *p, const char *oom_message) {
+	p->failed = true;
+	if (p->depth_exceeded) {
+		if (p->error) {
+			p->error->code = GTEXT_YAML_E_DEPTH;
+			p->error->message = "Maximum nesting depth exceeded";
+		}
+		return GTEXT_YAML_E_DEPTH;
+	}
+	if (p->error) {
+		p->error->code = GTEXT_YAML_E_OOM;
+		p->error->message = oom_message;
+	}
+	return GTEXT_YAML_E_OOM;
+}
+
 static bool stack_push(
 	parser_state *p,
 	GTEXT_YAML_Node *node,
@@ -1111,6 +1140,11 @@ static bool stack_push(
 	int source_line,
 	int source_col
 ) {
+	const size_t max_depth = p->doc ? p->doc->options.max_depth : 0;
+	if (max_depth > 0 && p->stack.depth >= max_depth) {
+		p->depth_exceeded = true;
+		return false;
+	}
 	if (p->stack.depth >= p->stack.capacity) {
 		/* Grow stack */
 		size_t new_cap = p->stack.capacity * 2;
@@ -3165,12 +3199,7 @@ static GTEXT_YAML_Status parse_callback(
 				evt->line,
 				evt->col
 			)) {
-				p->failed = true;
-				if (p->error) {
-					p->error->code = GTEXT_YAML_E_OOM;
-					p->error->message = "Out of memory tracking sequence";
-				}
-				return GTEXT_YAML_E_OOM;
+				return stack_push_failed(p, "Out of memory tracking sequence");
 			}
 			break;
 		}
@@ -3324,12 +3353,7 @@ static GTEXT_YAML_Status parse_callback(
 				evt->line,
 				evt->col
 			)) {
-				p->failed = true;
-				if (p->error) {
-					p->error->code = GTEXT_YAML_E_OOM;
-					p->error->message = "Out of memory tracking mapping";
-				}
-				return GTEXT_YAML_E_OOM;
+				return stack_push_failed(p, "Out of memory tracking mapping");
 			}
 			break;
 		}
@@ -3607,12 +3631,7 @@ static GTEXT_YAML_Status parse_callback(
 						event->line,
 						event->col
 					)) {
-						p->failed = true;
-						if (p->error) {
-							p->error->code = GTEXT_YAML_E_OOM;
-							p->error->message = "Out of memory tracking sequence";
-						}
-						return GTEXT_YAML_E_OOM;
+						return stack_push_failed(p, "Out of memory tracking sequence");
 					}
 					break;
 					
@@ -3716,12 +3735,7 @@ static GTEXT_YAML_Status parse_callback(
 						event->line,
 						event->col
 					)) {
-						p->failed = true;
-						if (p->error) {
-							p->error->code = GTEXT_YAML_E_OOM;
-							p->error->message = "Out of memory tracking mapping";
-						}
-						return GTEXT_YAML_E_OOM;
+						return stack_push_failed(p, "Out of memory tracking mapping");
 					}
 					break;
 					
@@ -4099,12 +4113,8 @@ static GTEXT_YAML_Status parse_callback(
 						node_get_source_location(pair_key, &pair_offset, &pair_line, &pair_col);
 						if (!stack_push(p, NULL, STATE_MAPPING_VALUE, NULL, NULL,
 								-1, false, pair_offset, pair_line, pair_col)) {
-							p->failed = true;
-							if (p->error) {
-								p->error->code = GTEXT_YAML_E_OOM;
-								p->error->message = "Out of memory starting flow pair";
-							}
-							return GTEXT_YAML_E_OOM;
+							return stack_push_failed(
+								p, "Out of memory starting flow pair");
 						}
 						p->stack.flow_flags[p->stack.depth - 1] |= GTEXT_YAML_FLOW_PAIR;
 						if (!temp_add(p, pair_key)) {
@@ -4245,13 +4255,7 @@ static GTEXT_YAML_Status parse_callback(
 								event->line,
 								event->col
 							)) {
-								p->failed = true;
-								if (p->error) {
-									p->error->code = GTEXT_YAML_E_OOM;
-									p->error->message =
-										"Out of memory tracking block mapping";
-								}
-								return GTEXT_YAML_E_OOM;
+								return stack_push_failed(p, "Out of memory tracking block mapping");
 							}
 							if (!mapping_supply_empty_key(p)) {
 								p->failed = true;
@@ -4417,12 +4421,7 @@ static GTEXT_YAML_Status parse_callback(
 						source_line,
 						source_col
 					)) {
-						p->failed = true;
-						if (p->error) {
-							p->error->code = GTEXT_YAML_E_OOM;
-							p->error->message = "Out of memory tracking block mapping";
-						}
-						return GTEXT_YAML_E_OOM;
+						return stack_push_failed(p, "Out of memory tracking block mapping");
 					}
 
 					/* An own-line tag before a block mapping reaches the parser
@@ -4539,12 +4538,7 @@ static GTEXT_YAML_Status parse_callback(
 							event->line,
 							event->col
 						)) {
-							p->failed = true;
-							if (p->error) {
-								p->error->code = GTEXT_YAML_E_OOM;
-								p->error->message = "Out of memory starting flow pair";
-							}
-							return GTEXT_YAML_E_OOM;
+							return stack_push_failed(p, "Out of memory starting flow pair");
 						}
 						p->stack.flow_flags[p->stack.depth - 1] |=
 							GTEXT_YAML_FLOW_PAIR;
@@ -4569,12 +4563,7 @@ static GTEXT_YAML_Status parse_callback(
 							event->line,
 							event->col
 						)) {
-							p->failed = true;
-							if (p->error) {
-								p->error->code = GTEXT_YAML_E_OOM;
-								p->error->message = "Out of memory tracking explicit key";
-							}
-							return GTEXT_YAML_E_OOM;
+							return stack_push_failed(p, "Out of memory tracking explicit key");
 						}
 					}
 
@@ -4860,12 +4849,7 @@ static GTEXT_YAML_Status parse_callback(
 							event->line,
 							event->col
 						)) {
-							p->failed = true;
-							if (p->error) {
-								p->error->code = GTEXT_YAML_E_OOM;
-								p->error->message = "Out of memory tracking block sequence";
-							}
-							return GTEXT_YAML_E_OOM;
+							return stack_push_failed(p, "Out of memory tracking block sequence");
 						}
 					}
 					p->stack.flow_flags[p->stack.depth - 1] |=

@@ -1267,6 +1267,35 @@ constructor's being absent:
   PyYAML accepts it, being 1.1, which is the sort of disagreement that makes
   a single oracle dangerous.
 
+### A nesting limit the block half of the grammar never reached
+
+`max_depth` was counted in the stream layer, at the `[` and `{` of a flow
+collection. Block structure never touched it, because block structure is
+composed by the DOM parser rather than reported by the scanner. So
+
+```yaml
+- - - - - ... x        # five thousand of them
+```
+
+parsed to a DOM five thousand deep with the default limit of 256 in force.
+That is exactly the input a nesting limit exists for, and it was the one input
+the limit did not see. The same held for nested block mappings.
+
+The limit belongs where the parse stack deepens, which is `stack_push()`, and
+that is where it is now - one place for both halves of the grammar. A depth
+refusal is also not an allocation failure, and all eleven of that function's
+callers reported one; they share a `stack_push_failed()` that says which
+happened.
+
+It surfaced through the writer, and the mechanism is worth keeping in mind:
+the flow-style writer turns block nesting into flow nesting, which *is*
+counted, so the writer produced a document this parser then refused. **A limit
+that only some spellings of the same document reach is not a limit**, and
+running a document through a writer is a cheap way to change its spelling.
+
+The test that was here asked "if it failed, did it fail with `E_DEPTH`?",
+which passes when nothing fails at all.
+
 ### A built scalar with white space at either end
 
 Also from the writer fuzzer, and the same lesson as the DOM constructor's

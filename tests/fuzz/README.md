@@ -242,6 +242,15 @@ where the *parser* was the one in the wrong - `!!float 12` refused, where
 and `!!null x` accepted, where the null row is five spellings and nothing
 else.
 
+And a nesting limit that reached only half the grammar. `max_depth` was
+counted at the `[` and `{` of a flow collection, in the stream layer; block
+structure is composed by the DOM parser and never touched it, so `- ` five
+thousand times parsed to a DOM five thousand deep with a limit of 256 in
+force. The writer is what exposed it - the flow-style writer turns block
+nesting into flow nesting, which *is* counted - and that is a trick worth
+remembering: running a document through a writer changes its spelling cheaply,
+and a limit that only some spellings reach is not a limit.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -322,7 +331,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — forty library defects and three of its own,
+has already earned that — forty-one library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.
