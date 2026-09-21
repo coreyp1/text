@@ -1090,6 +1090,15 @@ The suite has no case with white space inside something that would otherwise
 resolve, which is what kept this out of every score on this page. The five
 cases are in `tests/data/yaml/spec-1.2.2.corpus`.
 
+The fuzzer came back for the two white-space characters YAML does not have.
+The vertical tab and the form feed are not `c-printable` (5.1), so no parsed
+scalar holds one - but the DOM API takes any `char *`, and `strtod()` skips
+them exactly as it skips a space. `\v6662.` was answering *the float 6662*,
+and the writer then escaped it into a quoted scalar the reader read back as a
+string. `parse_float_value()` wants a digit or a `.` after the optional sign
+now, the way `parse_int_value()` wants a digit, and the white-space test is
+C's whole set rather than YAML's `s-white`.
+
 ### A property in front of a key, for the third time
 
 The rule that a flow collection standing at the key's own column is the next

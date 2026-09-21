@@ -229,6 +229,11 @@ and the break written before the next `---` landed on top of it. Only on `+`,
 and only with a second document after it - two conditions at once, neither of
 them rare on its own.
 
+Then the same white-space hole through the two characters YAML does not have:
+the vertical tab and the form feed are not c-printable, so no parsed scalar
+holds one, but the DOM API takes any `char *` and `strtod()` skips them like a
+space. `"\v6662."` was the float 6662.
+
 Nothing is open at the moment.
 
 **This target is not yet quiet, and the notes above say so rather than
@@ -309,7 +314,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — thirty-six library defects and three of its own,
+has already earned that — thirty-seven library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

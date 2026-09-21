@@ -767,6 +767,19 @@ static bool parse_float_value(
 		return false;
 	}
 
+	/* strtod() skips leading white space, and 10.3.2's float row has none:
+	   it is "[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?".
+	   One optional sign, then a digit or a ".", and nothing before them.  The
+	   same hole parse_int_value() had, and reachable the same way. */
+	{
+		const char *first = clean;
+		if (*first == '+' || *first == '-') first++;
+		if (*first != '.' && !(*first >= '0' && *first <= '9')) {
+			free(clean);
+			return false;
+		}
+	}
+
 	errno = 0;
 	char *end = NULL;
 	/* Not strtod: it reads LC_NUMERIC, and where the separator is a comma it
@@ -1904,8 +1917,17 @@ static GTEXT_YAML_Status resolve_scalar(
 static bool plain_text_has_space(const char *value, size_t len) {
 	if (!value) return false;
 	for (size_t i = 0; i < len; i++) {
-		const char c = value[i];
-		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') return true;
+		/* C's whole white-space set, not YAML's s-white.  The vertical tab
+		   and the form feed are not even c-printable (5.1), so no parsed
+		   scalar holds one - but the DOM API takes any char *, and strtod()
+		   and strtoll() skip them exactly as they skip a space.  A scalar
+		   of "\v6662." was answering "the float 6662". */
+		switch (value[i]) {
+			case ' ': case '\t': case '\n': case '\r': case '\v': case '\f':
+				return true;
+			default:
+				break;
+		}
 	}
 	return false;
 }

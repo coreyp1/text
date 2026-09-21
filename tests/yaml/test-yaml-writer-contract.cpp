@@ -312,6 +312,13 @@ TEST(YamlWriterContract, OuterWhiteSpaceMakesABuiltScalarAString) {
 		   string, and the helper now wants a digit straight after the sign
 		   on its own account as well. */
 		"+\n1", "+ 1", "-\n1", "0x\n10", "1 1", "1\n1", "+\n\n1",
+		/* And the two white-space characters YAML does not have. The vertical
+		   tab and the form feed are not c-printable (5.1), so no parsed
+		   scalar holds one - but the DOM API takes any char *, and strtod()
+		   and strtoll() skip them exactly as they skip a space. "\v6662."
+		   was answering "the float 6662", and the writer then escaped it into
+		   a quoted scalar the reader read back as a string. */
+		"\v6662.", "\v1", "\f1", "\v.5", "+\v1", "\vtrue",
 	};
 	for (const char *text : texts) {
 		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
