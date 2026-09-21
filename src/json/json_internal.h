@@ -232,6 +232,21 @@ GTEXT_INTERNAL_API int json_decimal_from_lexeme(
     const char * lexeme, size_t len, json_decimal * out);
 
 /**
+ * @brief Does a number lexeme denote a whole number?
+ *
+ * Asked of the digits rather than of the double they became, because the two
+ * disagree in both directions at the edges: a fifty-three digit integer is not
+ * a representable double and is still an integer, and the nearest double to
+ * `1.00000000000000000000000000000000001e30` is whole while the value is not.
+ * No arithmetic is done on the digits, so there is no magnitude at which this
+ * stops working.
+ *
+ * @return 1 whole, 0 not, -1 undecidable (not a bare JSON number lexeme)
+ */
+GTEXT_INTERNAL_API int json_decimal_lexeme_is_integer(
+    const char * lexeme, size_t len);
+
+/**
  * @brief Is `value` an exact integer multiple of `divisor`?
  *
  * @return 1 yes, 0 no, -1 undecidable (a NULL argument or a zero divisor)

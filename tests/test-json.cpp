@@ -12038,6 +12038,150 @@ TEST(JsonSchemaMetaschema, NeedsARegexProviderAndSaysSo) {
 	gtext_json_error_free(&err);
 }
 
+// ===========================================================================
+// "integer" is about the value, not about what fits in a machine word
+// ===========================================================================
+//
+// The old test was `dv == (double)(long long)dv`, which is undefined behaviour
+// for any double outside `long long`'s range - and what the hardware does with
+// it on x86-64 is produce LLONG_MIN, which compares unequal, so every whole
+// number past about 9.2e18 was reported as not an integer.
+//
+// The digits the document wrote decide it now. That is not only a wider range:
+// it is a different question, and at the edges the two answers differ in both
+// directions.
+
+namespace {
+
+/** Does `{"type":"integer"}` accept this literal? */
+bool is_integer(const char * literal) {
+	GTEXT_JSON_Value * doc = parse_doc("{\"type\":\"integer\"}");
+	EXPECT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema = gtext_json_schema_compile(doc, nullptr);
+	EXPECT_NE(schema, nullptr);
+	GTEXT_JSON_Value * v = parse_doc(literal);
+	EXPECT_NE(v, nullptr) << literal;
+	bool ok = v
+	    && gtext_json_schema_validate(schema, v, nullptr) == GTEXT_JSON_OK;
+	gtext_json_free(v);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+	return ok;
+}
+
+} // namespace
+
+TEST(JsonSchemaInteger, WholeNumbersOfAnySize) {
+	EXPECT_TRUE(is_integer("0"));
+	EXPECT_TRUE(is_integer("5"));
+	EXPECT_TRUE(is_integer("-5"));
+	EXPECT_TRUE(is_integer("5.0"));
+	EXPECT_TRUE(is_integer("-5.00000"));
+
+	// Past 2^63, where the old cast was undefined. The suite's own bignums.
+	EXPECT_TRUE(is_integer(
+	    "12345678910111213141516171819202122232425262728293031"));
+	EXPECT_TRUE(is_integer(
+	    "-12345678910111213141516171819202122232425262728293031"));
+	EXPECT_TRUE(is_integer("18446744073709551616"));
+
+	// Past the range of a double's exact integers, and past its range
+	// entirely as far as any cast is concerned.
+	EXPECT_TRUE(is_integer("1e308"));
+	EXPECT_TRUE(is_integer("-1e308"));
+	// Scaled up past every fractional digit, so the value is whole even
+	// though the lexeme has a point in it.
+	EXPECT_TRUE(is_integer("1.5e300"));
+	EXPECT_TRUE(is_integer("1.5e1"));
+	EXPECT_TRUE(is_integer("1234.5678e4"));
+}
+
+TEST(JsonSchemaInteger, NumbersWithAFractionAreNot) {
+	EXPECT_FALSE(is_integer("5.5"));
+	EXPECT_FALSE(is_integer("-5.5"));
+	EXPECT_FALSE(is_integer("1.5e-1"));
+	EXPECT_FALSE(is_integer("1234.5678e3"));
+	// One digit short of cancelling the fraction.
+	EXPECT_FALSE(is_integer("1.5e0"));
+	// Scaled below one, and not zero.
+	EXPECT_FALSE(is_integer("15e-2"));
+	EXPECT_FALSE(is_integer("1e-400"));
+}
+
+TEST(JsonSchemaInteger, TheDigitsDecideAndNotTheDouble) {
+	// The nearest double to this is a whole number - every double above 2^53
+	// is - but the value the document wrote is not, and the value is what the
+	// keyword constrains. An implementation that converted first would say
+	// yes, and the suite's bignum group would still pass.
+	EXPECT_FALSE(is_integer("972783798187987123879878123.188781371"));
+	EXPECT_FALSE(
+	    is_integer("1.00000000000000000000000000000000000000000000000001e30"));
+
+	// And the other direction: a whole number no double can hold exactly.
+	EXPECT_TRUE(is_integer("10000000000000000000000000000000000000000000001"));
+}
+
+TEST(JsonSchemaInteger, EveryDigitZeroIsWholeHoweverItIsScaled) {
+	EXPECT_TRUE(is_integer("0"));
+	EXPECT_TRUE(is_integer("-0"));
+	EXPECT_TRUE(is_integer("0.0"));
+	EXPECT_TRUE(is_integer("0.000e-99"));
+	EXPECT_TRUE(is_integer("0e-99999999999999999999"));
+}
+
+TEST(JsonSchemaInteger, MultipleOfSurvivesAnExponentThatWouldOverflow) {
+	// The suite's float-overflow case. 1e308 / 0.5 is 2e308, which is not a
+	// double, so an implementation that divides gets infinity and an
+	// implementation that takes fmod gets the right answer by luck. The
+	// decimal path answers it in exponents and never forms the quotient.
+	GTEXT_JSON_Value * doc =
+	    parse_doc("{\"type\":\"integer\",\"multipleOf\":0.5}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema = gtext_json_schema_compile(doc, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	GTEXT_JSON_Value * v = parse_doc("1e308");
+	ASSERT_NE(v, nullptr);
+	EXPECT_EQ(gtext_json_schema_validate(schema, v, nullptr), GTEXT_JSON_OK);
+	gtext_json_free(v);
+
+	GTEXT_JSON_Value * odd = parse_doc("0.75");
+	ASSERT_NE(odd, nullptr);
+	EXPECT_EQ(
+	    gtext_json_schema_validate(schema, odd, nullptr), GTEXT_JSON_E_SCHEMA);
+	gtext_json_free(odd);
+
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
+TEST(JsonSchemaInteger, ADomBuiltNumberHasNoLexemeAndStillWorks) {
+	// Nothing built through the DOM API carries the digits a document would
+	// have, so the double is all there is. It answers correctly for every
+	// value a double can hold, which is every value this path can produce.
+	GTEXT_JSON_Value * doc = parse_doc("{\"type\":\"integer\"}");
+	ASSERT_NE(doc, nullptr);
+	GTEXT_JSON_Schema * schema = gtext_json_schema_compile(doc, nullptr);
+	ASSERT_NE(schema, nullptr);
+
+	GTEXT_JSON_Value * whole = gtext_json_new_number_double(42.0);
+	GTEXT_JSON_Value * fraction = gtext_json_new_number_double(42.5);
+	GTEXT_JSON_Value * huge = gtext_json_new_number_double(1e300);
+	ASSERT_NE(whole, nullptr);
+	ASSERT_NE(fraction, nullptr);
+	ASSERT_NE(huge, nullptr);
+	EXPECT_EQ(gtext_json_schema_validate(schema, whole, nullptr), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_schema_validate(schema, fraction, nullptr),
+	    GTEXT_JSON_E_SCHEMA);
+	EXPECT_EQ(gtext_json_schema_validate(schema, huge, nullptr), GTEXT_JSON_OK);
+
+	gtext_json_free(whole);
+	gtext_json_free(fraction);
+	gtext_json_free(huge);
+	gtext_json_schema_free(schema);
+	gtext_json_free(doc);
+}
+
 int main(int argc, char * * argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

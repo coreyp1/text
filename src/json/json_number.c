@@ -558,3 +558,122 @@ GTEXT_INTERNAL_API int json_decimal_is_multiple_of(
   }
   return 1;
 }
+
+/*
+ * Does a number lexeme denote a whole number?
+ *
+ * This is asked of the digits the document wrote, not of the double they were
+ * converted to, because the two disagree in both directions at the edges. A
+ * fifty-three digit integer is not representable as a double and yet it is an
+ * integer; `972783798187987123879878123.188781371` is not an integer and yet
+ * the nearest double to it is whole. JSON Schema's "integer" is a constraint
+ * on the value the document denotes, so the lexeme is the thing to ask.
+ *
+ * No arithmetic is done on the digits, so there is no size at which this stops
+ * working. A JSON number is `D * 10^(e - f)`, where `D` is the digit string
+ * with the point taken out, `f` is how many of those digits came after the
+ * point and `e` is the exponent. `k = f - e` is how many digits end up to the
+ * right of the point, and the question is only whether those digits are all
+ * zero.
+ */
+GTEXT_INTERNAL_API int json_decimal_lexeme_is_integer(
+    const char * lexeme, size_t len) {
+  if (!lexeme || len == 0) {
+    return -1;
+  }
+
+  size_t i = 0;
+  if (lexeme[i] == '-' || lexeme[i] == '+') {
+    i++;
+  }
+
+  size_t digits = 0;  // length of D
+  size_t zeros = 0;   // trailing zeros of D, counted as it is read
+  int any_nonzero = 0;
+  size_t fraction = 0; // f
+
+  size_t int_start = i;
+  while (i < len && lexeme[i] >= '0' && lexeme[i] <= '9') {
+    digits++;
+    if (lexeme[i] == '0') {
+      zeros++;
+    }
+    else {
+      zeros = 0;
+      any_nonzero = 1;
+    }
+    i++;
+  }
+  if (i == int_start) {
+    return -1; // JSON requires at least one integer digit
+  }
+
+  if (i < len && lexeme[i] == '.') {
+    i++;
+    size_t frac_start = i;
+    while (i < len && lexeme[i] >= '0' && lexeme[i] <= '9') {
+      digits++;
+      fraction++;
+      if (lexeme[i] == '0') {
+        zeros++;
+      }
+      else {
+        zeros = 0;
+        any_nonzero = 1;
+      }
+      i++;
+    }
+    if (i == frac_start) {
+      return -1;
+    }
+  }
+
+  /*
+   * The exponent is clamped rather than parsed exactly. It is only ever
+   * compared against `f`, which is bounded by the length of the lexeme, so any
+   * magnitude past that bound gives the same answer as the bound itself - and
+   * `1e999999999` must not become an overflowed small number on the way to
+   * being told it is an integer.
+   */
+  long exponent = 0;
+  if (i < len && (lexeme[i] == 'e' || lexeme[i] == 'E')) {
+    i++;
+    int negative = 0;
+    if (i < len && (lexeme[i] == '+' || lexeme[i] == '-')) {
+      negative = lexeme[i] == '-';
+      i++;
+    }
+    size_t exp_start = i;
+    while (i < len && lexeme[i] >= '0' && lexeme[i] <= '9') {
+      if (exponent < 1000000) {
+        exponent = exponent * 10 + (lexeme[i] - '0');
+      }
+      i++;
+    }
+    if (i == exp_start) {
+      return -1;
+    }
+    if (negative) {
+      exponent = -exponent;
+    }
+  }
+
+  if (i != len) {
+    return -1; // trailing text: not a bare number lexeme
+  }
+
+  if (!any_nonzero) {
+    return 1; // every digit is zero, however it is scaled
+  }
+
+  long k = (long)fraction - exponent;
+  if (k <= 0) {
+    return 1;
+  }
+  if ((unsigned long)k > (unsigned long)digits) {
+    /* Scaled below one, and not zero, so there is a digit to the right of the
+     * point wherever the significant digits ended up. */
+    return 0;
+  }
+  return (unsigned long)k <= (unsigned long)zeros ? 1 : 0;
+}

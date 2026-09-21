@@ -2766,6 +2766,36 @@ static GTEXT_JSON_Status json_schema_compile_body(json_schema_node * node,
  * answers the same question less exactly - and `has_multiple_of_decimal`
  * says which one answered.
  */
+/*
+ * Is this instance a whole number?
+ *
+ * The digits the document wrote decide it, and the double only when there are
+ * no digits to consult - a value built through the DOM API rather than parsed.
+ *
+ * This used to be `dv == (double)(long long)dv`, which is wrong twice over.
+ * Converting a double outside `long long`'s range is undefined behaviour, so
+ * the answer for anything past about 9.2e18 was whatever the hardware felt
+ * like; and on x86-64 what it feels like is `LLONG_MIN`, which compares unequal
+ * and so reported every large integer as not an integer. A fifty-three digit
+ * whole number is an integer, and so is 1e308.
+ */
+static int json_schema_is_integral(const GTEXT_JSON_Value * instance) {
+  if (instance->as.number.lexeme) {
+    int whole = json_decimal_lexeme_is_integer(
+        instance->as.number.lexeme, instance->as.number.lexeme_len);
+    if (whole >= 0) {
+      return whole;
+    }
+  }
+  double dv = 0.0;
+  if (gtext_json_get_double(instance, &dv) != GTEXT_JSON_OK) {
+    return 0;
+  }
+  /* `floor` rather than a cast: it is defined for every finite double, and
+   * every double of magnitude 2^52 or more is already whole. */
+  return isfinite(dv) && dv == floor(dv);
+}
+
 static int json_schema_is_multiple_of(
     const json_schema_node * node, const GTEXT_JSON_Value * instance, double v) {
   if (node->has_multiple_of_decimal && instance->type == GTEXT_JSON_NUMBER
@@ -3327,19 +3357,16 @@ static GTEXT_JSON_Status json_schema_validate_body(
     case GTEXT_JSON_BOOL:
       instance_flag = JSON_SCHEMA_TYPE_BOOL;
       break;
-    case GTEXT_JSON_NUMBER: {
+    case GTEXT_JSON_NUMBER:
       instance_flag = JSON_SCHEMA_TYPE_NUMBER;
       /* "integer" is a constraint on the value, not a separate JSON type, so
        * a whole number satisfies both "number" and "integer".  A schema
        * saying {"type":"integer"} therefore matches 5 and 5.0 but not 5.5,
        * which is what JSON Schema requires. */
-      double dv = 0.0;
-      if (gtext_json_get_double(instance, &dv) == GTEXT_JSON_OK
-          && dv == (double)(long long)dv) {
+      if (json_schema_is_integral(instance)) {
         instance_flag |= JSON_SCHEMA_TYPE_INTEGER;
       }
       break;
-    }
     case GTEXT_JSON_STRING:
       instance_flag = JSON_SCHEMA_TYPE_STRING;
       break;
