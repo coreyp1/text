@@ -171,7 +171,7 @@ resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 1,506 tests across 106 binaries with zero failures, clean
+The test suite runs 1,534 tests across 109 binaries with zero failures, clean
 under valgrind and under ASan/UBSan, at 76.9% line coverage. (Counting these
 from `make test` output needs care: several binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
@@ -223,13 +223,18 @@ specification, and `tests/data/yaml/spec-1.2.2.corpus` holds the cases that
 say so - divergences found by reading the grammar, none of which appears
 anywhere in the suite.
 
-**The writer is well behind the parser.** `make conformance-roundtrip` writes
-every suite document the parser accepts back out and re-reads it: 255 of 282
-survive by value (90.4%), and only 234 in block style. A resolved tag is
-written as bare text and lost; a non-scalar key is written as a sequence entry
-and the structure with it; a single-quoted scalar is chosen for content single
-quotes cannot hold. None of that is visible to `make conformance`, because
-yaml-test-suite is a corpus of inputs and tests no writer at all.
+**The write side is measured too.** yaml-test-suite is a corpus of inputs and
+tests no writer at all, so `make conformance-roundtrip` runs it backwards:
+every document the parser accepts is written out again and re-read, through
+each of the three writers. All three keep **282 of 282 by value**, and block
+style keeps every anchor, tag and scalar spelling as well. The first time that
+was measured it was 90.4%, and 83.0% in block style: a resolved tag went out
+as bare text, block scalars had no chomping indicator, folding turned line
+breaks into spaces, an empty node became `~`, and an alias key took the colon
+with it. Running the suite backwards also found three parser defects, one of
+which was that `gtext_yaml_stream_feed()` stopped at the first alias and the
+rest of the document was read only by a second, drifted copy of the same
+loop. `make test` runs the same property over the shapes that were wrong.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. Every one found so far is

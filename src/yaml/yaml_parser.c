@@ -1462,6 +1462,26 @@ static bool node_is_on_document_start_line(const parser_state *p, size_t offset)
  * column and still be that key's value - "a:" then "- 1" is {a: [1]} - so the
  * '-' indicator must not be treated this way.
  */
+/**
+ * @brief The column a node begins in, which is not always the column of its
+ *        content.
+ *
+ * Properties are held by the stream and reported with the event they end up
+ * on, so "&anchor c" arrives at the column of the "c".  Under an empty "b:"
+ * that put the node eight columns past the mapping and it was taken for b's
+ * value rather than the next key.  A property left on a line of its own
+ * introduces whatever follows it and is a different question, judged by
+ * property_left_of_open_collection().
+ */
+static int event_node_col(const GTEXT_YAML_Event *event) {
+	if (!event) return 0;
+	if (event->prop_col >= 0 && event->prop_line == event->line
+			&& event->prop_col < event->col) {
+		return event->prop_col;
+	}
+	return event->col;
+}
+
 static bool block_value_is_missing(parser_state *p, int col) {
 	if (p->stack.depth == 0) return false;
 	size_t top = p->stack.depth - 1;
@@ -2533,7 +2553,7 @@ static GTEXT_YAML_Status parse_callback(
 		const bool starts_entry = (type == GTEXT_YAML_EVENT_INDICATOR
 			&& event->data.indicator == '-');
 		GTEXT_YAML_Status close_status =
-			close_block_contexts_for(p, event->col, starts_entry);
+			close_block_contexts_for(p, event_node_col(event), starts_entry);
 		if (close_status != GTEXT_YAML_OK) return close_status;
 		p->last_event_line = event->line;
 	}
@@ -2872,7 +2892,7 @@ static GTEXT_YAML_Status parse_callback(
 				 * expected, is the next key rather than that value.  Supply
 				 * the null the absent value stands for, before this scalar
 				 * takes its place in the alternating list. */
-				if (block_value_is_missing(p, event->col)) {
+				if (block_value_is_missing(p, event_node_col(event))) {
 					if (!mapping_supply_null_value(p)) {
 						p->failed = true;
 						if (p->error) {

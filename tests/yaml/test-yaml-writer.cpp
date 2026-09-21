@@ -178,6 +178,8 @@ TEST(YamlWriter, ScalarSingleQuoted) {
   gtext_yaml_free(doc);
 }
 
+/* ">-" for the same reason as the literal above: "one two three" has no
+   trailing line break and clip chomping would give it one. */
 TEST(YamlWriter, FoldedLineWidth) {
   GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
   ASSERT_NE(doc, nullptr);
@@ -268,6 +270,11 @@ TEST(YamlWriter, BlockStyleForced) {
   gtext_yaml_free(doc);
 }
 
+/* The expectation here used to be "|", with no chomping indicator, which
+   reads back as "line 1\nline 2\n" - a line break the value never had.  A
+   block scalar's chomping indicator is part of spelling the value, not
+   decoration: "-" for a value with no trailing break, nothing for one, "+"
+   for more than one. */
 TEST(YamlWriter, ScalarLiteral) {
   GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
   ASSERT_NE(doc, nullptr);

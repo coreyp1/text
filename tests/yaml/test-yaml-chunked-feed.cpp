@@ -118,6 +118,13 @@ std::string Events(const std::string &input, size_t chunk) {
  * sizes below. */
 const char *kDocuments[] = {
 	"name: Mark McGwire\n",
+	/* A bare "!" is the non-specific tag and the node it names comes after
+	   it, so the scanner has to hold the "!" until that node has arrived -
+	   and let go of it at the end of the stream, where no node ever will. */
+	"a: !\nb: 2\n",
+	"- !\n- x\n",
+	"! a\n",
+	"[!]\n",
 	"a: one two three\n",
 	"First occurrence: &anchor Foo\nSecond occurrence: *anchor\n",
 	"- !!int 1\n- !!int -2\n- !!int 33\n",

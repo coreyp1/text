@@ -165,8 +165,11 @@ TEST(YamlTagPolicy, ARedirectedSecondaryHandleLeavesTheYamlNamespace) {
 TEST(YamlTagPolicy, AHandlePointedAtTheYamlNamespaceIsStillPoliced) {
 	EXPECT_TRUE(Refuses("%TAG ! tag:yaml.org,2002:\n---\n!bogus 1\n",
 			nullptr, kUnknown));
+	/* "!!str" rather than the URI: a tag in the standard namespace has one
+	   spelling in this DOM whichever way it was written, so a handle that
+	   expands to that namespace lands on the same string "!!str" does. */
 	EXPECT_TRUE(Accepts("%TAG ! tag:yaml.org,2002:\n---\n!str 1\n",
-			nullptr, "tag:yaml.org,2002:str"));
+			nullptr, "!!str"));
 }
 
 TEST(YamlTagPolicy, ApplicationTagsAreRefusedWhenTheOptionIsOff) {

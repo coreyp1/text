@@ -765,53 +765,90 @@ characters in the stream whatever it builds.
 **Read the bytes, not the terminal.** Two items on a list of thirteen were
 there because a screen could not draw the difference.
 
-## The writer is the weaker half
+## The writer, and running the suite backwards
 
 Everything above measures the parser. yaml-test-suite is a corpus of inputs
 and tests no writer at all, so `make conformance-roundtrip` runs it backwards:
-every document the parser accepts is written out again and re-read.
+every document the parser accepts is written out again and re-read. All three
+writers are scored, because there are three.
 
 |  | by value | by event |
 | --- | ---: | ---: |
-| default (flow) style | **255 of 282, 90.4%** | 231, 81.9% |
-| block style | **234 of 282, 83.0%** | 210, 74.5% |
+| the DOM writer, flow style | **282 of 282, 100%** | 280, 99.3% |
+| the DOM writer, block style | **282 of 282, 100%** | **282, 100%** |
+| the streaming writer | **282 of 282, 100%** | 280, 99.3% |
 
 *By value* asks whether the JSON is the same - a failure there is data lost or
-corrupted. *By event* also asks that anchors, tags and the text of every
-scalar survive; the gap between the two is the writer choosing its own
-spelling, which is deliberate. The first column is the one that has to reach
-100%, and it does not. Note also that block style, the one a human would pick,
-is the weaker of the two.
+corrupted, and the target holds all three to 100%. *By event* also asks that
+anchors, tags and the text of every scalar survive. Block style reaches that
+too; the two flow-style figures cannot, and the two documents they miss are
+the whole of the difference: `ns-flow-seq-entry` has no empty alternative, so
+an entry that is the empty node with no properties has to be written `~` there,
+and `~` is a scalar the document did not hold. In block style the same entry
+is written `-` and nothing, which is what the document said.
 
-What is known to be wrong, in rough order of severity:
+`make test` runs the same property over the shapes that were wrong, without
+needing the network: see `tests/yaml/test-yaml-roundtrip.cpp`.
 
-- **A resolved tag is written as bare text.** `!<tag:example.com,2000:app/foo>`
-  comes out as `tag:example.com,2000:app/foo` with no `!<...>` around it, so it
-  re-reads as a mapping key, or fails on the comma. The tag is lost and the
-  output is not the document. Shorthands that were never resolved (`!!str`,
-  `!local`) survive. Seven suite documents; no `%TAG` directive is ever
-  emitted.
-- **A non-scalar key is written as a sequence entry.** `? [a, b]` over `: v` -
-  a mapping whose key is a sequence - is written `- a` / `- b: v` and re-reads
-  as `["a", {"b": "v"}]`. There is no `?`/`:` explicit-key form in the writer,
-  and the result is structural corruption rather than a refusal.
-- **A single-quoted scalar is chosen for content it cannot hold.** Single
-  quotes have no escapes, so a line break inside them folds to a space: a
-  scalar of one newline is written `'<newline>'` and comes back as a space.
-  Such content needs the double-quoted or literal style.
-- **A document with no root cannot be written at all.** An empty stream, and a
-  document that is only `...`, return an error from
-  `gtext_yaml_write_document()`.
-- **Block scalars gain a trailing blank line** and are indented past their
-  header.
-- **Comments are dropped**, which is the one already on the planned list.
+The first measurement of this scored 90.4% and 83.0%. What was wrong:
 
-A separate parser defect turned up the same way: an anchored key with no value
-in a flow mapping, `{&b b, *b: 1}`, is refused as an unknown anchor. The
-sequence spelling `[&b b, *b]` and the valued spelling `{&b b: 1, c: *b}` both
-work. It is not a regression - the same input failed the same way before any
-of this work - and no suite case covers it, because it only appears when the
-writer produces it.
+- **A resolved tag was written as bare text.** `!<tag:example.com,2000:app/foo>`
+  came out as `tag:example.com,2000:app/foo` with no `!<...>` around it, so it
+  re-read as a mapping key, or failed on the comma. Every tag now goes out as
+  one of 5.6's three spellings: a shorthand where the tag has one, `!!x` for
+  the standard namespace, and the verbatim `!<uri>` otherwise, with anything
+  outside `ns-uri-char` percent-encoded.
+- **Block scalars had no chomping indicator and no indentation indicator.** A
+  value with no trailing line break gained one, a value with three kept one,
+  and a first line beginning with a space lost the space. The writer now
+  decides all three before it commits to the style, and falls back to quotes
+  for a value that has no faithful block spelling at all.
+- **Folding turned every line break into a space.** `>` was written with one
+  break where the content held one, and 8.1.3 folds that away: `"ab cd\nef"`
+  came back as `"ab cd ef"`. A run of *k* line breaks needs *k+1* on the page.
+- **A single-quoted scalar was chosen for content it cannot hold.** Single
+  quotes have no escapes, so a line break inside them folds to a space.
+- **An empty node was written `~`.** `a:` and `- ` are how 7.2's empty node is
+  spelled; writing `~` put a scalar into the document that the document never
+  held. It is written as nothing now, everywhere a spelling for it exists.
+- **A key that ended in a property took the colon with it.** 6.9.2 stops an
+  anchor name at a flow indicator and nowhere else, so `*b: 1` names the
+  anchor `b:` and `!!null: 1` the tag `!!null:`. Such a key is separated from
+  its colon: `*b : 1`.
+- **An empty collection started a line of its own** in column zero, which ended
+  the mapping that introduced it. `key: []` stays on one line.
+- **A stream with no documents could not be written**, so `# comment only`,
+  `...` and a file of one blank line came back as writer failures.
+- **A collection inside a flow collection reset itself to block style**, which
+  wrote `finish: x: 89` into the middle of a `{...}`. One function decides
+  flow or block now, and both the collection and whatever introduced it ask
+  it, so a container never writes `-` and a line break for a child that is
+  going to be flow after all.
+- **Comments are dropped**, which is the one still on the planned list.
+
+The streaming writer had all of the same faults and a few of its own, because
+it was a second implementation of the same rules and had drifted from the
+first. It is not one any more: the spelling of a scalar, a tag, a property and
+a block scalar lives in one place and both writers call it.
+
+Three parser defects turned up the same way, none of them visible to a test
+that only reads:
+
+- A node begins where its *properties* begin, not where its content does. The
+  properties are held by the stream and reported with the event they end up
+  on, so `&anchor c: 3` under an empty `b:` arrived at the column of the `c` -
+  eight past the mapping - and was taken for b's value rather than the next
+  key.
+- A bare `!` is a whole tag property (5.3) and an ordinary node follows it.
+  The scanner read that node as the tag's *name*, which takes a `:` with it,
+  so `a: !` over `b: 2` was a mapping whose second key was `b:`; and the
+  stream never recorded where the `!` was written, so it was carried past the
+  empty node it belonged to and hung on the next one.
+- `gtext_yaml_stream_feed()` stopped at the first alias it read and returned.
+  The rest of the document was read only because `gtext_yaml_stream_finish()`
+  ran a *second copy* of the same four-hundred-line loop that did not stop -
+  a copy that had also never gained `%YAML` and `%TAG` handling, nor any of
+  the fixes the first had collected. There is one copy now.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

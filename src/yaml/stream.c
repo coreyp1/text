@@ -120,6 +120,15 @@ struct GTEXT_YAML_Stream {
      is a sequence entry, which matters because a block sequence may sit at
      its owning key's column but not at a sibling entry's. */
   int cur_line;
+  /* A property indicator taken off the scanner whose name or node had not
+     arrived yet.  The scanner has no pushback - the "!" is gone by the time
+     that is known and there is nowhere to put it back - so the stream holds
+     it here and starts from it again on the next feed.  Without this, "---"
+     over "! a" lost its tag: the "a" is an ordinary block scalar and needs a
+     line of lookahead, the scan came back E_INCOMPLETE, and the "!" went
+     with it. */
+  bool held_property;
+  GTEXT_YAML_Token held_property_tok;
   int cur_line_start;
   bool cur_line_only_props;
   bool cur_line_opens_with_dash;
@@ -553,7 +562,39 @@ static bool stream_tag_is_non_specific(
   const GTEXT_YAML_Token *bang,
   const GTEXT_YAML_Token *next
 ) {
-  return next->offset != bang->offset + 1;
+  if (next->offset != bang->offset + 1) return true;
+  /* ns-tag-char is ns-uri-char less "!" and the flow indicators, so a "!"
+     up against one of those - or against the end of the stream - has no name
+     after it and is the whole property: "[!]" is a sequence of one empty
+     node, not a tag named "]". */
+  if (next->type == GTEXT_YAML_TOKEN_EOF) return true;
+  if (next->type == GTEXT_YAML_TOKEN_INDICATOR && next->u.c != '!') return true;
+  return false;
+}
+
+/**
+ * @brief Note which line a token opened, and whether the line is properties
+ *        alone.
+ *
+ * The loop below does this for every token it scans - but a bare "!" hands
+ * the token after it straight to the processing step, so that one needs the
+ * bookkeeping done for it or the line stays recorded as the "!"'s own.
+ */
+static void stream_note_line(GTEXT_YAML_Stream *s, const GTEXT_YAML_Token *tok) {
+  if (tok->line != s->cur_line) {
+    s->cur_line = tok->line;
+    s->cur_line_start = tok->col;
+    s->cur_line_only_props = true;
+    s->cur_line_opens_with_dash =
+      tok->type == GTEXT_YAML_TOKEN_INDICATOR && tok->u.c == '-';
+  }
+  if (!(tok->type == GTEXT_YAML_TOKEN_DOCUMENT_START
+      || tok->type == GTEXT_YAML_TOKEN_DOCUMENT_END
+      || tok->type == GTEXT_YAML_TOKEN_COMMENT
+      || (tok->type == GTEXT_YAML_TOKEN_INDICATOR
+          && (tok->u.c == '&' || tok->u.c == '!')))) {
+    s->cur_line_only_props = false;
+  }
 }
 
 static GTEXT_YAML_Status stream_ensure_document_started(
@@ -630,49 +671,38 @@ GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(
   if (s) s->sync_mode = sync;
 }
 
-GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
-  GTEXT_YAML_Stream * s,
-  const char * data,
-  size_t len
-) {
-  if (!s) return GTEXT_YAML_E_INVALID;
-  /* Enforce total-bytes limit if set (0 means use library default already applied in opts) */
-  if (s->opts.max_total_bytes > 0) {
-    if (s->total_bytes_consumed + len > s->opts.max_total_bytes) return GTEXT_YAML_E_LIMIT;
-    s->total_bytes_consumed += len;
-  }
-
-  if (!gtext_yaml_scanner_feed(s->scanner, data, len)) return GTEXT_YAML_E_OOM;
-  
-  /* In sync mode, mark scanner as finished immediately so we can process aliases */
-  if (s->sync_mode) {
-    gtext_yaml_scanner_finish(s->scanner);
-  }
-
+/**
+ * @brief Turn every token the scanner can hand over now into events.
+ *
+ * gtext_yaml_stream_feed() and gtext_yaml_stream_finish() both need this, and
+ * each used to carry its own copy of it - four hundred lines, twice - which
+ * had drifted a long way apart.  The finish() copy had no %YAML or %TAG
+ * handling at all, none of the E_INCOMPLETE guards that keep a property from
+ * being taken and then dropped, and none of the tag fixes: "---" over "! a"
+ * lost its tag whenever the "!" was still in hand when the input ended, which
+ * for the pull reader is every time.
+ *
+ * Returns GTEXT_YAML_E_INCOMPLETE when it stopped for want of input rather
+ * than at the end of the stream, because finish() closes the open document
+ * after the one and not after the other.
+ */
+static GTEXT_YAML_Status stream_drain(GTEXT_YAML_Stream *s) {
   GTEXT_YAML_Token tok;
+  if (s->held_property) {
+    s->held_property = false;
+    tok = s->held_property_tok;
+    goto process_token;
+  }
   for (;;) {
     GTEXT_YAML_Status st = stream_scan(s, &tok);
-    if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK; /* need more data */
+    if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_E_INCOMPLETE;
     if (st != GTEXT_YAML_OK) return st;
     if (tok.type == GTEXT_YAML_TOKEN_EOF) {
       GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
       if (flush != GTEXT_YAML_OK) return flush;
       break;
     }
-    if (tok.line != s->cur_line) {
-      s->cur_line = tok.line;
-      s->cur_line_start = tok.col;
-      s->cur_line_only_props = true;
-      s->cur_line_opens_with_dash =
-        tok.type == GTEXT_YAML_TOKEN_INDICATOR && tok.u.c == '-';
-    }
-    if (!(tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
-        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END
-        || tok.type == GTEXT_YAML_TOKEN_COMMENT
-        || (tok.type == GTEXT_YAML_TOKEN_INDICATOR
-            && (tok.u.c == '&' || tok.u.c == '!')))) {
-      s->cur_line_only_props = false;
-    }
+    stream_note_line(s, &tok);
 
 process_token:
     if (s->pending_alias) {
@@ -856,7 +886,11 @@ process_token:
            The next token (handled by subsequent iteration) will pick it up. */
         GTEXT_YAML_Token name_tok;
         GTEXT_YAML_Status nst = stream_scan(s, &name_tok);
-        if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
+        if (nst == GTEXT_YAML_E_INCOMPLETE) {
+          s->held_property = true;
+          s->held_property_tok = tok;
+          return GTEXT_YAML_E_INCOMPLETE;
+        }
         if (nst != GTEXT_YAML_OK) return nst;
         if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
         
@@ -895,7 +929,11 @@ process_token:
       } else if (tok.u.c == '!') {
         GTEXT_YAML_Token tag_tok;
         GTEXT_YAML_Status nst = stream_scan(s, &tag_tok);
-        if (nst == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
+        if (nst == GTEXT_YAML_E_INCOMPLETE) {
+          s->held_property = true;
+          s->held_property_tok = tok;
+          return GTEXT_YAML_E_INCOMPLETE;
+        }
         if (nst != GTEXT_YAML_OK) return nst;
 
         char buf[256];
@@ -917,7 +955,28 @@ process_token:
           if (defer != GTEXT_YAML_OK) return defer;
           s->pending_tag = strdup("!");
           s->pending_tag_line = tok.line;
+          /* The non-specific tag is a property like any other and has to
+             record where it was written, or nothing downstream can tell
+             whether its node was ever written: "a: !" over "b: 2" carried
+             the "!" past the empty value it belonged to and hung it on the
+             next key instead. */
+          s->pending_prop_offset = tok.offset;
+          s->pending_prop_line = tok.line;
+          s->pending_prop_col = tok.col;
+          if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
+            s->pending_prop_min_col = tok.col;
+            s->pending_prop_min_line = tok.line;
+          }
+          s->pending_prop_line_start = s->cur_line_start;
+          s->pending_prop_opens_line = s->cur_line_only_props;
+          s->pending_prop_line_dash = s->cur_line_opens_with_dash;
           tok = tag_tok;
+          if (tok.type == GTEXT_YAML_TOKEN_EOF) {
+            GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
+            if (flush != GTEXT_YAML_OK) return flush;
+            break;
+          }
+          stream_note_line(s, &tok);
           goto process_token;
         }
 
@@ -992,7 +1051,14 @@ process_token:
         if (nst != GTEXT_YAML_OK) return nst;
         GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &next_tok);
         if (doc_rc != GTEXT_YAML_OK) return doc_rc;
-        return stream_emit_alias(s, &next_tok);
+        /* "continue", not "return": an alias is one node among however many
+           are left to read.  This used to end the pass, and the rest of the
+           document was only read because finish() ran a second copy of this
+           loop that did not - so "{ &a [a, &b b]: *b, *a : [c, *b, d]}" was
+           read to its first alias and no further. */
+        GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &next_tok);
+        if (alias_rc != GTEXT_YAML_OK) return alias_rc;
+        continue;
       }
       /* Emit remaining indicators (commas, colons, etc.) */
       if (s->cb) {
@@ -1045,371 +1111,38 @@ process_token:
   return GTEXT_YAML_OK;
 }
 
+GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_feed(
+  GTEXT_YAML_Stream * s,
+  const char * data,
+  size_t len
+) {
+  if (!s) return GTEXT_YAML_E_INVALID;
+  /* Enforce total-bytes limit if set (0 means use library default already applied in opts) */
+  if (s->opts.max_total_bytes > 0) {
+    if (s->total_bytes_consumed + len > s->opts.max_total_bytes) return GTEXT_YAML_E_LIMIT;
+    s->total_bytes_consumed += len;
+  }
+
+  if (!gtext_yaml_scanner_feed(s->scanner, data, len)) return GTEXT_YAML_E_OOM;
+  
+  /* In sync mode, mark scanner as finished immediately so we can process aliases */
+  if (s->sync_mode) {
+    gtext_yaml_scanner_finish(s->scanner);
+  }
+
+  GTEXT_YAML_Status st = stream_drain(s);
+  return st == GTEXT_YAML_E_INCOMPLETE ? GTEXT_YAML_OK : st;
+}
+
 GTEXT_API GTEXT_YAML_Status gtext_yaml_stream_finish(GTEXT_YAML_Stream * s)
 {
   if (!s) return GTEXT_YAML_E_INVALID;
   if (!s->scanner) return GTEXT_YAML_OK;
   gtext_yaml_scanner_finish(s->scanner);
 
-  /* Drain any remaining tokens now that the scanner is finished. */
-  for (;;) {
-    GTEXT_YAML_Token tok;
-
-    GTEXT_YAML_Status st = stream_scan(s, &tok);
-    if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
-    if (st != GTEXT_YAML_OK) return st;
-    if (tok.type == GTEXT_YAML_TOKEN_EOF) {
-      GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-      if (flush != GTEXT_YAML_OK) return flush;
-      break;
-    }
-    if (tok.line != s->cur_line) {
-      s->cur_line = tok.line;
-      s->cur_line_start = tok.col;
-      s->cur_line_only_props = true;
-      s->cur_line_opens_with_dash =
-        tok.type == GTEXT_YAML_TOKEN_INDICATOR && tok.u.c == '-';
-    }
-    if (!(tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START
-        || tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END
-        || tok.type == GTEXT_YAML_TOKEN_COMMENT
-        || (tok.type == GTEXT_YAML_TOKEN_INDICATOR
-            && (tok.u.c == '&' || tok.u.c == '!')))) {
-      s->cur_line_only_props = false;
-    }
-
-process_token_finish:
-    if (s->pending_alias) {
-      if (tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-        return GTEXT_YAML_E_BAD_TOKEN;
-      }
-      s->pending_alias = false;
-      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
-      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
-      GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &tok);
-      if (alias_rc != GTEXT_YAML_OK) return alias_rc;
-      continue;
-    }
-
-    GTEXT_YAML_Event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.offset = tok.offset;
-    ev.line = tok.line;
-    ev.col = tok.col;
-
-    if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_START) {
-      {
-        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-        if (flush != GTEXT_YAML_OK) return flush;
-      }
-      if (s->document_started && !s->document_closed) {
-        GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
-        if (rc != GTEXT_YAML_OK) return rc;
-      }
-      GTEXT_YAML_Status rc = stream_emit_document_start(s, &tok);
-      if (rc != GTEXT_YAML_OK) return rc;
-      continue;
-    }
-
-    if (tok.type == GTEXT_YAML_TOKEN_DOCUMENT_END) {
-      {
-        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-        if (flush != GTEXT_YAML_OK) return flush;
-      }
-      /* A "..." with no document open closes nothing: l-document-suffix
-         stands on its own in a stream (9.2), and "..." by itself is a
-         stream with no documents in it. Opening one here so that it could
-         be closed gave every such suffix a null document of its own - a
-         bare "..." parsed as one null, and one between two documents put a
-         third between them. */
-      if (!s->document_started || s->document_closed) {
-        continue;
-      }
-      GTEXT_YAML_Status rc = stream_emit_document_end(s, &tok);
-      if (rc != GTEXT_YAML_OK) return rc;
-      continue;
-    }
-
-    if (tok.type != GTEXT_YAML_TOKEN_DIRECTIVE && tok.type != GTEXT_YAML_TOKEN_COMMENT) {
-      GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &tok);
-      if (doc_rc != GTEXT_YAML_OK) return doc_rc;
-    }
-
-    if (tok.type == GTEXT_YAML_TOKEN_COMMENT) {
-      if (s->opts.retain_comments) {
-        ev.type = GTEXT_YAML_EVENT_COMMENT;
-        ev.data.comment.ptr = tok.u.comment.ptr;
-        ev.data.comment.len = tok.u.comment.len;
-        ev.data.comment.inline_comment = tok.u.comment.inline_comment;
-        if (s->cb) {
-          GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
-          if (rc != GTEXT_YAML_OK) return rc;
-        } else {
-        }
-      } else {
-      }
-      continue;
-    }
-
-    if (tok.type == GTEXT_YAML_TOKEN_INDICATOR) {
-      /* These end the node position rather than filling it, so properties
-         still waiting belong to the empty node - but only where they were
-         inside the position this indicator closes. A tag on a line of its
-         own introduces the collection that follows it:
-
-             !!seq        the tag belongs to the sequence
-             - a
-
-             - &a         the anchor belongs to the first entry, which is
-             - b          empty, and the second "-" is what proves it
-
-         The two are told apart by where their lines begin. A property that
-         opened its own line introduces whatever follows, however that is
-         indented. One written part way along a line belongs to the position
-         it stands in, and a later line that begins no further right has
-         left that position:
-
-             x: !custom      the "-" line begins further right, so the tag
-               - 1           is the sequence's
-
-             a: !!str        the "b" line begins at the same column, so a's
-             b: 1            value was never written and the tag is its */
-      if ((tok.u.c == '-' || tok.u.c == ':' || tok.u.c == '?'
-           || tok.u.c == ',' || tok.u.c == ']' || tok.u.c == '}')
-          && (s->pending_anchor || s->pending_tag)
-          && stream_props_left_behind(s, &tok)) {
-        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-        if (flush != GTEXT_YAML_OK) return flush;
-      }
-      if (tok.u.c == '-') stream_props_claimed_by_sequence(s);
-      ev.type = GTEXT_YAML_EVENT_INDICATOR;
-      ev.data.indicator = tok.u.c;
-      /* Properties still looking for their node when an indicator arrives:
-         where they were written travels with the indicator, so a consumer
-         that is about to decide what this indicator opens can see that
-         something is already waiting to name it. */
-      if (s->pending_anchor || s->pending_tag) {
-        ev.prop_line = s->pending_prop_line;
-        ev.prop_col = s->pending_prop_col;
-      }
-      else {
-        ev.prop_col = -1;
-      }
-
-      if (tok.u.c == '[' || tok.u.c == '{') {
-        s->current_depth++;
-        if (s->opts.max_depth > 0 && s->current_depth > s->opts.max_depth) {
-          return GTEXT_YAML_E_DEPTH;
-        }
-
-        GTEXT_YAML_Event start_ev;
-        memset(&start_ev, 0, sizeof(start_ev));
-        start_ev.type = (tok.u.c == '[')
-          ? GTEXT_YAML_EVENT_SEQUENCE_START
-          : GTEXT_YAML_EVENT_MAPPING_START;
-        stream_attach_pending(s, &start_ev);
-        start_ev.offset = tok.offset;
-        start_ev.line = tok.line;
-        start_ev.col = tok.col;
-
-        if (s->cb) {
-          GTEXT_YAML_Status rc = s->cb(s, &start_ev, s->user);
-          if (rc != GTEXT_YAML_OK) return rc;
-        }
-
-        stream_clear_pending(s);
-        continue;
-      } else if (tok.u.c == ']' || tok.u.c == '}') {
-        if (s->current_depth > 0) s->current_depth--;
-
-        GTEXT_YAML_Event end_ev;
-        memset(&end_ev, 0, sizeof(end_ev));
-        end_ev.type = (tok.u.c == ']')
-          ? GTEXT_YAML_EVENT_SEQUENCE_END
-          : GTEXT_YAML_EVENT_MAPPING_END;
-        end_ev.offset = tok.offset;
-        end_ev.line = tok.line;
-        end_ev.col = tok.col;
-
-        if (s->cb) {
-          GTEXT_YAML_Status rc = s->cb(s, &end_ev, s->user);
-          if (rc != GTEXT_YAML_OK) return rc;
-        }
-        continue;
-      }
-      
-      /* Handle anchor definition */
-      if (tok.u.c == '&') {
-        GTEXT_YAML_Token name_tok;
-        GTEXT_YAML_Status nst = stream_scan(s, &name_tok);
-        if (nst != GTEXT_YAML_OK) return nst;
-        if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) return GTEXT_YAML_E_BAD_TOKEN;
-        
-        size_t namelen = name_tok.u.scalar.len;
-        char buf[256];
-        if (namelen >= sizeof(buf)) namelen = sizeof(buf)-1;
-        memcpy(buf, name_tok.u.scalar.ptr, namelen);
-        buf[namelen] = '\0';
-        
-        /* A property whose node was never written belongs to an empty one, and
-           is reported as that before this one takes its place. */
-        if (stream_props_left_behind(s, &tok)) {
-          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-          if (flush != GTEXT_YAML_OK) return flush;
-        }
-        GTEXT_YAML_Status defer = stream_defer_property(
-          s, &tok, &s->pending_anchor, &s->pending_anchor_line,
-          &s->outer_anchor, &s->outer_anchor_line,
-          "Node has more than one anchor");
-        if (defer != GTEXT_YAML_OK) return defer;
-        s->pending_anchor = strdup(buf);
-        s->pending_anchor_line = tok.line;
-        s->pending_prop_offset = tok.offset;
-        s->pending_prop_line = tok.line;
-        s->pending_prop_col = tok.col;
-        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
-          s->pending_prop_min_col = tok.col;
-          s->pending_prop_min_line = tok.line;
-        }
-        s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line = s->cur_line_only_props;
-        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
-        
-        continue;
-      }
-
-      if (tok.u.c == '!') {
-        GTEXT_YAML_Token tag_tok;
-        GTEXT_YAML_Status nst = stream_scan(s, &tag_tok);
-        if (nst != GTEXT_YAML_OK) return nst;
-
-        char buf[256];
-        size_t tag_len = 0;
-
-        if (stream_tag_is_non_specific(&tok, &tag_tok)) {
-          /* The "!" was the whole property. Record it and go round again
-             with the token just read, which is the node it applies to. */
-          /* A property whose node was never written belongs to an empty one, and
-             is reported as that before this one takes its place. */
-          if (stream_props_left_behind(s, &tok)) {
-            GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-            if (flush != GTEXT_YAML_OK) return flush;
-          }
-          GTEXT_YAML_Status defer = stream_defer_property(
-            s, &tok, &s->pending_tag, &s->pending_tag_line,
-            &s->outer_tag, &s->outer_tag_line,
-            "Node has more than one tag");
-          if (defer != GTEXT_YAML_OK) return defer;
-          s->pending_tag = strdup("!");
-          s->pending_tag_line = tok.line;
-          tok = tag_tok;
-          goto process_token_finish;
-        }
-
-        if (tag_tok.type == GTEXT_YAML_TOKEN_INDICATOR && tag_tok.u.c == '!') {
-          GTEXT_YAML_Token name_tok;
-          nst = stream_scan(s, &name_tok);
-          if (nst != GTEXT_YAML_OK) return nst;
-          if (name_tok.type != GTEXT_YAML_TOKEN_SCALAR) {
-            return GTEXT_YAML_E_BAD_TOKEN;
-          }
-          tag_len = name_tok.u.scalar.len;
-          if (tag_len > sizeof(buf) - 3) tag_len = sizeof(buf) - 3;
-          buf[0] = '!';
-          buf[1] = '!';
-          memcpy(buf + 2, name_tok.u.scalar.ptr, tag_len);
-          tag_len += 2;
-          buf[tag_len] = '\0';
-        } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR
-            && tag_tok.u.scalar.len >= 2
-            && tag_tok.u.scalar.ptr[0] == '<'
-            && tag_tok.u.scalar.ptr[tag_tok.u.scalar.len - 1] == '>') {
-          /* A verbatim tag: "!<X>" is the tag X exactly as written, with no
-             handle to expand (5.3). Keep the URI and drop the brackets. */
-          tag_len = tag_tok.u.scalar.len - 2;
-          if (tag_len > sizeof(buf) - 1) tag_len = sizeof(buf) - 1;
-          memcpy(buf, tag_tok.u.scalar.ptr + 1, tag_len);
-          buf[tag_len] = '\0';
-        } else if (tag_tok.type == GTEXT_YAML_TOKEN_SCALAR) {
-          tag_len = tag_tok.u.scalar.len;
-          if (tag_len > sizeof(buf) - 2) tag_len = sizeof(buf) - 2;
-          buf[0] = '!';
-          memcpy(buf + 1, tag_tok.u.scalar.ptr, tag_len);
-          tag_len += 1;
-          buf[tag_len] = '\0';
-        } else {
-          return GTEXT_YAML_E_BAD_TOKEN;
-        }
-
-        /* A property whose node was never written belongs to an empty one, and
-           is reported as that before this one takes its place. */
-        if (stream_props_left_behind(s, &tok)) {
-          GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-          if (flush != GTEXT_YAML_OK) return flush;
-        }
-        GTEXT_YAML_Status defer = stream_defer_property(
-          s, &tok, &s->pending_tag, &s->pending_tag_line,
-          &s->outer_tag, &s->outer_tag_line,
-          "Node has more than one tag");
-        if (defer != GTEXT_YAML_OK) return defer;
-        s->pending_tag = strdup(buf);
-        s->pending_tag_line = tok.line;
-        s->pending_prop_offset = tok.offset;
-        s->pending_prop_line = tok.line;
-        s->pending_prop_col = tok.col;
-        if (s->pending_prop_min_col < 0 || tok.col < s->pending_prop_min_col) {
-          s->pending_prop_min_col = tok.col;
-          s->pending_prop_min_line = tok.line;
-        }
-        s->pending_prop_line_start = s->cur_line_start;
-        s->pending_prop_opens_line = s->cur_line_only_props;
-        s->pending_prop_line_dash = s->cur_line_opens_with_dash;
-        continue;
-      }
-      
-      /* Handle alias reference */
-      if (tok.u.c == '*') {
-        GTEXT_YAML_Token next_tok;
-        GTEXT_YAML_Status nst = stream_scan(s, &next_tok);
-        if (nst == GTEXT_YAML_E_INCOMPLETE) {
-          s->pending_alias = true;
-          return GTEXT_YAML_OK;
-        }
-        if (nst != GTEXT_YAML_OK) return nst;
-        GTEXT_YAML_Status doc_rc = stream_ensure_document_started(s, &next_tok);
-        if (doc_rc != GTEXT_YAML_OK) return doc_rc;
-        GTEXT_YAML_Status alias_rc = stream_emit_alias(s, &next_tok);
-        if (alias_rc != GTEXT_YAML_OK) return alias_rc;
-        continue;
-      }
-      
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
-        if (rc != GTEXT_YAML_OK) return rc;
-      }
-      continue;
-    }
-
-    if (tok.type == GTEXT_YAML_TOKEN_SCALAR) {
-      if (stream_props_left_behind(s, &tok)) {
-        GTEXT_YAML_Status flush = stream_flush_empty_node(s, &tok);
-        if (flush != GTEXT_YAML_OK) return flush;
-      }
-      ev.type = GTEXT_YAML_EVENT_SCALAR;
-      ev.data.scalar.ptr = tok.u.scalar.ptr;
-      ev.data.scalar.len = tok.u.scalar.len;
-      ev.scalar_style = tok.scalar_style;
-      stream_attach_pending(s, &ev);
-      if (s->cb) {
-        GTEXT_YAML_Status rc = s->cb(s, &ev, s->user);
-        if (rc != GTEXT_YAML_OK) {
-          return rc;
-        }
-      }
-      stream_clear_pending(s);
-      continue;
-    }
-  }
+  GTEXT_YAML_Status st = stream_drain(s);
+  if (st == GTEXT_YAML_E_INCOMPLETE) return GTEXT_YAML_OK;
+  if (st != GTEXT_YAML_OK) return st;
 
   if (s->document_started && !s->document_closed) {
     GTEXT_YAML_Status rc = stream_emit_document_end(s, NULL);

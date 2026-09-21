@@ -73,6 +73,7 @@ struct GTEXT_YAML_Scanner {
   
   /* Track last indicator character for tag/anchor/alias parsing */
   int last_indicator;
+  size_t last_indicator_offset;
 
   /* How far a block_scalar_complete() that ran out of input had got, so the
      next one resumes instead of starting over.  Walking the whole block on
@@ -463,6 +464,11 @@ static bool property_token_complete(const GTEXT_YAML_Scanner *s)
      answer - deferring is always safe - and costs one more token of delay,
      so the rule stays where the need is. */
   if (s->input.data[s->cursor] == '!' && p == s->cursor + 1) {
+    /* Unless there is no more input coming, in which case the "!" is the
+       last thing in the stream and waiting for a node after it would wait
+       for ever: "---" over "!" is a document whose root is an empty node
+       carrying the non-specific tag. */
+    if (s->finished) return true;
     size_t q = p;
     while (q < s->input.len) {
       const char wc = s->input.data[q];
@@ -2047,6 +2053,7 @@ block_scalar_collected:
        value reaches only the code that asks for it. */
     if (c == '&' || c == '*' || c == '!' || c == '-') {
       s->last_indicator = c;
+      s->last_indicator_offset = off;
     } else {
       s->last_indicator = 0;
     }
@@ -2378,14 +2385,23 @@ scan_plain_scalar:
   
   /* If this scalar follows an anchor/alias indicator, it must be space-delimited
      (anchor/alias names cannot contain spaces per YAML spec) */
-  int require_space_delimiter = (s->last_indicator == '&' || s->last_indicator == '*' || s->last_indicator == '!');
+  /* A shorthand tag's name begins at the byte after the "!" (5.3): "!foo"
+     is a tag, but "! foo" and a "!" at the end of a line are the whole tag
+     property and what comes next is an ordinary node.  Scanning that node as
+     a tag name - which takes a ":" into the name, since ns-tag-char excludes
+     only the flow indicators - turned "a: !" over "b: 2" into a mapping
+     whose second key was "b:". */
+  int require_space_delimiter =
+      (s->last_indicator == '&' || s->last_indicator == '*'
+       || (s->last_indicator == '!' && off == s->last_indicator_offset + 1));
 
   /* A verbatim tag, "!<...>" (5.3, c-verbatim-tag): the URI between the
      brackets is taken as written, and the ordinary plain-scalar rules do not
      apply to it - a ":" inside it is not a key separator. Without this the
      scanner read "!<tag:yaml.org,2002:str> foo" as a plain scalar starting
      part way through the URI. */
-  if (s->last_indicator == '!' && scanner_peek(s) == '<') {
+  if (s->last_indicator == '!' && off == s->last_indicator_offset + 1
+      && scanner_peek(s) == '<') {
     size_t vlen = 1;
     for (;;) {
       if (s->cursor + vlen >= s->input.len) {

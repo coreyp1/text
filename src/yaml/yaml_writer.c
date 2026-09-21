@@ -240,7 +240,31 @@ typedef struct {
 typedef struct {
   GTEXT_YAML_Sink * sink;
   const GTEXT_YAML_Write_Options * opts;
-  yaml_encoding_state encoding;
+  /* Borrowed: the streaming writer keeps its own encoder across calls and
+     hands this state a view of it, so the two writers cannot drift apart on
+     the half of a UTF-8 sequence that is still waiting for its other half. */
+  yaml_encoding_state * encoding;
+  /* 8.1.1.1 measures a block scalar's indentation indicator from the
+     indentation of the node that holds it - which is -1 for the root of a
+     document, and the container's own indent everywhere else.  The writer
+     cannot work it out from the indent it is passed, so each caller says. */
+  int block_parent_indent;
+  /* 7.2 lets an empty node stand wherever a node is expected, with one
+     exception: a flow sequence entry needs properties or content, so "[,]"
+     is not a sequence of one empty node.  Everywhere else "a:" is how an
+     empty node is spelled, and writing "a: ~" instead put a scalar into the
+     document that the document never held. */
+  bool empty_scalar_ok;
+  /* 6.9.2 and 5.6 stop an anchor name and a tag at a flow indicator and
+     nowhere else, so ':' belongs to whichever of them came last: "*b: 1"
+     names the anchor "b:", "&a: 1" the anchor "a:", "!!null: 1" the tag
+     "!!null:".  A key that ends in a property has to be separated from its
+     colon; a key that ends in content does not. */
+  bool key_absorbs_colon;
+  /* A block scalar writes the line break that terminates its last line,
+     because with '+' chomping that break is part of the value.  Whoever
+     would have written the separator break next skips it. */
+  bool line_terminated;
 } yaml_writer_state;
 
 static GTEXT_YAML_Encoding writer_encoding(const GTEXT_YAML_Write_Options *opts) {
@@ -531,7 +555,7 @@ static GTEXT_YAML_Status write_bytes(
   if (!state || !state->sink || !state->sink->write) {
     return GTEXT_YAML_E_INVALID;
   }
-  return write_encoded_bytes(state->sink, &state->encoding, bytes, len);
+  return write_encoded_bytes(state->sink, state->encoding, bytes, len);
 }
 
 static GTEXT_YAML_Status write_str(
@@ -540,6 +564,15 @@ static GTEXT_YAML_Status write_str(
     return GTEXT_YAML_E_INVALID;
   }
   return write_bytes(state, str, strlen(str));
+}
+
+/* The style the root node starts in.  Block style has to win here, because
+   nothing below the root can turn flow back into block. */
+static bool writer_root_is_flow(const GTEXT_YAML_Write_Options * opts) {
+  if (!opts) return true;
+  if (opts->flow_style == GTEXT_YAML_FLOW_STYLE_FLOW) return true;
+  if (opts->flow_style == GTEXT_YAML_FLOW_STYLE_BLOCK) return false;
+  return !opts->pretty;
 }
 
 static const char *writer_newline(const GTEXT_YAML_Write_Options * opts) {
@@ -561,6 +594,17 @@ static int writer_line_width(const GTEXT_YAML_Write_Options * opts) {
     return 0;
   }
   return opts->line_width;
+}
+
+/* The break that separates one node from the next - unless a block scalar
+   has already written it, in which case writing another would leave a blank
+   line that '+' chomping would keep as part of the value. */
+static GTEXT_YAML_Status write_separator(yaml_writer_state * state) {
+  if (state->line_terminated) {
+    state->line_terminated = false;
+    return GTEXT_YAML_OK;
+  }
+  return write_str(state, writer_newline(state->opts));
 }
 
 static GTEXT_YAML_Status write_indent(
@@ -634,6 +678,10 @@ static bool node_is_mapping_type(const GTEXT_YAML_Node *node) {
       node->type == GTEXT_YAML_SET;
 }
 
+/* "key:" followed by a block collection puts the collection on the next
+   line - but an empty one is written "[]" or "{}" with no indent of its own,
+   which lands in column zero and ends the mapping.  An empty collection is a
+   value like any other and belongs on the line it was introduced on. */
 static bool node_scalar_block_style(const GTEXT_YAML_Node *node) {
   if (!node) return false;
   switch (node->type) {
@@ -692,10 +740,99 @@ static bool tag_is_binary(const char *tag) {
   return false;
 }
 
-static bool scalar_needs_quotes(const char *value) {
-  if (!value || value[0] == '\0') return true;
-  for (const unsigned char *p = (const unsigned char *)value; *p; p++) {
-    unsigned char c = *p;
+/* A tag reaches the writer in one of two spellings: the shorthand the parser
+   never had to expand ("!local", "!!str"), or the URI a %TAG directive
+   resolved it to.  The second kind used to go out as bare text, so
+   "tag:example.com,2000:app/foo" left the writer looking like a plain scalar -
+   and came back as a mapping key, or as two nodes either side of the comma.
+   5.6 gives three spellings and every tag has to go out as one of them. */
+static bool tag_char_is_safe(unsigned char c, bool shorthand) {
+  if (isalnum(c) || c == '-' || c == '_') return true;
+  switch (c) {
+    case '#': case ';': case '/': case '?': case ':': case '@':
+    case '&': case '=': case '+': case '$': case '.': case '~':
+    case '*': case '\'': case '(': case ')':
+      return true;
+    /* ns-tag-char is ns-uri-char less '!' and the flow indicators, because a
+       shorthand ends where a flow collection could begin. */
+    case ',': case '[': case ']': case '!':
+      return !shorthand;
+    default:
+      return false;
+  }
+}
+
+static bool tag_suffix_is_safe(const char *suffix) {
+  if (!suffix || !*suffix) return false;
+  for (const unsigned char *p = (const unsigned char *)suffix; *p; p++) {
+    if (!tag_char_is_safe(*p, true)) return false;
+  }
+  return true;
+}
+
+/* "!", "!local", "!!str", "!handle!suffix".  Anything else - a space, a
+   comma, a brace - has to go out verbatim instead. */
+static bool tag_is_writable_shorthand(const char *tag) {
+  if (!tag || tag[0] != '!') return false;
+  const unsigned char *p = (const unsigned char *)tag + 1;
+  if (*p == '\0') return true;
+  if (*p == '!') {
+    p++;
+  } else {
+    const unsigned char *scan = p;
+    while (isalnum(*scan) || *scan == '-') scan++;
+    if (*scan == '!') p = scan + 1;
+  }
+  return tag_suffix_is_safe((const char *)p);
+}
+
+static GTEXT_YAML_Status write_tag_verbatim(
+    yaml_writer_state * state, const char * tag) {
+  static const char hex[] = "0123456789ABCDEF";
+  GTEXT_YAML_Status status = write_str(state, "!<");
+  if (status != GTEXT_YAML_OK) return status;
+  for (const unsigned char *p = (const unsigned char *)tag; *p; p++) {
+    /* '%' is escaped along with the unsafe bytes: the parser decoded the
+       escapes on the way in, so a literal '%' in the tag we hold has to come
+       back out as %25 or the next read will decode something that was never
+       written. */
+    if (*p != '%' && tag_char_is_safe(*p, false)) {
+      status = write_bytes(state, (const char *)p, 1);
+    } else {
+      char buf[3];
+      buf[0] = '%';
+      buf[1] = hex[(*p >> 4) & 0x0F];
+      buf[2] = hex[*p & 0x0F];
+      status = write_bytes(state, buf, sizeof(buf));
+    }
+    if (status != GTEXT_YAML_OK) return status;
+  }
+  return write_str(state, ">");
+}
+
+static GTEXT_YAML_Status write_tag(
+    yaml_writer_state * state, const char * tag) {
+  static const char yaml_prefix[] = "tag:yaml.org,2002:";
+  if (!tag || !*tag) return GTEXT_YAML_OK;
+
+  if (tag[0] == '!') {
+    if (tag_is_writable_shorthand(tag)) {
+      return write_str(state, tag);
+    }
+  } else if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) == 0 &&
+      tag_suffix_is_safe(tag + sizeof(yaml_prefix) - 1)) {
+    GTEXT_YAML_Status status = write_str(state, "!!");
+    if (status != GTEXT_YAML_OK) return status;
+    return write_str(state, tag + sizeof(yaml_prefix) - 1);
+  }
+
+  return write_tag_verbatim(state, tag);
+}
+
+static bool scalar_needs_quotes(const char *value, size_t len) {
+  if (!value || len == 0) return true;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)value[i];
     if (!(isalnum(c) || c == '_' || c == '-' || c == '.')) {
       return true;
     }
@@ -704,14 +841,14 @@ static bool scalar_needs_quotes(const char *value) {
 }
 
 static GTEXT_YAML_Status write_escaped_scalar(
-    yaml_writer_state * state, const char * value) {
+    yaml_writer_state * state, const char * value, size_t len) {
   static const char hex[] = "0123456789ABCDEF";
   GTEXT_YAML_Status status = write_str(state, "\"");
   if (status != GTEXT_YAML_OK) return status;
 
-  if (!value) value = "";
-  for (const unsigned char *p = (const unsigned char *)value; *p; p++) {
-    unsigned char c = *p;
+  if (!value) len = 0;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)value[i];
     switch (c) {
       case '\\':
         status = write_str(state, "\\\\");
@@ -749,17 +886,31 @@ static GTEXT_YAML_Status write_escaped_scalar(
   return write_str(state, "\"");
 }
 
+/* Single quotes have no escapes at all, so the style can only be used for
+   content it can hold verbatim: a line break inside one folds away to a
+   space on the way back in, and there is no spelling for a control
+   character.  Both cases go out double quoted instead. */
+static bool scalar_fits_single_quotes(const char *value, size_t len) {
+  if (!value) return true;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)value[i];
+    if (c == '\t') continue;
+    if (c < 0x20 || c == 0x7F) return false;
+  }
+  return true;
+}
+
 static GTEXT_YAML_Status write_single_quoted_scalar(
-    yaml_writer_state * state, const char * value) {
+    yaml_writer_state * state, const char * value, size_t len) {
   GTEXT_YAML_Status status = write_str(state, "'");
   if (status != GTEXT_YAML_OK) return status;
 
-  if (!value) value = "";
-  for (const char *p = value; *p; p++) {
-    if (*p == '\'') {
+  if (!value) len = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (value[i] == '\'') {
       status = write_str(state, "''");
     } else {
-      status = write_bytes(state, p, 1);
+      status = write_bytes(state, value + i, 1);
     }
     if (status != GTEXT_YAML_OK) return status;
   }
@@ -767,42 +918,118 @@ static GTEXT_YAML_Status write_single_quoted_scalar(
   return write_str(state, "'");
 }
 
-static GTEXT_YAML_Status write_wrapped_line(
+/* Everything a block scalar has to decide before a byte of it is written.
+   The old writer decided none of it: it always wrote '|' or '>' with no
+   chomping indicator and no indentation indicator, so a value with no
+   trailing break came back with one, a value with several came back with
+   one, a first line that began with a space lost the space, and folding
+   turned every line break in the content into a space. */
+typedef struct {
+  bool usable;      /* false: the value has no faithful block spelling */
+  bool folded;      /* '>' rather than '|' */
+  char chomp;       /* '-' strip, '+' keep, '\0' clip */
+  int indent_digit; /* 0 when auto-detection reads the right indentation */
+  size_t body_len;  /* the value with its trailing line breaks removed */
+  size_t trailing;  /* how many of those there were */
+} yaml_block_plan;
+
+static void plan_block_scalar(
+    const char * value,
+    size_t len,
+    size_t content_indent,
+    int parent_indent,
+    bool folded_wanted,
+    yaml_block_plan * plan) {
+  memset(plan, 0, sizeof(*plan));
+  if (!value || len == 0) return;
+
+  size_t trailing = 0;
+  while (trailing < len && value[len - 1 - trailing] == '\n') trailing++;
+  size_t body_len = len - trailing;
+  /* A value that is nothing but line breaks has no first line to set the
+     indentation from, so it has no block spelling at all. */
+  if (body_len == 0) return;
+
+  for (size_t i = 0; i < body_len; i++) {
+    unsigned char c = (unsigned char)value[i];
+    /* A carriage return would be read back as a line break, and a control
+       character has no literal spelling.  Both need quotes. */
+    if (c == '\r') return;
+    if (c < 0x20 && c != '\n' && c != '\t') return;
+    if (c == 0x7F) return;
+  }
+
+  plan->body_len = body_len;
+  plan->trailing = trailing;
+  plan->chomp = trailing == 0 ? '-' : (trailing == 1 ? '\0' : '+');
+
+  /* 8.1.1.1: auto-detection takes the indentation from the first non-empty
+     line, so a first line that begins with a space needs the indicator. */
+  size_t first = 0;
+  while (first < body_len && value[first] == '\n') first++;
+  if (first < body_len && value[first] == ' ') {
+    long digit = (long)content_indent - (long)parent_indent;
+    if (digit < 1 || digit > 9) return;
+    plan->indent_digit = (int)digit;
+  }
+
+  if (folded_wanted) {
+    /* 8.1.3 keeps the break after a more-indented line and folds every other
+       one, so a folded scalar can only hold lines that neither begin nor end
+       with a space or a tab. */
+    bool ok = true;
+    size_t line = 0;
+    while (ok && line < body_len) {
+      size_t stop = line;
+      while (stop < body_len && value[stop] != '\n') stop++;
+      if (stop > line) {
+        char head = value[line];
+        char tail = value[stop - 1];
+        if (head == ' ' || head == '\t' || tail == ' ' || tail == '\t') {
+          ok = false;
+        }
+      }
+      line = stop + 1;
+    }
+    plan->folded = ok;
+  }
+
+  plan->usable = true;
+}
+
+/* A folded line may be broken at a single space, because the break folds
+   back to that space.  Two spaces in a row cannot: the fold would return
+   only one of them. */
+static GTEXT_YAML_Status write_folded_line(
     yaml_writer_state * state,
     const char * line,
     size_t len,
     size_t indent,
     int line_width) {
+  size_t width = line_width > 0 ? (size_t)line_width : 0;
   size_t pos = 0;
-  while (pos < len) {
-    size_t remaining = len - pos;
-    size_t max_width = line_width > 0 ? (size_t)line_width : remaining;
-    size_t chunk = remaining < max_width ? remaining : max_width;
+  bool first = true;
 
-    if (remaining > max_width) {
-      size_t cut = chunk;
-      for (size_t i = 0; i < chunk; i++) {
-        if (line[pos + i] == ' ') {
-          cut = i;
+  while (pos < len) {
+    size_t cut = len;
+    if (width > 0 && len - pos > width) {
+      for (size_t i = 1; i < width && pos + i < len; i++) {
+        if (line[pos + i] == ' ' && line[pos + i - 1] != ' ' &&
+            pos + i + 1 < len && line[pos + i + 1] != ' ') {
+          cut = pos + i;
         }
       }
-      if (cut > 0) {
-        chunk = cut;
-      }
     }
-
-    GTEXT_YAML_Status status = write_indent(state, indent);
-    if (status != GTEXT_YAML_OK) return status;
-    status = write_bytes(state, line + pos, chunk);
-    if (status != GTEXT_YAML_OK) return status;
-    pos += chunk;
-    while (pos < len && line[pos] == ' ') {
-      pos++;
-    }
-    if (pos < len) {
-      status = write_str(state, writer_newline(state->opts));
+    if (!first) {
+      GTEXT_YAML_Status status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
     }
+    GTEXT_YAML_Status status = write_indent(state, indent);
+    if (status != GTEXT_YAML_OK) return status;
+    status = write_bytes(state, line + pos, cut - pos);
+    if (status != GTEXT_YAML_OK) return status;
+    pos = cut < len ? cut + 1 : len;
+    first = false;
   }
   return GTEXT_YAML_OK;
 }
@@ -811,39 +1038,86 @@ static GTEXT_YAML_Status write_block_scalar(
     yaml_writer_state * state,
     const char * value,
     size_t indent,
-    bool folded) {
-  GTEXT_YAML_Status status = write_str(state, folded ? ">" : "|");
-  if (status != GTEXT_YAML_OK) return status;
-  status = write_str(state, writer_newline(state->opts));
-  if (status != GTEXT_YAML_OK) return status;
-
-  if (!value) value = "";
-  int line_width = writer_line_width(state->opts);
+    const yaml_block_plan * plan) {
   size_t child_indent = indent + (size_t)writer_indent_spaces(state->opts);
-  const char *line = value;
-  const char *cursor = value;
+  int line_width = writer_line_width(state->opts);
 
-  for (;;) {
-    if (*cursor == '\n' || *cursor == '\0') {
-      size_t len = (size_t)(cursor - line);
-      if (folded && line_width > 0) {
-        status = write_wrapped_line(state, line, len, child_indent, line_width);
-      } else {
-        status = write_indent(state, child_indent);
-        if (status != GTEXT_YAML_OK) return status;
-        status = write_bytes(state, line, len);
-      }
-      if (status != GTEXT_YAML_OK) return status;
-      status = write_str(state, writer_newline(state->opts));
-      if (status != GTEXT_YAML_OK) return status;
-      if (*cursor == '\0') break;
-      cursor++;
-      line = cursor;
-      continue;
-    }
-    cursor++;
+  GTEXT_YAML_Status status = write_str(state, plan->folded ? ">" : "|");
+  if (status != GTEXT_YAML_OK) return status;
+  if (plan->indent_digit) {
+    char digit = (char)('0' + plan->indent_digit);
+    status = write_bytes(state, &digit, 1);
+    if (status != GTEXT_YAML_OK) return status;
+  }
+  if (plan->chomp) {
+    status = write_bytes(state, &plan->chomp, 1);
+    if (status != GTEXT_YAML_OK) return status;
   }
 
+  size_t pos = 0;
+
+  /* 8.1.3 folds a lone break away to a space and keeps one line feed for
+     every empty line after it, so a run of k line feeds in the content is
+     written as k+1 breaks.  A literal scalar keeps every break as it is, so
+     there each line is simply one break. */
+  if (plan->folded) {
+    size_t lead = 0;
+    while (pos < plan->body_len && value[pos] == '\n') {
+      lead++;
+      pos++;
+    }
+    /* Empty lines at the head of a folded scalar come before any folding and
+       are taken one line feed each. */
+    for (size_t i = 0; i <= lead; i++) {
+      status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+    }
+    while (pos < plan->body_len) {
+      size_t stop = pos;
+      while (stop < plan->body_len && value[stop] != '\n') stop++;
+      status = write_folded_line(
+          state, value + pos, stop - pos, child_indent, line_width);
+      if (status != GTEXT_YAML_OK) return status;
+      size_t gap = 0;
+      pos = stop;
+      while (pos < plan->body_len && value[pos] == '\n') {
+        gap++;
+        pos++;
+      }
+      if (pos < plan->body_len) {
+        for (size_t i = 0; i <= gap; i++) {
+          status = write_str(state, writer_newline(state->opts));
+          if (status != GTEXT_YAML_OK) return status;
+        }
+      }
+    }
+  } else {
+    while (pos <= plan->body_len) {
+      size_t stop = pos;
+      while (stop < plan->body_len && value[stop] != '\n') stop++;
+
+      status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+      if (stop > pos) {
+        status = write_indent(state, child_indent);
+        if (status == GTEXT_YAML_OK) {
+          status = write_bytes(state, value + pos, stop - pos);
+        }
+        if (status != GTEXT_YAML_OK) return status;
+      }
+      if (stop == plan->body_len) break;
+      pos = stop + 1;
+    }
+  }
+
+  /* One break terminates the last line; the rest are the value's own, kept
+     by '+' and thrown away by '|' and '-' alike. */
+  size_t breaks = plan->trailing > 0 ? plan->trailing : 1;
+  for (size_t i = 0; i < breaks; i++) {
+    status = write_str(state, writer_newline(state->opts));
+    if (status != GTEXT_YAML_OK) return status;
+  }
+  state->line_terminated = true;
   return GTEXT_YAML_OK;
 }
 
@@ -891,6 +1165,67 @@ static const char *node_inline_comment(const GTEXT_YAML_Node *node) {
     default:
       return NULL;
   }
+}
+
+/* The one place that decides whether a collection is written "[a, b]" or as
+   indented block lines.  A container has to ask before it writes "-" and a
+   line break, because a child that turns out flow after all would then start
+   in column zero: "- !!map" over "{foo: bar}" is two top-level nodes, not
+   one tagged mapping. */
+static bool collection_is_flow(
+    const yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    const char * tag_override,
+    bool flow) {
+  const GTEXT_YAML_Write_Options * opts = state->opts;
+  bool pretty = opts ? opts->pretty : false;
+  GTEXT_YAML_Flow_Style flow_style = opts
+      ? opts->flow_style
+      : GTEXT_YAML_FLOW_STYLE_AUTO;
+
+  if (flow_style == GTEXT_YAML_FLOW_STYLE_FLOW) return true;
+  /* Block style asked for at the root, not once inside a flow collection:
+     7.3 has no block spelling there. */
+  if (flow_style == GTEXT_YAML_FLOW_STYLE_BLOCK && !flow) pretty = true;
+  if (flow) return true;
+  if (opts && opts->canonical) return true;
+  /* Properties are written in front of the node, and "&a" cannot share a
+     line with block content, so an anchored or tagged collection goes out
+     flow whatever was asked for. */
+  if (node_anchor(node) || tag_override || node_tag(node)) return true;
+  if (node_requires_tag(node->type)) return true;
+  return !pretty;
+}
+
+static bool node_opens_block(
+    const yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    const char * tag_override) {
+  if (node_is_sequence_type(node)) {
+    if (node->as.sequence.count == 0) return false;
+  } else if (node_is_mapping_type(node)) {
+    if (node->as.mapping.count == 0) return false;
+  } else {
+    return false;
+  }
+  return !collection_is_flow(state, node, tag_override, false);
+}
+
+/* True when this node will be written as nothing at all, so the space that
+   would have separated it from its '-' or ':' has nothing left to separate. */
+static bool node_writes_nothing(
+    const yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    const char * tag_override) {
+  if (!state->empty_scalar_ok) return false;
+  if (!node || node->type != GTEXT_YAML_NULL) return false;
+  if (node->as.scalar.value && node->as.scalar.value[0]) return false;
+  if (!state->opts) return false;
+  if (state->opts->canonical) return false;
+  if (state->opts->scalar_style != GTEXT_YAML_SCALAR_STYLE_PLAIN) return false;
+  if (node->as.scalar.scalar_style != GTEXT_YAML_SCALAR_STYLE_PLAIN) return false;
+  if (node_anchor(node) || tag_override || node_tag(node)) return false;
+  return node_inline_comment(node) == NULL;
 }
 
 static GTEXT_YAML_Status write_comment_lines(
@@ -945,20 +1280,20 @@ static GTEXT_YAML_Status write_node(
   const char * tag_override,
   bool leading_newline);
 
-static GTEXT_YAML_Status write_node_prefix(
+static GTEXT_YAML_Status write_properties(
     yaml_writer_state * state,
-    const GTEXT_YAML_Node * node,
-    const char * tag_override) {
-  const char *anchor = node_anchor(node);
-  const char *tag = tag_override ? tag_override : node_tag(node);
+    const char * anchor,
+    const char * tag,
+    GTEXT_YAML_Node_Type type,
+    bool trailing_space) {
   bool canonical = state->opts && state->opts->canonical;
 
-  if (!tag && node_requires_tag(node->type)) {
-    tag = default_tag_for_type(node->type);
+  if (!tag && node_requires_tag(type)) {
+    tag = default_tag_for_type(type);
   }
 
   if (!tag && canonical) {
-    tag = default_tag_for_type(node->type);
+    tag = default_tag_for_type(type);
   }
 
   if (anchor) {
@@ -974,15 +1309,28 @@ static GTEXT_YAML_Status write_node_prefix(
       status = write_str(state, " ");
       if (status != GTEXT_YAML_OK) return status;
     }
-    status = write_str(state, tag);
+    status = write_tag(state, tag);
     if (status != GTEXT_YAML_OK) return status;
   }
 
-  if (anchor || tag) {
+  if ((anchor || tag) && trailing_space) {
     return write_str(state, " ");
   }
 
   return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status write_node_prefix(
+    yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    const char * tag_override,
+    bool trailing_space) {
+  return write_properties(
+      state,
+      node_anchor(node),
+      tag_override ? tag_override : node_tag(node),
+      node->type,
+      trailing_space);
 }
 
 static GTEXT_YAML_Status resolve_custom_write_tag(
@@ -1031,10 +1379,11 @@ static GTEXT_YAML_Status write_scalar_node(
   GTEXT_YAML_Status status = resolve_custom_write_tag(
       state, node, tag_override, &resolved_tag);
   if (status != GTEXT_YAML_OK) return status;
-  status = write_node_prefix(state, node, resolved_tag);
-  if (status != GTEXT_YAML_OK) return status;
 
   const char *value = node->as.scalar.value;
+  /* A scalar may hold a NUL, so its length is what counts, not its
+     terminator. */
+  size_t value_len = value ? node->as.scalar.length : 0;
   bool is_binary = false;
   bool canonical = state->opts && state->opts->canonical;
   GTEXT_YAML_Scalar_Style style = state->opts
@@ -1058,17 +1407,34 @@ static GTEXT_YAML_Status write_scalar_node(
   if (!canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN &&
       node->type == GTEXT_YAML_NULL) {
     if (!value || value[0] == '\0') {
+      /* Properties are enough to make a flow sequence entry a node, so an
+         anchored or tagged empty scalar can stay empty even there. */
+      bool has_properties =
+          node_anchor(node) || resolved_tag || node_tag(node);
+      if (state->empty_scalar_ok || has_properties) {
+        status = write_node_prefix(state, node, resolved_tag, false);
+        if (status != GTEXT_YAML_OK) return status;
+        state->key_absorbs_colon = has_properties;
+        return write_inline_comment(state, node_inline_comment(node));
+      }
+      status = write_node_prefix(state, node, resolved_tag, true);
+      if (status != GTEXT_YAML_OK) return status;
       return write_str(state, "~");
     }
+    status = write_node_prefix(state, node, resolved_tag, true);
+    if (status != GTEXT_YAML_OK) return status;
     return write_str(state, value);
   }
 
+  status = write_node_prefix(state, node, resolved_tag, true);
+  if (status != GTEXT_YAML_OK) return status;
+
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
-    if (!is_binary && scalar_needs_quotes(value)) {
+    if (!is_binary && scalar_needs_quotes(value, value_len)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     } else if (!flow && state->opts && state->opts->pretty) {
       int line_width = writer_line_width(state->opts);
-      if (line_width > 0 && value && strlen(value) > (size_t)line_width) {
+      if (line_width > 0 && value_len > (size_t)line_width) {
         style = GTEXT_YAML_SCALAR_STYLE_FOLDED;
       }
     }
@@ -1079,17 +1445,40 @@ static GTEXT_YAML_Status write_scalar_node(
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   }
 
+  /* A block style is only a spelling of the value if the value has one.  Ask
+     before committing to it, and fall back to quotes when the answer is no -
+     rather than writing something that reads back as a different string. */
+  yaml_block_plan block;
+  memset(&block, 0, sizeof(block));
+  if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
+      style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
+    plan_block_scalar(
+        value,
+        value_len,
+        indent + (size_t)writer_indent_spaces(state->opts),
+        state->block_parent_indent,
+        style == GTEXT_YAML_SCALAR_STYLE_FOLDED,
+        &block);
+    if (!block.usable) {
+      style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+    }
+  }
+
+  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED &&
+      !scalar_fits_single_quotes(value, value_len)) {
+    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
   switch (style) {
     case GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED:
-      status = write_single_quoted_scalar(state, value);
+      status = write_single_quoted_scalar(state, value, value_len);
       break;
     case GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED:
-      status = write_escaped_scalar(state, value);
+      status = write_escaped_scalar(state, value, value_len);
       break;
     case GTEXT_YAML_SCALAR_STYLE_LITERAL:
-      return write_block_scalar(state, value, indent, false);
     case GTEXT_YAML_SCALAR_STYLE_FOLDED:
-      return write_block_scalar(state, value, indent, true);
+      return write_block_scalar(state, value, indent, &block);
     case GTEXT_YAML_SCALAR_STYLE_PLAIN:
     default:
       status = GTEXT_YAML_OK;
@@ -1098,9 +1487,8 @@ static GTEXT_YAML_Status write_scalar_node(
 
   if (status != GTEXT_YAML_OK) return status;
 
-  if (!value) value = "";
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
-    status = write_str(state, value);
+    status = write_bytes(state, value ? value : "", value_len);
     if (status != GTEXT_YAML_OK) return status;
   }
 
@@ -1115,22 +1503,7 @@ static GTEXT_YAML_Status write_sequence_node(
   const char * tag_override,
   bool leading_newline) {
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
-  bool pretty = state->opts ? state->opts->pretty : false;
-  GTEXT_YAML_Flow_Style flow_style = state->opts
-      ? state->opts->flow_style
-      : GTEXT_YAML_FLOW_STYLE_AUTO;
-
-  if (flow_style == GTEXT_YAML_FLOW_STYLE_FLOW) {
-    flow = true;
-  } else if (flow_style == GTEXT_YAML_FLOW_STYLE_BLOCK) {
-    flow = false;
-    pretty = true;
-  }
-
-  if (!flow && (node_anchor(node) || node_tag(node) ||
-      (state->opts && state->opts->canonical))) {
-    flow = true;
-  }
+  flow = collection_is_flow(state, node, tag_override, flow);
 
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
@@ -1147,10 +1520,10 @@ static GTEXT_YAML_Status write_sequence_node(
       }
     }
   }
-  status = write_node_prefix(state, node, resolved_tag);
+  status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
 
-  if (flow || !pretty) {
+  if (flow) {
     status = write_str(state, "[");
     if (status != GTEXT_YAML_OK) return status;
     for (size_t i = 0; i < node->as.sequence.count; i++) {
@@ -1158,6 +1531,9 @@ static GTEXT_YAML_Status write_sequence_node(
         status = write_str(state, ", ");
         if (status != GTEXT_YAML_OK) return status;
       }
+      /* ns-flow-seq-entry has no empty alternative, so an entry with nothing
+         in it and no properties has to be written "~". */
+      state->empty_scalar_ok = false;
       status = write_node(
           state,
           node->as.sequence.children[i],
@@ -1170,6 +1546,7 @@ static GTEXT_YAML_Status write_sequence_node(
     }
     status = write_str(state, "]");
     if (status != GTEXT_YAML_OK) return status;
+    state->key_absorbs_colon = false;
     return write_inline_comment(state, node_inline_comment(node));
   }
 
@@ -1181,8 +1558,10 @@ static GTEXT_YAML_Status write_sequence_node(
     const GTEXT_YAML_Node *child = node->as.sequence.children[i];
     const char *child_comment = node_leading_comment(child);
     if (i > 0 || leading_newline) {
-      status = write_str(state, writer_newline(state->opts));
+      status = write_separator(state);
       if (status != GTEXT_YAML_OK) return status;
+    } else {
+      state->line_terminated = false;
     }
     if (child_comment) {
       status = write_comment_lines(state, child_comment, indent);
@@ -1194,7 +1573,9 @@ static GTEXT_YAML_Status write_sequence_node(
     status = write_str(state, "-");
     if (status != GTEXT_YAML_OK) return status;
 
-    if (child && (node_is_sequence_type(child) || node_is_mapping_type(child))) {
+    state->block_parent_indent = (int)indent;
+    state->empty_scalar_ok = true;
+    if (node_opens_block(state, child, NULL)) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
@@ -1206,7 +1587,8 @@ static GTEXT_YAML_Status write_sequence_node(
           false
         );
     } else {
-      status = write_str(state, " ");
+      status = write_str(
+          state, node_writes_nothing(state, child, NULL) ? "" : " ");
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
           state,
@@ -1231,22 +1613,7 @@ static GTEXT_YAML_Status write_mapping_node(
   const char * tag_override,
   bool leading_newline) {
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
-  bool pretty = state->opts ? state->opts->pretty : false;
-  GTEXT_YAML_Flow_Style flow_style = state->opts
-      ? state->opts->flow_style
-      : GTEXT_YAML_FLOW_STYLE_AUTO;
-
-  if (flow_style == GTEXT_YAML_FLOW_STYLE_FLOW) {
-    flow = true;
-  } else if (flow_style == GTEXT_YAML_FLOW_STYLE_BLOCK) {
-    flow = false;
-    pretty = true;
-  }
-
-  if (!flow && (node_anchor(node) || node_tag(node) ||
-      (state->opts && state->opts->canonical))) {
-    flow = true;
-  }
+  flow = collection_is_flow(state, node, tag_override, flow);
 
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
@@ -1265,10 +1632,10 @@ static GTEXT_YAML_Status write_mapping_node(
       }
     }
   }
-  status = write_node_prefix(state, node, resolved_tag);
+  status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
 
-  if (flow || !pretty) {
+  if (flow) {
     status = write_str(state, "{");
     if (status != GTEXT_YAML_OK) return status;
     for (size_t i = 0; i < node->as.mapping.count; i++) {
@@ -1276,6 +1643,7 @@ static GTEXT_YAML_Status write_mapping_node(
         status = write_str(state, ", ");
         if (status != GTEXT_YAML_OK) return status;
       }
+      state->empty_scalar_ok = true;
       status = write_node(
           state,
           node->as.mapping.pairs[i].key,
@@ -1285,8 +1653,9 @@ static GTEXT_YAML_Status write_mapping_node(
           false
       );
       if (status != GTEXT_YAML_OK) return status;
-      status = write_str(state, ": ");
+      status = write_str(state, state->key_absorbs_colon ? " : " : ": ");
       if (status != GTEXT_YAML_OK) return status;
+      state->empty_scalar_ok = true;
       status = write_node(
           state,
           node->as.mapping.pairs[i].value,
@@ -1299,6 +1668,7 @@ static GTEXT_YAML_Status write_mapping_node(
     }
     status = write_str(state, "}");
     if (status != GTEXT_YAML_OK) return status;
+    state->key_absorbs_colon = false;
     return write_inline_comment(state, node_inline_comment(node));
   }
 
@@ -1310,8 +1680,10 @@ static GTEXT_YAML_Status write_mapping_node(
     const GTEXT_YAML_Node *key_node = node->as.mapping.pairs[i].key;
     const char *key_comment = node_leading_comment(key_node);
     if (i > 0 || leading_newline) {
-      status = write_str(state, writer_newline(state->opts));
+      status = write_separator(state);
       if (status != GTEXT_YAML_OK) return status;
+    } else {
+      state->line_terminated = false;
     }
     if (key_comment) {
       status = write_comment_lines(state, key_comment, indent);
@@ -1320,6 +1692,7 @@ static GTEXT_YAML_Status write_mapping_node(
     if (status != GTEXT_YAML_OK) return status;
     status = write_indent(state, indent);
     if (status != GTEXT_YAML_OK) return status;
+    state->empty_scalar_ok = true;
     status = write_node(
         state,
         key_node,
@@ -1329,11 +1702,13 @@ static GTEXT_YAML_Status write_mapping_node(
         false
     );
     if (status != GTEXT_YAML_OK) return status;
-    status = write_str(state, ":");
+    status = write_str(state, state->key_absorbs_colon ? " :" : ":");
     if (status != GTEXT_YAML_OK) return status;
 
     const GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
-    if (value && (node_is_sequence_type(value) || node_is_mapping_type(value))) {
+    state->block_parent_indent = (int)indent;
+    state->empty_scalar_ok = true;
+    if (node_opens_block(state, value, node->as.mapping.pairs[i].value_tag)) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
@@ -1345,7 +1720,10 @@ static GTEXT_YAML_Status write_mapping_node(
           false
         );
     } else {
-      status = write_str(state, " ");
+      status = write_str(
+          state,
+          node_writes_nothing(state, value, node->as.mapping.pairs[i].value_tag)
+              ? "" : " ");
       if (status != GTEXT_YAML_OK) return status;
         status = write_node(
           state,
@@ -1376,6 +1754,7 @@ static GTEXT_YAML_Status write_alias_node(
   if (status != GTEXT_YAML_OK) return status;
   status = write_str(state, name);
   if (status != GTEXT_YAML_OK) return status;
+  state->key_absorbs_colon = true;
   return write_inline_comment(state, node_inline_comment(node));
 }
 
@@ -1389,6 +1768,8 @@ static GTEXT_YAML_Status write_node(
   if (!node) {
     return GTEXT_YAML_E_INVALID;
   }
+
+  state->key_absorbs_colon = false;
 
   switch (node->type) {
     case GTEXT_YAML_STRING:
@@ -1417,6 +1798,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
     const GTEXT_YAML_Write_Options * opts) {
   GTEXT_YAML_Write_Options defaults = gtext_yaml_write_options_default();
   yaml_writer_state state;
+  yaml_encoding_state encoding;
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
   const GTEXT_YAML_Node *root = NULL;
 
@@ -1430,11 +1812,29 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
 
   state.sink = sink;
   state.opts = opts;
-  writer_encoding_init(&state.encoding, opts);
+  writer_encoding_init(&encoding, opts);
+  state.encoding = &encoding;
+  /* s-l+block-node(-1, block-in): the root of a document sits one column to
+     the left of column zero, as far as 8.1.1.1 is concerned. */
+  state.block_parent_indent = -1;
+  state.line_terminated = false;
+  /* Nothing holds the root of a document, so an empty root has to be "~". */
+  state.empty_scalar_ok = false;
+  state.key_absorbs_colon = false;
   root = doc->root;
 
   if (!root) {
-    return GTEXT_YAML_OK;
+    /* A document with no content is still a document, and the empty node it
+       holds resolves to null.  Writing nothing at all said "no documents"
+       instead, which is a different stream. */
+    status = write_str(&state, "---");
+    if (status != GTEXT_YAML_OK) {
+      return status;
+    }
+    if (opts->trailing_newline) {
+      status = write_str(&state, writer_newline(opts));
+    }
+    return status;
   }
 
   status = write_comment_lines(&state, node_leading_comment(root), 0);
@@ -1442,18 +1842,18 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
     return status;
   }
 
-  status = write_node(&state, root, 0, !opts->pretty, NULL, false);
+  status = write_node(&state, root, 0, writer_root_is_flow(opts), NULL, false);
   if (status != GTEXT_YAML_OK) {
     return status;
   }
 
   if (opts->trailing_newline) {
-    status = write_str(&state, writer_newline(opts));
+    status = write_separator(&state);
     if (status != GTEXT_YAML_OK) {
       return status;
     }
   }
-  if (state.encoding.pending_utf8_len != 0) {
+  if (encoding.pending_utf8_len != 0) {
     return GTEXT_YAML_E_INVALID;
   }
 
@@ -1467,13 +1867,20 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
     const GTEXT_YAML_Write_Options * opts) {
   GTEXT_YAML_Write_Options defaults = gtext_yaml_write_options_default();
   yaml_writer_state state;
+  yaml_encoding_state encoding;
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
   bool wrote_doc = false;
 
-  if (!docs || count == 0) {
+  if (!sink || !sink->write) {
     return GTEXT_YAML_E_INVALID;
   }
-  if (!sink || !sink->write) {
+  /* An empty stream is a stream.  "# comment only", "..." and a file of one
+     blank line all parse to no documents at all, and refusing to write them
+     made a legal round trip look like a writer failure. */
+  if (count == 0) {
+    return GTEXT_YAML_OK;
+  }
+  if (!docs) {
     return GTEXT_YAML_E_INVALID;
   }
   if (!opts) {
@@ -1482,7 +1889,13 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
 
   state.sink = sink;
   state.opts = opts;
-  writer_encoding_init(&state.encoding, opts);
+  writer_encoding_init(&encoding, opts);
+  state.encoding = &encoding;
+  state.block_parent_indent = -1;
+  state.line_terminated = false;
+  /* Nothing holds the root of a document, so an empty root has to be "~". */
+  state.empty_scalar_ok = false;
+  state.key_absorbs_colon = false;
 
   for (size_t i = 0; i < count; i++) {
     const GTEXT_YAML_Document *doc = docs[i];
@@ -1493,10 +1906,11 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
     }
 
     if (wrote_doc) {
-      status = write_str(&state, writer_newline(opts));
+      status = write_separator(&state);
       if (status != GTEXT_YAML_OK) return status;
     }
 
+    state.block_parent_indent = -1;
     status = write_str(&state, "---");
     if (status != GTEXT_YAML_OK) return status;
     status = write_str(&state, writer_newline(opts));
@@ -1506,19 +1920,19 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
     if (root) {
       status = write_comment_lines(&state, node_leading_comment(root), 0);
       if (status != GTEXT_YAML_OK) return status;
-      status = write_node(&state, root, 0, !opts->pretty, NULL, false);
+      status = write_node(&state, root, 0, writer_root_is_flow(opts), NULL, false);
       if (status != GTEXT_YAML_OK) return status;
     }
 
     if (opts->trailing_newline) {
-      status = write_str(&state, writer_newline(opts));
+      status = write_separator(&state);
       if (status != GTEXT_YAML_OK) return status;
     }
 
     wrote_doc = true;
   }
 
-  if (state.encoding.pending_utf8_len != 0) {
+  if (encoding.pending_utf8_len != 0) {
     return GTEXT_YAML_E_INVALID;
   }
 
@@ -1548,6 +1962,12 @@ struct GTEXT_YAML_Writer {
   GTEXT_YAML_Sink sink;
   GTEXT_YAML_Write_Options opts;
   yaml_encoding_state encoding;
+  /* Set when the node just written ended in an anchor, a tag or an alias
+     name, all of which would swallow a ':' written straight after them. */
+  bool key_absorbs_colon;
+  /* Set when a block scalar has already written the break that ends its last
+     line, so the next separator must not write a second one. */
+  bool line_terminated;
   yaml_writer_stack_entry *stack;
   size_t stack_size;
   size_t stack_capacity;
@@ -1625,6 +2045,20 @@ static int writer_stack_pop(GTEXT_YAML_Writer *writer,
   return 0;
 }
 
+/* The two writers share a sink, a set of options and an encoder, so the
+   streaming one borrows the spelling helpers above by handing them a view of
+   itself rather than keeping a second copy of every rule.  The two used to
+   be written out twice and had drifted: only one of them knew how to spell a
+   resolved tag, and neither knew how to chomp a block scalar. */
+static void writer_view(GTEXT_YAML_Writer *writer, yaml_writer_state *state) {
+  memset(state, 0, sizeof(*state));
+  state->sink = &writer->sink;
+  state->opts = &writer->opts;
+  state->encoding = &writer->encoding;
+  state->block_parent_indent = -1;
+  state->empty_scalar_ok = false;
+}
+
 static int writer_write_bytes(GTEXT_YAML_Writer *writer,
     const char *bytes, size_t len) {
   if (!writer || !writer->sink.write || !bytes) {
@@ -1662,183 +2096,42 @@ static int writer_write_indent(GTEXT_YAML_Writer *writer, size_t spaces) {
   return 0;
 }
 
+/* Thin shims: the rules live in the shared helpers above, and these only
+   carry the streaming writer's int-returning convention across. */
 static int writer_write_prefix(
     GTEXT_YAML_Writer *writer,
     const char *anchor,
     const char *tag,
     GTEXT_YAML_Node_Type type,
     bool trailing_space) {
-  if (!tag && node_requires_tag(type)) {
-    tag = default_tag_for_type(type);
+  yaml_writer_state view;
+  writer_view(writer, &view);
+  if (write_properties(&view, anchor, tag, type, trailing_space)
+      != GTEXT_YAML_OK) {
+    writer->error = true;
+    return 1;
   }
-  if (writer->opts.canonical && !tag) {
-    tag = default_tag_for_type(type);
-  }
-  if (anchor) {
-    if (writer_write_char(writer, '&') != 0) return 1;
-    if (writer_write_string(writer, anchor) != 0) return 1;
-  }
-  if (tag) {
-    if (anchor) {
-      if (writer_write_char(writer, ' ') != 0) return 1;
-    }
-    if (writer_write_string(writer, tag) != 0) return 1;
-  }
-  if ((anchor || tag) && trailing_space) {
-    if (writer_write_char(writer, ' ') != 0) return 1;
-  }
+  /* An anchor or a tag with nothing after it would swallow a ':'. */
+  writer->key_absorbs_colon = !trailing_space && (anchor || tag);
   return 0;
 }
 
-static int writer_write_escaped(
-    GTEXT_YAML_Writer *writer,
-    const char *value,
-    size_t len) {
-  static const char hex[] = "0123456789ABCDEF";
-  if (writer_write_char(writer, '"') != 0) return 1;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)value[i];
-    switch (c) {
-      case '\\':
-        if (writer_write_string(writer, "\\\\") != 0) return 1;
-        break;
-      case '"':
-        if (writer_write_string(writer, "\\\"") != 0) return 1;
-        break;
-      case '\n':
-        if (writer_write_string(writer, "\\n") != 0) return 1;
-        break;
-      case '\r':
-        if (writer_write_string(writer, "\\r") != 0) return 1;
-        break;
-      case '\t':
-        if (writer_write_string(writer, "\\t") != 0) return 1;
-        break;
-      default:
-        if (c < 0x20) {
-          char buf[6];
-          buf[0] = '\\';
-          buf[1] = 'u';
-          buf[2] = '0';
-          buf[3] = '0';
-          buf[4] = hex[(c >> 4) & 0x0F];
-          buf[5] = hex[c & 0x0F];
-          if (writer_write_bytes(writer, buf, sizeof(buf)) != 0) return 1;
-        } else {
-          if (writer_write_bytes(writer, (const char *)&c, 1) != 0) return 1;
-        }
-        break;
-    }
+/* The break that separates one node from the next - unless a block scalar
+   has already written it, in which case a second would leave a blank line
+   that '+' chomping would keep as part of the value. */
+static int writer_write_separator(GTEXT_YAML_Writer *writer) {
+  if (writer->line_terminated) {
+    writer->line_terminated = false;
+    return 0;
   }
-  return writer_write_char(writer, '"');
+  return writer_write_string(writer, writer_newline(&writer->opts));
 }
 
-static int writer_write_single_quoted(
-    GTEXT_YAML_Writer *writer,
-    const char *value,
-    size_t len) {
-  if (writer_write_char(writer, '\'') != 0) return 1;
-  for (size_t i = 0; i < len; i++) {
-    if (value[i] == '\'') {
-      if (writer_write_string(writer, "''") != 0) return 1;
-    } else {
-      if (writer_write_bytes(writer, value + i, 1) != 0) return 1;
-    }
-  }
-  return writer_write_char(writer, '\'');
-}
-
-static int writer_write_wrapped_line(
-    GTEXT_YAML_Writer *writer,
-    const char *line,
-    size_t len,
-    size_t indent,
-    int line_width) {
-  size_t pos = 0;
-  while (pos < len) {
-    size_t remaining = len - pos;
-    size_t max_width = line_width > 0 ? (size_t)line_width : remaining;
-    size_t chunk = remaining < max_width ? remaining : max_width;
-
-    if (remaining > max_width) {
-      size_t cut = chunk;
-      for (size_t i = 0; i < chunk; i++) {
-        if (line[pos + i] == ' ') {
-          cut = i;
-        }
-      }
-      if (cut > 0) {
-        chunk = cut;
-      }
-    }
-
-    if (writer_write_indent(writer, indent) != 0) return 1;
-    if (writer_write_bytes(writer, line + pos, chunk) != 0) return 1;
-    pos += chunk;
-    while (pos < len && line[pos] == ' ') {
-      pos++;
-    }
-    if (pos < len) {
-      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
-        return 1;
-      }
-    }
-  }
-  return 0;
-}
-
-static int writer_write_block_scalar(
-    GTEXT_YAML_Writer *writer,
-    const char *value,
-    size_t indent,
-    bool folded) {
-  if (writer_write_string(writer, folded ? ">" : "|") != 0) return 1;
-  if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) return 1;
-
-  if (!value) value = "";
-  int line_width = writer_line_width(&writer->opts);
-  size_t child_indent = indent + (size_t)writer_indent_spaces(&writer->opts);
-  const char *line = value;
-  const char *cursor = value;
-
-  for (;;) {
-    if (*cursor == '\n' || *cursor == '\0') {
-      size_t line_len = (size_t)(cursor - line);
-      if (folded && line_width > 0) {
-        if (writer_write_wrapped_line(
-                writer, line, line_len, child_indent, line_width) != 0) {
-          return 1;
-        }
-      } else {
-        if (writer_write_indent(writer, child_indent) != 0) return 1;
-        if (writer_write_bytes(writer, line, line_len) != 0) return 1;
-      }
-      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
-        return 1;
-      }
-      if (*cursor == '\0') break;
-      cursor++;
-      line = cursor;
-      continue;
-    }
-    cursor++;
-  }
-
-  return 0;
-}
-
-static bool writer_scalar_needs_quotes(const char *value, size_t len) {
-  if (!value || len == 0) return true;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)value[i];
-    if (!(isalnum(c) || c == '_' || c == '-' || c == '.')) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static int writer_prepare_scalar(GTEXT_YAML_Writer *writer, bool *is_key) {
+/* @p empty says the node about to be written puts nothing on the page, so
+   the space that would have separated it from its "-" or ":" has nothing
+   left to separate. */
+static int writer_prepare_scalar(
+    GTEXT_YAML_Writer *writer, bool *is_key, bool empty) {
   yaml_writer_stack_entry *top = writer_stack_top(writer);
   if (!top) {
     if (is_key) *is_key = false;
@@ -1861,7 +2154,9 @@ static int writer_prepare_scalar(GTEXT_YAML_Writer *writer, bool *is_key) {
         if (is_key) *is_key = true;
         return 0;
       }
-      if (writer_write_string(writer, ": ") != 0) return 1;
+      if (writer_write_string(writer, writer->key_absorbs_colon
+              ? (empty ? " :" : " : ") : (empty ? ":" : ": ")) != 0) return 1;
+      writer->key_absorbs_colon = false;
       if (is_key) *is_key = false;
       return 0;
     }
@@ -1870,10 +2165,10 @@ static int writer_prepare_scalar(GTEXT_YAML_Writer *writer, bool *is_key) {
 
   if (top->type == YAML_WRITER_STACK_SEQUENCE) {
     if (top->has_items) {
-      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) return 1;
+      if (writer_write_separator(writer) != 0) return 1;
     }
     if (writer_write_indent(writer, top->indent) != 0) return 1;
-    if (writer_write_string(writer, "- ") != 0) return 1;
+    if (writer_write_string(writer, empty ? "-" : "- ") != 0) return 1;
     if (is_key) *is_key = false;
     return 0;
   }
@@ -1881,7 +2176,7 @@ static int writer_prepare_scalar(GTEXT_YAML_Writer *writer, bool *is_key) {
   if (top->type == YAML_WRITER_STACK_MAPPING) {
     if (top->expecting_key) {
       if (top->has_items) {
-        if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) return 1;
+        if (writer_write_separator(writer) != 0) return 1;
       }
       if (writer_write_indent(writer, top->indent) != 0) return 1;
       if (is_key) *is_key = true;
@@ -1889,11 +2184,13 @@ static int writer_prepare_scalar(GTEXT_YAML_Writer *writer, bool *is_key) {
     }
 
     if (top->explicit_key) {
-      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) return 1;
+      if (writer_write_separator(writer) != 0) return 1;
       if (writer_write_indent(writer, top->indent) != 0) return 1;
       top->explicit_key = false;
     }
-    if (writer_write_string(writer, ": ") != 0) return 1;
+    if (writer_write_string(writer, writer->key_absorbs_colon
+            ? (empty ? " :" : " : ") : (empty ? ":" : ": ")) != 0) return 1;
+    writer->key_absorbs_colon = false;
     if (is_key) *is_key = false;
     return 0;
   }
@@ -1925,7 +2222,31 @@ static GTEXT_YAML_Status writer_emit_scalar(
     GTEXT_YAML_Writer *writer,
     const GTEXT_YAML_Event *event) {
   bool is_key = false;
-  if (writer_prepare_scalar(writer, &is_key) != 0) {
+  const char *value = event->data.scalar.ptr ? event->data.scalar.ptr : "";
+  size_t len = event->data.scalar.len;
+  GTEXT_YAML_Scalar_Style style = writer->opts.scalar_style;
+  yaml_writer_stack_entry *top = writer_stack_top(writer);
+  bool in_flow = top ? top->flow : false;
+  size_t base_indent = top ? top->indent : 0;
+  bool has_properties = event->anchor || event->tag;
+  yaml_writer_state view;
+  writer_view(writer, &view);
+
+  /* An empty plain scalar is the empty node of 7.2, not the empty string:
+     "a:" and "-" are how it is written, and writing "" instead put a string
+     into the document that the document never held.  One position has no
+     empty alternative - a flow sequence entry with no properties, which
+     needs "~" - and the writer's own "---" holds an empty root. */
+  bool empty_node = (len == 0)
+      && !writer->opts.canonical
+      && writer->opts.scalar_style == GTEXT_YAML_SCALAR_STYLE_PLAIN
+      && event->scalar_style == GTEXT_YAML_SCALAR_STYLE_PLAIN;
+  bool needs_tilde = empty_node && !has_properties && in_flow && top
+      && top->type == YAML_WRITER_STACK_SEQUENCE;
+  if (needs_tilde) empty_node = false;
+
+  if (writer_prepare_scalar(
+          writer, &is_key, empty_node && !has_properties) != 0) {
     return GTEXT_YAML_E_STATE;
   }
 
@@ -1934,16 +2255,23 @@ static GTEXT_YAML_Status writer_emit_scalar(
           event->anchor,
           event->tag,
           GTEXT_YAML_STRING,
-          true) != 0) {
+          !empty_node) != 0) {
     return GTEXT_YAML_E_WRITE;
   }
 
-  const char *value = event->data.scalar.ptr ? event->data.scalar.ptr : "";
-  size_t len = event->data.scalar.len;
-  GTEXT_YAML_Scalar_Style style = writer->opts.scalar_style;
-  yaml_writer_stack_entry *top = writer_stack_top(writer);
-  bool in_flow = top ? top->flow : false;
-  size_t base_indent = top ? top->indent : 0;
+  if (empty_node) {
+    writer_finish_value(writer, is_key);
+    return GTEXT_YAML_OK;
+  }
+  if (needs_tilde) {
+    if (writer_write_string(writer, "~") != 0) return GTEXT_YAML_E_WRITE;
+    writer->key_absorbs_colon = false;
+    writer_finish_value(writer, is_key);
+    return GTEXT_YAML_OK;
+  }
+  /* 8.1.1.1 measures the indentation indicator from the node that holds the
+     scalar: the container's own indent, or -1 at the root of a document. */
+  view.block_parent_indent = top ? (int)top->indent : -1;
 
   if (writer->opts.canonical) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
@@ -1951,7 +2279,7 @@ static GTEXT_YAML_Status writer_emit_scalar(
   if (!writer->opts.canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
     style = event->scalar_style;
   }
-  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && writer_scalar_needs_quotes(value, len)) {
+  if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && scalar_needs_quotes(value, len)) {
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN && !in_flow && writer->opts.pretty) {
     int width = writer_line_width(&writer->opts);
@@ -1965,26 +2293,51 @@ static GTEXT_YAML_Status writer_emit_scalar(
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   }
 
-  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED) {
-    if (writer_write_single_quoted(writer, value, len) != 0) {
-      return GTEXT_YAML_E_WRITE;
-    }
-  } else if (style == GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED) {
-    if (writer_write_escaped(writer, value, len) != 0) {
-      return GTEXT_YAML_E_WRITE;
-    }
-  } else if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL) {
-    if (writer_write_block_scalar(writer, value, base_indent, false) != 0) {
-      return GTEXT_YAML_E_WRITE;
-    }
-  } else if (style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
-    if (writer_write_block_scalar(writer, value, base_indent, true) != 0) {
-      return GTEXT_YAML_E_WRITE;
-    }
-  } else {
-    if (writer_write_bytes(writer, value, len) != 0) {
-      return GTEXT_YAML_E_WRITE;
-    }
+  yaml_block_plan block;
+  memset(&block, 0, sizeof(block));
+  if (style == GTEXT_YAML_SCALAR_STYLE_LITERAL ||
+      style == GTEXT_YAML_SCALAR_STYLE_FOLDED) {
+    plan_block_scalar(
+        value,
+        len,
+        base_indent + (size_t)writer_indent_spaces(&writer->opts),
+        view.block_parent_indent,
+        style == GTEXT_YAML_SCALAR_STYLE_FOLDED,
+        &block);
+    if (!block.usable) style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  if (style == GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED &&
+      !scalar_fits_single_quotes(value, len)) {
+    style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
+  }
+
+  GTEXT_YAML_Status st = GTEXT_YAML_OK;
+  switch (style) {
+    case GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED:
+      st = write_single_quoted_scalar(&view, value, len);
+      break;
+    case GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED:
+      st = write_escaped_scalar(&view, value, len);
+      break;
+    case GTEXT_YAML_SCALAR_STYLE_LITERAL:
+    case GTEXT_YAML_SCALAR_STYLE_FOLDED:
+      st = write_block_scalar(&view, value, base_indent, &block);
+      break;
+    default:
+      st = write_bytes(&view, value, len);
+      break;
+  }
+  if (st != GTEXT_YAML_OK) {
+    writer->error = true;
+    return GTEXT_YAML_E_WRITE;
+  }
+  /* A block scalar ends its own last line, so whatever writes the next
+     separator has to know not to write another. */
+  writer->line_terminated = view.line_terminated;
+  /* Content of any kind stands between a property and a following ':'. */
+  if (len > 0 || style != GTEXT_YAML_SCALAR_STYLE_PLAIN) {
+    writer->key_absorbs_colon = false;
   }
 
   writer_finish_value(writer, is_key);
@@ -1995,7 +2348,7 @@ static GTEXT_YAML_Status writer_emit_alias(
     GTEXT_YAML_Writer *writer,
     const GTEXT_YAML_Event *event) {
   bool is_key = false;
-  if (writer_prepare_scalar(writer, &is_key) != 0) {
+  if (writer_prepare_scalar(writer, &is_key, false) != 0) {
     return GTEXT_YAML_E_STATE;
   }
 
@@ -2009,6 +2362,9 @@ static GTEXT_YAML_Status writer_emit_alias(
   if (writer_write_string(writer, name) != 0) {
     return GTEXT_YAML_E_WRITE;
   }
+  /* 6.9.2 stops an anchor name only at a flow indicator, so "*b: 1" names
+     the anchor "b:".  The colon has to be kept off it. */
+  writer->key_absorbs_colon = true;
 
   writer_finish_value(writer, is_key);
   return GTEXT_YAML_OK;
@@ -2086,7 +2442,7 @@ static GTEXT_YAML_Status writer_emit_container_start(
       }
     }
   } else if (parent->flow) {
-    if (writer_prepare_scalar(writer, &is_key) != 0) {
+    if (writer_prepare_scalar(writer, &is_key, false) != 0) {
       return GTEXT_YAML_E_STATE;
     }
     if (writer_write_prefix(
@@ -2103,9 +2459,7 @@ static GTEXT_YAML_Status writer_emit_container_start(
     if (writer_write_char(writer, open_char) != 0) return GTEXT_YAML_E_WRITE;
   } else if (parent->type == YAML_WRITER_STACK_SEQUENCE) {
     if (parent->has_items) {
-      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
-        return GTEXT_YAML_E_WRITE;
-      }
+      if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
     }
     if (writer_write_indent(writer, parent_indent) != 0) return GTEXT_YAML_E_WRITE;
     if (flow) {
@@ -2145,9 +2499,7 @@ static GTEXT_YAML_Status writer_emit_container_start(
   } else if (parent->type == YAML_WRITER_STACK_MAPPING) {
     if (parent->expecting_key) {
       if (parent->has_items) {
-        if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
-          return GTEXT_YAML_E_WRITE;
-        }
+        if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
       }
       if (writer_write_indent(writer, parent_indent) != 0) return GTEXT_YAML_E_WRITE;
       if (writer_write_string(writer, "? ") != 0) return GTEXT_YAML_E_WRITE;
@@ -2186,9 +2538,7 @@ static GTEXT_YAML_Status writer_emit_container_start(
       }
     } else {
       if (parent->explicit_key) {
-        if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
-          return GTEXT_YAML_E_WRITE;
-        }
+        if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
         if (writer_write_indent(writer, parent_indent) != 0) {
           return GTEXT_YAML_E_WRITE;
         }
@@ -2247,6 +2597,7 @@ static GTEXT_YAML_Status writer_emit_container_end(
       return GTEXT_YAML_E_WRITE;
     }
   }
+  writer->key_absorbs_colon = false;
 
   writer_finish_value(writer, entry.is_map_key);
   return GTEXT_YAML_OK;
@@ -2322,12 +2673,14 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_writer_event(
       return GTEXT_YAML_OK;
     }
     case GTEXT_YAML_EVENT_DOCUMENT_END: {
-      const char *newline = writer_newline(&writer->opts);
       if (!writer->in_document) {
         return GTEXT_YAML_E_STATE;
       }
       if (writer->opts.trailing_newline) {
-        if (writer_write_string(writer, newline) != 0) return GTEXT_YAML_E_WRITE;
+        /* Through the separator, so a block scalar that has already ended
+           its own last line does not gain a blank one - which "+" chomping
+           would keep as part of the value. */
+        if (writer_write_separator(writer) != 0) return GTEXT_YAML_E_WRITE;
       }
       writer->in_document = false;
       return GTEXT_YAML_OK;

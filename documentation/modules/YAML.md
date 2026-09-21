@@ -971,17 +971,20 @@ All tests pass with zero memory leaks (valgrind-verified).
 
 ### Known gaps
 
-**The writer is the weaker half of the module, and it is not finished.**
-`make conformance-roundtrip` writes every suite document this parser accepts
-back out and re-reads it: 255 of 282 survive by value in the default flow
-style (90.4%), 234 in block style (83.0%). A by-value failure is data lost,
-not a style difference. The list, in rough order of severity, is on
-\ref format_yaml "the YAML format page"; the headline items are a resolved
-tag written as bare text, a non-scalar key written as a sequence entry, and a
-single-quoted scalar chosen for content single quotes cannot hold.
+**What the writers are measured against.** `make conformance-roundtrip` writes
+every suite document this parser accepts back out and re-reads it, through the
+DOM writer in flow style, the DOM writer in block style, and the streaming
+writer. All three keep 282 of 282 by value, which is the figure the target
+holds them to; block style also keeps every anchor, tag and scalar spelling.
+The two flow figures stop at 280 by event for one reason, which is in the
+grammar rather than in the writer: `ns-flow-seq-entry` has no empty
+alternative, so a flow sequence entry that is the empty node with no
+properties has to be written `~`.
 
-None of this is visible to `make conformance`, because yaml-test-suite is a
-corpus of inputs and tests no writer at all.
+None of that is visible to `make conformance`, because yaml-test-suite is a
+corpus of inputs and tests no writer at all. What the first backwards run
+found - and what it cost to fix - is on \ref format_yaml "the YAML format
+page". `make test` runs the same property over the shapes that were wrong.
 
 ### Planned Features
 

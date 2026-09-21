@@ -146,6 +146,16 @@ to be valid documents the parser refused, all the while the score read "all
 366 checked cases pass". Print how much of the corpus was asked, beside how
 much of it passed.
 
+And when the corpus is a corpus of *inputs*, ask what it says about the other
+direction. yaml-test-suite tests no writer at all, so the whole write side of
+that module went unmeasured behind a parser score of 395 of 395. Running the
+suite backwards - parse, write, parse, compare - costs nothing, needs no new
+corpus, and scored 90.4% the first time it was run. It found a resolved tag
+written as bare text, block scalars with no chomping indicator, folding that
+turned line breaks into spaces, and three parser defects besides, one of them
+a four-hundred-line loop that existed in two drifted copies. If a module both
+reads and writes, the corpus you already have measures twice.
+
 That last sentence is the most useful one on any of the three pages. A format
 page that only lists features is a marketing document. Name the oracle, name
 its limit, and name what nothing checks.

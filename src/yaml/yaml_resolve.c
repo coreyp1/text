@@ -1389,6 +1389,39 @@ static size_t tag_percent_decode(char *out, const char *in, size_t len) {
 	return w;
 }
 
+/* This library spells a tag in the standard namespace "!!str" wherever it
+   keeps one - the DOM constructors, the tag policy, tag_suffix(), every
+   caller of gtext_yaml_node_tag().  A tag that arrives spelled as the URI
+   has to be put into that spelling too: "!<tag:yaml.org,2002:str>" and
+   "!!str" name one tag, and a DOM that held both answered two different
+   ways when asked what tag a node carried. */
+static const char *normalize_standard_tag(
+	GTEXT_YAML_Document *doc,
+	const char *tag
+) {
+	static const char yaml_prefix[] = "tag:yaml.org,2002:";
+	if (!doc || !tag) return tag;
+	if (strncmp(tag, yaml_prefix, sizeof(yaml_prefix) - 1) != 0) return tag;
+	const char *suffix = tag + (sizeof(yaml_prefix) - 1);
+	if (!*suffix) return tag;
+	/* Only where the shorthand reads back as the same tag: 6.8.2.2 keeps
+	   "!" and the flow indicators out of a suffix, so a URI carrying one of
+	   them has no shorthand spelling and keeps the one it came with. */
+	for (const unsigned char *c = (const unsigned char *)suffix; *c; c++) {
+		if (*c == '!' || *c == ',' || *c == '['
+				|| *c == ']' || *c == '{' || *c == '}') {
+			return tag;
+		}
+	}
+	size_t len = strlen(suffix);
+	char *out = (char *)yaml_context_alloc(doc->ctx, len + 3, 1);
+	if (!out) return tag;
+	out[0] = '!';
+	out[1] = '!';
+	memcpy(out + 2, suffix, len + 1);
+	return out;
+}
+
 static const char *resolve_tag_handle(
 	GTEXT_YAML_Document *doc,
 	const char *tag
@@ -1397,7 +1430,7 @@ static const char *resolve_tag_handle(
 	/* A verbatim tag reaches the DOM as the URI between its brackets and is
 	   used exactly as written (5.3), so anything not beginning "!" is not a
 	   shorthand and has neither a handle to expand nor escapes to decode. */
-	if (tag[0] != '!') return tag;
+	if (tag[0] != '!') return normalize_standard_tag(doc, tag);
 	/* "!!" is a handle like any other and may be redefined: %TAG !! makes
 	   the secondary handle mean something else for that document, and then
 	   "!!int" is that tag rather than tag:yaml.org,2002:int (6.8.2.2, spec
@@ -1445,7 +1478,7 @@ static const char *resolve_tag_handle(
 	memcpy(resolved, prefix, prefix_len);
 	size_t written = tag_percent_decode(resolved + prefix_len, suffix, suffix_len);
 	resolved[prefix_len + written] = '\0';
-	return resolved;
+	return normalize_standard_tag(doc, resolved);
 }
 
 static const GTEXT_YAML_Custom_Tag *find_custom_tag(

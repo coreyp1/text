@@ -361,6 +361,9 @@ TEST(YamlStreamWriter, BlockMappingDocument) {
   gtext_yaml_sink_buffer_free(&sink);
 }
 
+/* "|-", and no blank line after it.  The expectation here used to be "|"
+   with a trailing empty line, which reads back as "line 1\nline 2\n" - a
+   line break the value never had - and the two writers disagreed about it. */
 TEST(YamlStreamWriter, LiteralScalarDocument) {
   GTEXT_YAML_Sink sink;
   GTEXT_YAML_Status status = gtext_yaml_sink_buffer(&sink);

@@ -85,10 +85,12 @@ typedef struct {
 
   /** The node's tag as the node carries it, or NULL when it carries none.
    *
-   * This is the tag as written, with any `%TAG` handle already substituted:
-   * `!!str`, `!foo`, `tag:example.com,2000:app/x`.  It is *not* expanded to
-   * a URI - `!!str` and `tag:yaml.org,2002:str` name the same tag, and which
-   * spelling to print is the caller's question, not this library's. */
+   * This is the tag with any `%TAG` handle already substituted: `!!str`,
+   * `!foo`, `tag:example.com,2000:app/x`.  A tag in the standard namespace
+   * always reaches here in the `!!x` spelling, whichever of 5.6's three
+   * forms it was written in, so two nodes carrying the same tag compare
+   * equal.  Tags outside that namespace are the URI, not expanded further -
+   * which spelling to print is the caller's question. */
   const char * tag;
 
   /** SCALAR: the text as written, after escapes were decoded and block

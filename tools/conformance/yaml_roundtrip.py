@@ -16,6 +16,9 @@ Nothing in yaml-test-suite tests a writer; the suite is a corpus of inputs.
 Running it backwards through this library costs nothing and measures the half
 of the module the suite cannot see.
 
+YTS_RT_STREAM asks for the streaming writer instead of the DOM one, which is
+the other half of the write side and equally untested by the suite.
+
 Usage:  yaml_roundtrip.py <suite-dir> <yts-runner> <yts-roundtrip> [-v N]
 """
 import collections
@@ -27,6 +30,7 @@ import sys
 import yaml
 
 SUITE, RUNNER, ROUNDTRIP = sys.argv[1], sys.argv[2], sys.argv[3]
+STREAM = ['-s'] if os.environ.get('YTS_RT_STREAM') else []
 VERBOSE = 0
 if '-v' in sys.argv:
     i = sys.argv.index('-v')
@@ -67,7 +71,7 @@ for path in sorted(glob.glob(SUITE + '/src/*.yaml')):
             by_event['skip-refused'] += 1
             continue
 
-        written, rc = run([ROUNDTRIP, '-w'], src)
+        written, rc = run([ROUNDTRIP, '-w'] + STREAM, src)
         if rc != 0 or written.startswith('FAIL'):
             by_value['write-failed'] += 1
             failures.append((label, name, 'the writer refused it',
@@ -85,11 +89,14 @@ for path in sorted(glob.glob(SUITE + '/src/*.yaml')):
             else:
                 by_value['ok'] += 1
 
-        events, _ = run([ROUNDTRIP], src)
+        events, _ = run([ROUNDTRIP] + STREAM, src)
         head = events.split('\n', 1)[0]
         by_event['ok' if head == 'OK' else head.split(':')[0]] += 1
 
-print('=== round trip: parse -> write -> parse, over yaml-test-suite ===')
+WRITER = ('the streaming writer' if STREAM
+          else 'the DOM writer, block style' if os.environ.get('YTS_RT_BLOCK')
+          else 'the DOM writer, flow style')
+print('=== round trip: parse -> %s -> parse, over yaml-test-suite ===' % WRITER)
 for title, counter in (('by value (was any data lost?)', by_value),
                        ('by event (did the spelling survive too?)', by_event)):
     attempted = sum(counter.values()) - counter['skip-refused']

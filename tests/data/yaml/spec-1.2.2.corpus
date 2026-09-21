@@ -424,3 +424,89 @@ a: 1
 \ufeffb: 2
 @error Byte order mark inside a document
 @end
+
+# --- 5.3, c-non-specific-tag: "!" on its own is a whole tag property -------
+# The shorthand's name begins at the byte after the "!", so a "!" that is not
+# followed immediately by a name is the non-specific tag and an ordinary node
+# follows it.  The scanner used to read that node as the tag's name - which
+# takes a ":" with it, since ns-tag-char excludes only the flow indicators -
+# and the stream never recorded where the "!" was written, so it was carried
+# past the empty node it belonged to and hung on the next one.
+
+@case a bare "!" before a value that was never written
+@yaml
+a: !
+b: 2
+@json
+{"a":"","b":2}
+@end
+
+@case and before a sequence entry that was never written
+@yaml
+- !
+- x
+@json
+["","x"]
+@end
+
+@case up against a flow indicator, which cannot be part of a tag name
+@yaml
+[!]
+@json
+[""]
+@end
+
+@case or against the end of the stream, where no node can follow it
+@yaml
+!
+@json
+""
+@end
+
+# --- 6.8.2.2: the secondary handle names one tag, however it is spelled -----
+
+@case a verbatim tag in the standard namespace is the shorthand's tag
+@yaml
+!<tag:yaml.org,2002:str> 23
+@json
+"23"
+@end
+
+@case and a named handle pointed at that namespace resolves to it too
+@yaml
+%TAG !y! tag:yaml.org,2002:
+---
+!y!int 0x1f
+@json
+31
+@end
+
+# --- 8.1.1.1 / 6.9.2: a node begins where its properties begin -------------
+# The properties are held until the node they name arrives, and reported with
+# it, so an anchored key arrived at the column of its scalar.  Under a value
+# that was never written that put it inside the value rather than beside the
+# key.
+
+@case an anchored key under an empty value is the next key, not the value
+@yaml
+a: 1
+b:
+&anchor c: 3
+@json
+{"a":1,"b":null,"c":3}
+@end
+
+@case and a tagged one likewise
+@yaml
+b:
+!!str c: 3
+@json
+{"b":null,"c":3}
+@end
+
+@case a scalar at the mapping's own column with no ":" is still an error
+@yaml
+b:
+&anchor c
+@error Scalar with no
+@end

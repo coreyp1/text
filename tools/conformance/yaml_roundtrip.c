@@ -89,10 +89,60 @@ static char *events_of(GTEXT_YAML_Document **docs, size_t count) {
   return s.buf ? s.buf : strdup("");
 }
 
+/* Drive the streaming writer from a walk of the parsed tree.
+ *
+ * The streaming writer is the other half of the module's write side and the
+ * suite says nothing about it either.  Composed node events translate one for
+ * one into the events the writer takes, so the same corpus measures both. */
+typedef struct {
+  GTEXT_YAML_Writer *writer;
+  GTEXT_YAML_Status status;
+} Relay;
+
+static GTEXT_YAML_Status relay(const GTEXT_YAML_Node_Event *ev, void *user) {
+  Relay *r = (Relay *)user;
+  GTEXT_YAML_Event out;
+  memset(&out, 0, sizeof(out));
+  switch (ev->type) {
+    case GTEXT_YAML_NODE_EVENT_STREAM_START:
+      out.type = GTEXT_YAML_EVENT_STREAM_START; break;
+    case GTEXT_YAML_NODE_EVENT_STREAM_END:
+      out.type = GTEXT_YAML_EVENT_STREAM_END; break;
+    case GTEXT_YAML_NODE_EVENT_DOCUMENT_START:
+      out.type = GTEXT_YAML_EVENT_DOCUMENT_START; break;
+    case GTEXT_YAML_NODE_EVENT_DOCUMENT_END:
+      out.type = GTEXT_YAML_EVENT_DOCUMENT_END; break;
+    case GTEXT_YAML_NODE_EVENT_SEQUENCE_START:
+      out.type = GTEXT_YAML_EVENT_SEQUENCE_START; break;
+    case GTEXT_YAML_NODE_EVENT_SEQUENCE_END:
+      out.type = GTEXT_YAML_EVENT_SEQUENCE_END; break;
+    case GTEXT_YAML_NODE_EVENT_MAPPING_START:
+      out.type = GTEXT_YAML_EVENT_MAPPING_START; break;
+    case GTEXT_YAML_NODE_EVENT_MAPPING_END:
+      out.type = GTEXT_YAML_EVENT_MAPPING_END; break;
+    case GTEXT_YAML_NODE_EVENT_SCALAR:
+      out.type = GTEXT_YAML_EVENT_SCALAR;
+      out.data.scalar.ptr = ev->value;
+      out.data.scalar.len = ev->value_len;
+      out.scalar_style = ev->scalar_style;
+      break;
+    case GTEXT_YAML_NODE_EVENT_ALIAS:
+      out.type = GTEXT_YAML_EVENT_ALIAS;
+      out.data.alias_name = ev->value;
+      break;
+  }
+  out.anchor = ev->anchor;
+  out.tag = ev->tag;
+  r->status = gtext_yaml_writer_event(r->writer, &out);
+  return r->status;
+}
+
 int main(int argc, char **argv) {
   /* "-w" prints the written YAML and stops, so a caller can compare the two
-     sides any way it likes - by value as well as by event. */
+     sides any way it likes - by value as well as by event.  "-s" writes the
+     same document through the streaming writer instead of the DOM one. */
   const int write_only = (argc > 1 && strcmp(argv[1], "-w") == 0);
+  const int streaming = (argc > 1 && strcmp(argv[argc - 1], "-s") == 0);
   static char in[1 << 20];
   size_t n = fread(in, 1, sizeof(in) - 1, stdin);
   in[n] = 0;
@@ -125,13 +175,29 @@ int main(int argc, char **argv) {
     GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
     /* YTS_RT_BLOCK asks for the block style a human would write, so the two
        defaults can be told apart from the writer itself. */
-    if (getenv("YTS_RT_BLOCK")) {
+    const char *block = getenv("YTS_RT_BLOCK");
+    if (block && *block) {
       wopts.pretty = true;
       wopts.flow_style = GTEXT_YAML_FLOW_STYLE_BLOCK;
     }
-    GTEXT_YAML_Status wst = (count == 1)
-      ? gtext_yaml_write_document(docs[0], &sink, &wopts)
-      : gtext_yaml_write_documents(docs, count, &sink, &wopts);
+    GTEXT_YAML_Status wst;
+    if (streaming) {
+      Relay r;
+      r.status = GTEXT_YAML_OK;
+      r.writer = gtext_yaml_writer_new(sink, &wopts);
+      if (!r.writer) {
+        printf("FAIL write: no writer\n");
+        gtext_yaml_sink_buffer_free(&sink);
+        return 0;
+      }
+      wst = gtext_yaml_stream_walk(docs, count, relay, &r);
+      if (wst == GTEXT_YAML_OK) wst = gtext_yaml_writer_finish(r.writer);
+      gtext_yaml_writer_free(r.writer);
+    } else {
+      wst = (count == 1)
+        ? gtext_yaml_write_document(docs[0], &sink, &wopts)
+        : gtext_yaml_write_documents(docs, count, &sink, &wopts);
+    }
     if (wst != GTEXT_YAML_OK) {
       printf("FAIL write: status %d\n", (int)wst);
       gtext_yaml_sink_buffer_free(&sink);

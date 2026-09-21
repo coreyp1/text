@@ -1292,9 +1292,14 @@ conformance: ## Score the YAML parser against yaml-test-suite (clones it on firs
 conformance:
 	@PREFIX="$(PREFIX)" tools/conformance/run.sh
 
-conformance-roundtrip: ## Round-trip yaml-test-suite through the YAML writer
+conformance-roundtrip: ## Round-trip yaml-test-suite through all three YAML writers
 conformance-roundtrip:
-	@PREFIX="$(PREFIX)" tools/conformance/run.sh roundtrip
+	@echo "--- the DOM writer, flow style ---"
+	@PREFIX="$(PREFIX)" YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+	@echo "--- the DOM writer, block style ---"
+	@PREFIX="$(PREFIX)" YTS_RT_BLOCK=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+	@echo "--- the streaming writer ---"
+	@PREFIX="$(PREFIX)" YTS_RT_STREAM=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
 
 conformance-json: ## Score the JSON parser against JSONTestSuite (clones it on first use)
 conformance-json:
