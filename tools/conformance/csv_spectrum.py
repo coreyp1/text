@@ -19,12 +19,14 @@ if not cases:
     sys.exit("no csvs/ cases under %s" % SUITE)
 
 unusable = []
+no_fixture = []
 
 
 def score(permissive):
   passed = 0
   failures = []
   del unusable[:]
+  del no_fixture[:]
   env = dict(os.environ)
   if permissive:
       env['CSS_ALLOW_UNQUOTED_QUOTES'] = '1'
@@ -34,6 +36,10 @@ def score(permissive):
     name = os.path.basename(path)[:-4]
     expected_path = os.path.join(SUITE, 'json', name + '.json')
     if not os.path.exists(expected_path):
+        # Counted and named.  A case whose expectation is simply missing used
+        # to vanish here without leaving a trace in the output, which is the
+        # same hole as scoring a corpus you never finished reading.
+        no_fixture.append(name)
         continue
     with open(expected_path, encoding='utf-8') as fh:
         want = json.load(fh)
@@ -71,9 +77,17 @@ def score(permissive):
 passed, failures = score(False)
 relaxed_passed, _ = score(True)
 checked = passed + len(failures)
+total = len(cases)
+excluded = len(unusable) + len(no_fixture)
 print("=== csv-spectrum ===")
-print("checked %d, passed %d  (%.1f%%)"
-      % (checked, passed, 100.0 * passed / checked if checked else 0.0))
+# Two denominators.  The pass rate is over the cases that can be judged; the
+# corpus line says how many that was out of what the suite ships, so a rate
+# computed over a shrinking corpus cannot read as a rising score.
+print("checked %d of %d cases (%.1f%% of the corpus)"
+      % (checked, total, 100.0 * checked / total if total else 0.0))
+print("passed  %d  (%.1f%% of checked, %.1f%% of the corpus)"
+      % (passed, 100.0 * passed / checked if checked else 0.0,
+         100.0 * passed / total if total else 0.0))
 if relaxed_passed != passed:
     print("with dialect.allow_unquoted_quotes: %d  (%.1f%%)  - the difference "
           "is a dialect, not the grammar"
@@ -83,8 +97,24 @@ for name, want, got in failures:
     if got:
         print("  %-28s got: %s" % ("", got))
 for name in unusable:
-    print("  %-28s skipped: the suite's fixture is not an array of rows and "
+    print("  %-28s excluded: the suite's fixture is not an array of rows and "
           "does not match its own csv" % name)
+for name in no_fixture:
+    print("  %-28s excluded: the suite ships no json/ expectation for it" % name)
+if excluded:
+    print("%d of %d cases were not asked; quote the %.1f%% only with that count"
+          % (excluded, total,
+             100.0 * passed / checked if checked else 0.0))
+
+corpus_floor = os.environ.get('CSS_MIN_CORPUS')
+if corpus_floor and total:
+    covered = 100.0 * checked / total
+    if covered + 0.05 < float(corpus_floor):
+        print("conformance: only %.1f%% of the corpus was checked, below the "
+              "floor of %s%%" % (covered, corpus_floor))
+        sys.exit(1)
+    print("conformance: %.1f%% of the corpus checked, meeting the floor of %s%%"
+          % (covered, corpus_floor))
 
 floor = os.environ.get('CSS_MIN')
 if floor and checked:

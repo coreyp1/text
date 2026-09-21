@@ -3,17 +3,28 @@
 #
 #   tools/conformance/run-json.sh
 #
-# The suite is cloned into build/json-test-suite on first use and reused after
-# that.  JTS_MIN sets a floor the score must meet; JTS_REPORT names a file to
+# The suite is cloned into build/json-test-suite on first use and checked out at
+# the commit named in tools/conformance/JSON_SUITE_COMMIT.  JTS_MIN sets a floor
+# the score must meet; JTS_REPORT names a file to
 # write the failing cases to.  Mirrors run.sh, which does the same for YAML.
 set -e
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 suite=${JTS_SUITE:-$root/build/json-test-suite}
+commit=$(cat "$root/tools/conformance/JSON_SUITE_COMMIT")
 
 if [ ! -d "$suite/test_parsing" ]; then
 	echo "fetching JSONTestSuite into $suite"
-	git clone --depth 1 https://github.com/nst/JSONTestSuite.git "$suite"
+	git clone https://github.com/nst/JSONTestSuite.git "$suite"
+fi
+# The corpus is pinned. A score is a percentage, and a percentage that moves
+# because somebody upstream added or changed cases is not a measurement of
+# this library - run-json-schema.sh has pinned its suite for that reason since
+# it was written, and these three were still tracking whatever the default
+# branch held on the day they ran.
+if [ "$(git -C "$suite" rev-parse HEAD)" != "$commit" ]; then
+	git -C "$suite" fetch --quiet origin "$commit" 2>/dev/null || git -C "$suite" fetch --quiet
+	git -C "$suite" checkout --quiet "$commit"
 fi
 
 [ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }

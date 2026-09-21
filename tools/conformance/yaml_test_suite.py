@@ -105,11 +105,37 @@ for f in sorted(glob.glob(SUITE + '/src/*.yaml')):
             failures.append((label, name, 'value mismatch',
                              json.dumps(want)[:85], json.dumps(got)[:85]))
 
+# Two denominators, both printed, because they answer different questions and
+# only one of them is the corpus.
+#
+# `checked` is the cases this harness can judge: it drives an implementation
+# through a JSON-per-line interface, so a case that asserts an event stream
+# has nothing to compare against.  `total` is every case the suite ships.
+# Reporting only the first turns "100.0%" into a claim about a corpus that was
+# never fully asked, which is the failure the JSON Schema harness already
+# guards against by keeping refused schemas in its denominator.
+#
+# The skips here are not the engine narrowing - an implementation that started
+# refusing a checkable case would score it `json-rejected`, a failure - so the
+# rate over `checked` cannot be gamed by giving up on input.  What it can do
+# is quietly shrink: a parse error in an expectation moves a case to
+# `skip-bad-expect` and nobody sees the corpus get smaller.  YTS_MIN_CORPUS
+# exists to make that a build failure rather than a rounding difference.
 checked = sum(v for k, v in results.items() if not k.startswith('skip'))
+total = sum(results.values())
+skipped = total - checked
 passed = results['fail-ok'] + results['json-ok']
 print("=== yaml-test-suite: %s ===" % which)
 for k, v in sorted(results.items()): print("  %-18s %d" % (k, v))
-print("\nchecked %d, passed %d  (%.1f%%)" % (checked, passed, 100.0 * passed / checked))
+pct_checked = 100.0 * passed / checked if checked else 0.0
+pct_corpus = 100.0 * passed / total if total else 0.0
+covered = 100.0 * checked / total if total else 0.0
+print("\nchecked %d of %d cases (%.1f%% of the corpus)" % (checked, total, covered))
+print("passed  %d  (%.1f%% of checked, %.1f%% of the corpus)"
+      % (passed, pct_checked, pct_corpus))
+if skipped:
+    print("%d case(s) were not asked; the %.1f%% figure is the one to quote "
+          "only alongside that count" % (skipped, pct_checked))
 report = os.environ.get('YTS_REPORT')
 if report:
   with open(report, 'w') as fh:
@@ -119,9 +145,18 @@ if report:
         if got:  fh.write("           got : %s\n" % got)
   print("failures written to %s" % report)
 
+corpus_floor = os.environ.get('YTS_MIN_CORPUS')
+if corpus_floor:
+    if covered + 0.05 < float(corpus_floor):
+        print("conformance: only %.1f%% of the corpus was checked, below the "
+              "floor of %s%%" % (covered, corpus_floor))
+        sys.exit(1)
+    print("conformance: %.1f%% of the corpus checked, meeting the floor of %s%%"
+          % (covered, corpus_floor))
+
 floor = os.environ.get('YTS_MIN')
 if floor:
-    pct = 100.0 * passed / checked
+    pct = pct_checked
     if pct + 0.05 < float(floor):
         print("conformance: %.1f%% is below the floor of %s%%" % (pct, floor))
         sys.exit(1)

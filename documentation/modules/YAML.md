@@ -29,18 +29,28 @@ and conversion to JSON.
 kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
 the PyYAML comparison are on \ref format_yaml "the YAML format page".
 
-**Still unsupported:** one of the 366 checkable cases. A node may carry
-two anchors, which yaml-test-suite says should be refused and is accepted
-instead - the second silently replaces the first. Telling that apart from
-the valid document in the same case needs two properties pending at once,
-and the stream has one slot for them.
-
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
-parser. It passes **99.7%** of the 366 cases that can be checked by value or
-by refusal; the same harness scores js-yaml at 82.0% and PyYAML at 77.3%.
-Conformance to 1.2.2 is therefore partial. The first run scored 51.9%; the
-hundred and seventy cases since came from quoted-scalar line folding,
+parser, at the commit pinned in `tools/conformance/YAML_SUITE_COMMIT`. Of the
+suite's **406 cases it checks 366** - those carrying a `json` field, by value,
+and those marked `fail`, by refusal - and **all 366 pass**. The same harness
+scores js-yaml at 82.0% and PyYAML at 77.3%, which is the calibration that
+makes the figure readable: neither reference scores 100% either.
+
+The remaining 40 cases are not a pass and not a failure - they were never
+asked. Thirty-eight assert an event stream this harness does not emit, and
+two carry an expectation it cannot decode. Conformance to 1.2.2 is therefore
+partial in a way the percentage alone does not show, which is why the runner
+now prints both denominators and `YTS_MIN_CORPUS` can floor the second.
+Emitting the event stream is the single largest thing that would close it.
+
+**Recently closed:** a node carrying two anchors, which was the last case the
+harness could check and this parser could not answer. The second anchor
+silently replaced the first, which lost the outer anchor from the *valid*
+half of that shape - two anchors on two different nodes - as well as
+accepting the invalid half. Telling them apart needs two properties pending
+at once, where the stream had one slot. The first run scored 51.9%; the
+hundred and seventy-five cases since came from quoted-scalar line folding,
 directives, a group of structural refusals, the rule that `:`, `-` and `?`
 are indicators only where nothing plain-safe follows them, tabs in leading
 white space, a group of positional rules, a group around documents and
@@ -848,11 +858,13 @@ here as planned; both have shipped, as
 
 ### Compatibility
 
-The parser targets YAML 1.2.2 and hits **99.7%** of the
+The parser targets YAML 1.2.2 and answers **all 366** of the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) cases that can be
-checked by value or by refusal, measured by `make conformance`. The same
-harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither reference
-reaches 100% on this suite.
+checked by value or by refusal, measured by `make conformance`. That is 366 of
+the suite's 406: the other 40 assert an event stream the harness does not emit
+or carry an expectation it cannot decode, and are neither passed nor failed.
+The same harness scores js-yaml at 82.0% and PyYAML at 77.3%, so neither
+reference reaches 100% on the cases it does check.
 
 That number arrived late and corrected an impression. Fifteen defects had
 been found and fixed by hand-comparison against PyYAML and js-yaml, and a

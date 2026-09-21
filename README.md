@@ -162,11 +162,12 @@ resolution and conversion to JSON.
 
 ## Status
 
-The test suite runs 2,154 tests across 104 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 74.3% line coverage. (Counting these
-from `make test` output needs care: three binaries are run twice, once under
+The test suite runs 1,494 tests across 106 binaries with zero failures, clean
+under valgrind and under ASan/UBSan, at 76.8% line coverage. (Counting these
+from `make test` output needs care: several binaries are run twice, once under
 their module target and once in the sweep, so summing every `[ PASSED ]` line
-overstates the total by 773.) Three libFuzzer
+gives 2,309 instead. `make test-quiet` prints the deduplicated total, and that
+is the number quoted here.) Three libFuzzer
 harnesses cover the three parsers; `tests/fuzz/README.md` records what they
 have found. All of it runs in CI on every push and pull request, along with a
 coverage floor and the symbol, allocator and header gates - until recently

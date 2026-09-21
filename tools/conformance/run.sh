@@ -6,18 +6,30 @@
 #   tools/conformance/run.sh js           # js-yaml, if it can be found
 #   tools/conformance/run.sh py           # PyYAML, if it is installed
 #
-# The suite is cloned into build/yaml-test-suite on first use and reused after
-# that.  YTS_MIN sets a floor the score must meet; YTS_REPORT names a file to
+# The suite is cloned into build/yaml-test-suite on first use and checked out at
+# the commit named in tools/conformance/YAML_SUITE_COMMIT.  YTS_MIN sets a floor
+# the pass rate must meet, YTS_MIN_CORPUS a floor on how much of the corpus was
+# checked at all; YTS_REPORT names a file to
 # write the failing cases to.
 set -e
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 suite=${YTS_SUITE:-$root/build/yaml-test-suite}
+commit=$(cat "$root/tools/conformance/YAML_SUITE_COMMIT")
 which=${1:-ours}
 
 if [ ! -d "$suite/src" ]; then
 	echo "fetching yaml-test-suite into $suite"
-	git clone --depth 1 https://github.com/yaml/yaml-test-suite.git "$suite"
+	git clone https://github.com/yaml/yaml-test-suite.git "$suite"
+fi
+# The corpus is pinned. A score is a percentage, and a percentage that moves
+# because somebody upstream added or changed cases is not a measurement of
+# this library - run-json-schema.sh has pinned its suite for that reason since
+# it was written, and these three were still tracking whatever the default
+# branch held on the day they ran.
+if [ "$(git -C "$suite" rev-parse HEAD)" != "$commit" ]; then
+	git -C "$suite" fetch --quiet origin "$commit" 2>/dev/null || git -C "$suite" fetch --quiet
+	git -C "$suite" checkout --quiet "$commit"
 fi
 
 case "$which" in
