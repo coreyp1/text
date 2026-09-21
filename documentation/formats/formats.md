@@ -26,8 +26,13 @@ sequence, and how confident anyone should be about that.
 A cross-format audit against the libraries these are meant to replace is in
 \ref format_comparison "Comparison with other libraries".
 
-Formats named in the README's roadmap but with no parser - INI, TOML and the
-rest - have no page here. A page is written with the parser, not after it.
+INI and TOML are planned and have no parser, so they have no page here. A
+page is written with the parser, not after it.
+
+(This said "named in the README's roadmap", which no longer exists - and the
+suite README meanwhile listed INI/TOML as something this library *has*, on the
+strength of `GTEXT_YAML_MODE_CONFIG`, which is a YAML parse preset and not a
+parser for either format.)
 
 ## What each page contains
 
