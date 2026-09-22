@@ -358,7 +358,21 @@ typedef struct {
   bool allow_nonstandard_tags;
   bool allow_aliases;
   bool allow_merge_keys;
+
+  /* Whether a mapping key may be a collection.  YAML allows it - "? [a, b]"
+   * names a sequence as a key - and many consumers cannot represent one, so
+   * false refuses the document rather than handing on something they will
+   * mishandle.
+   *
+   * This did nothing at all until it was tested: the check that reads it
+   * returned early on exactly the setting that was meant to switch it on. */
   bool allow_complex_keys;
+
+  /* Whether a mapping key must resolve to a string.  Stricter than
+   * allow_complex_keys, and refuses everything that would refuse - an
+   * integer or boolean key is a scalar, so it passes the complex-key test
+   * and fails this one.  JSON has no other kind of key, which is what this
+   * is for. */
   bool require_string_keys;
   bool enable_json_fast_path;
   const GTEXT_YAML_Custom_Tag * custom_tags;

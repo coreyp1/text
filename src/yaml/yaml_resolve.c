@@ -850,7 +850,20 @@ static GTEXT_YAML_Status validate_mapping_key(
 ) {
 	const GTEXT_YAML_Node *resolved = NULL;
 
-	if (!opts || (!opts->allow_complex_keys && !opts->require_string_keys)) {
+	/* Nothing to check when neither option restricts anything: complex keys
+	   allowed and strings not required.
+	   
+	   The first clause used to be inverted - "!allow_complex_keys &&
+	   !require_string_keys" - which returned OK precisely when complex keys
+	   were the thing being refused. allow_complex_keys = false therefore did
+	   nothing on its own, and did nothing useful together with
+	   require_string_keys either, since the string check refuses everything
+	   the complex check would have. The option had never once had an effect.
+	   
+	   It survived because the wrong clause shares a condition with a right
+	   one: setting both options behaves correctly, and both of the built-in
+	   option sets that touch these set both. */
+	if (!opts || (opts->allow_complex_keys && !opts->require_string_keys)) {
 		return GTEXT_YAML_OK;
 	}
 
