@@ -289,12 +289,38 @@ VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=all --track-origins=yes --
 
 # Sanitizer flags (ASan + UBSan)
 #
-# -fno-sanitize-recover=undefined is what makes the second half of that a
-# gate.  ASan aborts on a finding, so `|| exit 1` in the loop below catches
-# it; UBSan by default prints a diagnostic and *runs on past the defect*, the
-# process exits 0, and the run is reported as clean.  A gate that cannot fail
-# is not a gate.
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
+# -fno-sanitize-recover is what makes the second half of that a gate.  ASan
+# aborts on a finding, so `|| exit 1` in the loop below catches it; UBSan by
+# default prints a diagnostic and *runs on past the defect*, the process exits
+# 0, and the run is reported as clean.  A gate that cannot fail is not a gate.
+#
+# One list, named once, because the two flags have to agree and a check named
+# in only one of them is worse than a check named in neither.  Measured here
+# on gcc 14.2, one defect per probe program - a program with two shows only
+# whichever aborts first:
+#
+#   -fsanitize=address,undefined -fno-sanitize-recover=undefined
+#       (int)1e30 -> silent, exit 0
+#   float-cast-overflow added to -fsanitize= only
+#       (int)1e30 -> diagnosed, exit 0
+#   float-cast-overflow in both
+#       (int)1e30 -> diagnosed, exit 1
+#
+# The middle row is the trap, and it looks like progress because output
+# appears where there was none: -fno-sanitize-recover=undefined does not
+# cover a check outside gcc's `undefined` group even when that check is
+# explicitly enabled.  float-cast-overflow is in clang's `undefined` and not
+# in gcc's, which is how it came to be missing from a build that reads as
+# though it asked for everything.
+#
+# Verify by exit status, never by output.  A firing UBSan gate aborts the
+# process before gtest prints anything, so the run contains no
+# "[  FAILED  ]" line at all - a summary that counts those reads a firing
+# gate as green.
+UBSAN_CHECKS := undefined,float-cast-overflow
+ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
+                    -fno-sanitize-recover=$(UBSAN_CHECKS) \
+                    -fno-omit-frame-pointer -g
 
 # Sanitizer build directory
 ASAN_BUILD_DIR := $(BUILD_DIR)-asan
@@ -1300,7 +1326,8 @@ FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
 # -fno-sanitize-recover=undefined for the same reason as ASAN_UBSAN_FLAGS: a
 # fuzzer steers by crashes, and a UBSan finding that only prints is an input
 # libFuzzer will never save as an artifact.
-FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
+FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) \
+            -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 # The fuzzers link cutil like everything else, so they need the same rpath the
