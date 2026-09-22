@@ -1240,7 +1240,22 @@ See `<ghoti.io/text/yaml/yaml_core.h>` for complete type definitions and enumera
 
 No YAML object is thread-safe. A document, a parser, a stream, a pull reader
 and a writer each belong to one thread at a time; two that were created
-separately share nothing and may be used concurrently. A document that
+separately share nothing and may be used concurrently.
+
+"Share nothing" is a claim about process-wide state as much as about objects,
+and it was false until recently for a reason nothing here could have shown
+you. Number conversion pins `LC_NUMERIC` so that a decimal separator belongs
+to the format rather than to the user's language settings, and the guard
+choosing *how* it pins was structurally unsatisfiable — it tested
+`_POSIX_C_SOURCE` above every `#include`, where `features.h` has not run yet.
+So Linux compiled the `setlocale()` fallback, which is process-wide: two
+threads writing two unrelated documents did share something, and the symptom
+was a number formatted with the wrong separator in the *other* thread's
+output. No crash, no leak, nothing for a sanitizer to find. It is
+`uselocale()` now, which is per-thread, and
+`gtext_number_is_thread_local()` asserts that in the test suite — a
+behavioural test cannot, because both implementations convert correctly and
+the fallback restores what it changed. A document that
 no thread is modifying may be read from several at once.
 
 The read accessors really are reads. `gtext_yaml_mapping_get()` is a linear

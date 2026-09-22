@@ -48,6 +48,7 @@
 #define GHOTI_IO_GTEXT_TEXT_NUMBER_INTERNAL_H
 
 #include <ghoti.io/text/macros.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -68,6 +69,24 @@ extern "C" {
  */
 GTEXT_INTERNAL_API int gtext_number_format(
     char * buf, size_t buf_size, const char * format, ...);
+
+/**
+ * @brief Whether the conversions here pin LC_NUMERIC per thread.
+ *
+ * True where the implementation uses uselocale()/newlocale(), false where it
+ * falls back to setlocale(), which is process-wide and so briefly changes the
+ * separator every other thread sees.
+ *
+ * This exists to be asserted. Both implementations produce correct numbers
+ * and the fallback puts back what it changed, so nothing observable
+ * afterwards distinguishes them; a test that sets a locale and checks the
+ * library still works passes either way. The guard that chooses between them
+ * was silently false for the whole life of this file, and this is what makes
+ * that visible.
+ *
+ * @return true if a conversion cannot disturb another thread's locale
+ */
+GTEXT_INTERNAL_API bool gtext_number_is_thread_local(void);
 
 /**
  * @brief strtod, always in the C locale.

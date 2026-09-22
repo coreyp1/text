@@ -26,15 +26,60 @@
  * See text_number_internal.h for why this is shared rather than per-format.
  */
 
-/* Locale support, the same test the JSON writer used to carry. */
-#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
+/* Locale support.
+ *
+ * This was "the same test the JSON writer used to carry", and the test was
+ * never true. It read
+ *
+ *     #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
+ *
+ * placed here, above every #include in the file - and _POSIX_C_SOURCE is
+ * defined *by* features.h, which arrives with the first include. At the point
+ * that #if was evaluated the macro did not exist yet, so the test was false on
+ * every platform, always. Nothing supplied it from outside either: the
+ * Makefile passes no -D_POSIX_C_SOURCE, and the build is -std=c17, which is
+ * strict-ANSI and would not have glibc volunteer it.
+ *
+ * The #elif that followed tested __APPLE__ and __FreeBSD__, which are
+ * *compiler* predefines and therefore are live before any include. So the
+ * chain selected uselocale on macOS and FreeBSD and the fallback on Linux -
+ * the one platform this library is developed, tested, fuzzed and shipped on,
+ * and the only one whose arm was chosen by a test that could not be true.
+ *
+ * It compiled clean, passed -Werror, and cost no correctness: the fallback
+ * below saves and restores LC_NUMERIC and converts properly. What it cost was
+ * the reason uselocale was wanted. setlocale is process-wide, so every JSON
+ * and YAML number conversion briefly moved the whole program's locale and any
+ * other thread formatting output in that window saw the wrong separator -
+ * which makes the thread-safety this library documents ("two that were
+ * created separately share nothing and may be used concurrently") false. No
+ * crash, no leak, nothing for a sanitizer to find.
+ *
+ * Two changes. The define goes *before* the include so features.h sees it,
+ * and the test asks after LC_NUMERIC_MASK - the thing the code below actually
+ * uses - rather than a standards level that is supposed to imply it. glibc
+ * declares that macro only where newlocale is declared, so the guard cannot
+ * drift from what the guarded code needs; a standards-level test can be right
+ * today and wrong after a flag change.
+ *
+ * Found by the libs/model session, which had copied this idiom from here and
+ * hit it from the other side: model's fallback arm is inert, so its locale
+ * test failed the moment the wrong arm compiled. Ours is a working
+ * alternative, so no before-and-after assertion could tell the two apart -
+ * gtext_number_is_thread_local() exists because of that. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <locale.h>
-#define GTEXT_HAVE_USELOCALE 1
-#elif defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
+/* Compiler predefines, so unlike the test above these are live here. */
 #include <xlocale.h>
+#endif
+
+#ifdef LC_NUMERIC_MASK
 #define GTEXT_HAVE_USELOCALE 1
 #else
-#include <locale.h>
 #define GTEXT_HAVE_USELOCALE 0
 #endif
 
@@ -165,3 +210,16 @@ GTEXT_INTERNAL_API double gtext_number_strtod(const char * s, char ** end) {
 }
 
 #endif
+
+/**
+ * @brief Whether the conversions above pin the locale per thread.
+ *
+ * The only cheap way to tell which arm compiled. Both arms convert correctly,
+ * and the fallback restores what it changed, so at every quiescent point the
+ * two are indistinguishable - the difference exists only *during* a
+ * conversion, in another thread. A behavioural test therefore measures the
+ * promise; this measures the guard.
+ */
+GTEXT_INTERNAL_API bool gtext_number_is_thread_local(void) {
+  return GTEXT_HAVE_USELOCALE != 0;
+}
