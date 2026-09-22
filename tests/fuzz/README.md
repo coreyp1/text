@@ -299,13 +299,29 @@ different thing from having run out of places to look. What it does say is
 that the defects this target finds cheaply are gone, and the next one will
 cost more than an hour.
 
-Two things would make the next campaign worth more than a repeat of this one.
-The corpus is now 43,000 files and average throughput fell from 7,550 a
-second to 5,150 as it grew; `-merge=1` into a fresh directory would cut that
-back to the units that carry the coverage - keeping the `.seed` files, which
-are the tracked ones and the point of the directory. And the harness still
-builds documents only through the paths described under *The options byte*,
-so what it cannot construct it cannot test.
+**The corpus has been merged since**, which is the first half of what that
+run said to do next. It had grown to 43,318 files and 173MB, and average
+throughput had fallen from 7,550 executions a second to 5,150 as libFuzzer
+spent its time re-running units that carried nothing new. `-merge=1` cut it
+to **5,911 files and 24MB** at *identical* coverage - 5,276 edges and 31,422
+features, the same two numbers the hour ended on - and a run over the merged
+corpus averages 9,147 a second. That is 1.8 times the work per second for no
+loss of reach.
+
+Merge into a destination that already holds the `.seed` files rather than an
+empty one. libFuzzer keeps everything already in the destination and adds
+only what extends it, so the tracked seeds survive with their names; merging
+into an empty directory would keep whichever of them still carried unique
+coverage, rename it to a hash, and silently drop the rest. They are tracked
+because they no longer trap, which is exactly the property that makes a
+coverage-based merge throw them away.
+
+The second half is still open, and is now the thing that matters most here:
+the harness builds documents only through the paths described under *The
+options byte*, so what it cannot construct it cannot test. Both defects
+the last two runs found needed something the corpus alone could not reach -
+the DOM API for one, YAML 1.1 mode for the other. Widening what the harness
+can build is worth more than another hour against what it can.
 
 ## The options byte
 
