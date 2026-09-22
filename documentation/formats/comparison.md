@@ -22,7 +22,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 
 | # | Finding | Scope | Severity |
 |---|---|---|---|
-| 1 | ~~No `LICENSE` file~~ **fixed here**; still open for five others | suite-wide | was: blocks all adoption |
+| 1 | ~~No `LICENSE` file~~ **fixed suite-wide**: all nine are LGPL-3.0-only | suite-wide | was: blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
@@ -37,28 +37,38 @@ repository alone. See section 12 of `CONVENTIONS.md` for why.
 
 ---
 
-## 1. The license was the first blocker - fixed here
+## 1. The license was the first blocker - fixed suite-wide
 
-**`text` now carries an MIT `LICENSE`**, copied from `cutil/LICENSE` with the
-year changed, which is what `CONVENTIONS.md` specifies. The README names it.
-The other five libraries without one - `image`, `compress`, `model`, `ctang`
-and `cjelly` - are item 7 in the suite TODO.
+**Every library is now LGPL-3.0-only.** Each carries `COPYING` (GPL-3.0) and
+`COPYING.LESSER` (LGPL-3.0), because LGPLv3 is drafted as additional
+permissions on top of GPLv3, and every file under `src/` and `include/`
+carries an SPDX identifier and the notice. The README names it.
 
-As found: there was no `LICENSE` file in this repository. Source files carry
+As found: there was no `LICENSE` file in this repository. Source files carried
 `Copyright 2026 by Corey Pennycuff` and no grant of any kind, which under
-default copyright means no one may use the library at all.
+default copyright means no one may use the library at all. That was true of
+six of the nine libraries, and it was item 7 in the suite TODO.
 
-This is not a new observation. `CONVENTIONS.md` already lists `LICENSE` (MIT)
-as part of the required repository layout, and its departures table records
-that `cutil` is the only library that has one, with the note that the other
-six should. `cutil/LICENSE` is a standard MIT text and is the obvious
-template.
+It was listed first because the stated reason for building this library is
+that the alternatives have licenses that do not suit. A library with no
+license is strictly worse on that axis than the libraries it means to
+replace.
 
-It is listed first because the stated reason for building this library is that
-the alternatives have licenses that do not suit. A library with no license is
-strictly worse on that axis than the libraries it means to replace: libyaml is
-MIT, RapidJSON is MIT, and PyYAML is MIT. Nothing else on this page matters to
-an outside adopter until this is resolved.
+**The resolution moves along that axis rather than to the end of it, and
+deliberately so.** libyaml is MIT, RapidJSON is MIT and PyYAML is MIT; LGPL
+is more restrictive than all three, so on the narrow question this section
+asked - "is the license a reason not to adopt?" - LGPL is an improvement on
+*no* license and a step back from the competition. That is the intended
+trade. The suite is meant to support a commercial license alongside the open
+one, and a permissive license gives a dual-license position nothing to sell:
+there is no reason to pay for permission MIT already grants. LGPL's relink
+obligation is what makes the paid license worth buying, which is the same
+reason Qt moved from LGPLv2.1 to LGPLv3.
+
+So an adopter who needs MIT terms is now a *customer* rather than a lost
+cause, which is a different answer from the one this page originally
+anticipated, not a better score on the same one. Dynamic linkers are
+unaffected.
 
 ---
 

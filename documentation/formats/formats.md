@@ -81,8 +81,9 @@ question from the pages above. They ask whether a parser implements its
 specification; that page asks what a caller migrating from libyaml, RapidJSON,
 libcsv or PyYAML would find missing, and ranks the answers by how many
 adoptions each one blocks. Its findings are measured rather than surveyed, and
-two of them - the absent `LICENSE` file and the unoptimized default build - are
-suite-wide rather than particular to this library.
+two of them - the absent license, since resolved by moving the whole suite to
+LGPL-3.0-only, and the unoptimized default build - are suite-wide rather than
+particular to this library.
 
 ## Work in progress
 

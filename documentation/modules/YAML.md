@@ -1159,8 +1159,9 @@ section 7.
 
 ## 17. License
 
-MIT. Copyright 2026 by Corey Pennycuff. The full text is in `LICENSE` at the
-root of the repository.
+LGPL-3.0-only. Copyright (C) 2026 Corey Pennycuff. The full text is in
+`COPYING.LESSER` at the root of the repository, alongside the `COPYING`
+(GPL-3.0) it is written as additional permissions on top of.
 
 Part of the ghoti.io text library.
 
