@@ -283,22 +283,29 @@ reachable from a corpus of *documents*; the first needs the DOM API, and the
 second needs 1.1 mode. `corpus/yaml-writer/int-tag-on-an-infinity.seed` is
 the reproducer, kept because it no longer traps.
 
-**One run has now gone the distance without a find**, which the paragraph
-that stood here asked to be told about: seven minutes and 3.18 million
-executions, straight after the `.INF` fix, over a corpus of 5,600-odd units.
-That is one run, and it says the harness has stopped finding things at this
-depth rather than that there is nothing left - every run before it found
-something, each fix exposing the next, which is what a new harness does on a
-surface nothing had fuzzed before and is the strongest available argument
-that the surface needed one. The run before this one went five minutes and
-1.9 million executions before reaching the `.INF` conversion; the first went
-twenty-three thousand executions in twenty minutes before it found the
-property-column defect above, on a corpus that barely existed yet.
+**An hour found nothing.** `make fuzz-run-yaml-writer FUZZ_TIME=3600`, run
+straight after the `.INF` fix: 18,551,639 executions at about 5,150 a second,
+no crash, no timeout, no sanitizer report. Every run before it had found
+something, each fix exposing the next - twenty-three thousand executions in
+twenty minutes for the property-column defect, on a corpus that barely
+existed yet; five minutes and 1.9 million for the `.INF` conversion, on one
+that did.
 
-The corpus under `corpus/yaml-writer/` is the record. The next thing worth
-doing here is a longer campaign - `make fuzz-run-yaml-writer FUZZ_TIME=3600`
-- rather than more short ones, and this paragraph should say what that
-finds.
+**It is worth reading what that does and does not say.** Coverage was still
+climbing when the hour ran out - 5,237 edges to 5,276, features 29,121 to
+31,422, and 8,615 new corpus units kept. The harness was still reaching code
+it had not reached before and simply did not fault there, which is a
+different thing from having run out of places to look. What it does say is
+that the defects this target finds cheaply are gone, and the next one will
+cost more than an hour.
+
+Two things would make the next campaign worth more than a repeat of this one.
+The corpus is now 43,000 files and average throughput fell from 7,550 a
+second to 5,150 as it grew; `-merge=1` into a fresh directory would cut that
+back to the units that carry the coverage - keeping the `.seed` files, which
+are the tracked ones and the point of the directory. And the harness still
+builds documents only through the paths described under *The options byte*,
+so what it cannot construct it cannot test.
 
 ## The options byte
 
