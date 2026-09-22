@@ -1976,6 +1976,36 @@ change was a test helper: `Render()` prints an alias by printing its target,
 which a recursive document turns into an infinite walk, so it now stops at a
 node already on the path.
 
+### A folded scalar broken where the fold would not come back
+
+From the writer fuzzer again, and the first of these that changed a
+document's *text* rather than its types: a space came back as a newline.
+
+    before "-III)I\n?+-II{  *   s{ \t  a* {["
+    after  "-III)I\n?+-II{  *   s{\n\t  a* {["
+
+A folded block scalar reads a single line break as a space (8.1.3), and that
+is what lets the writer break a long line at a space and get the space back
+on the next parse. The exception is a **more-indented** line, whose preceding
+break 6.5 keeps rather than folds — and more-indented means beginning with a
+space *or a tab*. `write_folded_line()` refused to break where a **space**
+stood on either side of the candidate and said nothing about tabs, so
+`"three \tfour"` went out as a line ending `three` and a line beginning with
+a tab. The reader kept that break, and the space was gone.
+
+The rule was already written down, and already enforced once: the planner
+that decides whether a value has a folded spelling at all refuses one whose
+own lines begin or end with white space, and it names tabs correctly. What
+was missing is that the same rule has to hold for the lines the writer
+*invents*. A constraint checked against incoming data and not against data
+the code generates itself is the shape worth remembering here.
+
+It needs a particular shape to show, which is why the corpus had not found
+it: the break-point loop keeps the last valid candidate within the line
+width, so a tab-adjacent space is only chosen when nothing after it is also a
+candidate. `"one two three \tfour five six"` folds correctly;
+`"one two three \tfourfivesix"` does not.
+
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status
 rather than being left behind in the token loop, so an unterminated quoted

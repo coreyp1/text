@@ -1439,9 +1439,22 @@ static void plan_block_scalar(
   plan->usable = true;
 }
 
+static bool is_space_or_tab(char c) {
+  return c == ' ' || c == '\t';
+}
+
 /* A folded line may be broken at a single space, because the break folds
    back to that space.  Two spaces in a row cannot: the fold would return
-   only one of them. */
+   only one of them.
+
+   Nor may the break leave white space against it on either side, and a tab
+   counts.  8.1.3 keeps the break before a more-indented line rather than
+   folding it, and "more indented" means beginning with a space *or a tab* -
+   so breaking "s{ \t  a" at its space writes a continuation line starting
+   with a tab, and the reader keeps that break as a line feed.  The space is
+   then gone and a newline stands where it was.  The plan above already
+   refuses a scalar whose own lines begin or end with white space; this is
+   the same rule applied to the lines the writer invents. */
 static GTEXT_YAML_Status write_folded_line(
     yaml_writer_state * state,
     const char * line,
@@ -1456,8 +1469,8 @@ static GTEXT_YAML_Status write_folded_line(
     size_t cut = len;
     if (width > 0 && len - pos > width) {
       for (size_t i = 1; i < width && pos + i < len; i++) {
-        if (line[pos + i] == ' ' && line[pos + i - 1] != ' ' &&
-            pos + i + 1 < len && line[pos + i + 1] != ' ') {
+        if (line[pos + i] == ' ' && !is_space_or_tab(line[pos + i - 1]) &&
+            pos + i + 1 < len && !is_space_or_tab(line[pos + i + 1])) {
           cut = pos + i;
         }
       }
