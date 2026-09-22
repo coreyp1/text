@@ -834,8 +834,6 @@ static GTEXT_YAML_Document *yaml_parse_json_document_internal(
 		return NULL;
 	}
 
-	yaml_context_set_input_buffer(ctx, input, length);
-
 	doc = (GTEXT_YAML_Document *)yaml_context_alloc(ctx, sizeof(GTEXT_YAML_Document), 8);
 	if (!doc) {
 		yaml_context_free(ctx);
@@ -1475,8 +1473,8 @@ static bool colon_begins_its_line(const parser_state *p, size_t offset) {
 	const char *buffer = NULL;
 	size_t i = 0;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
-	buffer = p->ctx->input_buffer;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return false;
+	buffer = p->ctx->decoded_input;
 	/* An offset past the end of the buffer means the end of it, and the
 	   question - what stands between here and the start of the line - is the
 	   same one.  This scans *backwards* from the offset, so without the clamp
@@ -1484,7 +1482,7 @@ static bool colon_begins_its_line(const parser_state *p, size_t offset) {
 	   heap-buffer-overflow, 22 bytes before whatever the allocator had put
 	   next.  The five other helpers that index this buffer have all had this
 	   line since they were written; this one never did. */
-	i = offset > p->ctx->input_buffer_len ? p->ctx->input_buffer_len : offset;
+	i = offset > p->ctx->decoded_input_len ? p->ctx->decoded_input_len : offset;
 	while (i > 0) {
 		char c = buffer[i - 1];
 		if (c == '\n' || c == '\r') return true;
@@ -1509,9 +1507,9 @@ static bool node_is_on_document_start_line(const parser_state *p, size_t offset)
 	size_t length = 0;
 	size_t line_start = 0;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
-	buffer = p->ctx->input_buffer;
-	length = p->ctx->input_buffer_len;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return false;
+	buffer = p->ctx->decoded_input;
+	length = p->ctx->decoded_input_len;
 	if (offset > length) offset = length;
 
 	line_start = offset;
@@ -1617,9 +1615,9 @@ static bool block_node_begins_line(const parser_state *p, size_t offset) {
 	size_t line_start = 0;
 	size_t i = 0;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return false;
-	if (offset > p->ctx->input_buffer_len) return false;
-	buffer = p->ctx->input_buffer;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return false;
+	if (offset > p->ctx->decoded_input_len) return false;
+	buffer = p->ctx->decoded_input;
 
 	line_start = offset;
 	while (line_start > 0) {
@@ -1705,10 +1703,10 @@ static int line_key_col_from_offset(const parser_state *p, size_t offset) {
 	size_t i = 0;
 	int col = 1;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return -1;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return -1;
 
-	buffer = p->ctx->input_buffer;
-	length = p->ctx->input_buffer_len;
+	buffer = p->ctx->decoded_input;
+	length = p->ctx->decoded_input_len;
 	if (offset > length) offset = length;
 
 	line_start = offset;
@@ -1773,9 +1771,9 @@ static bool block_entry_may_start_at(const parser_state *p, size_t offset) {
 	size_t length = 0;
 	size_t line_start = 0;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return true;
-	buffer = p->ctx->input_buffer;
-	length = p->ctx->input_buffer_len;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return true;
+	buffer = p->ctx->decoded_input;
+	length = p->ctx->decoded_input_len;
 	if (offset > length) return true;
 
 	line_start = offset;
@@ -1813,9 +1811,9 @@ static bool block_key_may_start_at(const parser_state *p, size_t offset) {
 	size_t i = 0;
 	size_t line_start = 0;
 
-	if (!p || !p->ctx || !p->ctx->input_buffer) return true;
-	buffer = p->ctx->input_buffer;
-	if (offset > p->ctx->input_buffer_len) return true;
+	if (!p || !p->ctx || !p->ctx->decoded_input) return true;
+	buffer = p->ctx->decoded_input;
+	if (offset > p->ctx->decoded_input_len) return true;
 
 	line_start = offset;
 	while (line_start > 0) {
@@ -2752,10 +2750,28 @@ static GTEXT_YAML_Status parse_callback(
 	const void *event_payload,
 	void *user_data
 ) {
-	(void)s;  /* Unused */
 	parser_state *p = (parser_state *)user_data;
 	if (p->failed) return GTEXT_YAML_E_STATE;
-	
+
+	/* Point the context at the text this event's offset indexes, which is the
+	   scanner's decoded stream and not the bytes the caller handed in. The
+	   two differ for a byte order mark and for every encoding but UTF-8, and
+	   the helpers below that ask "what stands between here and the start of
+	   the line?" were reading the caller's buffer at a decoded offset - so
+	   "a: 1" over "b: 2" was refused outright in UTF-16, and in UTF-8 with a
+	   mark in front of it.
+
+	   Refreshed here rather than kept, because the scanner owns the buffer
+	   and moves it when it grows. Every path that builds a DOM arrives
+	   through this function, so this is the one place it needs saying. */
+	{
+		const char *decoded = NULL;
+		size_t decoded_len = 0;
+		if (gtext_yaml_stream_decoded_input(s, &decoded, &decoded_len)) {
+			yaml_context_set_decoded_input(p->ctx, decoded, decoded_len);
+		}
+	}
+
 	const GTEXT_YAML_Event *event = (const GTEXT_YAML_Event *)event_payload;
 	GTEXT_YAML_Event_Type type = event->type;
 
@@ -4943,9 +4959,6 @@ GTEXT_YAML_Document *yaml_parse_document(
 		return NULL;
 	}
 	
-	/* Store input buffer reference (for future in-situ optimization) */
-	yaml_context_set_input_buffer(ctx, input, length);
-	
 	/* Create document */
 	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)yaml_context_alloc(
 		ctx, sizeof(GTEXT_YAML_Document), 8
@@ -4987,6 +5000,10 @@ GTEXT_YAML_Document *yaml_parse_document(
 		}
 		return NULL;
 	}
+	/* The parser reads the decoded stream by offset, so it has to still be
+	   there. Asked for before the first feed, while nothing has been
+	   dropped. */
+	gtext_yaml_stream_retain_decoded_input(stream);
 	
 	/* Enable synchronous mode so aliases can be processed immediately */
 	gtext_yaml_stream_set_sync_mode(stream, true);
@@ -5379,7 +5396,6 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 		}
 		return GTEXT_YAML_E_OOM;
 	}
-	yaml_context_set_input_buffer(state.ctx, input, len);
 
 	state.doc = (GTEXT_YAML_Document *)yaml_context_alloc(
 		state.ctx, sizeof(GTEXT_YAML_Document), 8
@@ -5418,6 +5434,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 		}
 		return GTEXT_YAML_E_OOM;
 	}
+	gtext_yaml_stream_retain_decoded_input(stream);
 	gtext_yaml_stream_set_sync_mode(stream, true);
 
 	GTEXT_YAML_Status status = gtext_yaml_stream_feed(stream, input, len);
@@ -5540,9 +5557,6 @@ typedef struct {
 	GTEXT_YAML_Document *current_doc;    /* Current document being built */
 	size_t current_doc_index;            /* Index of current document */
 	
-	const char *input;                   /* Input buffer (for context setup) */
-	size_t input_length;                 /* Input buffer length */
-	
 	const GTEXT_YAML_Parse_Options *options;
 	GTEXT_YAML_Error *error;
 	bool failed;
@@ -5650,7 +5664,7 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 /**
  * @brief Start a new document in the multi-document stream.
  */
-static bool multidoc_start_document(multidoc_state *state, const char *input, size_t length) {
+static bool multidoc_start_document(multidoc_state *state) {
 	/* Create context for this document */
 	yaml_context *ctx = yaml_context_new();
 	if (!ctx) {
@@ -5661,9 +5675,6 @@ static bool multidoc_start_document(multidoc_state *state, const char *input, si
 		}
 		return false;
 	}
-	
-	/* Store input buffer reference */
-	yaml_context_set_input_buffer(ctx, input, length);
 	
 	/* Create document */
 	GTEXT_YAML_Document *doc = (GTEXT_YAML_Document *)yaml_context_alloc(
@@ -5777,7 +5788,7 @@ static GTEXT_YAML_Status multidoc_callback(
 		}
 		
 		/* Start new document */
-		if (!multidoc_start_document(state, state->input, state->input_length)) {
+		if (!multidoc_start_document(state)) {
 			return GTEXT_YAML_E_OOM;
 		}
 		state->current_doc->explicit_start = event->explicit_marker;
@@ -5812,7 +5823,7 @@ static GTEXT_YAML_Status multidoc_callback(
 	
 	/* If no document started yet, start one (implicit document) */
 	if (!state->current_parser) {
-		if (!multidoc_start_document(state, state->input, state->input_length)) {
+		if (!multidoc_start_document(state)) {
 			return GTEXT_YAML_E_OOM;
 		}
 		/* A directive is the only event that reaches here without a document
@@ -5861,8 +5872,6 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 	multidoc_state state = {0};
 	state.options = opts;
 	state.error = error;
-	state.input = input;
-	state.input_length = length;
 	
 	/* Create streaming parser */
 	GTEXT_YAML_Stream *stream = gtext_yaml_stream_new(opts, multidoc_callback, &state);
@@ -5873,6 +5882,7 @@ GTEXT_YAML_Document **gtext_yaml_parse_all(
 		}
 		return NULL;
 	}
+	gtext_yaml_stream_retain_decoded_input(stream);
 	
 	/* Enable synchronous mode so aliases can be processed immediately */
 	gtext_yaml_stream_set_sync_mode(stream, true);

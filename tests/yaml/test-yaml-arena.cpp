@@ -231,8 +231,8 @@ TEST(YamlContext, CreateDestroy) {
 	ASSERT_NE(ctx, nullptr);
 	
 	EXPECT_NE(ctx->arena, nullptr);
-	EXPECT_EQ(ctx->input_buffer, nullptr);
-	EXPECT_EQ(ctx->input_buffer_len, 0);
+	EXPECT_EQ(ctx->decoded_input, nullptr);
+	EXPECT_EQ(ctx->decoded_input_len, 0);
 	EXPECT_EQ(ctx->resolver, nullptr);
 	EXPECT_EQ(ctx->node_count, 0);
 	
@@ -257,20 +257,20 @@ TEST(YamlContext, Alloc) {
 }
 
 //
-// Test: Set input buffer
+// Test: Set the decoded input
 //
-TEST(YamlContext, SetInputBuffer) {
+TEST(YamlContext, SetDecodedInput) {
 	yaml_context *ctx = yaml_context_new();
 	ASSERT_NE(ctx, nullptr);
 	
 	const char *input = "test: yaml";
-	yaml_context_set_input_buffer(ctx, input, strlen(input));
+	yaml_context_set_decoded_input(ctx, input, strlen(input));
 	
-	EXPECT_EQ(ctx->input_buffer, input);
-	EXPECT_EQ(ctx->input_buffer_len, strlen(input));
+	EXPECT_EQ(ctx->decoded_input, input);
+	EXPECT_EQ(ctx->decoded_input_len, strlen(input));
 	
 	yaml_context_free(ctx);
-	// Input buffer NOT freed (caller-owned)
+	// The decoded stream is NOT freed: the scanner owns it.
 }
 
 //
@@ -282,7 +282,7 @@ TEST(YamlContext, NullSafety) {
 	void *p = yaml_context_alloc(nullptr, 100, 8);
 	EXPECT_EQ(p, nullptr);
 	
-	yaml_context_set_input_buffer(nullptr, "test", 4);  // Should not crash
+	yaml_context_set_decoded_input(nullptr, "test", 4);  // Should not crash
 }
 
 int main(int argc, char **argv) {

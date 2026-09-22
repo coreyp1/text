@@ -757,6 +757,13 @@ status = gtext_yaml_stream_finish(stream);
 The parser accepts UTF-8, UTF-16, and UTF-32 input when a BOM is present.
 Input is normalized to UTF-8 internally.
 
+That normalization is what every reported `offset` counts bytes of - an error's,
+a warning's, an event's, a node's source location. It is an index into the
+buffer you passed in only for UTF-8 with no BOM; a BOM is stripped before
+decoding and shifts them by three, and UTF-16 and UTF-32 bear no byte-for-byte
+relation to it. `line` and `col` are counted in characters and are right in
+every encoding, so use those to locate something in the original.
+
 ### 9.1 BOM Detection and Transcoding
 
 Supported BOMs:

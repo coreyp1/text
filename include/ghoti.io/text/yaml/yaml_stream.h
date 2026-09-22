@@ -191,6 +191,9 @@ typedef struct {
 	 * "---" closing a document that had no "..." is an inferred end followed
 	 * by a written start, and reports itself that way. */
 	bool explicit_marker;
+	/** Where this event is. @ref gtext_yaml_offsets applies: offset
+	 *  counts bytes of the decoded stream, which is an index into the
+	 *  caller's buffer only for UTF-8 with no byte order mark. */
 	size_t offset;
 	int line;
 	int col;

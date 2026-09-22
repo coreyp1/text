@@ -42,8 +42,8 @@ yaml_context *yaml_context_new(void) {
 		return NULL;
 	}
 	
-	ctx->input_buffer = NULL;
-	ctx->input_buffer_len = 0;
+	ctx->decoded_input = NULL;
+	ctx->decoded_input_len = 0;
 	ctx->resolver = NULL;  /* Created when needed during parsing */
 	ctx->node_count = 0;
 	
@@ -62,16 +62,16 @@ void yaml_context_free(yaml_context *ctx) {
 	/* Free arena (frees all nodes) */
 	yaml_arena_free(ctx->arena);
 	
-	/* Note: input_buffer is NOT freed (caller-owned) */
+	/* Note: decoded_input is NOT freed (the scanner owns it) */
 	
 	free(ctx);
 }
 
-/* Set input buffer reference (for future in-situ mode) */
-void yaml_context_set_input_buffer(yaml_context *ctx, const char *buf, size_t len) {
+/* Point at the scanner's decoded stream. See the field in yaml_internal.h. */
+void yaml_context_set_decoded_input(yaml_context *ctx, const char *buf, size_t len) {
 	if (!ctx) return;
-	ctx->input_buffer = buf;
-	ctx->input_buffer_len = len;
+	ctx->decoded_input = buf;
+	ctx->decoded_input_len = len;
 }
 
 /* Allocate from context's arena */

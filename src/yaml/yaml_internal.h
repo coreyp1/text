@@ -152,6 +152,27 @@ GTEXT_INTERNAL_API int gtext_yaml_scanner_feed(GTEXT_YAML_Scanner *s, const char
 GTEXT_INTERNAL_API void gtext_yaml_scanner_finish(GTEXT_YAML_Scanner *s);
 GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner *s, GTEXT_YAML_Token *tok, GTEXT_YAML_Error *err);
 
+/**
+ * @brief Keep the decoded input rather than dropping it as it is consumed.
+ *
+ * Call before the first feed. Every offset the scanner reports counts bytes
+ * of the *decoded* stream, so that stream is the only text those offsets can
+ * be used to index - and by default the scanner drops its consumed prefix,
+ * which leaves nothing at the front to index into. Retaining costs the
+ * document's length in memory, which is why it is asked for rather than
+ * assumed.
+ */
+GTEXT_INTERNAL_API void gtext_yaml_scanner_retain_decoded(GTEXT_YAML_Scanner *s);
+
+/**
+ * @brief The decoded stream, when it is being retained.
+ *
+ * False - and nothing written - when it is not. The pointer is the scanner's
+ * own buffer and moves when it grows, so it is fetched where it is used
+ * rather than kept.
+ */
+GTEXT_INTERNAL_API bool gtext_yaml_scanner_decoded(const GTEXT_YAML_Scanner *s, const char **data, size_t *len);
+
 /* ====================================================================
  * Arena Allocator and Context (Phase 4)
  * ==================================================================== */
@@ -192,8 +213,20 @@ typedef struct yaml_arena {
  */
 typedef struct yaml_context {
 	yaml_arena *arena;              /* Arena allocator */
-	const char *input_buffer;       /* Original input (for future in-situ mode) */
-	size_t input_buffer_len;        /* Input length */
+	/* The decoded character stream, which is what every offset the scanner
+	   and the stream report counts bytes of - not the bytes the caller
+	   handed in. Those are the same thing only for UTF-8 with no byte order
+	   mark, and this field used to hold the caller's buffer, so every
+	   positional question the parser asks was answered from the wrong text
+	   whenever they differed: a mark, or any of the UTF-16 and UTF-32
+	   encodings, and a block mapping with two entries did not parse at all.
+
+	   Borrowed from the scanner, which owns it and moves it as it grows, so
+	   it is refreshed as each event arrives rather than set once. NULL until
+	   the first one, and the helpers that read it all answer for themselves
+	   when it is. */
+	const char *decoded_input;
+	size_t decoded_input_len;
 	struct ResolverState *resolver; /* Anchor/alias resolver */
 	size_t node_count;              /* Total nodes allocated (statistics) */
 } yaml_context;
@@ -206,7 +239,7 @@ GTEXT_INTERNAL_API void *yaml_arena_alloc(yaml_arena *arena, size_t size, size_t
 /* Context API */
 GTEXT_INTERNAL_API yaml_context *yaml_context_new(void);
 GTEXT_INTERNAL_API void yaml_context_free(yaml_context *ctx);
-GTEXT_INTERNAL_API void yaml_context_set_input_buffer(yaml_context *ctx, const char *buf, size_t len);
+GTEXT_INTERNAL_API void yaml_context_set_decoded_input(yaml_context *ctx, const char *buf, size_t len);
 GTEXT_INTERNAL_API void *yaml_context_alloc(yaml_context *ctx, size_t size, size_t align);
 
 /**
@@ -455,6 +488,17 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node *yaml_node_new_alias(
 
 /* Stream internal API */
 GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(GTEXT_YAML_Stream *s, bool sync);
+
+/**
+ * @brief The scanner's retention switch and its buffer, reached through the
+ *        stream, which is all the DOM parser is given.
+ *
+ * See gtext_yaml_scanner_retain_decoded(). Retention is asked for once, after
+ * the stream is made and before it is fed; the buffer is asked for on every
+ * event, because it moves.
+ */
+GTEXT_INTERNAL_API void gtext_yaml_stream_retain_decoded_input(GTEXT_YAML_Stream *s);
+GTEXT_INTERNAL_API bool gtext_yaml_stream_decoded_input(const GTEXT_YAML_Stream *s, const char **data, size_t *len);
 
 /**
  * @brief Report what the scanner said when it last refused a token.

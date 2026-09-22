@@ -74,13 +74,30 @@ typedef enum {
 } GTEXT_YAML_Status;
 
 /**
+ * @page gtext_yaml_offsets What an offset counts
+ *
+ * Bytes of the **decoded** character stream, not of the buffer you passed in.
+ * The two are the same number for UTF-8 with no byte order mark, and for
+ * nothing else: a mark is stripped before decoding and moves every offset by
+ * three, and UTF-16 and UTF-32 bear no byte-for-byte relation to it at all.
+ *
+ * `line` and `col` are counted in characters and are right in every encoding,
+ * so they are what to locate something by when the input was not plain UTF-8.
+ * Translating the offsets back would mean keeping a map of the whole document
+ * - a cost on every parse for something few callers need - so it is said here
+ * instead.
+ */
+
+/**
  * @struct GTEXT_YAML_Error
  * @brief Rich error payload returned/filled by YAML operations.
  *
  * Fields:
  * - code: status code (see @ref GTEXT_YAML_Status).
  * - message: human-readable message (owned by caller or static; do not free).
- * - offset/line/col: location in the input where the error occurred.
+ * - offset/line/col: where in the input the error is. See
+ *   @ref gtext_yaml_offsets for what offset counts - it is not always
+ *   an index into the buffer you passed in.
  * - context_snippet: optional heap-allocated snippet to show nearby input; freed by gtext_yaml_error_free().
  * - caret_offset: position within context_snippet of the error location.
  * - expected_token/actual_token: optional textual tokens to aid diagnostics.
@@ -101,6 +118,8 @@ typedef struct {
 /**
  * @struct GTEXT_YAML_Source_Location
  * @brief Source location metadata for a node.
+ *
+ * @ref gtext_yaml_offsets applies to @c offset.
  */
 typedef struct {
   size_t offset;
@@ -215,6 +234,8 @@ typedef enum {
 /**
  * @struct GTEXT_YAML_Warning
  * @brief Warning payload for non-fatal parse issues.
+ *
+ * @ref gtext_yaml_offsets applies to @c offset.
  */
 typedef struct {
   GTEXT_YAML_Warning_Code code;

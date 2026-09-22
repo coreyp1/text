@@ -290,14 +290,17 @@ and a property in front of a key not counting as part of the key, so
 `&a {}: 1` over `b: 2` put the second entry outside the mapping the first had
 opened.
 
-**One is open, and it is the largest thing here.** An event's offset indexes
-the decoded character stream; the parser's positional helpers index the raw
-input the caller handed in. For UTF-8 those are the same bytes, and for
-UTF-16 they are not - so a block mapping with two entries does not parse in
-UTF-16 at all. One of those helpers scans backwards and had no bound check,
-making the mismatch a heap-buffer-overflow; that half is fixed, and the rest
-is written down under *Known defects* because closing it is a design decision
-rather than a patch.
+The last one to close was the largest, and it was larger than it had been
+written down as. An event's offset counts bytes of the decoded character
+stream; the parser's six positional helpers were reading the raw input the
+caller handed in. Those are the same bytes only for UTF-8 with no byte order
+mark - so a block mapping with two entries did not parse in UTF-16, and did
+not parse in ordinary UTF-8 with a mark in front of it either, which is what a
+good many editors write. The scanner can now be asked to keep its decoded
+stream whole rather than sliding a window over it, which is what the DOM
+parser needs and the streaming API does not; the helpers read that. Six
+encodings of fourteen shapes have to agree now, and yaml-test-suite - UTF-8
+throughout - could never have told anyone.
 
 Comparison against other implementations keeps finding defects here, so treat
 this module as the least settled of the three. What the rest have in

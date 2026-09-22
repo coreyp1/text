@@ -683,6 +683,21 @@ GTEXT_INTERNAL_API bool gtext_yaml_stream_last_error(
   return true;
 }
 
+GTEXT_INTERNAL_API void gtext_yaml_stream_retain_decoded_input(
+  GTEXT_YAML_Stream *s
+) {
+  if (s && s->scanner) gtext_yaml_scanner_retain_decoded(s->scanner);
+}
+
+GTEXT_INTERNAL_API bool gtext_yaml_stream_decoded_input(
+  const GTEXT_YAML_Stream *s,
+  const char **data,
+  size_t *len
+) {
+  if (!s) return false;
+  return gtext_yaml_scanner_decoded(s->scanner, data, len);
+}
+
 /* Internal: Set synchronous mode (for use by gtext_yaml_parse) */
 GTEXT_INTERNAL_API void gtext_yaml_stream_set_sync_mode(
   GTEXT_YAML_Stream *s,

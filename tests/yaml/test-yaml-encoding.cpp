@@ -154,56 +154,135 @@ TEST(YamlEncoding, WriterRoundTripUtf16Le) {
   gtext_yaml_free(doc);
 }
 
-/* Event offsets index the *decoded* character stream; the parser's positional
-   helpers index the raw input buffer the caller handed in. For UTF-8 those
-   are the same bytes and nobody noticed. For UTF-16 they are not, and every
-   question of the form "what stands between here and the start of the line?"
-   is answered from the wrong place - so a block mapping with two entries does
-   not parse at all.
+/* Every encoding has to mean the same document.
+ *
+ * It did not. An event's offset counts bytes of the *decoded* character
+ * stream; the helpers in yaml_parser.c that ask "what stands between here and
+ * the start of the line?" were reading the buffer the caller handed in. Those
+ * are the same bytes only for UTF-8 with no byte order mark - which is what
+ * kept it hidden, and what made it worse than it looked, because a mark in
+ * front of ordinary UTF-8 shifts every offset by three and breaks it just as
+ * completely as UTF-16 does. "a: 1" over "b: 2" was refused outright with
+ * "Mapping key beside a node already on this line".
+ *
+ * yaml-test-suite has no case in any encoding but UTF-8, so `make conformance`
+ * cannot see any of this. These are the gate. */
 
-   One of those helpers also had no bound check, so the mismatch was a
-   heap-buffer-overflow: it scans *backwards* from the offset, and an offset
-   past the end of the buffer made the first read land off the allocation.
-   ASan called it 22 bytes before whatever the allocator had put next. The
-   clamp is in; the offsets are not, and are recorded on the YAML format page
-   under Known defects.
+enum class Enc { Utf8, Utf8Bom, Utf16Le, Utf16Be, Utf32Le, Utf32Be };
 
-   This test says what is wrong rather than what is right, and is written to
-   keep passing when it is fixed. */
-TEST(YamlEncoding, Utf16BlockMappingsDoNotParseYet) {
-  const char *documents[] = {
+static const char *enc_name(Enc e) {
+  switch (e) {
+    case Enc::Utf8:    return "UTF-8";
+    case Enc::Utf8Bom: return "UTF-8 with BOM";
+    case Enc::Utf16Le: return "UTF-16LE";
+    case Enc::Utf16Be: return "UTF-16BE";
+    case Enc::Utf32Le: return "UTF-32LE";
+    case Enc::Utf32Be: return "UTF-32BE";
+  }
+  return "?";
+}
+
+/* ASCII in, because what is being tested is where the bytes of a character
+   land rather than which character it is. */
+static std::string encode(const std::string &ascii, Enc e) {
+  std::string out;
+  switch (e) {
+    case Enc::Utf8:
+      return ascii;
+    case Enc::Utf8Bom:
+      out.append("\xEF\xBB\xBF");
+      out.append(ascii);
+      return out;
+    case Enc::Utf16Le: out.append("\xFF\xFE", 2); break;
+    case Enc::Utf16Be: out.append("\xFE\xFF", 2); break;
+    case Enc::Utf32Le: out.append("\xFF\xFE\x00\x00", 4); break;
+    case Enc::Utf32Be: out.append("\x00\x00\xFE\xFF", 4); break;
+  }
+  const bool wide = (e == Enc::Utf32Le || e == Enc::Utf32Be);
+  const bool big = (e == Enc::Utf16Be || e == Enc::Utf32Be);
+  for (char ch : ascii) {
+    const char zero = '\0';
+    if (big) {
+      if (wide) { out.push_back(zero); out.push_back(zero); }
+      out.push_back(zero);
+      out.push_back(ch);
+    } else {
+      out.push_back(ch);
+      out.push_back(zero);
+      if (wide) { out.push_back(zero); out.push_back(zero); }
+    }
+  }
+  return out;
+}
+
+/* What the document says, spelled one way, so that two parses can be compared
+   without walking them. Empty when it was refused. */
+static std::string canonical(const std::string &bytes, bool *parsed) {
+  GTEXT_YAML_Error err;
+  memset(&err, 0, sizeof(err));
+  GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+  GTEXT_YAML_Document *doc =
+      gtext_yaml_parse(bytes.data(), bytes.size(), &popts, &err);
+  gtext_yaml_error_free(&err);
+  *parsed = (doc != nullptr);
+  if (!doc) return std::string();
+
+  GTEXT_YAML_Sink sink;
+  std::string out;
+  if (gtext_yaml_sink_buffer(&sink) == GTEXT_YAML_OK) {
+    GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+    if (gtext_yaml_write_document(doc, &sink, &wopts) == GTEXT_YAML_OK) {
+      const char *data = gtext_yaml_sink_buffer_data(&sink);
+      out.assign(data ? data : "", gtext_yaml_sink_buffer_size(&sink));
+    }
+    gtext_yaml_sink_buffer_free(&sink);
+  }
+  gtext_yaml_free(doc);
+  return out;
+}
+
+TEST(YamlEncoding, EveryEncodingMeansTheSameDocument) {
+  /* Shapes chosen for the questions the positional helpers ask: is this the
+     first thing on its line, what column does this entry begin at, is there
+     already a node beside it, is this the "---" line. A single-entry mapping
+     asks none of them, which is why the tests that were here passed. */
+  static const char *documents[] = {
     "a: 1\nb: 2\n",
     "a:\n: 1\n",
     "outer:\n  x: 1\n  b: 2\n",
+    "- 1\n- 2\n",
+    "a:\n- 1\n- 2\n",
+    "? a\n: b\n? c\n: d\n",
+    "&anchor a: 1\nb: 2\n",
+    "a:\n{}: 1\n",
+    "a: [b, c]\nd: 2\n",
+    "-: 1\nx: 2\n",
+    "key: |\n  text\nnext: 1\n",
+    "- a: 1\n  b: 2\n",
+    /* Refused, and it has to stay refused in every encoding: a block
+       collection may not begin on the "---" line. */
+    "--- a: b\n",
+    /* Refused for the opposite reason - a second node beside a finished one. */
+    "x: { y: z }in: valid\n",
   };
-  for (const char *utf8 : documents) {
-    const std::string in8(utf8);
-    std::string in16;
-    in16.push_back('\xff');
-    in16.push_back('\xfe');
-    for (char ch : in8) { in16.push_back(ch); in16.push_back('\0'); }
+  static const Enc encodings[] = {
+    Enc::Utf8Bom, Enc::Utf16Le, Enc::Utf16Be, Enc::Utf32Le, Enc::Utf32Be,
+  };
 
-    GTEXT_YAML_Error err;
-    memset(&err, 0, sizeof(err));
-    GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
-    GTEXT_YAML_Document *a =
-      gtext_yaml_parse(in8.data(), in8.size(), &opts, &err);
-    ASSERT_NE(a, nullptr) << "utf-8: " << (err.message ? err.message : "");
-    gtext_yaml_error_free(&err);
-    gtext_yaml_free(a);
-
-    memset(&err, 0, sizeof(err));
-    GTEXT_YAML_Document *b =
-      gtext_yaml_parse(in16.data(), in16.size(), &opts, &err);
-    if (b) {
-      /* It got fixed. Good - delete this test's excuse and keep the assert. */
-      gtext_yaml_free(b);
-      gtext_yaml_error_free(&err);
-      continue;
+  for (const char *text : documents) {
+    bool base_parsed = false;
+    const std::string base = canonical(encode(text, Enc::Utf8), &base_parsed);
+    for (Enc e : encodings) {
+      bool parsed = false;
+      const std::string got = canonical(encode(text, e), &parsed);
+      EXPECT_EQ(parsed, base_parsed)
+        << enc_name(e) << " disagrees with UTF-8 about whether <<" << text
+        << ">> is a document at all";
+      if (parsed && base_parsed) {
+        EXPECT_EQ(got, base)
+          << enc_name(e) << " read <<" << text << ">> as something else";
+      }
     }
-    EXPECT_EQ(err.code, GTEXT_YAML_E_INVALID)
-      << "utf-16 of <<" << utf8 << ">>: " << (err.message ? err.message : "");
-    gtext_yaml_error_free(&err);
   }
 }
 

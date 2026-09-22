@@ -54,6 +54,18 @@ struct GTEXT_YAML_Scanner {
   size_t printable_checked;
   size_t cursor;          /* next byte index to consume */
   size_t offset;          /* total bytes consumed previously (for offsets) */
+  /* Whether the decoded prefix is kept rather than dropped as it is
+     consumed.  Off, input[] is a sliding window: the consumed prefix is
+     moved away and cursor restarts at zero, which is what keeps a streaming
+     parse bounded by the document's *tokens* rather than its length.  On,
+     nothing is dropped, so cursor and offset stay equal and input[] is the
+     whole decoded stream from its first byte - which is the only thing an
+     absolute offset can be used to index.
+
+     The DOM parser turns it on because it asks positional questions of the
+     text an event's offset points into, and it already holds the whole
+     document anyway.  The event-only streaming API leaves it off. */
+  bool retain_decoded;
   int line;
   int col;
   int finished;           /* whether finish() was called */
@@ -237,8 +249,9 @@ static int scanner_consume(GTEXT_YAML_Scanner *s)
     }
   }
   s->col++;
-  /* When we've consumed enough that we can free the earlier prefix, do so. */
-  if (s->cursor > 1024 && s->cursor * 2 > s->input.len) {
+  /* When we've consumed enough that we can free the earlier prefix, do so -
+     unless someone is indexing it by absolute offset. */
+  if (!s->retain_decoded && s->cursor > 1024 && s->cursor * 2 > s->input.len) {
     /* drop consumed prefix */
     size_t rem = s->input.len - s->cursor;
     memmove(s->input.data, s->input.data + s->cursor, rem);
@@ -1257,6 +1270,23 @@ GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
   s->last_json_like = false;
   s->last_indicator = 0;
   return s;
+}
+
+GTEXT_INTERNAL_API void gtext_yaml_scanner_retain_decoded(GTEXT_YAML_Scanner *s)
+{
+  /* Before any input arrives, so that no prefix has been dropped already. */
+  if (s) s->retain_decoded = true;
+}
+
+GTEXT_INTERNAL_API bool gtext_yaml_scanner_decoded(
+    const GTEXT_YAML_Scanner *s,
+    const char **data,
+    size_t *len)
+{
+  if (!s || !s->retain_decoded) return false;
+  if (data) *data = s->input.data;
+  if (len) *len = s->input.len;
+  return true;
 }
 
 GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s)

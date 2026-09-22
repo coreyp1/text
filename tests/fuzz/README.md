@@ -260,16 +260,18 @@ the shape the fuzzer built does not, and came back as "Unterminated flow
 collection" on a document whose brackets balance. The array grows now, and
 `max_depth` is the only limit.
 
-And then the one that is still open, which is also the biggest. An event's
-offset indexes the *decoded* character stream; the parser's positional helpers
-index the raw input the caller handed in. For UTF-8 those are the same bytes.
-For UTF-16 they are not, and a block mapping with two entries does not parse
-at all - `a: 1` over `b: 2` is refused. One of those helpers scans backwards
-and had no bound check, so the mismatch was a **heap-buffer-overflow**, which
-is what ASan caught here. The clamp is in and its bytes are the first seed in
-`corpus/yaml-writer/` worth tracking, because it no longer traps; the offsets
-are on the YAML format page under *Known defects*, where the fix is a design
-decision rather than a patch.
+And then the biggest of them. An event's offset indexes the *decoded*
+character stream; the parser's positional helpers indexed the raw input the
+caller handed in. For UTF-8 with no byte order mark those are the same bytes.
+For everything else they are not, and a block mapping with two entries did not
+parse at all - `a: 1` over `b: 2` was refused, in UTF-16 and equally in
+ordinary UTF-8 behind a mark. One of those helpers scans backwards and had no
+bound check, so the mismatch was also a **heap-buffer-overflow**, which is what
+ASan caught here. The clamp went in first; the offsets took longer, because
+the scanner slides a window over its decode buffer and an absolute offset
+cannot index a window. It can be asked to keep the whole thing now, and the
+DOM parser asks. Those bytes are the first seed in `corpus/yaml-writer/` worth
+tracking, because it no longer traps.
 
 **This target is not yet quiet, and the notes above say so rather than
 pretending otherwise.** Every run of it so far has found something, each fix

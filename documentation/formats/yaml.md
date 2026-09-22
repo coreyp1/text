@@ -628,41 +628,25 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-One is open, and it is the largest thing on this page.
+None open.
 
-**A block mapping with two entries does not parse in UTF-16.**
+The one that stood here until recently - that a block mapping with two entries
+did not parse in UTF-16 - is fixed, and it was worse than this page said: the
+same mismatch broke ordinary UTF-8 with a byte order mark in front of it, which
+is what a good many editors write. It is described under *The offsets and the
+text they index were two different streams* below.
 
-```
-FF FE  "a: 1\nb: 2\n" in UTF-16LE   ->  "Mapping key beside a node already
-                                          on this line"
-```
-
-The same bytes as UTF-8 parse. So do `a:` over `: 1`, and a nested mapping,
-and most other shapes with more than one entry.
-
-The cause is a mismatch of coordinates. An event's `offset` indexes the
-**decoded character stream**; the six helpers in `yaml_parser.c` that ask
-*"what stands between here and the start of the line?"* index
-`ctx->input_buffer`, which is the **raw input the caller handed in**. For
-UTF-8 those are the same bytes, which is why nothing noticed - the suite has
-no UTF-16 case at all, so `make conformance` cannot see it either.
-
-It is not a one-line fix. The scanner decodes into its own buffer and
-*compacts* it as it consumes (`memmove` in `scanner_feed`), so that buffer is
-a sliding window rather than something an absolute offset can index. Closing
-this properly means either keeping the decoded stream whole, translating
-offsets, or moving these positional questions into the scanner, which is the
-only layer that has the line in front of it. That is a design decision, not a
-patch, and it is written down here rather than guessed at.
-
-**The memory-safety half of it is fixed.** `colon_begins_its_line()` scans
-*backwards* from the offset and was the one of those six helpers with no
-bound check, so an offset past the end of the buffer made its first read land
-outside the allocation - ASan reported a heap-buffer-overflow 22 bytes before
-whatever the allocator had put next. It clamps now, like its five siblings.
-The reproducing bytes are a test in `tests/yaml/test-yaml-encoding.cpp` and a
-tracked seed under `tests/fuzz/corpus/yaml-writer/`; reverting the clamp makes
-both report it.
+What remains is a documented limit rather than a defect, and it is the
+outward-facing half of that same mismatch. **Every `offset` this module
+reports - on an error, a warning, an event, a node's source location - counts
+bytes of the decoded character stream, not of the buffer you passed in.** They
+are the same number for UTF-8 with no mark, and for nothing else: a mark moves
+them by three, and UTF-16 and UTF-32 have no byte-for-byte relation to it at
+all. `line` and `col` are counted in characters and are right in every
+encoding, so they are what to locate a fault by when the input was not plain
+UTF-8. Translating the offsets back would mean keeping a map of the whole
+document, which is a cost every caller would pay for something few need; it is
+written down instead, on each of those fields.
 
 ## Not implemented
 
@@ -997,6 +981,11 @@ part:
   not ask what followed it, the property that was part of its key in one place
   and not the next. A writer is a cheap spelling-changer, which is why it
   keeps finding these.
+- **Two coordinate systems for one document.** The parser measured positions
+  in the text the caller handed in and was given offsets counted in the text
+  the scanner had decoded. Nothing said which of the two a `size_t` meant, so
+  the two were interchangeable right up to the first document where they
+  differed.
 
 Most of them are in the *reader*. That is not what the harness was built for,
 and it is the strongest thing that can be said for building it.
@@ -1555,6 +1544,70 @@ that only reads:
   ran a *second copy* of the same four-hundred-line loop that did not stop -
   a copy that had also never gained `%YAML` and `%TAG` handling, nor any of
   the fixes the first had collected. There is one copy now.
+
+### The offsets and the text they index were two different streams
+
+The parser asks positional questions no token carries the answer to: *is this
+`:` the first thing on its line? what column does this entry begin at? is
+there already a node beside it? is this the `---` line?* Six helpers answer
+them, and each works the same way - take the node's offset, scan backwards to
+the line break, and read what stands between.
+
+The text they read was `ctx->input_buffer`, the bytes the caller handed in.
+The offset they were given counts bytes of the **decoded** character stream,
+which is what the scanner reports everything in. Those are the same bytes for
+UTF-8 with no byte order mark, and for nothing else.
+
+So a block mapping with two entries did not parse at all:
+
+```
+FF FE  "a: 1\nb: 2\n" in UTF-16LE   ->  "Mapping key beside a node already
+                                           on this line"
+```
+
+The page that recorded this called it a UTF-16 defect, which understated it.
+The mark is stripped before decoding, so *ordinary UTF-8 with a byte order
+mark in front of it* - what a good many editors write - is shifted by three
+and fails exactly the same way. `EF BB BF` and then `a: 1` over `b: 2` was
+refused with the same message. Every encoding was affected, and every shape
+with more than one entry: a sequence of two, a nested mapping, an explicit
+key, a key carrying a property. The single-entry mapping that the encoding
+tests all used asks none of those questions, which is why five of them passed
+while the feature did not work.
+
+It was written up as a design decision rather than a patch because the
+scanner *compacts* its decode buffer as it consumes - `memmove` in
+`scanner_consume` - so it is a sliding window an absolute offset cannot index.
+That framing had the layers the wrong way round. The buffer is a window
+because it is allowed to be; the DOM parser is the one caller that needs it
+whole, and it already holds the entire document. So the scanner now takes a
+switch: with it on, the consumed prefix is kept, `cursor` and `offset` stay
+equal, and the decoded stream can be indexed from its first byte. The DOM
+parser turns it on and the event-only streaming API does not, which is what
+keeps a streaming parse bounded by its tokens rather than its length.
+
+The field the helpers read is called `decoded_input` now, and it is filled
+where each event arrives rather than once at the start - the scanner owns that
+buffer and moves it as it grows. `input_buffer`, with its comment about a
+future in-situ mode, was a plausible-looking name for the wrong text, and the
+wrong text is what every one of those six helpers read.
+
+yaml-test-suite is UTF-8 throughout, so `make conformance` could not see any
+of this and still cannot. The gate is
+`tests/yaml/test-yaml-encoding.cpp`, which now parses fourteen shapes in six
+encodings and requires all six to agree - on what the document means, and on
+whether it is a document at all. Reverting the fix fails it sixty times, twelve
+of the fourteen shapes in each of the five encodings that are not plain UTF-8.
+Every one of those sixty is a disagreement about whether the bytes are a
+document: eleven refused where UTF-8 accepts, and `--- a: b` accepted where
+UTF-8 refuses it.
+
+The memory-safety half was fixed first and separately: `colon_begins_its_line()`
+scans backwards and was the one of the six with no bound check, so an offset
+past the end of the caller's buffer made its first read land outside the
+allocation. ASan reported a heap-buffer-overflow 22 bytes before whatever the
+allocator had put next. The reproducing bytes are still a test and a tracked
+fuzz seed.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status
