@@ -14,6 +14,10 @@ extern "C" {
 #include <string>
 #include <unistd.h>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 static std::string make_temp_path(const char *suffix) {
   std::string path = "/tmp/ghoti_yaml_";
   path += suffix;
@@ -155,3 +159,107 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+#ifndef _WIN32
+/* Writing a file must not change who can read it.
+ *
+ * gtext_file_write_atomic() writes a temporary and renames it over the
+ * destination, and a temporary is owner-only. Until cutil's
+ * gcu_file_temp_commit() grew a permissions argument, the destination
+ * inherited that and nobody chose it - so every save of a 644 configuration
+ * file quietly narrowed it to 600, and nothing here would have noticed.
+ *
+ * GCU_FILE_PERMS_PRESERVE is what that call passes now. The two wrong
+ * answers are wrong in opposite directions and one of them is the one a
+ * caller reaches by reflex: PRIVATE is the zero value and narrows a config
+ * nobody asked to narrow, DEFAULT widens one somebody deliberately ran
+ * chmod 600 on. Replacing a file is not the same act as creating it.
+ *
+ * POSIX only. The mode bits have no Windows equivalent, and the permissions
+ * question there is a different one rather than the same one spelled
+ * differently. */
+static mode_t mode_of(const std::string &path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 ? (st.st_mode & 07777) : 0;
+}
+
+TEST(YamlFileIO, WritingAFileKeepsThePermissionsItAlreadyHad) {
+  /* Both directions, so neither wrong answer passes: a narrow file must not
+     be widened and a wide one must not be narrowed. */
+  const mode_t modes[] = { 0600, 0640, 0644, 0664 };
+
+  const char *source = "key: value\n";
+  for (mode_t want : modes) {
+    std::string path = make_temp_path("perms");
+    FILE *file = fopen(path.c_str(), "wb");
+    ASSERT_NE(file, nullptr);
+    fputs("old: 1\n", file);
+    fclose(file);
+    /* Set it explicitly rather than trusting the umask, which differs
+       between machines and would make this test's meaning depend on it. */
+    ASSERT_EQ(chmod(path.c_str(), want), 0) << path;
+    ASSERT_EQ(mode_of(path), want) << path;
+
+    GTEXT_YAML_Error err;
+    memset(&err, 0, sizeof(err));
+    GTEXT_YAML_Document *doc =
+      gtext_yaml_parse(source, strlen(source), nullptr, &err);
+    ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+    gtext_yaml_error_free(&err);
+
+    memset(&err, 0, sizeof(err));
+    EXPECT_EQ(gtext_yaml_write_file(path.c_str(), doc, nullptr, &err),
+      GTEXT_YAML_OK) << (err.message ? err.message : "");
+    gtext_yaml_error_free(&err);
+    gtext_yaml_free(doc);
+
+    EXPECT_EQ(mode_of(path), want)
+      << "writing over a file of mode " << std::oct << want
+      << " left it " << mode_of(path);
+
+    /* And it has to still be the document that was written, so a test that
+       preserved the mode by not writing anything would fail here. */
+    GTEXT_YAML_Document *back =
+      gtext_yaml_parse_file(path.c_str(), nullptr, nullptr);
+    ASSERT_NE(back, nullptr);
+    const GTEXT_YAML_Node *value =
+      gtext_yaml_mapping_get(gtext_yaml_document_root(back), "key");
+    ASSERT_NE(value, nullptr);
+    EXPECT_STREQ(gtext_yaml_node_as_string(value), "value");
+    gtext_yaml_free(back);
+
+    remove(path.c_str());
+  }
+}
+
+TEST(YamlFileIO, WritingAFileThatDoesNotExistUsesTheOrdinaryDefault) {
+  /* PRESERVE falls back to what an ordinary fopen() would have given when
+     there is no destination yet - which is the umask's business, so this
+     sets one rather than asserting whatever the machine happens to have. */
+  const mode_t saved = umask(022);
+  std::string path = make_temp_path("perms_new");
+  remove(path.c_str());
+
+  const char *source = "key: value\n";
+  GTEXT_YAML_Error err;
+  memset(&err, 0, sizeof(err));
+  GTEXT_YAML_Document *doc =
+    gtext_yaml_parse(source, strlen(source), nullptr, &err);
+  ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+  gtext_yaml_error_free(&err);
+
+  memset(&err, 0, sizeof(err));
+  EXPECT_EQ(gtext_yaml_write_file(path.c_str(), doc, nullptr, &err),
+    GTEXT_YAML_OK) << (err.message ? err.message : "");
+  gtext_yaml_error_free(&err);
+  gtext_yaml_free(doc);
+
+  /* 0666 & ~022. Not 0600, which is what a renamed temporary would have
+     given and what this whole argument exists to stop. */
+  EXPECT_EQ(mode_of(path), 0644u)
+    << "a newly created file came out " << std::oct << mode_of(path);
+
+  remove(path.c_str());
+  umask(saved);
+}
+#endif  /* _WIN32 */

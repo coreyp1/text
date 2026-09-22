@@ -150,7 +150,23 @@ GTEXT_INTERNAL_API gtext_file_status gtext_file_write_atomic(const char * path,
    * header here already made: the file these parsers are usually pointed at is
    * a configuration file, and "the old one survived, but the new one is empty"
    * is not a way for one of those to come back from a power loss.
+   *
+   * GCU_FILE_PERMS_PRESERVE, for the same reason and from the same sentence.
+   * The destination of an atomic write is a renamed temporary, and a
+   * temporary is owner-only; until cutil grew this argument the mode came
+   * from that and nobody chose it, so every save of a 644 configuration file
+   * quietly narrowed it to 600. PRESERVE keeps whatever the destination
+   * already had and falls back to what an ordinary fopen() would have given
+   * when there is no destination yet, which is what the hand-written version
+   * did before any of this.
+   *
+   * The two wrong answers are wrong in opposite directions, and one of them
+   * is the one a caller reaches by reflex: PRIVATE is the zero value and
+   * narrows a config nobody asked to narrow, while DEFAULT widens one
+   * somebody deliberately ran chmod 600 on. Replacing a file is not the same
+   * act as creating it.
    */
-  result = gcu_file_temp_commit(&temp, path, GCU_FILE_SYNC_FULL);
+  result = gcu_file_temp_commit(
+      &temp, path, GCU_FILE_SYNC_FULL, GCU_FILE_PERMS_PRESERVE);
   return gtext_file_map(result, GTEXT_FILE_E_WRITE);
 }
