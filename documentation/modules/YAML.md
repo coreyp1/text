@@ -1244,19 +1244,30 @@ separately share nothing and may be used concurrently.
 
 "Share nothing" is a claim about process-wide state as much as about objects,
 and it was false until recently for a reason nothing here could have shown
-you. Number conversion pins `LC_NUMERIC` so that a decimal separator belongs
-to the format rather than to the user's language settings, and the guard
-choosing *how* it pins was structurally unsatisfiable — it tested
-`_POSIX_C_SOURCE` above every `#include`, where `features.h` has not run yet.
-So Linux compiled the `setlocale()` fallback, which is process-wide: two
-threads writing two unrelated documents did share something, and the symptom
-was a number formatted with the wrong separator in the *other* thread's
-output. No crash, no leak, nothing for a sanitizer to find. It is
-`uselocale()` now, which is per-thread, and
-`gtext_number_is_thread_local()` asserts that in the test suite — a
-behavioural test cannot, because both implementations convert correctly and
-the fallback restores what it changed. A document that
-no thread is modifying may be read from several at once.
+you. Number conversion has to make the decimal separator belong to the format
+rather than to the user's language settings, and it used to do that by pinning
+`LC_NUMERIC` — thread-locally with `uselocale()` where that existed, and
+process-wide with `setlocale()` where it did not. The guard choosing between
+them was structurally unsatisfiable: it tested `_POSIX_C_SOURCE` above every
+`#include`, where `features.h` has not run yet. So Linux compiled the
+process-wide arm, and two threads writing two unrelated documents did share
+something — the symptom being a number formatted with the wrong separator in
+the *other* thread's output. No crash, no leak, nothing for a sanitizer to
+find.
+
+Repairing the guard was not enough, because Windows is a supported target and
+MinGW has no `uselocale`: the fallback was not covering a hypothetical
+platform, it was covering a third of what this library ships to. So the
+locale is no longer pinned, consulted or changed at all. A conversion reads
+no process-wide state, which means there is no arm left to select wrongly and
+nothing to assert about which one compiled.
+
+The suite measures the property directly instead: a bystander thread formats
+a number whose spelling it knows while the main thread runs 300,000
+conversions, and counts how often it gets something else. Against the old
+process-wide fallback that count was 4,003,481 — `setlocale` is not a narrow
+window, it is most of the runtime. Against what is here now it is 0. A
+document that no thread is modifying may be read from several at once.
 
 The read accessors really are reads. `gtext_yaml_mapping_get()` is a linear
 scan of the stored pairs and `gtext_yaml_alias_target()` returns a stored

@@ -42,6 +42,17 @@
  * a portability #ifdef. It lives here now and everything uses it, on the
  * same reasoning as text_file_io_internal.h: keeping it in one place means
  * a fix to it reaches all three formats rather than one.
+ *
+ * These take a value and a style rather than a printf format string. That is
+ * not decoration. The implementation works by repairing the one byte a
+ * conversion can spell differently in another locale, and "the output is a
+ * number and nothing else" is what makes that repair sound - a format string
+ * with literal text in it would break the assumption silently. Taking the
+ * value directly means the assumption cannot be violated by a caller.
+ *
+ * Nothing behind this header calls setlocale, uselocale, newlocale or
+ * localeconv; see text_number.c for why the two-armed version that did was
+ * the wrong shape for a library that ships to Windows as well as POSIX.
  */
 
 #ifndef GHOTI_IO_GTEXT_TEXT_NUMBER_INTERNAL_H
@@ -50,49 +61,87 @@
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @brief snprintf, always in the C locale.
+ * @brief How a double should be spelled.
  *
- * Same contract as snprintf: returns the length the output would have had,
- * or a negative value on failure. Intended for numeric conversions - it is
- * LC_NUMERIC that is pinned, not the whole locale.
+ * The three printf conversions this library ever wanted, named so that the
+ * format string stays on this side of the call.
+ */
+typedef enum {
+  GTEXT_NUMBER_GENERAL,    /**< Significant digits, shortest of %e / %f. */
+  GTEXT_NUMBER_FIXED,      /**< Digits after the point. */
+  GTEXT_NUMBER_SCIENTIFIC, /**< Exponential. */
+} GTEXT_Number_Style;
+
+/**
+ * @brief Format a double with "." as the decimal separator, in any locale.
+ *
+ * Same return contract as snprintf: the length the output would have had, or
+ * negative on failure. A return of @p buf_size or more means the result was
+ * truncated and @p buf holds nothing worth reading.
  *
  * @param buf Destination buffer (must not be NULL)
  * @param buf_size Size of @p buf in bytes (must not be 0)
- * @param format printf format string (must not be NULL)
+ * @param value The value to spell
+ * @param style Which printf conversion to use
+ * @param precision Precision for that conversion; negative is treated as 0
  * @return Bytes the result needed, or negative on failure
  */
-GTEXT_INTERNAL_API int gtext_number_format(
-    char * buf, size_t buf_size, const char * format, ...);
+GTEXT_INTERNAL_API int gtext_number_format_double(
+    char * buf, size_t buf_size, double value,
+    GTEXT_Number_Style style, int precision);
 
 /**
- * @brief Whether the conversions here pin LC_NUMERIC per thread.
+ * @brief Format a signed 64-bit integer.
  *
- * True where the implementation uses uselocale()/newlocale(), false where it
- * falls back to setlocale(), which is process-wide and so briefly changes the
- * separator every other thread sees.
+ * Present for symmetry and to keep every number conversion in the library on
+ * one path. Integer conversion has no locale-dependent element, so this is
+ * snprintf with a bounds check.
  *
- * This exists to be asserted. Both implementations produce correct numbers
- * and the fallback puts back what it changed, so nothing observable
- * afterwards distinguishes them; a test that sets a locale and checks the
- * library still works passes either way. The guard that chooses between them
- * was silently false for the whole life of this file, and this is what makes
- * that visible.
- *
- * @return true if a conversion cannot disturb another thread's locale
+ * @param buf Destination buffer (must not be NULL)
+ * @param buf_size Size of @p buf in bytes (must not be 0)
+ * @param value The value to spell
+ * @return Bytes the result needed, or negative on failure
  */
-GTEXT_INTERNAL_API bool gtext_number_is_thread_local(void);
+GTEXT_INTERNAL_API int gtext_number_format_i64(
+    char * buf, size_t buf_size, int64_t value);
 
 /**
- * @brief strtod, always in the C locale.
+ * @brief Format an unsigned 64-bit integer.
+ *
+ * @param buf Destination buffer (must not be NULL)
+ * @param buf_size Size of @p buf in bytes (must not be 0)
+ * @param value The value to spell
+ * @return Bytes the result needed, or negative on failure
+ */
+GTEXT_INTERNAL_API int gtext_number_format_u64(
+    char * buf, size_t buf_size, uint64_t value);
+
+/**
+ * @brief How many bytes strtod() would consume from @p s in the C locale.
+ *
+ * Exposed because it is the load-bearing half of gtext_number_strtod(): it
+ * is what lets a parse stop where the document says the number stops, rather
+ * than where the user's locale thinks it does. Handed "1,5" in a comma
+ * locale, strtod answers 1.5; this answers 1, and the parse is cut there.
+ *
+ * @param s String to measure (must not be NULL)
+ * @return Length of the longest prefix strtod would convert, or 0 for none
+ */
+GTEXT_INTERNAL_API size_t gtext_number_c_extent(const char * s);
+
+/**
+ * @brief strtod, reading "." as the decimal separator in any locale.
  *
  * Same contract as strtod, including setting errno on range errors, so a
- * caller can go on checking endptr and errno as it did before.
+ * caller can go on checking endptr and errno as it did before. @p end is set
+ * relative to @p s, never into any temporary this function may have made.
  *
  * @param s String to convert (must not be NULL)
  * @param end Set to the first unconverted character, or NULL if not wanted

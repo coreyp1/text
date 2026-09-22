@@ -267,10 +267,11 @@ rather than assuming, and the check found two things:
 - `gtext_version_string()` raced with itself, formatting into a function-local
   static guarded by a second static flag. It returns a compile-time constant
   now, so the buffer and the race are both gone.
-- Number formatting forces the C locale. Where `uselocale()` exists - this
-  build included - that is thread-local and harmless. The `setlocale()`
-  fallback for platforms without it is process-global and can corrupt another
-  thread's number formatting; it is documented as the compromise it is.
+- Number formatting used to force the C locale, thread-locally where
+  `uselocale()` existed and process-globally where it did not. It no longer
+  changes the locale at all - nothing in the library calls `setlocale`,
+  `uselocale`, `newlocale` or `localeconv` - so the compromise that used to be
+  documented here is gone rather than mitigated. See Core.md.
 
 A claim that YAML accessors lazily cached alias resolution was also written
 and then removed, because reading the code showed they do not: aliases and

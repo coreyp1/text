@@ -28,12 +28,18 @@
  * condition has not verified anything, and saying so once and loudly beats
  * five quiet passes.
  *
- * What they could never have caught, and still cannot: which locale API the
- * library uses. Both implementations convert correctly and the fallback puts
- * back what it changed, so nothing observable afterwards tells them apart -
- * the difference is process-wide state during a conversion, in another
- * thread. gtext_number_is_thread_local() is the structural answer, and
- * TheConversionsPinTheLocalePerThread is where it is asserted.
+ * There used to be a paragraph here saying that no test in this file could
+ * see *which* locale API the library used, because both arms converted
+ * correctly and the process-wide one put back what it changed - so the only
+ * difference lived in another thread, mid-conversion, and an accessor had to
+ * report it structurally.
+ *
+ * That is no longer true, in both halves. The library now touches no locale
+ * at all, so there is no arm to report; and the difference the accessor stood
+ * in for is measured directly by AConversionCannotDisturbAnotherThread, which
+ * runs a bystander thread and counts how often it sees a separator it did not
+ * ask for. Against the old process-wide fallback that count was 4,003,481 in
+ * 300,000 conversions. Against what is here now it is 0.
  */
 #include <gtest/gtest.h>
 #include <locale.h>
@@ -41,6 +47,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <atomic>
+#include <cmath>
+#include <thread>
 #include <ghoti.io/text/json.h>
 #include <ghoti.io/text/yaml.h>
 
@@ -48,16 +57,42 @@ extern "C" {
 #include "../src/text_number_internal.h"
 }
 
-/* glibc keeps one small allocation for the LOCPATH list (reached from
-   newlocale, via __argz_add_sep) that freelocale never returns. It is not
-   ours and it is not a leak we can close. Suppressed here and only here, so
-   it cannot widen to another binary. */
-extern "C" const char *__lsan_default_suppressions(void);
-extern "C" const char *__lsan_default_suppressions(void) {
-	return "leak:__argz_add_sep\n";
-}
+/* There was an __lsan_default_suppressions() here, for one small glibc
+   allocation on the LOCPATH list that freelocale never returned. It was
+   reached from newlocale - which the library called, and no longer does.
+   Removed after checking: with the suppression emptied this binary is clean
+   under LSan, and LSan is armed (a deliberate 1234-byte leak is still
+   reported). A suppression that suppresses nothing is where the next real
+   leak hides. */
 
 namespace {
+
+/* Switches LC_NUMERIC to a named locale and puts it back however the test
+   ends. Used for the locales this file generates for itself. */
+class ScopedLocale {
+public:
+	explicit ScopedLocale(const char *name) {
+		const char *saved = setlocale(LC_NUMERIC, nullptr);
+		if (saved) previous_ = saved;
+		if (setlocale(LC_NUMERIC, name)) {
+			active_ = true;
+			name_ = name;
+		}
+		else {
+			setlocale(LC_NUMERIC, previous_.c_str());
+		}
+	}
+	~ScopedLocale() { setlocale(LC_NUMERIC, previous_.c_str()); }
+
+	bool active() const { return active_; }
+	const std::string &name() const { return name_; }
+	const char *separator() const { return localeconv()->decimal_point; }
+
+private:
+	std::string previous_ = "C";
+	std::string name_;
+	bool active_ = false;
+};
 
 /* Switches LC_NUMERIC to something that separates with a comma, and puts it
    back afterwards however the test ends. */
@@ -133,24 +168,32 @@ std::string JsonFromDouble(double x) {
    runtime to the child, LeakSanitizer then trips on localedef's own
    allocations and it exits non-zero - and the failure reads as "no locale
    could be generated", for a reason with nothing to do with locales. */
-static bool EnsureCommaLocale() {
-	{
-		CommaLocale probe;
-		if (probe.active()) return true;
-	}
-
+/* Builds <name>.UTF-8 into a directory LOCPATH points at, once per process.
+   Returns true if the locale can then be selected. */
+static bool GenerateLocale(const std::string &name) {
 	static std::string dir;
 	if (dir.empty()) {
 		char tmpl[] = "/tmp/gtext-locale-XXXXXX";
 		const char *made = mkdtemp(tmpl);
 		if (!made) return false;
 		dir = made;
-		const std::string cmd =
-			"env -u LD_PRELOAD -u LD_LIBRARY_PATH localedef -i de_DE -f UTF-8 "
-			+ dir + "/de_DE.UTF-8 >/dev/null 2>&1";
-		if (system(cmd.c_str()) != 0) return false;
 		setenv("LOCPATH", dir.c_str(), 1);
 	}
+	const std::string cmd =
+		"env -u LD_PRELOAD -u LD_LIBRARY_PATH localedef -i " + name
+		+ " -f UTF-8 " + dir + "/" + name + ".UTF-8 >/dev/null 2>&1";
+	if (system(cmd.c_str()) != 0) return false;
+	ScopedLocale check((name + ".UTF-8").c_str());
+	return check.active();
+}
+
+static bool EnsureCommaLocale() {
+	{
+		CommaLocale probe;
+		if (probe.active()) return true;
+	}
+
+	if (!GenerateLocale("de_DE")) return false;
 
 	CommaLocale again;
 	return again.active();
@@ -177,27 +220,229 @@ TEST(LocaleNumbers, ACommaLocaleIsAvailable) {
 		<< " is active but snprintf still separates with '.'";
 }
 
-/* The one thing no behavioural test in this file can see.
+/* The difference an accessor used to have to report.
    
-   Both locale implementations convert correctly, and the fallback restores
-   what it changed, so before-and-after they are identical; the difference is
-   that setlocale is process-wide and briefly changes the separator every
-   other thread sees. For the whole life of src/text_number.c the guard
-   selecting between them was structurally unsatisfiable - it tested
-   _POSIX_C_SOURCE above every #include, where features.h has not run - so
+   src/text_number.c once chose between uselocale() and setlocale() with a
+   preprocessor guard, and the guard was structurally unsatisfiable: it tested
+   _POSIX_C_SOURCE above every #include, where features.h has not yet run. So
    Linux compiled the process-wide arm while macOS and FreeBSD, selected by
-   compiler predefines, got the thread-local one.
+   compiler predefines that *are* live there, got the thread-local one.
    
-   This is what makes that visible. If a platform legitimately has no
-   per-thread locale API, this test is the place to record the decision
-   rather than the place to delete. */
-TEST(LocaleNumbers, TheConversionsPinTheLocalePerThread) {
-	EXPECT_TRUE(gtext_number_is_thread_local())
-		<< "number conversions are using process-wide setlocale(), which "
-		   "makes the concurrency guarantee in the module documentation "
-		   "false; check the guard in src/text_number.c";
+   Repairing the guard was not enough, because Windows is a supported target
+   here and MinGW has no uselocale - the fallback was not covering some
+   hypothetical platform, it was covering a third of what this library ships
+   to. So the locale is no longer consulted or changed at all, and this test
+   measures the property the arms were arguing about.
+   
+   A bystander thread formats a number whose spelling it knows and counts how
+   often it gets a different one. Against the old process-wide fallback the
+   count was 4,003,481 out of 300,000 conversions: setlocale is not a window,
+   it is most of the runtime. */
+TEST(LocaleNumbers, AConversionCannotDisturbAnotherThread) {
+	ASSERT_TRUE(EnsureCommaLocale());
+	CommaLocale loc;
+	ASSERT_TRUE(loc.active());
+
+	std::atomic<bool> stop{false};
+	std::atomic<long> wrong{0};
+	std::atomic<long> seen{0};
+
+	std::thread bystander([&] {
+		while (!stop.load(std::memory_order_relaxed)) {
+			char b[32];
+			snprintf(b, sizeof(b), "%.1f", 1.5);
+			seen.fetch_add(1, std::memory_order_relaxed);
+			if (strcmp(b, "1,5") != 0) {
+				wrong.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+	});
+
+	char buf[64];
+	for (long i = 0; i < 300000; i++) {
+		gtext_number_format_double(
+			buf, sizeof(buf), 0.1 + (double)i, GTEXT_NUMBER_GENERAL, 17);
+	}
+	stop.store(true);
+	bystander.join();
+
+	/* The control: if the bystander never ran, it cannot have seen anything,
+	   and a zero below would mean nothing at all. */
+	ASSERT_GT(seen.load(), 0L) << "the bystander thread never ran";
+	EXPECT_EQ(wrong.load(), 0L)
+		<< "a number conversion changed the separator another thread sees; "
+		   "that is process-wide locale state, and it makes the concurrency "
+		   "guarantee in the module documentation false";
+
+	/* ...and it must still convert correctly while not doing that. */
+	ASSERT_GT(gtext_number_format_double(
+		buf, sizeof(buf), 0.5, GTEXT_NUMBER_GENERAL, 17), 0);
+	EXPECT_STREQ(buf, "0.5");
 }
 
+/* gtext_number_c_extent() is what lets a parse stop where the document says
+   the number stops rather than where the locale thinks it does, so it has to
+   agree with strtod exactly - an extent one byte short silently truncates a
+   number, one byte long silently extends it.
+   
+   Compared here against the thing it models. Three deliberate mutations of
+   its rules - consuming a malformed exponent, dropping the bare "0x" case,
+   and accepting a lone "." - were caught 63984, 3224 and 371362 times
+   respectively by this comparison. */
+TEST(LocaleNumbers, TheExtentScanAgreesWithStrtod) {
+	ScopedLocale c("C");
+	ASSERT_TRUE(c.active());
+
+	static const char *cases[] = {
+		"", "0", "-0", "+1", "1.", ".5", ".", "-.", "1e", "1e+", "1e+5",
+		"1E-3", "0x", "0X", "0x1", "0x1.8p3", "0x1.8p+3", "0x.8p1", "0x1p",
+		"0xg", "inf", "INF", "infinity", "InFiNiTy", "infin", "nan", "NAN",
+		"nan()", "nan(0x1)", "nan(abc_1)", "nan(", "  1.5", "\t-2.5e3xyz",
+		"1,5", "1.5,2", "++1", "--1", "1.5e2xyz", "e5", "x1", "1e999",
+		"-inf", "+nan", "1.2.3", "0x1.8", "1_000",
+	};
+	for (const char *in : cases) {
+		char *end = nullptr;
+		(void)strtod(in, &end);
+		EXPECT_EQ(gtext_number_c_extent(in), (size_t)(end - in))
+			<< "input \"" << in << "\"";
+	}
+
+	/* And the same question asked by a generator, because the list above is
+	   the set of shapes that occurred to me. */
+	static const char alphabet[] = "0123456789.eE+-xXpPaAfFnN iInfNaN()_\t";
+	const size_t alpha_len = sizeof(alphabet) - 1;
+	unsigned long long st = 88172645463325252ULL;
+	auto rnd = [&st]() {
+		st ^= st << 13; st ^= st >> 7; st ^= st << 17; return st;
+	};
+	long mismatches = 0;
+	char buf[40];
+	for (long i = 0; i < 300000; i++) {
+		size_t len = 1 + (size_t)(rnd() % 18);
+		for (size_t j = 0; j < len; j++) buf[j] = alphabet[rnd() % alpha_len];
+		buf[len] = '\0';
+		char *end = nullptr;
+		(void)strtod(buf, &end);
+		if (gtext_number_c_extent(buf) != (size_t)(end - buf)) {
+			if (mismatches < 5) ADD_FAILURE() << "input \"" << buf << "\"";
+			mismatches++;
+		}
+	}
+	EXPECT_EQ(mismatches, 0L);
+}
+
+/* Integer conversion has no locale-dependent element, which is why
+   gtext_number_format_i64/u64 do no repair. That is a measurement, not a
+   deduction, so it is measured. Grouping would need printf's "'" flag; if
+   one ever appears in those functions this goes red. */
+TEST(LocaleNumbers, AnIntegerIsSpelledTheSameInEveryLocale) {
+	const int64_t svals[] = {0, 1, -1, 1234567, -9007199254740993LL,
+		INT64_MIN, INT64_MAX};
+	const uint64_t uvals[] = {0u, 1u, 1234567u, UINT64_MAX};
+
+	std::string in_c[sizeof(svals) / sizeof(svals[0])];
+	std::string uin_c[sizeof(uvals) / sizeof(uvals[0])];
+	{
+		ScopedLocale c("C");
+		ASSERT_TRUE(c.active());
+		char buf[64];
+		for (size_t i = 0; i < sizeof(svals) / sizeof(svals[0]); i++) {
+			ASSERT_GT(gtext_number_format_i64(buf, sizeof(buf), svals[i]), 0);
+			in_c[i] = buf;
+		}
+		for (size_t i = 0; i < sizeof(uvals) / sizeof(uvals[0]); i++) {
+			ASSERT_GT(gtext_number_format_u64(buf, sizeof(buf), uvals[i]), 0);
+			uin_c[i] = buf;
+		}
+	}
+
+	ASSERT_TRUE(EnsureCommaLocale());
+	CommaLocale loc;
+	ASSERT_TRUE(loc.active());
+	char buf[64];
+	for (size_t i = 0; i < sizeof(svals) / sizeof(svals[0]); i++) {
+		ASSERT_GT(gtext_number_format_i64(buf, sizeof(buf), svals[i]), 0);
+		EXPECT_EQ(std::string(buf), in_c[i]);
+	}
+	for (size_t i = 0; i < sizeof(uvals) / sizeof(uvals[0]); i++) {
+		ASSERT_GT(gtext_number_format_u64(buf, sizeof(buf), uvals[i]), 0);
+		EXPECT_EQ(std::string(buf), uin_c[i]);
+	}
+}
+
+/* A separator need not be one byte. ps_AF separates with U+066B, which is
+   two, so repairing it shortens the string - and the length the function
+   reports has to shorten with it, or every caller that checks "did this fit"
+   is working from a number that is now wrong. */
+TEST(LocaleNumbers, AMultiByteSeparatorIsStillRepaired) {
+	ASSERT_TRUE(GenerateLocale("ps_AF"))
+		<< "could not generate ps_AF.UTF-8; without it the multi-byte "
+		   "separator path is never exercised";
+	ScopedLocale loc("ps_AF.UTF-8");
+	ASSERT_TRUE(loc.active());
+
+	/* The hostile condition really is hostile, and really is multi-byte. */
+	ASSERT_GT(strlen(loc.separator()), 1u) << "ps_AF separator is not "
+		"multi-byte here; this test is measuring nothing";
+	char probe[32];
+	snprintf(probe, sizeof(probe), "%.1f", 1.5);
+	ASSERT_STRNE(probe, "1.5") << "plain snprintf already separates with '.'";
+
+	char buf[64];
+	int len = gtext_number_format_double(
+		buf, sizeof(buf), 0.5, GTEXT_NUMBER_GENERAL, 17);
+	EXPECT_STREQ(buf, "0.5");
+	EXPECT_EQ(len, (int)strlen(buf))
+		<< "the reported length did not shrink with the string";
+
+	len = gtext_number_format_double(
+		buf, sizeof(buf), 1.25, GTEXT_NUMBER_FIXED, 3);
+	EXPECT_STREQ(buf, "1.250");
+	EXPECT_EQ(len, (int)strlen(buf));
+
+	/* And back again, through the multi-byte respelling in the parser. */
+	char *end = nullptr;
+	EXPECT_EQ(gtext_number_strtod("0.5", &end), 0.5);
+	EXPECT_EQ(*end, '\0');
+}
+
+/* The half of the parse that truncation buys.
+   
+   Handed "1,5" in a comma locale a bare strtod answers 1.5, because it reads
+   the comma as a decimal point. The document did not say 1.5; it said 1
+   followed by a separator that belongs to whatever contains it. */
+TEST(LocaleNumbers, AParseStopsWhereTheDocumentSaysItDoes) {
+	ASSERT_TRUE(EnsureCommaLocale());
+	CommaLocale loc;
+	ASSERT_TRUE(loc.active());
+
+	/* The control: this is exactly what the bare function gets wrong here. */
+	char *bare_end = nullptr;
+	ASSERT_EQ(strtod("1,5", &bare_end), 1.5)
+		<< "the locale is not hostile in the way this test needs";
+
+	char *end = nullptr;
+	EXPECT_EQ(gtext_number_strtod("1,5", &end), 1.0);
+	ASSERT_NE(end, nullptr);
+	EXPECT_EQ(*end, ',');
+
+	end = nullptr;
+	EXPECT_EQ(gtext_number_strtod("1.5", &end), 1.5);
+	ASSERT_NE(end, nullptr);
+	EXPECT_EQ(*end, '\0');
+
+	end = nullptr;
+	EXPECT_EQ(gtext_number_strtod("-2.5e3xyz", &end), -2500.0);
+	ASSERT_NE(end, nullptr);
+	EXPECT_STREQ(end, "xyz");
+
+	/* Nothing to convert stays nothing to convert. */
+	end = nullptr;
+	EXPECT_EQ(gtext_number_strtod("abc", &end), 0.0);
+	ASSERT_NE(end, nullptr);
+	EXPECT_STREQ(end, "abc");
+}
 
 TEST(LocaleNumbers, AYamlFloatIsStillAFloat) {
 	EXPECT_EQ(YamlValueType("a: 0.1\n"), GTEXT_YAML_FLOAT) << "in the C locale";

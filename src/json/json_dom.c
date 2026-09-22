@@ -524,8 +524,8 @@ GTEXT_API GTEXT_JSON_Value * gtext_json_new_number_double(double x) {
   char lexeme_buf[64]; // Enough for any double
   /* Not snprintf: it writes LC_NUMERIC's separator, and a lexeme of "0,1"
      is not a JSON number at all. */
-  int snprintf_result =
-      gtext_number_format(lexeme_buf, sizeof(lexeme_buf), "%.17g", x);
+  int snprintf_result = gtext_number_format_double(
+      lexeme_buf, sizeof(lexeme_buf), x, GTEXT_NUMBER_GENERAL, 17);
   if (snprintf_result < 0 || (size_t)snprintf_result >= sizeof(lexeme_buf)) {
     json_context_free(ctx);
     return NULL;

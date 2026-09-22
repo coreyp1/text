@@ -95,7 +95,7 @@ static GTEXT_YAML_Status coerce_key_name(
 	case GTEXT_YAML_INT: {
 		int64_t v = 0;
 		if (!gtext_yaml_node_as_int(key, &v)) break;
-		if (gtext_number_format(buf, buf_size, "%" PRId64, v) < 0) break;
+		if (gtext_number_format_i64(buf, buf_size, v) < 0) break;
 		*out = buf;
 		return GTEXT_YAML_OK;
 	}
@@ -117,7 +117,8 @@ static GTEXT_YAML_Status coerce_key_name(
 		   the name carries a "." wherever this runs. */
 		int n = -1;
 		for (int prec = 15; prec <= 17; prec++) {
-			n = gtext_number_format(buf, buf_size, "%.*g", prec, d);
+			n = gtext_number_format_double(
+				buf, buf_size, d, GTEXT_NUMBER_GENERAL, prec);
 			if (n < 0 || (size_t)n >= buf_size) break;
 			if (gtext_number_strtod(buf, NULL) == d) break;
 		}

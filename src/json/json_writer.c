@@ -451,12 +451,10 @@ static int format_double(char * buf, size_t buf_size, double d,
     return -1;
   }
 
-  const char * fmt_str;
-
   switch (format) {
   case GTEXT_JSON_FLOAT_SHORTEST:
-    fmt_str = "%.17g";
-    return gtext_number_format(buf, buf_size, fmt_str, d);
+    return gtext_number_format_double(
+        buf, buf_size, d, GTEXT_NUMBER_GENERAL, 17);
 
   case GTEXT_JSON_FLOAT_FIXED:
     // Clamp precision to reasonable range
@@ -464,9 +462,8 @@ static int format_double(char * buf, size_t buf_size, double d,
       precision = 0;
     if (precision > 20)
       precision = 20;
-    fmt_str = "%.*f";
-    return gtext_number_format(
-        buf, buf_size, fmt_str, precision, d);
+    return gtext_number_format_double(
+        buf, buf_size, d, GTEXT_NUMBER_FIXED, precision);
 
   case GTEXT_JSON_FLOAT_SCIENTIFIC:
     // Clamp precision to reasonable range
@@ -474,14 +471,13 @@ static int format_double(char * buf, size_t buf_size, double d,
       precision = 0;
     if (precision > 20)
       precision = 20;
-    fmt_str = "%.*e";
-    return gtext_number_format(
-        buf, buf_size, fmt_str, precision, d);
+    return gtext_number_format_double(
+        buf, buf_size, d, GTEXT_NUMBER_SCIENTIFIC, precision);
 
   default:
     // Fallback to shortest
-    fmt_str = "%.17g";
-    return gtext_number_format(buf, buf_size, fmt_str, d);
+    return gtext_number_format_double(
+        buf, buf_size, d, GTEXT_NUMBER_GENERAL, 17);
   }
 }
 
@@ -524,8 +520,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Try int64 first (if available and fits)
   if (v->as.number.has_i64) {
     int64_t i64 = v->as.number.i64;
-    int len = gtext_number_format(
-        num_buf, sizeof(num_buf), "%lld", (long long)i64);
+    int len = gtext_number_format_i64(num_buf, sizeof(num_buf), i64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -534,8 +529,7 @@ static int write_number(GTEXT_JSON_Sink * sink, const GTEXT_JSON_Value * v,
   // Try uint64 next
   if (v->as.number.has_u64) {
     uint64_t u64 = v->as.number.u64;
-    int len = gtext_number_format(
-        num_buf, sizeof(num_buf), "%llu", (unsigned long long)u64);
+    int len = gtext_number_format_u64(num_buf, sizeof(num_buf), u64);
     if (len > 0 && (size_t)len < sizeof(num_buf)) {
       return write_bytes(sink, num_buf, (size_t)len);
     }
@@ -1505,8 +1499,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_i64(
 
   // Format number (locale-independent)
   char num_buf[64];
-  int len =
-      gtext_number_format(num_buf, sizeof(num_buf), "%lld", x);
+  int len = gtext_number_format_i64(num_buf, sizeof(num_buf), (int64_t)x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return GTEXT_JSON_E_WRITE;
@@ -1558,8 +1551,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_writer_number_u64(
 
   // Format number (locale-independent)
   char num_buf[64];
-  int len =
-      gtext_number_format(num_buf, sizeof(num_buf), "%llu", x);
+  int len = gtext_number_format_u64(num_buf, sizeof(num_buf), (uint64_t)x);
   if (len < 0 || (size_t)len >= sizeof(num_buf)) {
     w->error = 1;
     return GTEXT_JSON_E_WRITE;

@@ -314,14 +314,23 @@ that turned up are worth naming:
   by a second static flag, so two threads calling it at once both saw the flag
   clear and both wrote the buffer. It now returns a compile-time constant, so
   there is no buffer and no race.
-- **Number formatting changes the locale.** `LC_NUMERIC` decides whether a
-  double is written with `.` or `,`, so the writer forces the C locale around
-  each conversion. Where `uselocale()` is available - which includes Linux,
-  macOS and the BSDs, and is what this build uses - the change is thread-local
-  and invisible to other threads. On a platform without it the writer falls
-  back to `setlocale()`, which is **process-global**: another thread
-  formatting a number at that moment can see the wrong decimal separator.
-  That fallback is a portability compromise, not the intended path.
+- **Number formatting does not touch the locale.** `LC_NUMERIC` decides
+  whether a double is written with `.` or `,`, and the library used to force
+  the C locale around each conversion - thread-locally via `uselocale()` where
+  that existed, and process-globally via `setlocale()` where it did not. The
+  process-global fallback was not a remote possibility: the guard selecting
+  between the two was structurally unsatisfiable, so Linux took the fallback,
+  and MinGW has no `uselocale` at all, so Windows took it by right.
+
+  The locale is no longer consulted or changed. A double is formatted with
+  whatever separator the locale gives and the one separator byte is rewritten
+  as `.` afterwards; a parse measures how far the number runs under C rules
+  and hands `strtod` a copy spelled the way the current locale reads, so
+  `"1,5"` in a German locale still parses as `1`, stopping at the comma, and
+  not as `1.5`. Integer conversion has no locale-dependent element and is
+  left alone. No `setlocale`, `uselocale`, `newlocale` or `localeconv`
+  appears anywhere in the library, which `nm -D --undefined-only` will
+  confirm.
 
 **A caller-supplied `GTEXT_Allocator` must be thread-safe if the objects using
 it are touched from more than one thread.** The library adds no locking of its
