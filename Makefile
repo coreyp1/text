@@ -725,9 +725,19 @@ check-headers: ## Fail if any installed header is not self-contained
 # broken or duplicated include guard shows up as a redefinition; and once as
 # C++, because every test in this project is C++ and a header that forgets
 # `extern "C"` links against nothing.
+#
+# The list is every header `install` copies, which is not the same as every
+# header under include/.  It globbed include/ alone and so checked 25 of the
+# 26 headers that ship: libver_gen.h is generated into $(GEN_DIR) and installed
+# from there, so the one header whose content is produced by the build rather
+# than written by hand was the one nothing verified.  Same shape as the gate
+# itself is for - a hand-kept list that silently stops matching - one level up,
+# in a list kept by a glob rather than by a person.
 	@mkdir -p $(BUILD_DIR)
 	@fail=0; checked=0; \
-	for h in $$(find include -name '*.h' | sed 's|^include/||' | sort); do \
+	for h in $$( { find include -name '*.h' | sed 's|^include/||'; \
+			find $(GEN_DIR) -name '*.h' 2>/dev/null \
+				| sed 's|^$(GEN_DIR)/||'; } | sort -u); do \
 		checked=$$((checked + 1)); \
 		printf '#include <%s>\n#include <%s>\nint main(void) { return 0; }\n' "$$h" "$$h" \
 			> $(BUILD_DIR)/hdrcheck.c; \

@@ -1277,6 +1277,15 @@ Part of the ghoti.io text library.
 
 ---
 
-**Last Updated:** February 11, 2026  
+**Last Updated:** September 22, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 563 YAML test cases, of 2154 across the suite, all passing
+**Test count:** 683 YAML test cases across 96 binaries, of 1,591 across the
+suite, all passing.
+
+Both figures count each binary once. `make test` has three group targets
+(`Text tests`, `JSON tests`, `CSV tests`) that re-run binaries the per-target
+rules have already run, so summing every `[  PASSED  ]` line gives 2,432 -
+841 more than there are tests. The rule is to count only what follows a
+single-token `### Running <name> ###` header, and to note that 108 such
+headers appear while 107 report a total: `testHeaders` is a plain C program
+rather than a gtest binary and prints none.
