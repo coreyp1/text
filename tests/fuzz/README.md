@@ -283,17 +283,22 @@ reachable from a corpus of *documents*; the first needs the DOM API, and the
 second needs 1.1 mode. `corpus/yaml-writer/int-tag-on-an-infinity.seed` is
 the reproducer, kept because it no longer traps.
 
-**This target is not yet quiet, and the notes above say so rather than
-pretending otherwise.** Every run of it so far has found something, each fix
-exposing the next - which is what a new harness does on a surface nothing had
-fuzzed before, and is the strongest available argument that the surface needed
-one. The best run so far went twenty-three thousand executions in twenty
-minutes before it found the property-column defect above; with the corpus it
-has since grown, five minutes and 1.9 million executions were enough to reach
-the `.INF` conversion. The corpus under
-`corpus/yaml-writer/` is the record; a run that goes the full `FUZZ_TIME`
-without a find will be the first, and this paragraph should be updated when it
-happens.
+**One run has now gone the distance without a find**, which the paragraph
+that stood here asked to be told about: seven minutes and 3.18 million
+executions, straight after the `.INF` fix, over a corpus of 5,600-odd units.
+That is one run, and it says the harness has stopped finding things at this
+depth rather than that there is nothing left - every run before it found
+something, each fix exposing the next, which is what a new harness does on a
+surface nothing had fuzzed before and is the strongest available argument
+that the surface needed one. The run before this one went five minutes and
+1.9 million executions before reaching the `.INF` conversion; the first went
+twenty-three thousand executions in twenty minutes before it found the
+property-column defect above, on a corpus that barely existed yet.
+
+The corpus under `corpus/yaml-writer/` is the record. The next thing worth
+doing here is a longer campaign - `make fuzz-run-yaml-writer FUZZ_TIME=3600`
+- rather than more short ones, and this paragraph should say what that
+finds.
 
 ## The options byte
 
