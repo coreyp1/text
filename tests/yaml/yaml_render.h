@@ -7,6 +7,13 @@
  * both the answers and the refusals. It was copied into seven test files
  * before this header existed, which is how the alias case came to be
  * missing from the one that needed it.
+ *
+ * It prints an alias by printing its target, so a document that names an
+ * enclosing collection - "&O [1, *O]", and every block spelling of it since
+ * adopt_own_line_anchor() started re-pointing the anchor - would recur until
+ * the stack ran out. A table test written in good faith would look like a
+ * mystery crash rather than a diff, so a node already on the path prints as
+ * "*" and the walk stops there.
  */
 #ifndef GTEXT_TESTS_YAML_RENDER_H
 #define GTEXT_TESTS_YAML_RENDER_H
@@ -14,12 +21,36 @@
 #include <gtest/gtest.h>
 #include <string.h>
 #include <string>
+#include <vector>
 #include <ghoti.io/text/yaml.h>
 
 namespace {
 
+/* The nodes between the root and the one being printed, so a recursive
+   document terminates. Only the path is held, not every node seen: a node
+   reached twice down two different branches is not a cycle, and printing it
+   once each time is what a reader of the expectation wants. */
+std::vector<const GTEXT_YAML_Node *> &RenderPath() {
+	static std::vector<const GTEXT_YAML_Node *> path;
+	return path;
+}
+
+struct RenderFrame {
+	explicit RenderFrame(const GTEXT_YAML_Node *n) { RenderPath().push_back(n); }
+	~RenderFrame() { RenderPath().pop_back(); }
+};
+
+bool RenderOnPath(const GTEXT_YAML_Node *n) {
+	for (const GTEXT_YAML_Node *seen : RenderPath()) {
+		if (seen == n) return true;
+	}
+	return false;
+}
+
 void RenderInto(const GTEXT_YAML_Node *n, std::string &out) {
 	if (!n) { out += "<null-node>"; return; }
+	if (RenderOnPath(n)) { out += '*'; return; }
+	RenderFrame frame(n);
 	switch (gtext_yaml_node_type(n)) {
 	case GTEXT_YAML_NULL:
 		out += "null";

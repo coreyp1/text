@@ -706,19 +706,58 @@ e: [*d, *d]        # 32 elements
 
 The parser tracks total expansion count and fails with `GTEXT_YAML_E_LIMIT` when exceeded.
 
-### 7.4 Cycle Detection
+### 7.4 Cycles, and the one kind a document can hold
 
-The parser detects and rejects cycles in anchor definitions:
+An alias names "the most recent **preceding** node having the same anchor"
+(3.2.2.2), so the two-anchor cycle this section used to give as its example
 
 ```yaml
-# This is invalid - creates a cycle:
 a: &a
-  b: *b
+  b: *b       # *b names an anchor that does not exist yet
 b: &b
   a: *a
 ```
 
-Parser returns `GTEXT_YAML_E_INVALID` when cycles are detected.
+is not a cycle at all - it is a forward reference, and the parser refuses it
+with `GTEXT_YAML_E_INVALID` and *Unknown anchor referenced by alias*. PyYAML
+and js-yaml refuse it too. Mutual recursion cannot be written in YAML for
+that reason: whichever of the two anchors comes second, the alias to it in
+the first is a forward reference.
+
+**Self-reference can be, and is accepted.** A node's anchor precedes
+everything inside it, so an alias within the anchored collection legitimately
+names it:
+
+```yaml
+&O
+k: v
+j: *O         # *O is this mapping
+```
+
+`gtext_yaml_alias_target()` returns the enclosing node, and PyYAML renders
+the same document as `{'k': 'v', 'j': {...}}`. The block spelling above was
+wrong until recently - the alias came back as the string `"k"` - and the flow
+spelling `&O [1, *O]` was always right; *An anchor moved, and the
+registration it made did not* in \ref format_yaml has the account.
+
+A recursive document is finite to handle, because an alias is a node in its
+own right and nothing expands it: the DOM holds the alias and its target,
+`max_alias_expansion` counts the aliases a document *writes* rather than the
+expansions a reader could take from them, and the writer emits `*O` by name.
+What such a document will not do is convert: `gtext_yaml_to_json()` refuses
+an alias, because JSON has no way to say one. A caller that walks the DOM
+itself is the one that has to expect a cycle, and
+`gtext_yaml_node_anchor()` on each collection is what tells it where one can
+close.
+
+There is a cycle detector, and it is not on this path.
+`gtext_yaml_resolver_compute_expansion()` walks anchors registered by name
+and returns `GTEXT_YAML_E_INVALID` on a genuine cycle, which it can see
+because names registered through that API *can* be made mutually
+referential in a way a parsed document cannot. It is `GTEXT_INTERNAL_API`
+and nothing under `src/` calls it: the parser does its own alias accounting,
+and the only callers are the two tests named after it. Do not read this
+section's guarantee off that function.
 
 ---
 

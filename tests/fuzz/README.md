@@ -357,7 +357,17 @@ it is.
 
 A stored artifact that predates all of that turned out to be an omap built
 with the same key twice - the DOM appenders enforced neither of `!!omap`'s two
-rules, where the resolver enforces both. All twelve stored artifacts pass now.
+rules, where the resolver enforces both.
+
+The last one still standing was **an anchor written on its own line before a
+block collection**, and it is the clearest case yet of why this harness
+writes as well as reads. The anchor reached the collection on the way out but
+the alias table kept pointing at the scalar it had arrived on, so `*O` inside
+the collection named the mapping's first key. Used as a key it made a mapping
+with two distinct keys come back *Duplicate mapping key*; used anywhere, it
+meant the document said one thing going in and another coming back, which is
+the invariant this target exists to check and the only way it could have been
+noticed. All thirteen stored artifacts pass now.
 
 Its triage is the lesson worth keeping. Read by eye, the 434 bytes of UTF-16
 it produced contained `!!null ""`, which looks like a defect this library has
@@ -445,7 +455,7 @@ The writer harness is new, and its execution count is not yet comparable: it
 builds a document and re-parses one on every run, so it is much slower per
 execution than a parse-only harness. The four writer defects it was written
 for had already been found by hand; it exists so the next four are not, and it
-has already earned that — forty-three library defects and three of its own,
+has already earned that — forty-four library defects and three of its own,
 listed above. Most of the twenty are in the *reader*, which is not what this harness
 was built to test: a writer is an instrument for asking a parser questions a
 corpus of inputs cannot phrase, and it turns out to ask a lot of them.

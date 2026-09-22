@@ -925,6 +925,56 @@ static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEX
 }
 
 /**
+ * @brief Take back an anchor a scalar registered on a collection's behalf.
+ *
+ * An own-line anchor reaches the parser on the collection's first scalar -
+ * its first key, or its first entry - because a block collection has no
+ * opening token to carry it. That scalar registers it before
+ * adopt_own_line_anchor() gets to look at it, and the registration says the
+ * anchor names the scalar, which it never did.
+ *
+ * Leaving the entry in place is not merely untidy: it is what an alias
+ * *inside* the collection resolves against. "&O\nk: v\nj: *O" came back
+ * with *O bound to the string "k" rather than to the mapping, against both
+ * PyYAML and js-yaml. The equivalent flow document, "&O [ 1, *O ]", was
+ * always right, because there the anchor arrives with the "[" and no scalar
+ * ever claims it.
+ *
+ * The entry keeps its name and gives up its node, which is exactly the state
+ * a collection's anchor is in between its opening and its closing: written,
+ * but with nothing yet to point at. lookup_anchor() then misses,
+ * anchor_open_on_stack() finds the name on the level being built, and the
+ * alias is deferred to the end of the parse - the same path the flow case
+ * has always taken. register_anchor() fills the entry back in when the
+ * collection exists.
+ *
+ * Only an entry still pointing at this scalar is cleared. A name may have
+ * been anchored to something else earlier in the document, and an alias
+ * written between that definition and this one has already bound to it.
+ *
+ * Of the two places adopt_own_line_anchor() moves an anchor off a scalar,
+ * only one has a document behind it. The other is the handover into
+ * p->outer_anchor, and instrumenting it across the suite and the conformance
+ * corpus reaches it exactly once - from "top: &n" over "  &m" over "  - 1",
+ * which is refused as a node with more than one anchor whatever this
+ * function does. It is called there because the rule is the same on both
+ * paths, not because an accepted document turns on it.
+ */
+static void unregister_anchor(
+		parser_state *p, const char *name, const GTEXT_YAML_Node *node) {
+	if (!p || !name || !node) return;
+	for (size_t i = 0; i < p->anchors.count; i++) {
+		if (p->anchors.entries[i].name
+				&& strcmp(p->anchors.entries[i].name, name) == 0) {
+			if (p->anchors.entries[i].node == node) {
+				p->anchors.entries[i].node = NULL;
+			}
+			return;
+		}
+	}
+}
+
+/**
  * @brief Track an alias node for later resolution.
  */
 static bool track_alias(
@@ -1953,10 +2003,11 @@ static GTEXT_YAML_Status adopt_own_line_tag(
  * (suite case UGM3). "x: &anc" over "  - 1" is the sequence version, whose
  * alias gave 1 instead of [1].
  *
- * The scalar has already registered the anchor by the time this runs. The
- * collection registers it again when it is built, and an alias takes the
- * most recent preceding definition (3.2.2.2), so an alias after the
- * collection sees the collection.
+ * The scalar has already registered the anchor by the time this runs, and
+ * that registration has to be taken back as well as the anchor string -
+ * unregister_anchor() says why. Moving the string alone left an alias
+ * *inside* the collection bound to the scalar, because the entry the alias
+ * looked the name up in still named it.
  *
  * The three tests before the work are preconditions rather than behaviour,
  * and mirror adopt_own_line_tag() line for line. Instrumenting them shows no
@@ -1990,6 +2041,7 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 				&& node->as.scalar.anchor) {
 			p->outer_anchor = strdup(node->as.scalar.anchor);
 			if (!p->outer_anchor) return GTEXT_YAML_OK; /* keep it on the node */
+			unregister_anchor(p, node->as.scalar.anchor, node);
 			node->as.scalar.anchor = NULL;
 			p->last_scalar_anchor_own_line = false;
 		}
@@ -2011,6 +2063,7 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 	if (!moved) return GTEXT_YAML_OK;
 
 	p->stack.temps[top].anchor = moved;
+	unregister_anchor(p, anchor, node);
 	node->as.scalar.anchor = NULL;
 	p->last_scalar_anchor_own_line = false;
 	return GTEXT_YAML_OK;

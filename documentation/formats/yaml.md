@@ -1909,6 +1909,73 @@ claimed. The property the gate had been hiding is now a test in its own right:
 accepts behind the tag that names it.** That one is checked against the parser
 rather than against a table, so it cannot be made to agree with a mistake.
 
+### An anchor moved, and the registration it made did not
+
+`adopt_own_line_anchor()` was written for an anchor with no token to arrive
+on. A flow collection has a `[` or a `{`; a block one has nothing, so an
+anchor written on the line above reaches the parser attached to the first
+scalar the stream can hang it on - the mapping's first key, or the sequence's
+first entry - and the function moves it to the collection where it belongs.
+That much was right, and the cases tested for it all put their alias *after*
+the collection, where the collection has closed and re-registered the name.
+
+An alias *inside* the collection was still bound to the scalar:
+
+```
+  &O          *O gave the string "k", so a document both PyYAML and js-yaml
+  k: v        read as recursive came back finite - and said so nowhere.
+  j: *O
+```
+
+The anchor string moved and the alias-table entry did not. The scalar
+registers the name before `adopt_own_line_anchor()` ever sees it, and that
+entry is what an alias looks the name up in, so every alias written between
+the anchor and the end of the collection resolved to a node that never held
+it. The flow spelling `&O [1, *O]` was always right for the reason the block
+one was wrong: there the anchor arrives with the `[`, no scalar claims it,
+and the alias takes the path meant for this - `lookup_anchor()` misses,
+`anchor_open_on_stack()` finds the name on the level being built, and the
+binding is deferred until the collection exists. `unregister_anchor()` gives
+the entry up with the string, so the block spelling takes that same path.
+
+The entry keeps its name and gives up its node, which is exactly the state a
+collection's anchor is in between its opening and its closing. Only an entry
+still pointing at that scalar is cleared: a name anchored to something else
+earlier in the document keeps that binding, because an alias written in
+between has already resolved against it.
+
+**The wrong answer was not always a wrong value.** Used as a key, the alias
+resolved to the mapping's own first key - which is, necessarily, a key that
+mapping already has - so a document with two distinct keys came back
+*Duplicate mapping key*:
+
+```
+  &O
+  k: v
+  *O : x
+```
+
+And the anchor reaches the mapping on the way *out* whether or not the alias
+does, so one document said two things. With `require_string_keys` the first
+parse accepted that input and the second refused it: the alias was a string
+going in and a mapping coming back. That is how the writer fuzzer surfaced
+it, and it is the shape of finding this target exists for - not a crash, but
+a document this library parses, writes, and then will not read.
+
+Fixing it makes such documents genuinely recursive, which is why it was left
+open once: it reaches `max_alias_expansion`, `nodes_equal()`, the writer, and
+`to_json`, and those wanted measuring together rather than one at a time. All
+four hold, and none of them needed changing. `max_alias_expansion` counts the
+aliases a document *writes*, not the expansions a reader could take from
+them, so one alias is one alias however it points. `nodes_equal()` carries a
+depth bound already. The writer emits an alias by name and has nothing to
+recurse into, and the anchor it needs is on the node the alias names, so
+`&O {k: v, j: *O}` goes out and reads back as the same shape. `to_json`
+refuses an alias outright, as it did before. The only thing that had to
+change was a test helper: `Render()` prints an alias by printing its target,
+which a recursive document turns into an infinite walk, so it now stops at a
+node already on the path.
+
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status
 rather than being left behind in the token loop, so an unterminated quoted
