@@ -1423,33 +1423,95 @@ typedef struct {
 } yaml_clone_entry;
 
 typedef struct {
-	yaml_clone_entry *entries;
-	size_t count;
-	size_t capacity;
-	/* How deep clone_node() currently is, and how deep it may go.
+	yaml_clone_entry *entries; /* open-addressed; source == NULL is empty */
+	size_t count;              /* live entries */
+	size_t capacity;           /* a power of two, or 0 before first use */
+	/* How deep a clone may go.
 	 *
 	 * max_depth is a parse option and only the parser used to read it, so it
 	 * bounded a document that arrived as text and said nothing about one
 	 * built through the DOM API - which is the half that can nest without
 	 * limit, since the constructors have no parent pointers and cannot ask a
-	 * node how deep it sits without a walk per append. clone_node() recurses
-	 * at about 113 bytes a level, so a built document deep enough took the
-	 * process down. Zero is no limit. */
-	size_t depth;
+	 * node how deep it sits without a walk per append. Zero is no limit.
+	 *
+	 * The running depth used to live here too, because the walk was a
+	 * recursion and had one. It is carried per task now: the walk keeps its
+	 * stack on the heap, so exceeding this limit is the only way it can
+	 * fail, and SIZE_MAX means what it says rather than meaning a
+	 * segmentation fault at about 74000 levels. */
 	size_t max_depth;
 } yaml_clone_map;
+
+/* Source node to its clone.
+ *
+ * Open-addressed on the source pointer, and it was a linear scan until this
+ * walk stopped being bounded by the C stack. Every node consults the map
+ * once, so a scan made cloning quadratic in the node count: 25000 nested
+ * sequences took 0.445s, 50000 took 1.795s and 100000 took 5.577s. That was
+ * always reachable through width - a hundred thousand siblings needs no depth
+ * at all - but while a deep clone crashed at about 74000 levels, depth could
+ * not reach it. Now that depth can, the cost had to go.
+ *
+ * The table exists at all because a node reachable by two paths has to clone
+ * to one node, not two, or the shape of the copy is not the shape of the
+ * original. */
+static size_t clone_map_hash(const GTEXT_YAML_Node *source) {
+	/* Node addresses are allocation-aligned, so the low bits carry little;
+	   this is the 64-bit finaliser from splitmix, which spreads them. */
+	uint64_t x = (uint64_t)(uintptr_t)source;
+	x ^= x >> 30;
+	x *= 0xbf58476d1ce4e5b9ULL;
+	x ^= x >> 27;
+	x *= 0x94d049bb133111ebULL;
+	x ^= x >> 31;
+	return (size_t)x;
+}
 
 static const yaml_clone_entry *clone_map_find(
 	const yaml_clone_map *map,
 	const GTEXT_YAML_Node *source
 ) {
-	if (!map || !source) return NULL;
-	for (size_t i = 0; i < map->count; i++) {
-		if (map->entries[i].source == source) {
-			return &map->entries[i];
-		}
+	if (!map || !source || map->capacity == 0) return NULL;
+	size_t mask = map->capacity - 1;
+	size_t i = clone_map_hash(source) & mask;
+	while (map->entries[i].source) {
+		if (map->entries[i].source == source) return &map->entries[i];
+		i = (i + 1) & mask;
 	}
 	return NULL;
+}
+
+/* Insert with no growth check and no duplicate check, for use while
+   rebuilding a table that is known to have room. */
+static void clone_map_place(
+	yaml_clone_entry *entries,
+	size_t capacity,
+	const GTEXT_YAML_Node *source,
+	GTEXT_YAML_Node *clone
+) {
+	size_t mask = capacity - 1;
+	size_t i = clone_map_hash(source) & mask;
+	while (entries[i].source) i = (i + 1) & mask;
+	entries[i].source = source;
+	entries[i].clone = clone;
+}
+
+static bool clone_map_grow(yaml_clone_map *map) {
+	size_t new_capacity = map->capacity == 0 ? 64 : map->capacity * 2;
+	yaml_clone_entry *entries = (yaml_clone_entry *)calloc(
+		new_capacity, sizeof(yaml_clone_entry)
+	);
+	if (!entries) return false;
+	for (size_t i = 0; i < map->capacity; i++) {
+		if (map->entries[i].source) {
+			clone_map_place(entries, new_capacity,
+				map->entries[i].source, map->entries[i].clone);
+		}
+	}
+	free(map->entries);
+	map->entries = entries;
+	map->capacity = new_capacity;
+	return true;
 }
 
 static bool clone_map_add(
@@ -1458,58 +1520,142 @@ static bool clone_map_add(
 	GTEXT_YAML_Node *clone
 ) {
 	if (!map || !source || !clone) return false;
-	if (map->count >= map->capacity) {
-		size_t new_capacity = map->capacity == 0 ? 16 : map->capacity * 2;
-		yaml_clone_entry *new_entries = (yaml_clone_entry *)realloc(
-			map->entries, new_capacity * sizeof(yaml_clone_entry)
-		);
-		if (!new_entries) return false;
-		map->entries = new_entries;
-		map->capacity = new_capacity;
+	/* Grow at three quarters: open addressing degrades to a scan as it
+	   fills, which is the thing this table exists to stop being. */
+	if ((map->count + 1) * 4 > map->capacity * 3) {
+		if (!clone_map_grow(map)) return false;
 	}
-	map->entries[map->count].source = source;
-	map->entries[map->count].clone = clone;
+	clone_map_place(map->entries, map->capacity, source, clone);
 	map->count++;
 	return true;
 }
 
-static GTEXT_YAML_Node *clone_node_at_depth(
-	yaml_context *ctx,
-	const GTEXT_YAML_Node *node,
-	yaml_clone_map *map
-);
+/* One node's worth of work, and where its clone belongs.
+ *
+ * The walk below is a worklist rather than a recursion. That is not a style
+ * choice: max_depth bounds how deep a clone may go, and SIZE_MAX is the
+ * documented way to say "no bound, I own the stack" - which on a recursive
+ * walk means the caller can ask for a segmentation fault and get one. With
+ * the stack on the heap, the bound is the only thing max_depth still decides,
+ * and asking for no bound costs a few bytes of heap per level instead of a
+ * frame of C stack.
+ *
+ * It converts cleanly because the clone of a node is created, and registered
+ * in the map, *before* any of its children are cloned - so a child's task can
+ * carry the address of the slot its clone goes in, and there is no post-order
+ * work to come back for.
+ *
+ * Sharing survives because registration happens when a task is popped, not
+ * when it is pushed: whichever of two references to one node is popped first
+ * makes the clone, and the second finds it. That holds whatever order the
+ * children go on in, and reversing the loops below to restore the
+ * recursion's left-to-right pop order was measured to change nothing any
+ * test can see. It is kept anyway, because "the same order as before" is a
+ * cheaper thing to reason about than "an order nothing happens to depend on
+ * yet". */
+typedef struct {
+	const GTEXT_YAML_Node *source;
+	GTEXT_YAML_Node **dest; /* where this node's clone is to be written */
+	size_t depth;
+} yaml_clone_task;
 
-/* max_depth, for a document nobody parsed. A clone refuses by returning NULL,
-   which is what every other failure here does too. */
-static GTEXT_YAML_Node *clone_node(
-	yaml_context *ctx,
-	const GTEXT_YAML_Node *node,
-	yaml_clone_map *map
+typedef struct {
+	yaml_clone_task *items;
+	size_t count;
+	size_t capacity;
+} yaml_clone_stack;
+
+static bool clone_stack_push(
+	yaml_clone_stack *stack,
+	const GTEXT_YAML_Node *source,
+	GTEXT_YAML_Node **dest,
+	size_t depth
 ) {
-	GTEXT_YAML_Node *clone = NULL;
+	if (stack->count == stack->capacity) {
+		size_t new_capacity = stack->capacity == 0 ? 32 : stack->capacity * 2;
+		yaml_clone_task *items = (yaml_clone_task *)realloc(
+			stack->items, new_capacity * sizeof(yaml_clone_task)
+		);
+		if (!items) return false;
+		stack->items = items;
+		stack->capacity = new_capacity;
+	}
+	stack->items[stack->count].source = source;
+	stack->items[stack->count].dest = dest;
+	stack->items[stack->count].depth = depth;
+	stack->count++;
+	return true;
+}
 
-	if (!map) return NULL;
-	if (map->max_depth > 0 && map->depth >= map->max_depth) return NULL;
-
-	map->depth++;
-	clone = clone_node_at_depth(ctx, node, map);
-	map->depth--;
+/* The scalar arm, which is all copying and no recursion. */
+static GTEXT_YAML_Node *clone_scalar(
+	yaml_context *ctx,
+	const GTEXT_YAML_Node *node
+) {
+	GTEXT_YAML_Node *clone = yaml_node_new_scalar(
+		ctx,
+		node->as.scalar.value,
+		node->as.scalar.length,
+		node->as.scalar.tag,
+		node->as.scalar.anchor
+	);
+	if (!clone) return NULL;
+	clone->type = node->type;
+	clone->as.scalar.type = node->type;
+	clone->as.scalar.bool_value = node->as.scalar.bool_value;
+	clone->as.scalar.int_value = node->as.scalar.int_value;
+	clone->as.scalar.float_value = node->as.scalar.float_value;
+	clone->as.scalar.has_timestamp = node->as.scalar.has_timestamp;
+	/* One assignment, where this was twelve. A clone that copied the
+	   fields one at a time is a clone that silently drops whichever
+	   one is added next. */
+	clone->as.scalar.timestamp = node->as.scalar.timestamp;
+	clone->as.scalar.timestamp_leap_second =
+		node->as.scalar.timestamp_leap_second;
+	clone->as.scalar.has_binary = node->as.scalar.has_binary;
+	clone->as.scalar.binary_len = node->as.scalar.binary_len;
+	clone->as.scalar.binary_data = NULL;
+	if (node->as.scalar.has_binary && node->as.scalar.binary_data
+			&& node->as.scalar.binary_len > 0) {
+		unsigned char *data = (unsigned char *)yaml_context_alloc(
+			ctx,
+			node->as.scalar.binary_len,
+			1
+		);
+		if (!data) return NULL;
+		memcpy(data, node->as.scalar.binary_data, node->as.scalar.binary_len);
+		clone->as.scalar.binary_data = data;
+	}
 	return clone;
 }
 
-/* The body. Every recursive call goes through clone_node(), so the depth
-   accounting has one home and none of the early returns can skip it. */
-static GTEXT_YAML_Node *clone_node_at_depth(
+/* One task: make this node's clone, record it, and queue its children.
+   Every slot a child is queued against lives in the clone that has just been
+   allocated, and a node's storage does not move once allocated, so the
+   addresses stay good for as long as the walk needs them. */
+static bool clone_one(
 	yaml_context *ctx,
-	const GTEXT_YAML_Node *node,
-	yaml_clone_map *map
+	const yaml_clone_task *task,
+	yaml_clone_map *map,
+	yaml_clone_stack *stack
 ) {
+	const GTEXT_YAML_Node *node = task->source;
 	const yaml_clone_entry *entry = NULL;
 	GTEXT_YAML_Node *clone = NULL;
+	size_t child_depth;
 
-	if (!ctx || !node || !map) return NULL;
+	if (!ctx || !node || !map) return false;
+	/* Checked before the map is consulted, exactly as the recursive version
+	   checked it before its own early return, so a node reached again below
+	   the limit is still refused. */
+	if (map->max_depth > 0 && task->depth >= map->max_depth) return false;
+	child_depth = task->depth + 1;
+
 	entry = clone_map_find(map, node);
-	if (entry) return entry->clone;
+	if (entry) {
+		*task->dest = entry->clone;
+		return true;
+	}
 
 	switch (node->type) {
 		case GTEXT_YAML_STRING:
@@ -1517,41 +1663,11 @@ static GTEXT_YAML_Node *clone_node_at_depth(
 		case GTEXT_YAML_INT:
 		case GTEXT_YAML_FLOAT:
 		case GTEXT_YAML_NULL:
-			clone = yaml_node_new_scalar(
-				ctx,
-				node->as.scalar.value,
-				node->as.scalar.length,
-				node->as.scalar.tag,
-				node->as.scalar.anchor
-			);
-			if (!clone) return NULL;
-			clone->type = node->type;
-			clone->as.scalar.type = node->type;
-			clone->as.scalar.bool_value = node->as.scalar.bool_value;
-			clone->as.scalar.int_value = node->as.scalar.int_value;
-			clone->as.scalar.float_value = node->as.scalar.float_value;
-			clone->as.scalar.has_timestamp = node->as.scalar.has_timestamp;
-			/* One assignment, where this was twelve. A clone that copied the
-			   fields one at a time is a clone that silently drops whichever
-			   one is added next. */
-			clone->as.scalar.timestamp = node->as.scalar.timestamp;
-			clone->as.scalar.timestamp_leap_second =
-				node->as.scalar.timestamp_leap_second;
-			clone->as.scalar.has_binary = node->as.scalar.has_binary;
-			clone->as.scalar.binary_len = node->as.scalar.binary_len;
-			clone->as.scalar.binary_data = NULL;
-			if (node->as.scalar.has_binary && node->as.scalar.binary_data && node->as.scalar.binary_len > 0) {
-				unsigned char *data = (unsigned char *)yaml_context_alloc(
-					ctx,
-					node->as.scalar.binary_len,
-					1
-				);
-				if (!data) return NULL;
-				memcpy(data, node->as.scalar.binary_data, node->as.scalar.binary_len);
-				clone->as.scalar.binary_data = data;
-			}
-			if (!clone_map_add(map, node, clone)) return NULL;
-			return clone;
+			clone = clone_scalar(ctx, node);
+			if (!clone) return false;
+			if (!clone_map_add(map, node, clone)) return false;
+			*task->dest = clone;
+			return true;
 		case GTEXT_YAML_SEQUENCE:
 		case GTEXT_YAML_OMAP:
 		case GTEXT_YAML_PAIRS: {
@@ -1562,20 +1678,23 @@ static GTEXT_YAML_Node *clone_node_at_depth(
 				node->as.sequence.tag,
 				node->as.sequence.anchor
 			);
-			if (!clone) return NULL;
-			if (!clone_map_add(map, node, clone)) return NULL;
+			if (!clone) return false;
+			if (!clone_map_add(map, node, clone)) return false;
 			clone->type = node->type;
 			clone->as.sequence.type = node->type;
 			clone->as.sequence.count = count;
-			for (size_t i = 0; i < count; i++) {
-				clone->as.sequence.children[i] = clone_node(
-					ctx,
-					node->as.sequence.children[i],
-					map
-				);
-				if (!clone->as.sequence.children[i]) return NULL;
+			*task->dest = clone;
+			for (size_t i = count; i > 0; i--) {
+				clone->as.sequence.children[i - 1] = NULL;
+				if (!clone_stack_push(
+						stack,
+						node->as.sequence.children[i - 1],
+						&clone->as.sequence.children[i - 1],
+						child_depth)) {
+					return false;
+				}
 			}
-			return clone;
+			return true;
 		}
 		case GTEXT_YAML_MAPPING:
 		case GTEXT_YAML_SET: {
@@ -1586,11 +1705,12 @@ static GTEXT_YAML_Node *clone_node_at_depth(
 				node->as.mapping.tag,
 				node->as.mapping.anchor
 			);
-			if (!clone) return NULL;
-			if (!clone_map_add(map, node, clone)) return NULL;
+			if (!clone) return false;
+			if (!clone_map_add(map, node, clone)) return false;
 			clone->type = node->type;
 			clone->as.mapping.type = node->type;
 			clone->as.mapping.count = count;
+			*task->dest = clone;
 			for (size_t i = 0; i < count; i++) {
 				clone->as.mapping.pairs[i].key_tag =
 					node->as.mapping.pairs[i].key_tag
@@ -1604,34 +1724,74 @@ static GTEXT_YAML_Node *clone_node_at_depth(
 							node->as.mapping.pairs[i].value_tag,
 							strlen(node->as.mapping.pairs[i].value_tag))
 						: NULL;
-				clone->as.mapping.pairs[i].key = clone_node(
-					ctx,
-					node->as.mapping.pairs[i].key,
-					map
-				);
-				clone->as.mapping.pairs[i].value = clone_node(
-					ctx,
-					node->as.mapping.pairs[i].value,
-					map
-				);
-				if (!clone->as.mapping.pairs[i].key || !clone->as.mapping.pairs[i].value) {
-					return NULL;
+				clone->as.mapping.pairs[i].key = NULL;
+				clone->as.mapping.pairs[i].value = NULL;
+			}
+			/* Reverse, and value before key within a pair, so that popping
+			   gives key[0], value[0], key[1], ... - the order the recursion
+			   visited them in. */
+			for (size_t i = count; i > 0; i--) {
+				if (!clone_stack_push(
+						stack,
+						node->as.mapping.pairs[i - 1].value,
+						&clone->as.mapping.pairs[i - 1].value,
+						child_depth)) {
+					return false;
+				}
+				if (!clone_stack_push(
+						stack,
+						node->as.mapping.pairs[i - 1].key,
+						&clone->as.mapping.pairs[i - 1].key,
+						child_depth)) {
+					return false;
 				}
 			}
-			return clone;
+			return true;
 		}
 		case GTEXT_YAML_ALIAS:
 			clone = yaml_node_new_alias(ctx, node->as.alias.anchor_name);
-			if (!clone) return NULL;
-			if (!clone_map_add(map, node, clone)) return NULL;
+			if (!clone) return false;
+			if (!clone_map_add(map, node, clone)) return false;
+			*task->dest = clone;
 			if (node->as.alias.target) {
-				clone->as.alias.target = clone_node(ctx, node->as.alias.target, map);
-				if (!clone->as.alias.target) return NULL;
+				clone->as.alias.target = NULL;
+				if (!clone_stack_push(
+						stack,
+						node->as.alias.target,
+						&clone->as.alias.target,
+						child_depth)) {
+					return false;
+				}
 			}
-			return clone;
+			return true;
 		default:
-			return NULL;
+			return false;
 	}
+}
+
+/* max_depth, for a document nobody parsed. A clone refuses by returning NULL,
+   which is what every other failure here does too. */
+static GTEXT_YAML_Node *clone_node(
+	yaml_context *ctx,
+	const GTEXT_YAML_Node *node,
+	yaml_clone_map *map
+) {
+	GTEXT_YAML_Node *root = NULL;
+	yaml_clone_stack stack = {NULL, 0, 0};
+	bool ok;
+
+	if (!ctx || !node || !map) return NULL;
+
+	ok = clone_stack_push(&stack, node, &root, 0);
+	while (ok && stack.count > 0) {
+		const yaml_clone_task task = stack.items[--stack.count];
+		ok = clone_one(ctx, &task, map, &stack);
+	}
+	free(stack.items);
+
+	/* A partly-built clone is left where it is: every node of it came from
+	   the document's own arena and goes when the document does. */
+	return ok ? root : NULL;
 }
 
 /**

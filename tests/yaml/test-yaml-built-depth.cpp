@@ -160,6 +160,57 @@ TEST(YamlBuiltDepth, SizeMaxStillMeansNoLimit) {
 	gtext_yaml_free(doc);
 }
 
+/* What "no limit" costs, now that it does not cost the C stack.
+   
+   SIZE_MAX is the documented way to say "no bound, I own the stack". On a
+   recursive walk that made it a way to ask for a segmentation fault: the
+   clone recursed at about 113 bytes a level, so a little over 74000 levels
+   took the process down on the usual 8 MiB. The walk keeps its stack on the
+   heap now, so the depth a caller may ask for is bounded by memory rather
+   than by a frame size.
+   
+   200000 is chosen to be comfortably past that 74000, and this test crashes
+   rather than fails if the walk goes back to recursing - which is the honest
+   way for it to report, since that is exactly the failure being prevented. */
+TEST(YamlBuiltDepth, AnUnboundedCloneDoesNotUseTheCStack) {
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.max_depth = SIZE_MAX;
+
+	const size_t depth = 200000;
+	GTEXT_YAML_Document *doc = BuildNested(depth, &opts);
+	ASSERT_NE(doc, nullptr);
+	/* The control. A document that is not actually this deep would pass the
+	   clone below for the wrong reason. */
+	ASSERT_EQ(MeasureDepth(gtext_yaml_document_root(doc)), depth);
+
+	GTEXT_YAML_Node *copy =
+		gtext_yaml_node_clone(doc, gtext_yaml_document_root(doc));
+	ASSERT_NE(copy, nullptr);
+	EXPECT_EQ(MeasureDepth(copy), depth)
+		<< "the clone came back shallower than what it copied";
+
+	gtext_yaml_free(doc);
+}
+
+/* And the limit still binds when there is one, at the same place, so the
+   heap stack did not quietly turn max_depth off. */
+TEST(YamlBuiltDepth, TheCloneStillRefusesPastTheLimitItIsGiven) {
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.max_depth = 100;
+
+	GTEXT_YAML_Document *shallow = BuildNested(50, &opts);
+	ASSERT_NE(shallow, nullptr);
+	EXPECT_NE(gtext_yaml_node_clone(shallow, gtext_yaml_document_root(shallow)),
+		nullptr);
+	gtext_yaml_free(shallow);
+
+	GTEXT_YAML_Document *deep = BuildNested(500, &opts);
+	ASSERT_NE(deep, nullptr);
+	EXPECT_EQ(gtext_yaml_node_clone(deep, gtext_yaml_document_root(deep)),
+		nullptr);
+	gtext_yaml_free(deep);
+}
+
 /* A parsed document is bounded as it always was, and by the same number, so
    widening the limit's reach did not narrow it. */
 TEST(YamlBuiltDepth, AParsedDocumentIsUnchanged) {

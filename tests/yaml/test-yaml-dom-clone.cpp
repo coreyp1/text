@@ -5,6 +5,9 @@
 
 #include <gtest/gtest.h>
 
+#include <set>
+#include <string>
+
 extern "C" {
 #include <ghoti.io/text/yaml.h>
 #include <stdlib.h>
@@ -93,6 +96,80 @@ TEST(YamlDomClone, ClonesAliasCycles) {
 
 	gtext_yaml_free(doc1);
 	gtext_yaml_free(doc2);
+}
+
+/* The reason the clone keeps a source-to-clone table at all.
+   
+   A node reachable by two paths has to clone to *one* node, or the copy is a
+   different shape from the original. The table was a linear scan, which made
+   cloning quadratic in the node count - 100000 nested sequences took 5.6
+   seconds - and is open-addressed on the node pointer now. This is the
+   property that change had to preserve, stated without reference to how the
+   table is built. */
+TEST(YamlDomClone, ANodeReachedTwiceClonesOnce) {
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	ASSERT_NE(doc, nullptr);
+
+	GTEXT_YAML_Node *shared =
+		gtext_yaml_node_new_scalar(doc, "shared", nullptr, nullptr);
+	ASSERT_NE(shared, nullptr);
+	GTEXT_YAML_Node *seq = gtext_yaml_node_new_sequence(doc, nullptr, nullptr);
+	ASSERT_NE(seq, nullptr);
+	seq = gtext_yaml_sequence_append(doc, seq, shared);
+	ASSERT_NE(seq, nullptr);
+	seq = gtext_yaml_sequence_append(doc, seq, shared);
+	ASSERT_NE(seq, nullptr);
+
+	/* The control: it really is one node in two slots. */
+	ASSERT_EQ(gtext_yaml_sequence_get(seq, 0), gtext_yaml_sequence_get(seq, 1));
+
+	GTEXT_YAML_Node *copy = gtext_yaml_node_clone(doc, seq);
+	ASSERT_NE(copy, nullptr);
+	ASSERT_EQ(gtext_yaml_sequence_length(copy), 2u);
+	const GTEXT_YAML_Node *a = gtext_yaml_sequence_get(copy, 0);
+	const GTEXT_YAML_Node *b = gtext_yaml_sequence_get(copy, 1);
+	ASSERT_NE(a, nullptr);
+	EXPECT_EQ(a, b) << "the shared node was copied twice";
+	EXPECT_NE(a, shared) << "the clone points back into the original";
+
+	gtext_yaml_free(doc);
+}
+
+/* And the table holds many distinct nodes without losing or conflating any,
+   which is what a hash table can get wrong where a scan could not. Enough
+   entries to force it to grow several times. */
+TEST(YamlDomClone, ManyDistinctNodesEachCloneToTheirOwn) {
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	ASSERT_NE(doc, nullptr);
+
+	const size_t n = 5000;
+	GTEXT_YAML_Node *seq = gtext_yaml_node_new_sequence(doc, nullptr, nullptr);
+	ASSERT_NE(seq, nullptr);
+	for (size_t i = 0; i < n; i++) {
+		const std::string text = "item" + std::to_string(i);
+		GTEXT_YAML_Node *item =
+			gtext_yaml_node_new_scalar(doc, text.c_str(), nullptr, nullptr);
+		ASSERT_NE(item, nullptr);
+		seq = gtext_yaml_sequence_append(doc, seq, item);
+		ASSERT_NE(seq, nullptr);
+	}
+	ASSERT_EQ(gtext_yaml_sequence_length(seq), n);
+
+	GTEXT_YAML_Node *copy = gtext_yaml_node_clone(doc, seq);
+	ASSERT_NE(copy, nullptr);
+	ASSERT_EQ(gtext_yaml_sequence_length(copy), n);
+
+	std::set<const GTEXT_YAML_Node *> seen;
+	for (size_t i = 0; i < n; i++) {
+		const GTEXT_YAML_Node *item = gtext_yaml_sequence_get(copy, i);
+		ASSERT_NE(item, nullptr) << "slot " << i;
+		EXPECT_TRUE(seen.insert(item).second)
+			<< "slot " << i << " shares a clone with an earlier slot";
+		EXPECT_STREQ(gtext_yaml_node_as_string(item),
+			("item" + std::to_string(i)).c_str()) << "slot " << i;
+	}
+
+	gtext_yaml_free(doc);
 }
 
 int main(int argc, char **argv) {
