@@ -206,6 +206,28 @@ endif
 # The standard include directories for the project.
 INCLUDE := -I include/ -I $(GEN_DIR)/
 
+# Goals that compile and link nothing.  A missing sibling library must not stop
+# them: `make clean` needs rm, not cutil, and the $(error) below fires while
+# this file is being *read*, so it takes out every target rather than the ones
+# that need a dependency.  `clean` is where that is least expected and least
+# visible, because nobody reads clean's output - four of the suite's nine
+# libraries were found failing it this way during a workspace-wide rebuild,
+# each reporting that the fix was to run bootstrap.sh, from inside bootstrap.
+#
+# The two `ifndef SKIP_DEP_CHECK` guards below have been here for as long as
+# the errors have.  Nothing ever set the variable, so both were inert, which
+# is worse than their being absent: the mechanism is visible in the file and
+# does nothing, so reading it tells you the case is handled.
+#
+# $(or $(MAKECMDGOALS),all) is the load-bearing part.  With no goal named,
+# MAKECMDGOALS is empty and filter-out over nothing is also empty, so a bare
+# `make` would skip the check the error exists for.  Substituting `all` - a
+# goal that is not in this list - is what keeps the default build honest.
+DEPLESS_GOALS := clean fuzz-clean docs docs-pdf cloc help
+ifeq ($(filter-out $(DEPLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
+SKIP_DEP_CHECK := 1
+endif
+
 # ghoti.io-cutil, for GCU_Allocator.  text used to declare its own copy of that
 # vtable because CONVENTIONS.md described the library as standalone; that was a
 # misreading - a dependency inside the suite is fine as long as the graph stays
