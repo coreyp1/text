@@ -1036,6 +1036,72 @@ TEST(YamlWriterContract, APreferredStyleStillReachesAString) {
 	}
 }
 
+/* The tag has to agree with the *declared* type, not only with the text.
+ *
+ * gtext_yaml_node_new_scalar_typed() takes two claims - a type and a tag -
+ * and only the text was ever checked against the tag. The check skipped
+ * every string-typed node, on the reasoning that "!!str" takes any text and
+ * needs no checking. That is true of "!!str"; the exemption was written for
+ * the tag and applied to the *type*. So a node tagged "!!int" and declared a
+ * string was built happily, the writer put it out as '!!int "abc"', and this
+ * library refused to read its own output. The writer fuzzer found it by
+ * building exactly that.
+ *
+ * The plain constructor refuses the same pairs and always has, which is what
+ * makes this an inconsistency rather than a policy: one door checked and the
+ * other did not. */
+TEST(YamlWriterContract, ATagHasToAgreeWithTheDeclaredTypeToo) {
+	struct Case { const char *tag; const char *text; bool ok; };
+	const Case cases[] = {
+		/* A tag naming a type that is not string, on a node declared one. */
+		{ "!!int",   "abc", false }, { "!!int",   "42",  false },
+		{ "!!bool",  "abc", false }, { "!!float", "abc", false },
+		{ "!!null",  "abc", false }, { "!!null",  "",    false },
+		/* The tags that do name a string, and the ones this library does not
+		   resolve - a custom tag leaves the type to the caller, which is the
+		   point of one. */
+		{ "!!str",   "abc", true },  { "!",       "abc", true },
+		{ "!custom", "abc", true },  { "!custom", "42",  true },
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
+			doc, c.text, strlen(c.text), GTEXT_YAML_STRING, c.tag, nullptr);
+		EXPECT_EQ(node != nullptr, c.ok)
+			<< "typed(STRING) with " << c.tag << " <<" << c.text << ">>";
+
+		/* And the two constructors have to give the same answer, which is
+		   the property that failed. */
+		GTEXT_YAML_Document *other = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *plain =
+			gtext_yaml_node_new_scalar(other, c.text, c.tag, nullptr);
+		const bool plain_is_string =
+			plain && gtext_yaml_node_type(plain) == GTEXT_YAML_STRING;
+		EXPECT_EQ(node != nullptr, plain_is_string)
+			<< c.tag << " <<" << c.text
+			<< ">>: the typed and plain constructors disagree";
+		gtext_yaml_free(other);
+
+		/* Whatever it built has to be writable and readable again. */
+		if (node) {
+			gtext_yaml_document_set_root(doc, node);
+			Written w = write_doc(doc);
+			ASSERT_EQ(w.status, GTEXT_YAML_OK) << c.tag << " <<" << c.text << ">>";
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(w.text.data(), w.text.size(), &opts, &err);
+			EXPECT_NE(back, nullptr) << "wrote " << w.text
+				<< " which this parser refuses: "
+				<< (err.message ? err.message : "");
+			gtext_yaml_error_free(&err);
+			if (back) gtext_yaml_free(back);
+		}
+		gtext_yaml_free(doc);
+	}
+}
+
 /* A tag names the type whose syntax 10.3.2 defines, and the constructor is
    where a caller's claim about it is checked - the parser checks the same
    claim on the way in and refuses '!!int ""'. Without this the writer put

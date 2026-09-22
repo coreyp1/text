@@ -1056,6 +1056,12 @@ GTEXT_API bool gtext_yaml_document_set_root(
 	return true;
 }
 
+static GTEXT_YAML_Node_Type dom_scalar_type(
+	const char *value,
+	size_t length,
+	const char *tag
+);
+
 /* Whether @p tag is the "!!binary" of the type repository, in either of the
    two spellings the resolver accepts. */
 static bool tag_is_binary(const char *tag) {
@@ -1146,6 +1152,28 @@ static GTEXT_YAML_Node *dom_new_scalar(
 
 	   "!!str" takes any text, and the type the tag names is the type the node
 	   already has, so only a mismatch has to be looked for. */
+	if (tag && *tag) {
+		/* Two separate claims have to agree with the tag, and only the
+		   second was being checked.
+
+		   The first is the declared type.  A tag names a type, so a node
+		   tagged "!!int" and declared a string is as false as one tagged
+		   "!!int" holding "abc" - and gtext_yaml_node_new_scalar() refuses
+		   that text outright.  The test below exempted every string-typed
+		   node, on the reasoning that "!!str" takes any text and needs no
+		   checking; true of "!!str", and the exemption was written for the
+		   tag and applied to the type.  So the typed constructor built nodes
+		   tagged "!!int" whose type was string, the writer put them out as
+		   '!!int "abc"', and this library refused to read its own output.
+
+		   dom_scalar_type() is what a tag names, and it answers string for
+		   "!!str", for the non-specific "!", and for any tag this library
+		   does not resolve - so a custom tag still leaves the type to the
+		   caller, which is the point of one. */
+		if (type != dom_scalar_type(value, value ? length : 0, tag)) {
+			return NULL;
+		}
+	}
 	if (tag && *tag && type != GTEXT_YAML_STRING) {
 		const GTEXT_YAML_Node_Type from_text =
 			gtext_yaml_plain_text_classify(value, value ? length : 0,
