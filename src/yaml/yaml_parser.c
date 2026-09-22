@@ -5841,7 +5841,7 @@ static GTEXT_YAML_Status multidoc_callback(
 /**
  * @brief Parse all documents in a YAML stream.
  */
-GTEXT_YAML_Document **gtext_yaml_parse_all(
+GTEXT_API GTEXT_YAML_Document **gtext_yaml_parse_all(
 	const char *input,
 	size_t length,
 	size_t *document_count,
@@ -5966,7 +5966,7 @@ GTEXT_API GTEXT_YAML_Document * gtext_yaml_parse_json(
 	return yaml_parse_json_document_internal(input, length, options, error, true);
 }
 
-GTEXT_YAML_Document **gtext_yaml_parse_all_safe(
+GTEXT_API GTEXT_YAML_Document **gtext_yaml_parse_all_safe(
 	const char *input,
 	size_t length,
 	size_t *document_count,

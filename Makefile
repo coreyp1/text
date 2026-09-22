@@ -775,6 +775,24 @@ ifeq ($(OS_NAME), Linux)
 		printf "would not notice; a consumer gets an undefined reference.\n" >&2; \
 		exit 1; \
 	fi
+	@decl=$$(mktemp); exp=$$(mktemp); \
+	grep -rhoE 'GTEXT_API[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\**[[:space:]]*\**gtext_[a-z0-9_]+[[:space:]]*\(' include/ \
+		| grep -oE 'gtext_[a-z0-9_]+' | sort -u > $$decl; \
+	nm -D --defined-only $(APP_DIR)/$(TARGET) \
+		| awk '$$2 ~ /^[TDBR]$$/ {print $$3}' \
+		| sed 's/^$(LIBVER_SYMBOL)_//' | sort -u > $$exp; \
+	missing=$$(comm -23 $$decl $$exp); \
+	rm -f $$decl $$exp; \
+	if [ -n "$$missing" ]; then \
+		printf "\033[0;31m\n### Declared GTEXT_API but not in the shared library ###\033[0m\n" >&2; \
+		printf "%s\n" "$$missing" >&2; \
+		printf "\nThe header promises these and the shared library does not have them,\n" >&2; \
+		printf "so a consumer linking it gets an undefined reference for an API we\n" >&2; \
+		printf "document. Usually the definition in src/ is missing the GTEXT_API its\n" >&2; \
+		printf "declaration has. The check above reads the header, which is one half;\n" >&2; \
+		printf "this one reads the library, which is what a consumer actually links.\n" >&2; \
+		exit 1; \
+	fi
 	@split=$$(nm -D --undefined-only $(APP_DIR)/$(TARGET) \
 		| awk '{print $$2}' | grep '^$(LIBVER_SYMBOL)_' || true); \
 	if [ -n "$$split" ]; then \
@@ -818,6 +836,7 @@ ifeq ($(OS_NAME), Linux)
 	fi
 	@printf "\033[0;32mEvery exported symbol carries the $(LIBVER_SYMBOL)_ namespace.\033[0m\n"
 	@printf "\033[0;32mEvery public declaration carries GTEXT_API.\033[0m\n"
+	@printf "\033[0;32mEvery GTEXT_API declaration is in the shared library.\033[0m\n"
 	@printf "\033[0;32mEvery header includes macros.h.\033[0m\n"
 	@printf "\033[0;32mEvery include guard is unique and correctly prefixed.\033[0m\n"
 else

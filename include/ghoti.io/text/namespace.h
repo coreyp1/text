@@ -311,6 +311,8 @@
 #define gtext_yaml_pairs_iterate GHOTIIO_TEXT(gtext_yaml_pairs_iterate)
 #define gtext_yaml_pairs_size GHOTIIO_TEXT(gtext_yaml_pairs_size)
 #define gtext_yaml_parse GHOTIIO_TEXT(gtext_yaml_parse)
+#define gtext_yaml_parse_all GHOTIIO_TEXT(gtext_yaml_parse_all)
+#define gtext_yaml_parse_all_safe GHOTIIO_TEXT(gtext_yaml_parse_all_safe)
 #define gtext_yaml_parse_file GHOTIIO_TEXT(gtext_yaml_parse_file)
 #define gtext_yaml_parse_file_all GHOTIIO_TEXT(gtext_yaml_parse_file_all)
 #define gtext_yaml_parse_json GHOTIIO_TEXT(gtext_yaml_parse_json)
