@@ -316,12 +316,39 @@ coverage, rename it to a hash, and silently drop the rest. They are tracked
 because they no longer trap, which is exactly the property that makes a
 coverage-based merge throw them away.
 
-The second half is still open, and is now the thing that matters most here:
-the harness builds documents only through the paths described under *The
-options byte*, so what it cannot construct it cannot test. Both defects
-the last two runs found needed something the corpus alone could not reach -
-the DOM API for one, YAML 1.1 mode for the other. Widening what the harness
-can build is worth more than another hour against what it can.
+**The second half is done, and it paid immediately.** The harness could only
+build three kinds of node, with fixed parse options and two fixed write
+options, and what it cannot construct it cannot test - both defects the runs
+before it found needed something the corpus alone could not reach, the DOM
+API for one and YAML 1.1 mode for the other. It now draws from the input:
+
+- the **parse options**, so 1.1 mode, the three schemas and the key policies
+  are reachable at all;
+- the **write options**, so indentation, line width, the five scalar styles,
+  the three flow styles, canonical form and all five encodings are - which
+  puts the writer's UTF-16 and UTF-32 output back through the reader, an axis
+  yaml-test-suite does not have;
+- the **node kinds** - `!!set`, `!!omap`, `!!pairs`, typed scalars, stored
+  scalar styles and comments, none of which three kinds could express;
+- **multi-document output**, which had no path here at all.
+
+It found four defects in the first ninety seconds, described on the YAML
+format page: a preferred scalar style that changed what a scalar *was*, a
+comment written without being checked (a line break in an inline one escaped
+into the document as a second mapping entry), a NUL that stopped `strtoll()`
+where 10.3.2 does not, and a tag checked against a node's text but not
+against its declared type. Two more things it turned up are open questions
+rather than defects, and are on that page too.
+
+Three notes for whoever runs it next. The header is **two bytes** now, not
+one - path and dialect in the first, write options in the second - so a
+corpus unit written for the old shape means something different. Failure
+messages print bytes as escapes, because the moment the encoding became an
+axis a UTF-16 document reached the terminal as a screenful of nothing. And
+one find in that first run was the harness's own: it probed a scalar's type
+with `c_str()` while building the node from the full run of bytes, so a NUL
+made the two disagree and the harness manufactured the contradiction it then
+reported. Decode the artifact before believing it.
 
 ## The options byte
 

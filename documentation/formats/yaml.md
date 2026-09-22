@@ -628,7 +628,63 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-None open.
+Two are open, and both are questions about what an API *means* rather than
+faults with a settled answer. They are written down here rather than guessed
+at.
+
+**An inline comment inside a flow collection swallows the rest of the line.**
+
+```
+a sequence of two, the first carrying the inline comment "note":
+
+  written   [x # note, y]
+  read back Unterminated flow collection
+```
+
+Everything after a `#` is comment to the end of the line, so the `, y]` is
+inside it and the bracket never closes. The writer says OK. A *leading*
+comment is fine - in flow context the writer drops it, which loses a comment
+and no values - and in block style both are fine, because there the comment
+already ends the line.
+
+There are three ways out and they are not equivalent. YAML permits a line
+break inside a flow collection, so the writer could emit one after the
+comment and carry on: that keeps the comment and is the most work, because
+the continuation has to be indented past the block node that holds the flow
+collection. It could refuse, which is what it now does for a comment it
+cannot spell at all. Or it could drop the comment, as it already does for a
+leading one. The first is the honest answer and the third is what the
+neighbouring code does; picking between them is a decision about whether this
+writer preserves comments or merely tolerates them.
+
+**`gtext_yaml_node_new_scalar_typed()` takes a type the text cannot carry.**
+
+```
+gtext_yaml_node_new_scalar(doc, "NO", "!!null", NULL)          -> refused
+gtext_yaml_node_new_scalar_typed(doc, "NO", 2, NULL_TYPE, ...) -> built
+```
+
+The same false claim, refused through one door and accepted through the
+other. The node that results cannot be written correctly by anything:
+canonical form emits `!!null "NO"`, which this library then refuses to read,
+and plain form emits `NO`, which reads back as the string. The contradiction
+is in the node.
+
+The tagged constructor checks the claim because "a tag is an assertion that
+can be false". The type argument is the same assertion made without a tag,
+and nothing checks it. Closing that means `new_scalar_typed()` starts
+returning NULL where it used to return a node, which is a change to published
+behaviour - hence a decision rather than a patch. The alternative is for the
+writer to emit the node's *value* rather than its stale text, which keeps the
+constructor permissive and quietly discards what the caller passed as the
+text.
+
+A third thing is worth recording next to them, and is a gap rather than a
+defect: **the writer cannot be told which schema to target.**
+`GTEXT_YAML_Write_Options` carries no schema, so a document parsed under the
+JSON schema - where `~` is not a null spelling - is written `[~]` and reads
+back under that same schema as the string `"~"`. Nothing is wrong with the
+writer; it was never given the question.
 
 The one that stood here until recently - that a block mapping with two entries
 did not parse in UTF-16 - is fixed, and it was worse than this page said: the
@@ -1642,6 +1698,57 @@ tag says `int` and there is no string to fall back to.
 The bound is one function both call. Writing the test out twice was how the
 two had come to differ in the first place, and `(double)INT64_MAX` rounds
 *up* to 2^63, so `<= INT64_MAX` is not the comparison - `< 2^63` is.
+
+### Four the widened writer fuzzer found in its first ninety seconds
+
+The harness could only ever build three kinds of node with default options.
+Given the parse options, the write options, four more node kinds and a stored
+scalar style to choose from, it found four defects before the first run
+finished - which says more about what it could not previously *construct*
+than about how hard any of these were to hit.
+
+**A preferred scalar style changed what a scalar was.**
+`GTEXT_YAML_Write_Options::scalar_style` was applied to every scalar whatever
+its type. Only a plain scalar is resolved by its contents (10.3.2), so any
+other style makes a scalar a string: the null went out as `""` and came back
+the empty string, 42 came back `"42"`, true came back `"true"`. Four of the
+five styles did it, to four of the five types. The style is honoured for
+strings, where it costs nothing, and ignored for everything else. Canonical
+form is exempt and needs to be: it writes `!!int` in front of the value, and
+an explicit tag carries the type whatever the quoting does.
+
+**A comment was written without being checked.** Twice over, and the second
+is the worse. A character 5.1 forbids came out raw, so the writer produced a
+document this library refuses to read. And a line break in an *inline*
+comment ended the comment and made content of the rest - a mapping of one
+entry with the inline comment `one\nevil: yes` was written as `k: v # one`
+over `evil: yes` and read back with **two** entries. The comment escaped into
+the document and nothing reported it. A comment has one spelling and no
+escapes, so one that cannot be written is refused, which is the position the
+writer already took for an anchor name. A leading comment keeps its one
+exception: `\n` renders as another `#` line, which is a real spelling of a
+multi-line comment.
+
+**A NUL stopped the C conversions where 10.3.2 does not.** The mirror image
+of the white-space defect above it: white space makes `strtoll()` and
+`strtod()` read *past* the end of a row, and a NUL makes them stop *before*
+the text does. `"42\0x"` was handed to `strtoll()`, which saw `42` and
+answered the integer 42 - so the DOM API built an integer out of text the
+parser reads as a string, and a quoted `"42\0"` *parses* to a string. The
+tell was that `"true\0"` was already a string: the bool and null rows compare
+with lengths and were right, and only the two rows that hand their text to
+the C library were wrong.
+
+**A tag had to agree with the text but not with the declared type.**
+`gtext_yaml_node_new_scalar_typed()` takes two claims, and only one was
+checked against the tag. The check skipped every string-typed node, on the
+reasoning that `!!str` takes any text and needs none - true of `!!str`, and
+the exemption was written for the tag and applied to the *type*. So a node
+tagged `!!int` and declared a string was built, the writer emitted
+`!!int "abc"`, and this library refused to read its own output. What a tag
+names is what `dom_scalar_type()` answers, and the declared type has to match
+it; a tag this library does not resolve still answers "string", so a custom
+tag leaves the type to the caller, which is the point of one.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status
