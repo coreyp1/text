@@ -1990,6 +1990,20 @@ static bool plain_text_has_space(const char *value, size_t len) {
 		switch (value[i]) {
 			case ' ': case '\t': case '\n': case '\r': case '\v': case '\f':
 				return true;
+			/* And a NUL, for the mirror-image reason: white space makes the
+			   C conversions read *past* where 10.3.2 ends a row, and a NUL
+			   makes them stop *before* the text does.  strtoll() was handed
+			   "42\0x" and answered 42, so the DOM API built an integer out
+			   of a value the parser reads as the string it is - a quoted
+			   "42\0" parses to a string, because no row of 10.3.2 has a NUL
+			   in it and a NUL is not c-printable either.
+
+			   The bool and null rows compare with lengths and were right
+			   already; only the two that hand their text to the C library
+			   were wrong, which is why "true\0" was a string while "42\0"
+			   was a number. */
+			case '\0':
+				return true;
 			default:
 				break;
 		}

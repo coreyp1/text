@@ -350,6 +350,63 @@ TEST(YamlWriterContract, OuterWhiteSpaceMakesABuiltScalarAString) {
 	}
 }
 
+/* And a NUL, which is the same mistake pointing the other way.
+ *
+ * White space makes strtoll() and strtod() read *past* where a row of 10.3.2
+ * ends; a NUL makes them stop *before* the text does. "42\0x" was handed to
+ * strtoll(), which saw "42" and answered the integer 42 - so the DOM API
+ * built an integer whose text is not one, and the writer then quoted it and
+ * the reader read it back as the string it always was.
+ *
+ * The bool and null rows compare with lengths and were right the whole time,
+ * which is the tell: "true\0" was a string while "42\0" was a number. And a
+ * quoted "42\0" *parses* to a string, so the constructor and the parser
+ * disagreed about the same characters. No row of 10.3.2 holds a NUL, and a
+ * NUL is not c-printable either. */
+TEST(YamlWriterContract, ANulMakesABuiltScalarAString) {
+	const std::string texts[] = {
+		std::string("42\0", 3),
+		std::string("42\0x", 4),
+		std::string("1.5\0", 4),
+		std::string("\0" "42", 3),
+		std::string("4\0" "2", 3),
+		std::string("\0", 1),
+		std::string("+\0" "1", 3),
+		std::string("0x1\0", 4),
+	};
+	for (const std::string &text : texts) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_n(
+			doc, text.data(), text.size(), nullptr, nullptr);
+		ASSERT_NE(node, nullptr) << ::testing::PrintToString(text);
+		EXPECT_EQ(gtext_yaml_node_type(node), GTEXT_YAML_STRING)
+			<< ::testing::PrintToString(text);
+
+		/* And the parser has to agree about the same characters, which is
+		   what made this visible: the writer quoted the node and the reader
+		   answered "string" where the DOM had said "int". */
+		gtext_yaml_document_set_root(doc, node);
+		Written w = write_doc(doc);
+		ASSERT_EQ(w.status, GTEXT_YAML_OK) << ::testing::PrintToString(text);
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(w.text.data(), w.text.size(), &opts, &err);
+		ASSERT_NE(back, nullptr) << "wrote " << w.text << ": "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+		const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+		EXPECT_EQ(gtext_yaml_node_type(r), GTEXT_YAML_STRING) << "wrote " << w.text;
+		std::string got;
+		if (read_back_scalar(w.text, &got)) {
+			EXPECT_EQ(got, text) << "wrote " << w.text;
+		}
+		gtext_yaml_free(back);
+		gtext_yaml_free(doc);
+	}
+}
+
 /* A line of exactly "---" or "..." is c-directives-end or c-document-end
    (9.1.2), and c-forbidden keeps either out of a document's content wherever
    it begins a line with a break, white space or end of input after it
