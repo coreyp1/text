@@ -351,9 +351,13 @@ It has since also found the writer's missing **schema**: `0:0` parsed with
 writer never being told which dialect its output was for, which the
 `schema` and `yaml_1_1` write options now answer - this harness writes for the
 dialect it parsed in, which is the only version of the round trip that means
-anything. The other half is still open on the format page: the quoting
-whitelist treats `:` as needing quotes, and quoting a *non*-string changes what
+anything. The other half was the quoting whitelist, which treated `:` as
+needing quotes where 7.3.3 does not, and quoting a *non*-string changes what
 it is.
+
+One stored artifact still traps, and predates all of that: canonical form
+writes a null as `!!null ""` and this library refuses to read it back. It is
+on the format page under *Known defects*.
 
 Three notes for whoever runs it next. The header is **two bytes** now, not
 one - path and dialect in the first, write options in the second - so a

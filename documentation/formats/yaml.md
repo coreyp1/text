@@ -628,34 +628,27 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-One is open. The writer fuzzer found it while the missing schema option
-below - which had stood here as the last of these - was being closed, and it
-is what is left of that one after the option was added.
+One is open, and the writer fuzzer found it on a run that predates this
+session's work - it is an untriaged artifact rather than a new find.
 
-**The writer quotes a non-string for a reason that only holds for strings.**
+**Canonical form writes a null the parser then refuses.** A null scalar goes
+out as `!!null ""`, and this library will not read that back: a quoted scalar
+is a string, so the tag contradicts the style, which is exactly the check
+`gtext_yaml_node_new_scalar()` applies on the way in. Canonical form quotes
+everything by design - that is what canonical means - and the null row is the
+one where quoting and the tag cannot both be right. The other styles ask the
+null question before any style question and are fine; canonical skips that
+branch. Either canonical has to leave a null plain behind its tag, which
+makes it not-quite-canonical, or the reader has to accept a tag that names
+the type a quoted empty scalar could carry. The reproducer is a stored fuzz
+artifact.
 
-```
-  parsed with yaml_1_1   0:0     the sexagesimal integer 0
-  written                "0:0"   quoted
-  read back with 1_1     "0:0"   the string
-```
-
-`scalar_needs_quotes()` admits a small whitelist of characters and quotes
-everything else, and says why: *"quoting is value-preserving here: neither
-text resolves to anything but a string"*. That is true of a string and of
-nothing else. `:` is not on the whitelist, `0:0` is nonetheless a perfectly
-legal plain scalar - 7.3.3 admits `:` where an `ns-plain-safe` character
-follows it - and quoting it turns the integer the document held into a
-string.
-
-The exposure is narrow, because in the 1.2 core schema `0:0` is a string
-either way and quoting a string costs nothing. It is 1.1, where sexagesimals
-resolve, that the quoting reaches. Two ways out: widen the whitelist to the
-`ns-plain` productions it stands in for, which is the accurate fix and the
-one with room to break other things, or refuse to quote a node that is not a
-string, which is exact for the DOM writer and unavailable to the streaming
-one - an event stream reports a scalar as written and does not say what it
-resolved to.
+There is one more thing worth knowing, which is a limit rather than a defect.
+**A null cannot survive a round trip through the failsafe schema.** That
+schema resolves nothing, so `null` is written and the string `"null"` comes
+back. Nothing else is available: there is no spelling the failsafe schema
+reads as a null, because having none is what asking for it means. It is a
+test asserting the limit.
 
 The one that stood here until recently - that a block mapping with two entries
 did not parse in UTF-16 - is fixed, and it was worse than this page said: the
@@ -1725,6 +1718,45 @@ tagged `!!int` and declared a string was built, the writer emitted
 names is what `dom_scalar_type()` answers, and the declared type has to match
 it; a tag this library does not resolve still answers "string", so a custom
 tag leaves the type to the caller, which is the point of one.
+
+### Quoting is a free choice only for a string
+
+`scalar_needs_quotes()` admits a small whitelist of characters and quotes
+everything else. The note above it says why that is safe: *"quoting is
+value-preserving here: neither text resolves to anything but a string"*. True
+of a string, and of nothing else - and the whitelist was applied to every
+scalar.
+
+`:` was not on it. `0:0` is nonetheless a legal plain scalar - 7.3.3's
+`ns-plain-char` admits `:` where an `ns-plain-safe` character follows it - and
+parsed with `yaml_1_1` it is the sexagesimal integer 0. It was written in
+quotes, and quotes make a string:
+
+```
+  parsed with yaml_1_1   0:0     the integer 0
+  written                "0:0"
+  read back with 1_1     "0:0"   the string
+```
+
+The writer fuzzer found it through the event pipe, which is where it had to
+be found: there a scalar arrives plain and has to leave plain, because
+plainness is what carries the type, and the streaming writer is not told what
+anything resolved to. That rules out the other fix available for the DOM
+writer - *don't quote a non-string* - which is exact where the type is known
+and unavailable where it is not.
+
+So the whitelist learned the production it had been standing in for, for `:`
+alone: a colon that is not first, has a character after it, and that character
+is `ns-plain-safe` for the context - which excludes the flow indicators inside
+a flow collection, where a `,` or a `]` would end the scalar rather than
+belong to it. The first position is left as it was on purpose: `ns-plain-first`
+admits `:` there under the same rule, and a leading `:` is how a block mapping
+writes a value with no key, which is too close to the syntax to be worth the
+one character it saves.
+
+The exposure was narrow, which is why it lasted: in the 1.2 core schema `0:0`
+is a string either way and quoting a string costs nothing. It is 1.1, where
+sexagesimals resolve, that the quoting reached.
 
 ### The writer was never told which dialect it was writing for
 

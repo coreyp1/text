@@ -933,6 +933,109 @@ TEST(YamlWriterContract, TheTypedConstructorAgreesWithTheTagOnTheWayIn) {
 	}
 }
 
+/* Quoting is a free choice only for a string.
+ *
+ * scalar_needs_quotes() admits a small whitelist and quotes everything else,
+ * and the note above it says why that is safe: "quoting is value-preserving
+ * here: neither text resolves to anything but a string". True of a string,
+ * and of nothing else. ":" is not on the whitelist; "0:0" is nonetheless a
+ * legal plain scalar - 7.3.3 admits ":" where an ns-plain-safe character
+ * follows it - and parsed with yaml_1_1 it is the sexagesimal integer 0. It
+ * was written "0:0" in quotes and came back the string.
+ *
+ * The writer fuzzer found it through the event pipe, where the scalar arrives
+ * plain and has to leave plain, because plainness is what carries the type. */
+TEST(YamlWriterContract, AColonDoesNotForceQuotesOntoANonString) {
+	/* 7.3.3 admits ":" mid-scalar when what follows is ns-plain-safe, and in
+	   flow context the flow indicators are not. The first position is left
+	   alone deliberately: ":" there is how a block mapping writes a value
+	   with no key. */
+	struct Case { const char *text; bool needs_quotes; };
+	const Case cases[] = {
+		{ "0:0",     false }, { "1:30:00", false },
+		{ "a:b",     false }, { "x:1",     false },
+		/* A trailing colon has nothing safe after it. */
+		{ "a:",      true  },
+		/* A leading one is left quoted whatever follows. */
+		{ ":a",      true  }, { "::a",     true  },
+		/* Controls from either side of the whitelist. */
+		{ "word",    false }, { "a b",     true  }, { "a#b",     true  },
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *root = gtext_yaml_node_new_scalar_typed(
+			doc, c.text, strlen(c.text), GTEXT_YAML_STRING, nullptr, nullptr);
+		ASSERT_NE(root, nullptr) << c.text;
+		gtext_yaml_document_set_root(doc, root);
+		Written w = write_doc(doc, true);
+		ASSERT_EQ(w.status, GTEXT_YAML_OK) << c.text;
+		EXPECT_EQ(w.text.find('"') != std::string::npos, c.needs_quotes)
+			<< "<<" << c.text << ">> was written <<" << w.text << ">>";
+		gtext_yaml_free(doc);
+	}
+
+	/* And the property that makes it matter: a 1.1 sexagesimal integer keeps
+	   its value across a round trip, in every position a scalar can stand and
+	   in both styles. The oracle is the parser, not the quoting rule. */
+	const char *inputs[] = { "0:0", "k: 0:0", "0:0: v", "[0:0]", "{k: 0:0}" };
+	for (const char *input : inputs) {
+		for (int block = 0; block < 2; ++block) {
+			GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+			popts.yaml_1_1 = true;
+			GTEXT_YAML_Document *doc =
+				gtext_yaml_parse(input, strlen(input), &popts, nullptr);
+			ASSERT_NE(doc, nullptr) << input;
+
+			GTEXT_YAML_Sink sink;
+			ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+			GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+			wopts.yaml_1_1 = true;
+			if (block) {
+				wopts.pretty = true;
+				wopts.flow_style = GTEXT_YAML_FLOW_STYLE_BLOCK;
+			}
+			ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts),
+				GTEXT_YAML_OK) << input;
+			const std::string out(gtext_yaml_sink_buffer_data(&sink),
+				gtext_yaml_sink_buffer_size(&sink));
+			gtext_yaml_sink_buffer_free(&sink);
+
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(out.data(), out.size(), &popts, nullptr);
+			ASSERT_NE(back, nullptr) << input << " wrote <<" << out << ">>";
+
+			/* Find the scalar that was "0:0" in each shape and check it is
+			   still the integer it parsed as. */
+			const GTEXT_YAML_Node *r1 = gtext_yaml_document_root(doc);
+			const GTEXT_YAML_Node *r2 = gtext_yaml_document_root(back);
+			ASSERT_EQ(gtext_yaml_node_type(r1), gtext_yaml_node_type(r2))
+				<< input << " wrote <<" << out << ">>";
+			if (gtext_yaml_node_type(r1) == GTEXT_YAML_INT) {
+				int64_t a = -1;
+				int64_t b = -2;
+				EXPECT_TRUE(gtext_yaml_node_as_int(r1, &a));
+				EXPECT_TRUE(gtext_yaml_node_as_int(r2, &b));
+				EXPECT_EQ(a, b) << input << " wrote <<" << out << ">>";
+			}
+			else if (gtext_yaml_node_type(r1) == GTEXT_YAML_MAPPING) {
+				EXPECT_EQ(gtext_yaml_mapping_size(r1),
+					gtext_yaml_mapping_size(r2))
+					<< input << " wrote <<" << out << ">>";
+			}
+			else if (gtext_yaml_node_type(r1) == GTEXT_YAML_SEQUENCE) {
+				ASSERT_EQ(gtext_yaml_sequence_length(r2), 1u)
+					<< input << " wrote <<" << out << ">>";
+				EXPECT_EQ(
+					gtext_yaml_node_type(gtext_yaml_sequence_get(r2, 0)),
+					GTEXT_YAML_INT) << input << " wrote <<" << out << ">>";
+			}
+			gtext_yaml_free(back);
+			gtext_yaml_free(doc);
+		}
+	}
+}
+
 /* The writer has to be told which dialect its output is for.
  *
  * Only a plain scalar is resolved by its contents (10.3.2), so whether a

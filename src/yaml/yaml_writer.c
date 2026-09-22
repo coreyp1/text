@@ -1146,7 +1146,18 @@ static bool comment_text_is_writable(const char *text, bool allow_breaks) {
  * the core schema's integer and float rows ("[-+]? [0-9]+"). Neither is a
  * c-indicator, so neither needs quoting in the first place - and quoting them
  * turned null into the string "~" and the integer +1 into the string "+1". */
-static bool scalar_needs_quotes(const char *value, size_t len) {
+/* 7.3.3's ns-plain-safe(c): every ns-char, less the flow indicators where a
+   flow collection is what we are inside of.  A flow indicator inside a plain
+   scalar there would end the scalar rather than belong to it. */
+static bool plain_safe_char(unsigned char c, bool in_flow) {
+  if (c == ' ' || c == '\t' || c == '\n' || c == '\r') return false;
+  if (in_flow) {
+    if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') return false;
+  }
+  return true;
+}
+
+static bool scalar_needs_quotes(const char *value, size_t len, bool in_flow) {
   if (!value || len == 0) return true;
   /* ns-plain-first admits "-" only when an ns-plain-safe character follows -
      it is a c-indicator otherwise, and a lone "-" on a line is a block
@@ -1175,10 +1186,26 @@ static bool scalar_needs_quotes(const char *value, size_t len) {
   }
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)value[i];
-    if (!(isalnum(c) || c == '_' || c == '-' || c == '.'
-          || c == '~' || c == '+')) {
-      return true;
+    if (isalnum(c) || c == '_' || c == '-' || c == '.'
+        || c == '~' || c == '+') {
+      continue;
     }
+    /* ns-plain-char admits ":" where an ns-plain-safe character follows it
+       (7.3.3), and the whitelist did not - so "0:0" was quoted.  For a string
+       that costs nothing, which is what the note above says and why it went
+       unnoticed; for anything else quoting is not value-preserving, and "0:0"
+       parsed with yaml_1_1 is the sexagesimal integer 0.  It went out as the
+       string.
+
+       Not in first position: there ns-plain-first admits ":" only under the
+       same following-character rule, and a leading ":" is how a block mapping
+       writes a value with no key - too close to the syntax to be worth the
+       character it saves. */
+    if (c == ':' && i > 0 && i + 1 < len
+        && plain_safe_char((unsigned char)value[i + 1], in_flow)) {
+      continue;
+    }
+    return true;
   }
   return false;
 }
@@ -1562,7 +1589,7 @@ static GTEXT_YAML_Scalar_Style plan_scalar_style(
 
   if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
     if (is_binary ? plain_style_cannot_carry(value, len)
-                  : scalar_needs_quotes(value, len)) {
+                  : scalar_needs_quotes(value, len, in_flow)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     }
     /* A string whose text spells a number, a bool or a null has to be
