@@ -307,6 +307,21 @@ typedef struct {
      judged by the context it lands in. */
   bool in_flow;
   size_t flow_indent;
+  /* How deep write_node() currently is, and how deep it may go.
+   *
+   * max_depth is a parse option, and until now only the parser read it - so
+   * it bounded a document that arrived as text and said nothing about one
+   * built through the DOM API, which is the half of the library that can
+   * nest without limit. write_node() recurses on the C stack at about 228
+   * bytes a level, so a hand-built document a few tens of thousands deep
+   * took the process down with it, on default options, with nothing having
+   * asked for anything unusual.
+   *
+   * Taken from the document being written, because that is where a document
+   * keeps the options it was made with. Zero is no limit, which after
+   * gtext_yaml_parse_options_effective() means a caller who asked for none. */
+  size_t depth;
+  size_t max_depth;
 } yaml_writer_state;
 
 static GTEXT_YAML_Encoding writer_encoding(const GTEXT_YAML_Write_Options *opts) {
@@ -2373,7 +2388,45 @@ static GTEXT_YAML_Status write_alias_node(
   return write_inline_comment(state, node_inline_comment(node));
 }
 
+static GTEXT_YAML_Status write_node_at_depth(
+    yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    size_t indent,
+    bool flow,
+    const char * tag_override,
+    bool leading_newline);
+
+/* max_depth, enforced on the way out as well as on the way in.
+ *
+ * A document that was parsed has already been held to this once, so for that
+ * half of the library this check never fires. It is here for the other half:
+ * the DOM constructors do not consult max_depth at all - they have no parent
+ * pointers, so asking a node how deep it sits costs a walk per append - which
+ * left the depth of a built document bounded by nothing but the stack. */
 static GTEXT_YAML_Status write_node(
+    yaml_writer_state * state,
+    const GTEXT_YAML_Node * node,
+    size_t indent,
+    bool flow,
+    const char * tag_override,
+    bool leading_newline) {
+  GTEXT_YAML_Status status;
+
+  if (state->max_depth > 0 && state->depth >= state->max_depth) {
+    return GTEXT_YAML_E_DEPTH;
+  }
+
+  state->depth++;
+  status = write_node_at_depth(
+      state, node, indent, flow, tag_override, leading_newline);
+  state->depth--;
+  return status;
+}
+
+/* The body. Every recursive call goes through write_node() rather than
+   coming here directly, so the depth accounting has exactly one home and no
+   early return can skip it. */
+static GTEXT_YAML_Status write_node_at_depth(
     yaml_writer_state * state,
     const GTEXT_YAML_Node * node,
     size_t indent,
@@ -2431,6 +2484,9 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(
   memset(&state, 0, sizeof(state));
   state.sink = sink;
   state.opts = opts;
+  /* The document's own limit, not the writer's: a document carries the parse
+     options it was made with, and max_depth is one of them. */
+  state.max_depth = doc->options.max_depth;
   writer_encoding_init(&encoding, opts);
   state.encoding = &encoding;
   /* s-l+block-node(-1, block-in): the root of a document sits one column to
@@ -2532,6 +2588,9 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_write_documents(
       status = write_separator(&state);
       if (status != GTEXT_YAML_OK) return status;
     }
+
+    /* Per document, since each carries the options it was parsed with. */
+    state.max_depth = doc->options.max_depth;
 
     state.block_parent_indent = -1;
     status = write_str(&state, "---");

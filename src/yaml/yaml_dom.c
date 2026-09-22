@@ -1426,6 +1426,17 @@ typedef struct {
 	yaml_clone_entry *entries;
 	size_t count;
 	size_t capacity;
+	/* How deep clone_node() currently is, and how deep it may go.
+	 *
+	 * max_depth is a parse option and only the parser used to read it, so it
+	 * bounded a document that arrived as text and said nothing about one
+	 * built through the DOM API - which is the half that can nest without
+	 * limit, since the constructors have no parent pointers and cannot ask a
+	 * node how deep it sits without a walk per append. clone_node() recurses
+	 * at about 113 bytes a level, so a built document deep enough took the
+	 * process down. Zero is no limit. */
+	size_t depth;
+	size_t max_depth;
 } yaml_clone_map;
 
 static const yaml_clone_entry *clone_map_find(
@@ -1462,7 +1473,33 @@ static bool clone_map_add(
 	return true;
 }
 
+static GTEXT_YAML_Node *clone_node_at_depth(
+	yaml_context *ctx,
+	const GTEXT_YAML_Node *node,
+	yaml_clone_map *map
+);
+
+/* max_depth, for a document nobody parsed. A clone refuses by returning NULL,
+   which is what every other failure here does too. */
 static GTEXT_YAML_Node *clone_node(
+	yaml_context *ctx,
+	const GTEXT_YAML_Node *node,
+	yaml_clone_map *map
+) {
+	GTEXT_YAML_Node *clone = NULL;
+
+	if (!map) return NULL;
+	if (map->max_depth > 0 && map->depth >= map->max_depth) return NULL;
+
+	map->depth++;
+	clone = clone_node_at_depth(ctx, node, map);
+	map->depth--;
+	return clone;
+}
+
+/* The body. Every recursive call goes through clone_node(), so the depth
+   accounting has one home and none of the early returns can skip it. */
+static GTEXT_YAML_Node *clone_node_at_depth(
 	yaml_context *ctx,
 	const GTEXT_YAML_Node *node,
 	yaml_clone_map *map
@@ -1859,6 +1896,10 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_clone(
 	GTEXT_YAML_Node *clone = NULL;
 
 	if (!doc || !doc->ctx || !node) return NULL;
+
+	/* The destination's limit: the clone is the destination's node, and a
+	   document carries the parse options it was made with. */
+	map.max_depth = doc->options.max_depth;
 
 	clone = clone_node(doc->ctx, node, &map);
 	free(map.entries);

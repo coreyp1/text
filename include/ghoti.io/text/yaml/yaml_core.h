@@ -322,6 +322,21 @@ typedef struct {
   GTEXT_YAML_Mode mode;
   GTEXT_YAML_Dupkey_Mode dupkeys;
   GTEXT_YAML_Schema schema;
+  /* Maximum nesting depth, for reading a document and for walking one.
+   *
+   * It bounds the parser, the DOM writer and gtext_yaml_node_clone(). The
+   * last two matter because the DOM constructors do not consult it: they
+   * have no parent pointers, so asking a node how deep it sits would cost a
+   * walk on every append, and a document built through the API can therefore
+   * nest as far as memory allows. The limit is spent where the depth is
+   * already known, which is on the way back out.
+   *
+   * Those walks recurse on the C stack, at roughly 344 bytes a level while
+   * resolving, 228 in the DOM writer and 113 in the clone. The default of
+   * 256 is about 86 KiB at the worst of those - comfortable on a main
+   * thread, worth checking against a small thread stack. A value of SIZE_MAX
+   * removes the limit and hands you the stack: a document deep enough will
+   * then exhaust it rather than being refused. */
   size_t max_depth;
   size_t max_total_bytes;
   size_t max_alias_expansion;
