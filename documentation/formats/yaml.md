@@ -628,40 +628,27 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-One is open, and it is a question about what an API *means* rather than a
-fault with a settled answer. It is written down here rather than guessed at.
+None is open. What stands here is a gap rather than a defect - the writer was
+never given a question, rather than answering it wrongly.
 
-**An inline comment inside a flow collection swallows the rest of the line.**
+**The writer cannot be told which schema to target.**
+`GTEXT_YAML_Write_Options` carries no schema and no version, so the writer
+answers "what would this text resolve to" with the 1.2 core schema whatever
+the document was read under. A document parsed under the JSON schema - where
+`~` is not a null spelling - is written `[~]` and reads back under that same
+schema as the string `"~"`.
+
+The writer fuzzer found the same gap through the 1.1 door, and there it costs
+a *value* rather than a spelling:
 
 ```
-a sequence of two, the first carrying the inline comment "note":
-
-  written   [x # note, y]
-  read back Unterminated flow collection
+  parsed with yaml_1_1   0:0     the sexagesimal integer 0
+  written                "0:0"   quoted, by the 1.2 rule for that text
+  read back with 1_1     "0:0"   the string
 ```
 
-Everything after a `#` is comment to the end of the line, so the `, y]` is
-inside it and the bracket never closes. The writer says OK. A *leading*
-comment is fine - in flow context the writer drops it, which loses a comment
-and no values - and in block style both are fine, because there the comment
-already ends the line.
-
-There are three ways out and they are not equivalent. YAML permits a line
-break inside a flow collection, so the writer could emit one after the
-comment and carry on: that keeps the comment and is the most work, because
-the continuation has to be indented past the block node that holds the flow
-collection. It could refuse, which is what it now does for a comment it
-cannot spell at all. Or it could drop the comment, as it already does for a
-leading one. The first is the honest answer and the third is what the
-neighbouring code does; picking between them is a decision about whether this
-writer preserves comments or merely tolerates them.
-
-One more thing is worth recording next to it, and is a gap rather than a
-defect: **the writer cannot be told which schema to target.**
-`GTEXT_YAML_Write_Options` carries no schema, so a document parsed under the
-JSON schema - where `~` is not a null spelling - is written `[~]` and reads
-back under that same schema as the string `"~"`. Nothing is wrong with the
-writer; it was never given the question.
+Nothing is wrong with the writer's reasoning; it was never given the question
+its answer depends on.
 
 The one that stood here until recently - that a block mapping with two entries
 did not parse in UTF-16 - is fixed, and it was worse than this page said: the
@@ -1731,6 +1718,68 @@ tagged `!!int` and declared a string was built, the writer emitted
 names is what `dom_scalar_type()` answers, and the declared type has to match
 it; a tag this library does not resolve still answers "string", so a custom
 tag leaves the type to the caller, which is the point of one.
+
+### A comment is only a comment where nothing follows it
+
+A comment is `#` and then everything to the end of the line (7.1). The writer
+knew the rule for the comment's own text - a line break inside one ends it
+early, so a comment carrying one is refused - and not for what it is written
+*next to*. Three places put something after a comment on the same line, and
+each lost a different thing:
+
+```
+  a flow collection      [x # note, y]      Unterminated flow collection
+  a block mapping key    k # note: v        read back as a mapping of NONE
+  a streamed comment     - x# mid           read back as the scalar "x# mid"
+```
+
+The first is the one that was written down as an open question here, on the
+understanding that it needed a decision about whether this writer preserves
+comments or merely tolerates them. It needed no such decision, because the
+premise was wrong: it was described as reachable only by building a document
+through the DOM API, and it is not. The parser attaches a comment written
+inside brackets to the entry before it, so
+
+```
+  [ x, # note
+    y ]
+```
+
+is input this library reads, writes, and then refuses to read back. Refusing
+to write it would mean refusing a document we had just parsed, and dropping
+the comment would lose one on every round trip of an ordinary flow
+collection. 7.4 permits a line break inside a flow collection - which is how
+that input spelled it in the first place - so the writer ends the line and
+carries on below it. The flag that decides this is a property of the
+*position* and not of the node: a nested collection's own trailing comment
+sits inside its parent's brackets.
+
+The second came out of testing the first. An implicit key shares its line
+with the `:` that follows it, so a key carrying an inline comment cannot be
+one - and a mapping of one entry went out as `k # note: v` and came back as a
+mapping of **none**, with no error anywhere to say so. 7.4's explicit form
+puts the key and its colon on separate lines and is what the equivalent input
+spells, so that is what gets written:
+
+```
+  ? k # note
+  : v
+```
+
+The third is the worst of them and was in the other writer. `#` begins a
+comment only at the start of a line or after white space; anywhere else it is
+an ordinary character of the plain scalar it lands in. The streaming writer
+emitted the indent for a fresh line - nothing at all, at the root - straight
+after the scalar it had just written, so a comment did not merely go to the
+wrong place, it was **absorbed into the value**, and the result parsed
+cleanly. It had no idea where on a line it was; every byte it emits goes
+through one function, so that is where it now keeps track. The comment event
+already carried a flag saying which kind of comment the caller meant, and it
+had never been read.
+
+Nothing in the test suite had ever written a comment event, which is how the
+third survived. The first two were found by reading what the writer does
+after it writes a comment, once the first had a fix to check.
 
 **A claim was checkable whether or not a tag was there to check it.**
 The check above ran only for a node that also carried a tag, on the reasoning

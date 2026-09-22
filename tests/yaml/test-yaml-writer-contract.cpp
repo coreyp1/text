@@ -933,6 +933,229 @@ TEST(YamlWriterContract, TheTypedConstructorAgreesWithTheTagOnTheWayIn) {
 	}
 }
 
+/* The streaming writer's comment event has to end up being a comment.
+ *
+ * "#" starts one only at the start of a line or after white space (7.1).
+ * Anywhere else it is an ordinary character of whatever plain scalar it is
+ * written against - and the writer emitted the indent for a fresh line, which
+ * is nothing at all at the root, straight after the scalar it had just
+ * written. So a sequence of "x" and "y" with the comment "mid" between them
+ * came out as "- x# mid", and read back as the one scalar "x# mid".
+ *
+ * That is worse than losing the comment: the *value* changed, and the
+ * document parsed cleanly afterwards, so nothing anywhere said so. The event
+ * carries a flag for which kind of comment a caller meant, and the writer now
+ * reads both it and where it actually is. */
+TEST(YamlWriterContract, AStreamedCommentDoesNotBecomePartOfAValue) {
+	struct Case { GTEXT_YAML_Flow_Style style; bool inlined; };
+	const Case cases[] = {
+		{ GTEXT_YAML_FLOW_STYLE_BLOCK, true  },
+		{ GTEXT_YAML_FLOW_STYLE_BLOCK, false },
+		{ GTEXT_YAML_FLOW_STYLE_FLOW,  true  },
+		{ GTEXT_YAML_FLOW_STYLE_FLOW,  false },
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_YAML_Sink sink;
+		ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+		GTEXT_YAML_Write_Options opts = gtext_yaml_write_options_default();
+		opts.flow_style = c.style;
+		GTEXT_YAML_Writer *writer = gtext_yaml_writer_new(sink, &opts);
+		ASSERT_NE(writer, nullptr);
+
+		auto send = [&](GTEXT_YAML_Event_Type type, const char *text) {
+			GTEXT_YAML_Event e;
+			memset(&e, 0, sizeof(e));
+			e.type = type;
+			if (type == GTEXT_YAML_EVENT_SCALAR) {
+				e.data.scalar.ptr = text;
+				e.data.scalar.len = strlen(text);
+			}
+			if (type == GTEXT_YAML_EVENT_COMMENT) {
+				e.data.comment.ptr = text;
+				e.data.comment.len = strlen(text);
+				e.data.comment.inline_comment = c.inlined;
+			}
+			EXPECT_EQ(gtext_yaml_writer_event(writer, &e), GTEXT_YAML_OK);
+		};
+
+		send(GTEXT_YAML_EVENT_STREAM_START, nullptr);
+		send(GTEXT_YAML_EVENT_DOCUMENT_START, nullptr);
+		send(GTEXT_YAML_EVENT_SEQUENCE_START, nullptr);
+		send(GTEXT_YAML_EVENT_SCALAR, "x");
+		send(GTEXT_YAML_EVENT_COMMENT, "mid");
+		send(GTEXT_YAML_EVENT_SCALAR, "y");
+		send(GTEXT_YAML_EVENT_SEQUENCE_END, nullptr);
+		send(GTEXT_YAML_EVENT_DOCUMENT_END, nullptr);
+		send(GTEXT_YAML_EVENT_STREAM_END, nullptr);
+		ASSERT_EQ(gtext_yaml_writer_finish(writer), GTEXT_YAML_OK);
+
+		const std::string out(gtext_yaml_sink_buffer_data(&sink),
+			gtext_yaml_sink_buffer_size(&sink));
+		gtext_yaml_writer_free(writer);
+		gtext_yaml_sink_buffer_free(&sink);
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(out.data(), out.size(), &popts, &err);
+		ASSERT_NE(back, nullptr) << "wrote <<" << out << ">>: "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+
+		const GTEXT_YAML_Node *root = gtext_yaml_document_root(back);
+		ASSERT_NE(root, nullptr) << out;
+		ASSERT_EQ(gtext_yaml_sequence_length(root), 2u) << "wrote <<" << out << ">>";
+		/* The values, which is what the "#" had been swallowed into. */
+		EXPECT_STREQ(gtext_yaml_node_as_string(gtext_yaml_sequence_get(root, 0)),
+			"x") << "wrote <<" << out << ">>";
+		EXPECT_STREQ(gtext_yaml_node_as_string(gtext_yaml_sequence_get(root, 1)),
+			"y") << "wrote <<" << out << ">>";
+		/* ...and the comment is still written, as a comment. */
+		EXPECT_NE(out.find("# mid"), std::string::npos)
+			<< "wrote <<" << out << ">>";
+		gtext_yaml_free(back);
+	}
+}
+
+/* An inline comment may only be written where nothing follows it on the line.
+ *
+ * A comment is "#" to the end of the line (7.1). A flow collection is not
+ * over at the end of a line, so "[x # note, y]" puts the ", y]" inside the
+ * comment and the bracket never closes - the writer said OK and reading its
+ * own output back gave "Unterminated flow collection". 7.4 lets a flow
+ * collection run over a line break, which is how the input that produced such
+ * a node was spelled, so the writer ends the line and carries on below it.
+ *
+ * This is not only reachable through the DOM API. The parser attaches a
+ * comment written inside brackets to the entry before it, so every case here
+ * is a document this library reads, writes, and could not read back. */
+TEST(YamlWriterContract, AnInlineCommentInFlowDoesNotSwallowTheCollection) {
+	struct Case { const char *input; size_t items; const char *kept; };
+	const Case cases[] = {
+		/* On the first entry: the "," is what gets eaten. */
+		{ "[ x, # note\n  y ]\n", 2, "note" },
+		/* On the last: the "]" is. */
+		{ "[ x,\n  y # note\n]\n", 2, "note" },
+		/* On every one of them. */
+		{ "[ a, # one\n  b, # two\n  c # three\n]\n", 3, "three" },
+		/* A nested collection's own comment sits inside the outer brackets,
+		   so the context is the position and not the node. */
+		{ "[ [a] # inner\n, b]\n", 2, "inner" },
+		/* A flow mapping, where the eaten text is a key rather than a value. */
+		{ "{ a: 1, # note\n  b: 2 }\n", 2, "note" },
+	};
+
+	for (const Case &c : cases) {
+		GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+		popts.retain_comments = true;
+		GTEXT_YAML_Document *doc =
+			gtext_yaml_parse(c.input, strlen(c.input), &popts, nullptr);
+		ASSERT_NE(doc, nullptr) << "input <<" << c.input << ">>";
+
+		Written w = write_doc(doc);
+		ASSERT_EQ(w.status, GTEXT_YAML_OK) << c.input;
+
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(w.text.data(), w.text.size(), &popts, &err);
+		ASSERT_NE(back, nullptr) << "wrote <<" << w.text << ">>: "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+
+		/* The collection has to come back whole. Counting is what catches
+		   this: the old output parsed as a *shorter* collection or not at
+		   all, never as a wrong value. */
+		const GTEXT_YAML_Node *root = gtext_yaml_document_root(back);
+		ASSERT_NE(root, nullptr) << w.text;
+		const size_t got =
+			gtext_yaml_node_type(root) == GTEXT_YAML_MAPPING
+				? gtext_yaml_mapping_size(root)
+				: gtext_yaml_sequence_length(root);
+		EXPECT_EQ(got, c.items) << "wrote <<" << w.text << ">>";
+
+		/* And the comment is still there, which is what separates this from
+		   dropping it. */
+		EXPECT_NE(w.text.find(c.kept), std::string::npos)
+			<< "wrote <<" << w.text << ">> without " << c.kept;
+
+		gtext_yaml_free(back);
+		gtext_yaml_free(doc);
+	}
+}
+
+/* The same rule, where what follows the comment is a colon.
+ *
+ * An implicit key shares its line with the ":" that follows it, so a key
+ * carrying an inline comment cannot be one: the writer emitted "k # note: v"
+ * and the whole entry vanished into the comment. A mapping of one went out
+ * and a mapping of *none* came back, with no error to say so - the quietest
+ * shape this defect has.
+ *
+ * 7.4's explicit form puts the key and its colon on separate lines, which is
+ * both valid and what the input spelled, so that is what gets written. */
+TEST(YamlWriterContract, ACommentedKeyDoesNotSwallowItsOwnEntry) {
+	/* Built through the DOM, and parsed from the spelling that produces the
+	   same node - "? k # note" is read back with the comment on the key. */
+	for (int from_text = 0; from_text < 2; ++from_text) {
+		GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+		popts.retain_comments = true;
+
+		GTEXT_YAML_Document *doc = nullptr;
+		if (from_text) {
+			const char *input = "? k # note\n: v\n";
+			doc = gtext_yaml_parse(input, strlen(input), &popts, nullptr);
+		}
+		else {
+			doc = gtext_yaml_document_new(nullptr, nullptr);
+			GTEXT_YAML_Node *map =
+				gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+			GTEXT_YAML_Node *k =
+				gtext_yaml_node_new_scalar(doc, "k", nullptr, nullptr);
+			GTEXT_YAML_Node *v =
+				gtext_yaml_node_new_scalar(doc, "v", nullptr, nullptr);
+			gtext_yaml_node_set_inline_comment(doc, k, "note");
+			map = gtext_yaml_mapping_set(doc, map, k, v);
+			gtext_yaml_document_set_root(doc, map);
+		}
+		ASSERT_NE(doc, nullptr) << from_text;
+
+		/* Both styles: block reaches the explicit-key form, flow reaches the
+		   line break inside the braces. Neither may lose the entry. */
+		for (int block = 0; block < 2; ++block) {
+			Written w = write_doc(doc, block != 0);
+			ASSERT_EQ(w.status, GTEXT_YAML_OK) << from_text << "/" << block;
+
+			GTEXT_YAML_Error err;
+			memset(&err, 0, sizeof(err));
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(w.text.data(), w.text.size(), &popts, &err);
+			ASSERT_NE(back, nullptr) << "wrote <<" << w.text << ">>: "
+				<< (err.message ? err.message : "");
+			gtext_yaml_error_free(&err);
+
+			const GTEXT_YAML_Node *root = gtext_yaml_document_root(back);
+			ASSERT_NE(root, nullptr) << w.text;
+			EXPECT_EQ(gtext_yaml_node_type(root), GTEXT_YAML_MAPPING) << w.text;
+			EXPECT_EQ(gtext_yaml_mapping_size(root), 1u)
+				<< "wrote <<" << w.text << ">>";
+
+			const GTEXT_YAML_Node *key = nullptr;
+			const GTEXT_YAML_Node *value = nullptr;
+			if (gtext_yaml_mapping_get_at(root, 0, &key, &value)) {
+				EXPECT_STREQ(gtext_yaml_node_as_string(key), "k") << w.text;
+				EXPECT_STREQ(gtext_yaml_node_as_string(value), "v") << w.text;
+			}
+			EXPECT_NE(w.text.find("note"), std::string::npos) << w.text;
+
+			gtext_yaml_free(back);
+		}
+		gtext_yaml_free(doc);
+	}
+}
+
 /* A comment the writer cannot spell is refused, not written anyway.
  *
  * A comment is "#" followed by nb-char* (7.1). The writer emitted whatever

@@ -290,6 +290,23 @@ typedef struct {
      written at all.  See write_tag(). */
   const char *const *tag_handles;
   size_t tag_handle_count;
+  /* Whether the position being written to is inside a flow collection, and
+     what to indent a continuation line to if it is.
+
+     A comment runs to the end of the line (7.1), and a flow collection does
+     not: "[x # note, y]" puts the ", y]" inside the comment and the bracket
+     never closes.  So an inline comment written in flow context has to be
+     followed by a line break, which 7.4 permits inside a flow collection and
+     which is how the input that produced such a node was spelled in the first
+     place.
+
+     This is a property of the *position*, not of the node: a nested flow
+     collection's own trailing comment sits inside its parent's brackets, so
+     the flag is raised around a flow container's children and lowered again
+     before the container's own comment is written.  Then each comment is
+     judged by the context it lands in. */
+  bool in_flow;
+  size_t flow_indent;
 } yaml_writer_state;
 
 static GTEXT_YAML_Encoding writer_encoding(const GTEXT_YAML_Write_Options *opts) {
@@ -1714,7 +1731,23 @@ static GTEXT_YAML_Status write_inline_comment(
   if (!comment_text_is_writable(comment, false)) return GTEXT_YAML_E_INVALID;
   GTEXT_YAML_Status status = write_str(state, " # ");
   if (status != GTEXT_YAML_OK) return status;
-  return write_str(state, comment);
+  status = write_str(state, comment);
+  if (status != GTEXT_YAML_OK) return status;
+
+  /* In flow context the comment has eaten the rest of the line, and the rest
+     of the line is the collection: the separating "," or the closing "]".
+     7.4 lets a flow collection run over a line break, so this ends the line
+     and the collection carries on below it, indented past the block node that
+     holds it.  Without this the writer emitted "[x # note, y]" and said OK,
+     and reading that back gave "Unterminated flow collection" - on input this
+     library had just parsed, because the parser attaches a comment written
+     inside brackets to the entry before it. */
+  if (state->in_flow) {
+    status = write_str(state, writer_newline(state->opts));
+    if (status != GTEXT_YAML_OK) return status;
+    return write_indent(state, state->flow_indent);
+  }
+  return GTEXT_YAML_OK;
 }
 
 static GTEXT_YAML_Status write_node(
@@ -1972,10 +2005,21 @@ static GTEXT_YAML_Status write_sequence_node(
   if (flow) {
     status = write_str(state, "[");
     if (status != GTEXT_YAML_OK) return status;
+    /* Raised for the children only.  This collection's *own* trailing
+       comment belongs to whatever context holds the collection, which for a
+       nested one is the parent's flow and for the outermost is block - so the
+       flag goes back before that comment is written.  The continuation indent
+       is taken once, on the way into the outermost collection: anything past
+       the block node that holds it is deep enough, and nesting need not make
+       it deeper. */
+    const bool was_in_flow = state->in_flow;
+    const size_t was_flow_indent = state->flow_indent;
+    if (!state->in_flow) state->flow_indent = indent + 2;
+    state->in_flow = true;
     for (size_t i = 0; i < node->as.sequence.count; i++) {
       if (i > 0) {
         status = write_str(state, ", ");
-        if (status != GTEXT_YAML_OK) return status;
+        if (status != GTEXT_YAML_OK) goto seq_flow_done;
       }
       /* ns-flow-seq-entry has no empty alternative, so an entry with nothing
          in it and no properties has to be written "~". */
@@ -1988,9 +2032,12 @@ static GTEXT_YAML_Status write_sequence_node(
           NULL,
           false
       );
-      if (status != GTEXT_YAML_OK) return status;
+      if (status != GTEXT_YAML_OK) goto seq_flow_done;
     }
     status = write_str(state, "]");
+seq_flow_done:
+    state->in_flow = was_in_flow;
+    state->flow_indent = was_flow_indent;
     if (status != GTEXT_YAML_OK) return status;
     state->key_absorbs_colon = false;
     return write_inline_comment(state, node_inline_comment(node));
@@ -2084,10 +2131,21 @@ static GTEXT_YAML_Status write_mapping_node(
   if (flow) {
     status = write_str(state, "{");
     if (status != GTEXT_YAML_OK) return status;
+    /* Raised for the children only.  This collection's *own* trailing
+       comment belongs to whatever context holds the collection, which for a
+       nested one is the parent's flow and for the outermost is block - so the
+       flag goes back before that comment is written.  The continuation indent
+       is taken once, on the way into the outermost collection: anything past
+       the block node that holds it is deep enough, and nesting need not make
+       it deeper. */
+    const bool was_in_flow = state->in_flow;
+    const size_t was_flow_indent = state->flow_indent;
+    if (!state->in_flow) state->flow_indent = indent + 2;
+    state->in_flow = true;
     for (size_t i = 0; i < node->as.mapping.count; i++) {
       if (i > 0) {
         status = write_str(state, ", ");
-        if (status != GTEXT_YAML_OK) return status;
+        if (status != GTEXT_YAML_OK) goto map_flow_done;
       }
       state->empty_scalar_ok = true;
       status = write_node(
@@ -2098,9 +2156,9 @@ static GTEXT_YAML_Status write_mapping_node(
           node->as.mapping.pairs[i].key_tag,
           false
       );
-      if (status != GTEXT_YAML_OK) return status;
+      if (status != GTEXT_YAML_OK) goto map_flow_done;
       status = write_str(state, state->key_absorbs_colon ? " : " : ": ");
-      if (status != GTEXT_YAML_OK) return status;
+      if (status != GTEXT_YAML_OK) goto map_flow_done;
       state->empty_scalar_ok = true;
       status = write_node(
           state,
@@ -2110,9 +2168,12 @@ static GTEXT_YAML_Status write_mapping_node(
           node->as.mapping.pairs[i].value_tag,
           false
       );
-      if (status != GTEXT_YAML_OK) return status;
+      if (status != GTEXT_YAML_OK) goto map_flow_done;
     }
     status = write_str(state, "}");
+map_flow_done:
+    state->in_flow = was_in_flow;
+    state->flow_indent = was_flow_indent;
     if (status != GTEXT_YAML_OK) return status;
     state->key_absorbs_colon = false;
     return write_inline_comment(state, node_inline_comment(node));
@@ -2138,6 +2199,28 @@ static GTEXT_YAML_Status write_mapping_node(
     if (status != GTEXT_YAML_OK) return status;
     status = write_indent(state, indent);
     if (status != GTEXT_YAML_OK) return status;
+
+    /* A key carrying an inline comment cannot be an implicit one.  A comment
+       runs to the end of the line (7.1) and an implicit key has to share its
+       line with the ":" that follows it, so "k # note" and ": v" cannot both
+       be there: the writer emitted "k # note: v", which reads back as a
+       comment and *no entry at all* - a mapping of one going out and a
+       mapping of none coming back, with no error to say so.
+
+       7.4's explicit form is where a key and its colon are on separate lines,
+       which is how the input that produced such a node was spelled:
+
+         ? k # note
+         : v
+
+       so that is what gets written.  The condition is the key's own comment;
+       one deeper inside the key - "[a # c]" - ends its line inside the
+       brackets and is handled where flow collections are. */
+    const bool explicit_key = node_inline_comment(key_node) != NULL;
+    if (explicit_key) {
+      status = write_str(state, "? ");
+      if (status != GTEXT_YAML_OK) return status;
+    }
     state->empty_scalar_ok = true;
     status = write_node(
         state,
@@ -2148,6 +2231,15 @@ static GTEXT_YAML_Status write_mapping_node(
         false
     );
     if (status != GTEXT_YAML_OK) return status;
+    if (explicit_key) {
+      /* The colon starts its own line, so nothing is adjacent to it and
+         key_absorbs_colon has nothing to separate. */
+      status = write_str(state, writer_newline(state->opts));
+      if (status != GTEXT_YAML_OK) return status;
+      status = write_indent(state, indent);
+      if (status != GTEXT_YAML_OK) return status;
+      state->key_absorbs_colon = false;
+    }
     status = write_str(state, state->key_absorbs_colon ? " :" : ":");
     if (status != GTEXT_YAML_OK) return status;
 
@@ -2447,6 +2539,16 @@ struct GTEXT_YAML_Writer {
   char **tag_handles;
   size_t tag_handle_count;
   size_t tag_handle_capacity;
+  /* Whether the next byte written starts a line.  A "#" is a comment only at
+     the start of a line or after white space (7.1); anywhere else it is an
+     ordinary character of the scalar it is written against.  The writer had
+     no idea where it was, wrote "#" straight after a scalar, and the comment
+     became part of the value - "x" with the comment "mid" came out as
+     "x# mid" and read back as the one scalar "x# mid".
+
+     Every byte the streaming writer emits goes through writer_write_bytes(),
+     so that is where this is kept true. */
+  bool at_line_start;
   bool error;
 };
 
@@ -2573,6 +2675,10 @@ static int writer_write_bytes(GTEXT_YAML_Writer *writer,
   if (status != GTEXT_YAML_OK) {
     writer->error = true;
     return 1;
+  }
+  if (len > 0) {
+    const char last = bytes[len - 1];
+    writer->at_line_start = (last == '\n' || last == '\r');
   }
   return 0;
 }
@@ -2945,7 +3051,31 @@ static GTEXT_YAML_Status writer_emit_comment(
   yaml_writer_stack_entry *top = writer_stack_top(writer);
   size_t indent = top ? top->indent : 0;
 
-  if (writer_write_indent(writer, indent) != 0) return GTEXT_YAML_E_WRITE;
+  /* Where the "#" goes depends on where the writer already is, and it used to
+     be written as though that were always the start of a line.  It is not: a
+     comment event arriving after a scalar lands mid-line, the indent was zero
+     at the root, and "- x" then "#" then " mid" ran together into the plain
+     scalar "x# mid".  The comment was not lost, which would have been the
+     smaller fault - it was read back as part of the value.
+
+     The event says which of the two a caller meant.  An inline comment ends
+     the line the writer is on and needs only the white space that makes a
+     "#" a comment; a comment of its own needs a line to be on, so anything
+     already written on this one is ended first. */
+  if (!writer->at_line_start) {
+    if (event->data.comment.inline_comment) {
+      if (writer_write_string(writer, " ") != 0) return GTEXT_YAML_E_WRITE;
+    }
+    else {
+      if (writer_write_string(writer, writer_newline(&writer->opts)) != 0) {
+        return GTEXT_YAML_E_WRITE;
+      }
+      if (writer_write_indent(writer, indent) != 0) return GTEXT_YAML_E_WRITE;
+    }
+  }
+  else if (writer_write_indent(writer, indent) != 0) {
+    return GTEXT_YAML_E_WRITE;
+  }
   if (writer_write_string(writer, "#") != 0) return GTEXT_YAML_E_WRITE;
   if (comment[0] != '\0') {
     if (writer_write_string(writer, " ") != 0) return GTEXT_YAML_E_WRITE;
@@ -3182,6 +3312,7 @@ GTEXT_API GTEXT_YAML_Writer * gtext_yaml_writer_new(
   }
 
   writer->sink = sink;
+  writer->at_line_start = true;
   if (opts) {
     writer->opts = *opts;
   } else {

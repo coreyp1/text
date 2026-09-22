@@ -338,8 +338,18 @@ format page: a preferred scalar style that changed what a scalar *was*, a
 comment written without being checked (a line break in an inline one escaped
 into the document as a second mapping entry), a NUL that stopped `strtoll()`
 where 10.3.2 does not, and a tag checked against a node's text but not
-against its declared type. Two more things it turned up are open questions
-rather than defects, and are on that page too.
+against its declared type. Two more things it turned up were written down as
+open questions rather than defects; both turned out to be defects with
+settled answers after all, and one of them - an inline comment inside a flow
+collection - had been recorded as reachable only by building a document
+through the DOM API, which was wrong. The parser produces the same node from
+`[ x, # note`/`  y ]`, so it was a document this library read, wrote, and then
+refused to read back.
+
+It has since also found the writer's missing **schema**: `0:0` parsed with
+`yaml_1_1` is the integer 0, and the writer quotes it by the 1.2 rule for that
+text, so it reads back as the string. That one is still open, on the format
+page.
 
 Three notes for whoever runs it next. The header is **two bytes** now, not
 one - path and dialect in the first, write options in the second - so a
