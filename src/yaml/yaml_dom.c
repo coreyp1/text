@@ -1029,7 +1029,11 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 	memset(doc, 0, sizeof(*doc));
 	doc->ctx = ctx;
 	doc->root = NULL;
-	doc->options = options ? *options : gtext_yaml_parse_options_default();
+	/* Effective, not raw: a document built through this constructor is handed
+	   to gtext_yaml_to_json_with_options(), which spends max_alias_expansion
+	   as its node budget. A caller passing a zeroed options struct meant "the
+	   defaults" - the header says so - and used to get no budget at all. */
+	doc->options = gtext_yaml_parse_options_effective(options);
 	doc->node_count = 0;
 	doc->document_index = 0;
 	doc->has_directives = false;

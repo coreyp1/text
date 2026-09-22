@@ -160,8 +160,13 @@ typedef struct {
 	 * check and then allocated until malloc() failed.
 	 *
 	 * Taken from the document's max_alias_expansion, which is documented as
-	 * the total alias-expanded node limit and was not consulted here.  0
-	 * means unlimited. */
+	 * the total alias-expanded node limit and was not consulted here.
+	 *
+	 * A document gets its options through
+	 * gtext_yaml_parse_options_effective(), however it was made, and that
+	 * turns a zero into the library default - so the 0 case below is reached
+	 * only by a document whose options were written into the struct directly.
+	 * It still means unlimited when it happens. */
 	size_t nodes_visited;
 	size_t max_nodes;
 } yaml_to_json_context;

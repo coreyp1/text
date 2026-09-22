@@ -227,13 +227,43 @@ Until recently the conversion consulted none of this and allocated until
 limit, check that you get `GTEXT_YAML_E_LIMIT` rather than
 `GTEXT_YAML_E_OOM`: the second means something is expanding without a budget.
 
-### 4. Zero Means Default
+### 4. Zero Means Default, for the Size Limits Only
 
-Setting any limit to `0` uses the library default:
+Setting a size limit to `0` selects the library default:
+
 ```c
-GTEXT_YAML_Parse_Options opts = {0};
-opts.max_depth = 0;  // Uses default (64)
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+opts.max_depth = 0;   // 0 -> the default, which is 256
 ```
+
+**Do not build the struct by zeroing it.** This page used to print exactly
+that, with `opts.max_depth = 0; // Uses default (64)` beside it, and it was
+wrong three times over: the default is 256 and not 64; a zero did not select
+any default but *removed* the limit; and a struct zeroed whole is not the
+defaults even now.
+
+The first two were a library defect and are fixed — `max_depth`,
+`max_total_bytes` and `max_alias_expansion` are resolved against the defaults
+on every path, which is what `GTEXT_YAML_Parse_Options` in the public header
+has always said. Until that fix, this:
+
+```c
+GTEXT_YAML_Parse_Options opts = {0};   /* do not do this */
+```
+
+turned off every limit at once, and a few hundred bytes of nested flow
+sequences then exhausted the stack.
+
+The third is not a defect and will not be fixed, because it cannot be:
+every `bool` in the options struct zeroes to `false`, and `false` is a real
+setting rather than an absent one. A zeroed struct has `validate_utf8` off,
+`resolve_tags` off, `allow_aliases` off and `allow_merge_keys` off — some of
+those stricter than the defaults and some looser, none of them the defaults.
+
+**Start from `gtext_yaml_parse_options_default()` and change what you mean
+to change.** That is the only spelling that means "the defaults", and
+`gtext_yaml_parse_options_safe()` is the hardened starting point for
+untrusted input.
 
 ## Security Best Practices
 

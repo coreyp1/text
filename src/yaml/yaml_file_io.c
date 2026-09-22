@@ -136,8 +136,9 @@ static gtext_file_status yaml_file_slurp(const char * path,
     GTEXT_YAML_Parse_Options * out_effective, char ** out_data,
     size_t * out_len) {
   /* The same resolution the parser itself does, rather than a second copy of
-   * the rule. A max_total_bytes of 0 means no limit here exactly as it does
-   * everywhere else in this library, so it passes straight through. */
+   * the rule - which is why this needed no change when a max_total_bytes of 0
+   * stopped meaning "no limit" and started meaning "the default", as the
+   * public header had said all along. */
   *out_effective = gtext_yaml_parse_options_effective(options);
   return gtext_file_read_all(
       path, out_effective->max_total_bytes, out_data, out_len);

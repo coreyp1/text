@@ -61,12 +61,40 @@ GTEXT_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_default(void)
   return opts;
 }
 
+/* "All size limits use 0 to denote 'use the library default'" - the contract
+ * GTEXT_YAML_Parse_Options states in yaml_core.h, and which nothing
+ * implemented. Every check on these three is written "if (limit > 0 && ...)",
+ * so a zero did not select the default, it removed the limit; and the header's
+ * own suggested spelling, "GTEXT_YAML_Parse_Options opts = {0};", removed all
+ * three at once. A hundred thousand nested flow sequences then ran
+ * resolve_node() off the end of the stack.
+ *
+ * YAML was alone in this. json_get_limit() and csv_get_limit() have always
+ * mapped zero to the default for their formats, so the same field in the same
+ * shape of struct meant opposite things in three sibling parsers.
+ *
+ * YamlLimits.ZeroMeansDefault has asserted this since long before it was
+ * true. It feeds "[1, 2, 3, 4, 5]", which is accepted under every limit and
+ * under none, so the test named for the contract could not tell the two
+ * apart. */
+static size_t yaml_get_limit(size_t configured, size_t fallback) {
+  return configured > 0 ? configured : fallback;
+}
+
 GTEXT_INTERNAL_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_effective(
   const GTEXT_YAML_Parse_Options *opts
 ) {
   GTEXT_YAML_Parse_Options effective = opts
     ? *opts
     : gtext_yaml_parse_options_default();
+
+  const GTEXT_YAML_Parse_Options defaults = gtext_yaml_parse_options_default();
+  effective.max_depth =
+    yaml_get_limit(effective.max_depth, defaults.max_depth);
+  effective.max_total_bytes =
+    yaml_get_limit(effective.max_total_bytes, defaults.max_total_bytes);
+  effective.max_alias_expansion =
+    yaml_get_limit(effective.max_alias_expansion, defaults.max_alias_expansion);
 
   if (effective.mode == GTEXT_YAML_MODE_CONFIG) {
     effective.schema = GTEXT_YAML_SCHEMA_FAILSAFE;

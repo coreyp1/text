@@ -20,6 +20,7 @@
  * passes when nothing fails at all.
  */
 #include <gtest/gtest.h>
+#include <stdint.h>
 #include <string>
 
 extern "C" {
@@ -97,9 +98,40 @@ TEST(YamlDepth, ItIsReportedAsDepthAndNotAsMemory) {
 	gtext_yaml_error_free(&err);
 }
 
-/* Zero means no limit, which is what the field's documentation says. */
-TEST(YamlDepth, ZeroMeansNoLimit) {
-	EXPECT_EQ(ParseStatus(BlockSequence(2000), 0), GTEXT_YAML_OK);
+/* Zero means the library default, not "no limit".
+ *
+ * This test used to assert the opposite, on the stated grounds that it "is
+ * what the field's documentation says". It is not. max_depth carries no
+ * per-field documentation at all; the only sentence in any public header on
+ * the subject is the one over GTEXT_YAML_Parse_Options itself - "All size
+ * limits use 0 to denote 'use the library default'" - and json_core.h spells
+ * the same rule out per field as "0 = default, e.g. 256". The behaviour the
+ * test pinned was the implementation's, and the documentation it cited said
+ * the reverse.
+ *
+ * The cost of the implementation's reading was not academic.
+ * "GTEXT_YAML_Parse_Options opts = {0};" - the spelling the security page
+ * recommended - removed max_depth, max_total_bytes and max_alias_expansion at
+ * once, and a hundred thousand nested flow sequences then ran resolve_node()
+ * off the end of the stack. Under the documented reading the same struct is
+ * refused at 256.
+ *
+ * A caller who wants no limit still has one: SIZE_MAX. There is no spelling
+ * of "the library default" that a caller can reach if zero does not mean it,
+ * which is the asymmetry that settles this. */
+TEST(YamlDepth, ZeroMeansTheDefaultAndNotNoLimit) {
+	const GTEXT_YAML_Parse_Options defaults = gtext_yaml_parse_options_default();
+	ASSERT_LT(defaults.max_depth, 2000u);
+
+	EXPECT_EQ(ParseStatus(BlockSequence(2000), 0), GTEXT_YAML_E_DEPTH);
+	EXPECT_EQ(ParseStatus(BlockSequence(2000), defaults.max_depth),
+		GTEXT_YAML_E_DEPTH);
+
+	/* ...and it is the depth that refuses it, not the options struct. */
+	EXPECT_EQ(ParseStatus(BlockSequence(8), 0), GTEXT_YAML_OK);
+
+	/* Asking for no limit is still possible, just not by saying nothing. */
+	EXPECT_EQ(ParseStatus(BlockSequence(2000), SIZE_MAX), GTEXT_YAML_OK);
 }
 
 /* And the scanner had a second limit nobody set: a fixed 32-entry array for

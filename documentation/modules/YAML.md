@@ -327,11 +327,26 @@ The library provides extensive configuration options for parsing behavior:
 
 ### 3.1 Resource Limits
 
-All limits use `0` to indicate library defaults:
+All three size limits use `0` to indicate library defaults:
 
 - **`max_depth`**: Maximum nesting depth — **Default: 256**
 - **`max_total_bytes`**: Maximum total input size — **Default: 64MB**
 - **`max_alias_expansion`**: Maximum alias expansion count — **Default: 10,000**
+
+That sentence has been in `yaml_core.h` since the struct was written, and
+until recently nothing implemented it. Every check reads
+`if (limit > 0 && ...)`, so a zero did not select the default — it removed
+the limit, and `GTEXT_YAML_Parse_Options opts = {0};` removed all three at
+once. `gtext_yaml_parse_options_effective()` now resolves them, and every
+entry point in the module already went through it. To ask for *no* limit,
+say `SIZE_MAX`.
+
+**A zeroed struct is still not the defaults**, and cannot be: every `bool` in
+it zeroes to `false`, which is a setting rather than an absence, so
+`validate_utf8`, `resolve_tags`, `allow_aliases` and `allow_merge_keys` all
+come out off. Start from `gtext_yaml_parse_options_default()`, or
+`gtext_yaml_parse_options_safe()` for untrusted input, and change what you
+mean to change. See \ref example_yaml_security for the longer version.
 
 **Example: Setting strict limits for untrusted input**
 
