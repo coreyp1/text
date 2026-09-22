@@ -1114,7 +1114,21 @@ sanitizer-help: ## Show help for sanitizer usage
 # "overriding recipe" warnings. The YAML test targets are defined above.
 
 clean: ## Remove all contents of the build directories.
-	-@rm -rvf $(BUILD_DIR)
+# Every tree, not just $(BUILD_DIR).  The sanitizer build is
+# $(BUILD_DIR)-asan - a *sibling* of the ordinary one, not a child - so
+# `rm -rf $(BUILD_DIR)` left it whole while this target's own help text
+# says "directories", plural.  A workspace-wide clean left 55 object files
+# here, and that is the stale-object trap with a clean's authority behind
+# it: somebody who cleans to rule out a stale object has not ruled out the
+# sanitizer one, and `make test-asan` relinks against whatever survived.
+#
+# The glob rather than a list, because the list is the thing that goes
+# stale.  A library grows a tree - -asan here, -tsan and -fuzz elsewhere in
+# the suite - and whoever adds it has no reason to think about a target
+# five hundred lines away.  $(BUILD_DIR)-* covers every suffixed sibling
+# there will ever be, and cannot match the cloned corpora, which are
+# siblings of build/linux rather than of build/linux/release.
+	-@rm -rvf $(BUILD_DIR) $(BUILD_DIR)-*
 
 # Files will be as follows:
 # /usr/local/lib/(SUITE)/
