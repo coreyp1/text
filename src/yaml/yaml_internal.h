@@ -283,7 +283,6 @@ typedef struct yaml_context {
 	   when it is. */
 	const char *decoded_input;
 	size_t decoded_input_len;
-	struct ResolverState *resolver; /* Anchor/alias resolver */
 	size_t node_count;              /* Total nodes allocated (statistics) */
 } yaml_context;
 
@@ -440,7 +439,7 @@ struct GTEXT_YAML_Node {
 
 /* Document structure (root + metadata) */
 struct GTEXT_YAML_Document {
-	yaml_context *ctx;          /* Owns arena and resolver */
+	yaml_context *ctx;          /* Owns the arena */
 	GTEXT_YAML_Node *root;      /* Root node of the document */
 	GTEXT_YAML_Parse_Options options; /* Parse options used */
 	size_t node_count;          /* Total nodes allocated (statistics) */

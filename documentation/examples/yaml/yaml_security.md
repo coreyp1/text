@@ -212,11 +212,15 @@ tree, which is where the limit is spent:
   counts every node it visits against this limit and fails with
   `GTEXT_YAML_E_LIMIT`. Without `allow_resolved_aliases` it refuses alias
   nodes outright, which is the default.
-- The resolver API (`gtext_yaml_resolver_compute_expansion()`) computes the
-  expanded size and reports `GTEXT_YAML_E_LIMIT` before expanding anything.
 - The DOM parser additionally caps the number of alias nodes in a document,
   which is a different quantity: a bomb has few alias references and a large
   expansion, so that cap alone does not stop one.
+
+This list used to carry a third entry, a resolver API that computed the
+expanded size before expanding anything. It was internal, absent from the
+shared library, and called by nothing but its own tests; the whole module has
+since been deleted. If you read that advice, the conversion budget above is
+what to use instead.
 
 Until recently the conversion consulted none of this and allocated until
 `malloc()` failed, returning `GTEXT_YAML_E_OOM`. If you are relying on this

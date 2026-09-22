@@ -36,7 +36,6 @@
 #include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
 #include <ghoti.io/text/yaml/yaml_stream.h>
-#include <ghoti.io/text/yaml/yaml_resolver.h>
 
 /* Forward-declare scanner type in case internal header isn't visible at this
   inclusion point due to include-path differences. */
@@ -103,7 +102,6 @@ struct GTEXT_YAML_Stream {
   size_t total_bytes_consumed;
   size_t current_depth;
   size_t alias_expansion_count;
-  ResolverState *resolver;
   char *pending_anchor;  /* Anchor name to attach to next node (malloc'd, NULL if none) */
   char *pending_tag;  /* Tag to attach to next node (malloc'd, NULL if none) */
   int pending_tag_line; /* 1-based line pending_tag was written on */
@@ -646,13 +644,7 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   s->pending_prop_min_col = -1;
   s->pending_prop_min_line = 0;
   s->scanner = gtext_yaml_scanner_new();
-  s->resolver = gtext_yaml_resolver_new(&s->opts);
   if (!s->scanner) { free(s); return NULL; }
-  if (!s->resolver) {
-    gtext_yaml_scanner_free(s->scanner);
-    free(s);
-    return NULL;
-  }
   return s;
 }
 
@@ -660,7 +652,6 @@ GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s)
 {
   if (!s) return;
   if (s->scanner) gtext_yaml_scanner_free(s->scanner);
-  if (s->resolver) gtext_yaml_resolver_free(s->resolver);
   if (s->pending_anchor) free(s->pending_anchor);
   if (s->pending_tag) free(s->pending_tag);
   if (s->outer_anchor) free(s->outer_anchor);

@@ -27,12 +27,18 @@
 
 #include <ghoti.io/text/macros.h>
 #include "yaml_internal.h"
-#include <ghoti.io/text/yaml/yaml_resolver.h>
 #include <stdlib.h>
 
-/* Create new context with arena */
+/* Create new context with arena.
+ *
+ * calloc() rather than malloc(): every field below is set by hand, so the
+ * zeroing is redundant today and is the whole safety margin the moment a
+ * field is added. That is not hypothetical here - this function used to set
+ * a "resolver" field to NULL with a comment saying it would be created when
+ * needed during parsing, and nothing ever created it, so that initialiser
+ * was the only thing between the struct and a wild pointer. */
 yaml_context *yaml_context_new(void) {
-	yaml_context *ctx = (yaml_context *)malloc(sizeof(yaml_context));
+	yaml_context *ctx = (yaml_context *)calloc(1, sizeof(yaml_context));
 	if (!ctx) return NULL;
 	
 	/* Create arena */
@@ -44,7 +50,6 @@ yaml_context *yaml_context_new(void) {
 	
 	ctx->decoded_input = NULL;
 	ctx->decoded_input_len = 0;
-	ctx->resolver = NULL;  /* Created when needed during parsing */
 	ctx->node_count = 0;
 	
 	return ctx;
@@ -53,11 +58,6 @@ yaml_context *yaml_context_new(void) {
 /* Free context and arena */
 void yaml_context_free(yaml_context *ctx) {
 	if (!ctx) return;
-	
-	/* Free resolver if created */
-	if (ctx->resolver) {
-		gtext_yaml_resolver_free(ctx->resolver);
-	}
 	
 	/* Free arena (frees all nodes) */
 	yaml_arena_free(ctx->arena);

@@ -733,10 +733,14 @@ TEST(YamlToJson, LargeIntPolicy) {
 // GTEXT_YAML_E_OOM; the time it took scaled with how much memory the process
 // was allowed, which is the signature of no budget at all.
 //
-// The library had the right accounting in the resolver, and a test for it
-// (YamlAliasExponential.DFSLimit), but that test drives ResolverState
-// directly.  The path a caller actually takes - gtext_yaml_parse() followed by
-// gtext_yaml_to_json_with_options() - never consulted it.
+// The library had the right accounting in a resolver module, and a test for it
+// (YamlAliasExponential.DFSLimit), but that test drove ResolverState directly
+// and the path a caller actually takes - gtext_yaml_parse() followed by
+// gtext_yaml_to_json_with_options() - never consulted it.  The budget below is
+// what replaced it.  That module has since been deleted: four of its six
+// functions had no caller anywhere in src/, and the other two were called only
+// to build an object nothing ever read.  These three tests are the coverage it
+// was credited with, asked of the code that answers.
 // ---------------------------------------------------------------------------
 
 namespace {

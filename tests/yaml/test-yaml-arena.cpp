@@ -233,7 +233,6 @@ TEST(YamlContext, CreateDestroy) {
 	EXPECT_NE(ctx->arena, nullptr);
 	EXPECT_EQ(ctx->decoded_input, nullptr);
 	EXPECT_EQ(ctx->decoded_input_len, 0);
-	EXPECT_EQ(ctx->resolver, nullptr);
 	EXPECT_EQ(ctx->node_count, 0);
 	
 	yaml_context_free(ctx);

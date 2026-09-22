@@ -750,14 +750,19 @@ itself is the one that has to expect a cycle, and
 `gtext_yaml_node_anchor()` on each collection is what tells it where one can
 close.
 
-There is a cycle detector, and it is not on this path.
-`gtext_yaml_resolver_compute_expansion()` walks anchors registered by name
-and returns `GTEXT_YAML_E_INVALID` on a genuine cycle, which it can see
-because names registered through that API *can* be made mutually
-referential in a way a parsed document cannot. It is `GTEXT_INTERNAL_API`
-and nothing under `src/` calls it: the parser does its own alias accounting,
-and the only callers are the two tests named after it. Do not read this
-section's guarantee off that function.
+There used to be a cycle detector here, and it was never on this path.
+`gtext_yaml_resolver_compute_expansion()` walked anchors registered by name
+and returned `GTEXT_YAML_E_INVALID` on a genuine cycle, which it could see
+because names registered through *that* API can be made mutually referential
+in a way a parsed document cannot. Four of the resolver module's six
+functions had no caller anywhere under `src/`, and the other two were called
+only to build an object nothing ever read; its only exercise was four test
+files that drove it directly. It has been deleted. The accounting the
+library actually does is in three places that a caller reaches — the
+streaming parser's `alias_expansion_count`, the DOM parser's check in
+`resolve_aliases()`, and the conversion budget above — and the alias-bomb
+tests in `tests/yaml/test-yaml-to-json.cpp` are the coverage the resolver was
+credited with, asked of the code that answers.
 
 ---
 
@@ -1218,9 +1223,9 @@ See `<ghoti.io/text/yaml/yaml_core.h>` for complete type definitions and enumera
 
 ## 16. Thread Safety
 
-No YAML object is thread-safe. A document, a parser, a stream, a pull reader,
-a resolver and a writer each belong to one thread at a time; two that were
-created separately share nothing and may be used concurrently. A document that
+No YAML object is thread-safe. A document, a parser, a stream, a pull reader
+and a writer each belong to one thread at a time; two that were created
+separately share nothing and may be used concurrently. A document that
 no thread is modifying may be read from several at once.
 
 The read accessors really are reads. `gtext_yaml_mapping_get()` is a linear
