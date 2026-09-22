@@ -333,6 +333,20 @@ All three size limits use `0` to indicate library defaults:
 - **`max_total_bytes`**: Maximum total input size — **Default: 64MB**
 - **`max_alias_expansion`**: Maximum alias expansion count — **Default: 10,000**
 
+`max_depth` bounds the parser, the DOM writer and `gtext_yaml_node_clone()`.
+The last two matter because the DOM constructors do not consult it — they have
+no parent pointers, so asking a node how deep it sits would cost a walk on
+every append — and a document built through the API can therefore nest as far
+as memory allows.
+
+`SIZE_MAX` removes the limit, and removing it is safe. That was not always
+true: the three walks recursed on the C stack at roughly 344 bytes a level
+while resolving, 228 in the DOM writer and 113 in the clone, so "no limit"
+meant a segmentation fault at about 24,000 levels resolving, 37,000 writing
+and 74,000 cloning. Each keeps its stack on the heap now, so depth costs
+memory rather than a frame, and `max_depth` is a policy about what you are
+willing to accept rather than a guard against your own process dying.
+
 That sentence has been in `yaml_core.h` since the struct was written, and
 until recently nothing implemented it. Every check reads
 `if (limit > 0 && ...)`, so a zero did not select the default — it removed
@@ -1290,13 +1304,20 @@ Part of the ghoti.io text library.
 
 **Last Updated:** September 22, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 683 YAML test cases across 96 binaries, of 1,591 across the
+**Test count:** 713 YAML test cases across 100 binaries, of 1,625 across the
 suite, all passing.
 
 Both figures count each binary once. `make test` has three group targets
 (`Text tests`, `JSON tests`, `CSV tests`) that re-run binaries the per-target
-rules have already run, so summing every `[  PASSED  ]` line gives 2,432 -
-841 more than there are tests. The rule is to count only what follows a
-single-token `### Running <name> ###` header, and to note that 108 such
-headers appear while 107 report a total: `testHeaders` is a plain C program
+rules have already run, so summing every `[  PASSED  ]` line gives 2,457 -
+832 more than there are tests. The rule is to count only what follows a
+single-token `### Running <name> ###` header, and to note that 112 such
+headers appear while 111 report a total: `testHeaders` is a plain C program
 rather than a gtest binary and prints none.
+
+`make test` exits non-zero when any suite fails, which is worth stating
+because it has not always been true and because the log cannot be trusted to
+say so on its own: a test that *crashes* prints no `[  FAILED  ]` line at
+all, so a count of those lines reads a segfaulting suite as green. Measured -
+a planted null dereference gives exit 2 and names the suite, with zero
+`[  FAILED  ]` lines in the output.

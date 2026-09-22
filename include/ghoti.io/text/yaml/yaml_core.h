@@ -331,12 +331,13 @@ typedef struct {
    * nest as far as memory allows. The limit is spent where the depth is
    * already known, which is on the way back out.
    *
-   * Those walks recurse on the C stack, at roughly 344 bytes a level while
-   * resolving, 228 in the DOM writer and 113 in the clone. The default of
-   * 256 is about 86 KiB at the worst of those - comfortable on a main
-   * thread, worth checking against a small thread stack. A value of SIZE_MAX
-   * removes the limit and hands you the stack: a document deep enough will
-   * then exhaust it rather than being refused. */
+   * A value of SIZE_MAX removes the limit, and removing it is safe: none of
+   * these walks uses the C stack. They used to - roughly 344 bytes a level
+   * while resolving, 228 in the DOM writer and 113 in the clone - so
+   * SIZE_MAX was a way to ask for a segmentation fault and get one, at about
+   * 24,000 levels resolving, 37,000 writing and 74,000 cloning. Each keeps
+   * its stack on the heap now, so depth costs memory rather than a frame and
+   * this limit is a policy rather than a guard rail. */
   size_t max_depth;
   size_t max_total_bytes;
   size_t max_alias_expansion;
