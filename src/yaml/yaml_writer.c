@@ -2078,15 +2078,117 @@ static GTEXT_YAML_Status write_scalar_node(
   return write_inline_comment(state, node_inline_comment(node));
 }
 
-static GTEXT_YAML_Status write_sequence_node(
-    yaml_writer_state * state,
-    const GTEXT_YAML_Node * node,
-    size_t indent,
-    bool flow,
-  const char * tag_override,
-  bool leading_newline) {
+/* The writer's stack, on the heap.
+ *
+ * This was a recursive descent: write_sequence_node() and
+ * write_mapping_node() called write_node() for each child, at about 228 bytes
+ * of C stack a level, so a document past roughly 37000 levels ended the
+ * process. max_depth bounds that, and SIZE_MAX is the documented way to say
+ * "no bound, I own the stack" - which made SIZE_MAX a way to ask for a
+ * segmentation fault and get one.
+ *
+ * It is the hardest of the three walks to convert, because a collection
+ * emits text *between* its children rather than only before or after them:
+ * a separator, an indent, a "-" or a ":", and for a mapping a colon whose
+ * spelling depends on what the key turned out to be. So a frame carries the
+ * step it is up to, and each step emits its share and then asks for one
+ * child. The emission itself is unchanged, line for line; only the control
+ * flow around it moved.
+ *
+ * The flow-collection arms displace state->in_flow and state->flow_indent
+ * for the length of their children and put them back afterwards - which the
+ * recursion did with a local and a goto. Each frame holds what it displaced,
+ * and an error unwinds the stack restoring them innermost first, which is
+ * the order the returns used to happen in. */
+typedef enum {
+  WS_ENTER = 0,   /* properties, any opening bracket, per-type checks */
+  WS_SEQ_ITEM,    /* one sequence child */
+  WS_MAP_KEY,     /* one mapping key */
+  WS_MAP_VALUE,   /* that key's value */
+  WS_CLOSE        /* a flow collection's closing bracket and comment */
+} write_step;
+
+typedef struct {
+  const GTEXT_YAML_Node * node;
+  size_t indent;
+  bool flow;                /* as handed in, before collection_is_flow() */
+  const char * tag_override;
+  bool leading_newline;
+
+  write_step step;
+  size_t i;
+
+  bool coll_flow;           /* what collection_is_flow() decided */
+  bool saved_flow;          /* whether the two fields below are live */
+  bool was_in_flow;
+  size_t was_flow_indent;
+  bool explicit_key;        /* block mapping: this pair takes the "? k" form */
+} write_frame;
+
+typedef struct {
+  write_frame * items;
+  size_t count;
+  size_t capacity;
+} write_stack;
+
+static bool write_stack_push(
+    write_stack * stack, const GTEXT_YAML_Node * node, size_t indent,
+    bool flow, const char * tag_override, bool leading_newline) {
+  if (stack->count == stack->capacity) {
+    size_t new_capacity = stack->capacity == 0 ? 32 : stack->capacity * 2;
+    write_frame * items = (write_frame *)realloc(
+        stack->items, new_capacity * sizeof(write_frame));
+    if (!items) return false;
+    stack->items = items;
+    stack->capacity = new_capacity;
+  }
+  write_frame * f = &stack->items[stack->count++];
+  f->node = node;
+  f->indent = indent;
+  f->flow = flow;
+  f->tag_override = tag_override;
+  f->leading_newline = leading_newline;
+  f->step = WS_ENTER;
+  f->i = 0;
+  f->coll_flow = false;
+  f->saved_flow = false;
+  f->was_in_flow = false;
+  f->was_flow_indent = 0;
+  f->explicit_key = false;
+  return true;
+}
+
+/* max_depth, checked where the recursion checked it.
+ *
+ * A node sitting at nesting level d was refused when d >= max_depth, and d is
+ * how many frames are already on the stack when it is pushed - so the test
+ * reads the same and fires on the same documents. A document that was parsed
+ * has already been held to this once; it is here for the other half, since
+ * the DOM constructors do not consult max_depth at all. */
+static GTEXT_YAML_Status write_push_child(
+    yaml_writer_state * state, write_stack * stack,
+    const GTEXT_YAML_Node * child, size_t indent, bool flow,
+    const char * tag_override, bool leading_newline) {
+  if (state->max_depth > 0 && stack->count >= state->max_depth) {
+    return GTEXT_YAML_E_DEPTH;
+  }
+  if (!write_stack_push(
+          stack, child, indent, flow, tag_override, leading_newline)) {
+    return GTEXT_YAML_E_OOM;
+  }
+  return GTEXT_YAML_OK;
+}
+
+/* Everything a sequence does before its first child. */
+static GTEXT_YAML_Status write_enter_sequence(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const size_t indent = f->indent;
+  const char * tag_override = f->tag_override;
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
-  flow = collection_is_flow(state, node, tag_override, flow);
+
+  f->coll_flow = collection_is_flow(state, node, tag_override, f->flow);
 
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
@@ -2105,8 +2207,7 @@ static GTEXT_YAML_Status write_sequence_node(
   }
   status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
-
-  if (flow) {
+  if (f->coll_flow) {
     status = write_str(state, "[");
     if (status != GTEXT_YAML_OK) return status;
     /* Raised for the children only.  This collection's *own* trailing
@@ -2116,42 +2217,57 @@ static GTEXT_YAML_Status write_sequence_node(
        is taken once, on the way into the outermost collection: anything past
        the block node that holds it is deep enough, and nesting need not make
        it deeper. */
-    const bool was_in_flow = state->in_flow;
-    const size_t was_flow_indent = state->flow_indent;
+    f->saved_flow = true;
+    f->was_in_flow = state->in_flow;
+    f->was_flow_indent = state->flow_indent;
     if (!state->in_flow) state->flow_indent = indent + 2;
     state->in_flow = true;
-    for (size_t i = 0; i < node->as.sequence.count; i++) {
-      if (i > 0) {
-        status = write_str(state, ", ");
-        if (status != GTEXT_YAML_OK) goto seq_flow_done;
-      }
-      /* ns-flow-seq-entry has no empty alternative, so an entry with nothing
-         in it and no properties has to be written "~". */
-      state->empty_scalar_ok = false;
-      status = write_node(
-          state,
-          node->as.sequence.children[i],
-          indent,
-          true,
-          NULL,
-          false
-      );
-      if (status != GTEXT_YAML_OK) goto seq_flow_done;
-    }
-    status = write_str(state, "]");
-seq_flow_done:
-    state->in_flow = was_in_flow;
-    state->flow_indent = was_flow_indent;
-    if (status != GTEXT_YAML_OK) return status;
-    state->key_absorbs_colon = false;
-    return write_inline_comment(state, node_inline_comment(node));
+    f->step = WS_SEQ_ITEM;
+    return GTEXT_YAML_OK;
   }
 
   if (node->as.sequence.count == 0) {
+    stack->count--;
     return write_str(state, "[]");
   }
+  f->step = WS_SEQ_ITEM;
+  return GTEXT_YAML_OK;
+}
 
-  for (size_t i = 0; i < node->as.sequence.count; i++) {
+/* One sequence child, in either spelling. */
+static GTEXT_YAML_Status write_sequence_item(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const size_t indent = f->indent;
+  const bool leading_newline = f->leading_newline;
+  const size_t i = f->i;
+  GTEXT_YAML_Status status = GTEXT_YAML_OK;
+
+  if (i >= node->as.sequence.count) {
+    if (f->coll_flow) {
+      f->step = WS_CLOSE;
+      return GTEXT_YAML_OK;
+    }
+    stack->count--;
+    return GTEXT_YAML_OK;
+  }
+  f->i = i + 1;
+
+  if (f->coll_flow) {
+    if (i > 0) {
+      status = write_str(state, ", ");
+      if (status != GTEXT_YAML_OK) return status;
+    }
+    /* ns-flow-seq-entry has no empty alternative, so an entry with nothing
+       in it and no properties has to be written "~". */
+    state->empty_scalar_ok = false;
+    return write_push_child(
+        state, stack, node->as.sequence.children[i], indent, true, NULL,
+        false);
+  }
+
+  {
     const GTEXT_YAML_Node *child = node->as.sequence.children[i];
     const char *child_comment = node_leading_comment(child);
     if (i > 0 || leading_newline) {
@@ -2175,42 +2291,31 @@ seq_flow_done:
     if (node_opens_block(state, child, NULL)) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
-        status = write_node(
-          state,
-          child,
-          indent + (size_t)writer_indent_spaces(state->opts),
-          false,
-          NULL,
-          false
-        );
-    } else {
-      status = write_str(
-          state, node_writes_nothing(state, child, NULL) ? "" : " ");
-      if (status != GTEXT_YAML_OK) return status;
-        status = write_node(
-          state,
-          child,
-          indent + (size_t)writer_indent_spaces(state->opts),
-        !node_scalar_block_style(child),
-          NULL,
-          false
-        );
+      return write_push_child(
+          state, stack, child,
+          indent + (size_t)writer_indent_spaces(state->opts), false, NULL,
+          false);
     }
+    status = write_str(
+        state, node_writes_nothing(state, child, NULL) ? "" : " ");
     if (status != GTEXT_YAML_OK) return status;
+    return write_push_child(
+        state, stack, child,
+        indent + (size_t)writer_indent_spaces(state->opts),
+        !node_scalar_block_style(child), NULL, false);
   }
-
-  return GTEXT_YAML_OK;
 }
 
-static GTEXT_YAML_Status write_mapping_node(
-    yaml_writer_state * state,
-    const GTEXT_YAML_Node * node,
-    size_t indent,
-    bool flow,
-  const char * tag_override,
-  bool leading_newline) {
+/* Everything a mapping does before its first key. */
+static GTEXT_YAML_Status write_enter_mapping(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const size_t indent = f->indent;
+  const char * tag_override = f->tag_override;
   GTEXT_YAML_Status status = GTEXT_YAML_OK;
-  flow = collection_is_flow(state, node, tag_override, flow);
+
+  f->coll_flow = collection_is_flow(state, node, tag_override, f->flow);
 
   const char *resolved_tag = tag_override;
   status = resolve_custom_write_tag(state, node, tag_override, &resolved_tag);
@@ -2232,62 +2337,58 @@ static GTEXT_YAML_Status write_mapping_node(
   status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
 
-  if (flow) {
+  if (f->coll_flow) {
     status = write_str(state, "{");
     if (status != GTEXT_YAML_OK) return status;
-    /* Raised for the children only.  This collection's *own* trailing
-       comment belongs to whatever context holds the collection, which for a
-       nested one is the parent's flow and for the outermost is block - so the
-       flag goes back before that comment is written.  The continuation indent
-       is taken once, on the way into the outermost collection: anything past
-       the block node that holds it is deep enough, and nesting need not make
-       it deeper. */
-    const bool was_in_flow = state->in_flow;
-    const size_t was_flow_indent = state->flow_indent;
+    /* The same displacement, and the same reason, as a flow sequence. */
+    f->saved_flow = true;
+    f->was_in_flow = state->in_flow;
+    f->was_flow_indent = state->flow_indent;
     if (!state->in_flow) state->flow_indent = indent + 2;
     state->in_flow = true;
-    for (size_t i = 0; i < node->as.mapping.count; i++) {
-      if (i > 0) {
-        status = write_str(state, ", ");
-        if (status != GTEXT_YAML_OK) goto map_flow_done;
-      }
-      state->empty_scalar_ok = true;
-      status = write_node(
-          state,
-          node->as.mapping.pairs[i].key,
-          indent,
-          true,
-          node->as.mapping.pairs[i].key_tag,
-          false
-      );
-      if (status != GTEXT_YAML_OK) goto map_flow_done;
-      status = write_str(state, state->key_absorbs_colon ? " : " : ": ");
-      if (status != GTEXT_YAML_OK) goto map_flow_done;
-      state->empty_scalar_ok = true;
-      status = write_node(
-          state,
-          node->as.mapping.pairs[i].value,
-          indent,
-          true,
-          node->as.mapping.pairs[i].value_tag,
-          false
-      );
-      if (status != GTEXT_YAML_OK) goto map_flow_done;
-    }
-    status = write_str(state, "}");
-map_flow_done:
-    state->in_flow = was_in_flow;
-    state->flow_indent = was_flow_indent;
-    if (status != GTEXT_YAML_OK) return status;
-    state->key_absorbs_colon = false;
-    return write_inline_comment(state, node_inline_comment(node));
+    f->step = WS_MAP_KEY;
+    return GTEXT_YAML_OK;
   }
 
   if (node->as.mapping.count == 0) {
+    stack->count--;
     return write_str(state, "{}");
   }
+  f->step = WS_MAP_KEY;
+  return GTEXT_YAML_OK;
+}
 
-  for (size_t i = 0; i < node->as.mapping.count; i++) {
+static GTEXT_YAML_Status write_mapping_key(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const size_t indent = f->indent;
+  const bool leading_newline = f->leading_newline;
+  const size_t i = f->i;
+  GTEXT_YAML_Status status = GTEXT_YAML_OK;
+
+  if (i >= node->as.mapping.count) {
+    if (f->coll_flow) {
+      f->step = WS_CLOSE;
+      return GTEXT_YAML_OK;
+    }
+    stack->count--;
+    return GTEXT_YAML_OK;
+  }
+  f->step = WS_MAP_VALUE;
+
+  if (f->coll_flow) {
+    if (i > 0) {
+      status = write_str(state, ", ");
+      if (status != GTEXT_YAML_OK) return status;
+    }
+    state->empty_scalar_ok = true;
+    return write_push_child(
+        state, stack, node->as.mapping.pairs[i].key, indent, true,
+        node->as.mapping.pairs[i].key_tag, false);
+  }
+
+  {
     const GTEXT_YAML_Node *key_node = node->as.mapping.pairs[i].key;
     const char *key_comment = node_leading_comment(key_node);
     if (i > 0 || leading_newline) {
@@ -2320,66 +2421,92 @@ map_flow_done:
        so that is what gets written.  The condition is the key's own comment;
        one deeper inside the key - "[a # c]" - ends its line inside the
        brackets and is handled where flow collections are. */
-    const bool explicit_key = node_inline_comment(key_node) != NULL;
-    if (explicit_key) {
+    f->explicit_key = node_inline_comment(key_node) != NULL;
+    if (f->explicit_key) {
       status = write_str(state, "? ");
       if (status != GTEXT_YAML_OK) return status;
     }
     state->empty_scalar_ok = true;
-    status = write_node(
-        state,
-        key_node,
-        indent,
-        true,
-        node->as.mapping.pairs[i].key_tag,
-        false
-    );
-    if (status != GTEXT_YAML_OK) return status;
-    if (explicit_key) {
-      /* The colon starts its own line, so nothing is adjacent to it and
-         key_absorbs_colon has nothing to separate. */
-      status = write_str(state, writer_newline(state->opts));
-      if (status != GTEXT_YAML_OK) return status;
-      status = write_indent(state, indent);
-      if (status != GTEXT_YAML_OK) return status;
-      state->key_absorbs_colon = false;
-    }
-    status = write_str(state, state->key_absorbs_colon ? " :" : ":");
-    if (status != GTEXT_YAML_OK) return status;
+    return write_push_child(
+        state, stack, key_node, indent, true,
+        node->as.mapping.pairs[i].key_tag, false);
+  }
+}
 
+static GTEXT_YAML_Status write_mapping_value(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const size_t indent = f->indent;
+  const size_t i = f->i;
+  const bool explicit_key = f->explicit_key;
+  GTEXT_YAML_Status status = GTEXT_YAML_OK;
+
+  f->i = i + 1;
+  f->step = WS_MAP_KEY;
+
+  if (f->coll_flow) {
+    status = write_str(state, state->key_absorbs_colon ? " : " : ": ");
+    if (status != GTEXT_YAML_OK) return status;
+    state->empty_scalar_ok = true;
+    return write_push_child(
+        state, stack, node->as.mapping.pairs[i].value, indent, true,
+        node->as.mapping.pairs[i].value_tag, false);
+  }
+
+  if (explicit_key) {
+    /* The colon starts its own line, so nothing is adjacent to it and
+       key_absorbs_colon has nothing to separate. */
+    status = write_str(state, writer_newline(state->opts));
+    if (status != GTEXT_YAML_OK) return status;
+    status = write_indent(state, indent);
+    if (status != GTEXT_YAML_OK) return status;
+    state->key_absorbs_colon = false;
+  }
+  status = write_str(state, state->key_absorbs_colon ? " :" : ":");
+  if (status != GTEXT_YAML_OK) return status;
+
+  {
     const GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
     state->block_parent_indent = (int)indent;
     state->empty_scalar_ok = true;
     if (node_opens_block(state, value, node->as.mapping.pairs[i].value_tag)) {
       status = write_str(state, writer_newline(state->opts));
       if (status != GTEXT_YAML_OK) return status;
-        status = write_node(
-          state,
-          value,
-          indent + (size_t)writer_indent_spaces(state->opts),
-          false,
-          node->as.mapping.pairs[i].value_tag,
-          false
-        );
-    } else {
-      status = write_str(
-          state,
-          node_writes_nothing(state, value, node->as.mapping.pairs[i].value_tag)
-              ? "" : " ");
-      if (status != GTEXT_YAML_OK) return status;
-        status = write_node(
-          state,
-          value,
-          indent + (size_t)writer_indent_spaces(state->opts),
-        !node_scalar_block_style(value),
-          node->as.mapping.pairs[i].value_tag,
-          false
-        );
+      return write_push_child(
+          state, stack, value,
+          indent + (size_t)writer_indent_spaces(state->opts), false,
+          node->as.mapping.pairs[i].value_tag, false);
     }
+    status = write_str(
+        state,
+        node_writes_nothing(state, value, node->as.mapping.pairs[i].value_tag)
+            ? "" : " ");
     if (status != GTEXT_YAML_OK) return status;
+    return write_push_child(
+        state, stack, value,
+        indent + (size_t)writer_indent_spaces(state->opts),
+        !node_scalar_block_style(value),
+        node->as.mapping.pairs[i].value_tag, false);
   }
+}
 
-  return GTEXT_YAML_OK;
+/* A flow collection's closing bracket, its restores, and its own comment. */
+static GTEXT_YAML_Status write_close_flow(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
+  const bool is_sequence = node->type == GTEXT_YAML_SEQUENCE
+      || node->type == GTEXT_YAML_OMAP || node->type == GTEXT_YAML_PAIRS;
+  GTEXT_YAML_Status status = write_str(state, is_sequence ? "]" : "}");
+
+  state->in_flow = f->was_in_flow;
+  state->flow_indent = f->was_flow_indent;
+  f->saved_flow = false;
+  stack->count--;
+  if (status != GTEXT_YAML_OK) return status;
+  state->key_absorbs_colon = false;
+  return write_inline_comment(state, node_inline_comment(node));
 }
 
 static GTEXT_YAML_Status write_alias_node(
@@ -2401,21 +2528,65 @@ static GTEXT_YAML_Status write_alias_node(
   return write_inline_comment(state, node_inline_comment(node));
 }
 
-static GTEXT_YAML_Status write_node_at_depth(
-    yaml_writer_state * state,
-    const GTEXT_YAML_Node * node,
-    size_t indent,
-    bool flow,
-    const char * tag_override,
-    bool leading_newline);
+/* One step of the walk: advance the top frame, which may finish it or ask
+   for a child. Never holds a frame pointer across a push, because a push can
+   move the array. */
+static GTEXT_YAML_Status write_advance(
+    yaml_writer_state * state, write_stack * stack) {
+  write_frame * f = &stack->items[stack->count - 1];
+  const GTEXT_YAML_Node * node = f->node;
 
-/* max_depth, enforced on the way out as well as on the way in.
+  switch (f->step) {
+    case WS_ENTER:
+      if (!node) {
+        stack->count--;
+        return GTEXT_YAML_E_INVALID;
+      }
+      state->key_absorbs_colon = false;
+      switch (node->type) {
+        case GTEXT_YAML_STRING:
+        case GTEXT_YAML_BOOL:
+        case GTEXT_YAML_INT:
+        case GTEXT_YAML_FLOAT:
+        case GTEXT_YAML_NULL: {
+          GTEXT_YAML_Status status = write_scalar_node(
+              state, node, f->indent, f->flow, f->tag_override);
+          stack->count--;
+          return status;
+        }
+        case GTEXT_YAML_SEQUENCE:
+        case GTEXT_YAML_OMAP:
+        case GTEXT_YAML_PAIRS:
+          return write_enter_sequence(state, stack);
+        case GTEXT_YAML_MAPPING:
+        case GTEXT_YAML_SET:
+          return write_enter_mapping(state, stack);
+        case GTEXT_YAML_ALIAS: {
+          GTEXT_YAML_Status status = write_alias_node(state, node);
+          stack->count--;
+          return status;
+        }
+        default:
+          stack->count--;
+          return GTEXT_YAML_E_INVALID;
+      }
+    case WS_SEQ_ITEM:
+      return write_sequence_item(state, stack);
+    case WS_MAP_KEY:
+      return write_mapping_key(state, stack);
+    case WS_MAP_VALUE:
+      return write_mapping_value(state, stack);
+    case WS_CLOSE:
+    default:
+      return write_close_flow(state, stack);
+  }
+}
+
+/* Write a node and everything under it.
  *
- * A document that was parsed has already been held to this once, so for that
- * half of the library this check never fires. It is here for the other half:
- * the DOM constructors do not consult max_depth at all - they have no parent
- * pointers, so asking a node how deep it sits costs a walk per append - which
- * left the depth of a built document bounded by nothing but the stack. */
+ * Callers still see the signature the recursion had; what changed is that
+ * the nesting lives in a heap array rather than in C frames, so a document
+ * the caller has said may be any depth costs memory instead of the process. */
 static GTEXT_YAML_Status write_node(
     yaml_writer_state * state,
     const GTEXT_YAML_Node * node,
@@ -2423,54 +2594,26 @@ static GTEXT_YAML_Status write_node(
     bool flow,
     const char * tag_override,
     bool leading_newline) {
-  GTEXT_YAML_Status status;
+  write_stack stack = {NULL, 0, 0};
+  GTEXT_YAML_Status status = write_push_child(
+      state, &stack, node, indent, flow, tag_override, leading_newline);
 
-  if (state->max_depth > 0 && state->depth >= state->max_depth) {
-    return GTEXT_YAML_E_DEPTH;
+  while (status == GTEXT_YAML_OK && stack.count > 0) {
+    status = write_advance(state, &stack);
   }
 
-  state->depth++;
-  status = write_node_at_depth(
-      state, node, indent, flow, tag_override, leading_newline);
-  state->depth--;
+  /* An error leaves frames standing, and a flow collection's frame is
+     holding the in_flow state it displaced. Innermost first, which is the
+     order the returns used to unwind in. */
+  while (stack.count > 0) {
+    write_frame * f = &stack.items[--stack.count];
+    if (f->saved_flow) {
+      state->in_flow = f->was_in_flow;
+      state->flow_indent = f->was_flow_indent;
+    }
+  }
+  free(stack.items);
   return status;
-}
-
-/* The body. Every recursive call goes through write_node() rather than
-   coming here directly, so the depth accounting has exactly one home and no
-   early return can skip it. */
-static GTEXT_YAML_Status write_node_at_depth(
-    yaml_writer_state * state,
-    const GTEXT_YAML_Node * node,
-    size_t indent,
-    bool flow,
-    const char * tag_override,
-    bool leading_newline) {
-  if (!node) {
-    return GTEXT_YAML_E_INVALID;
-  }
-
-  state->key_absorbs_colon = false;
-
-  switch (node->type) {
-    case GTEXT_YAML_STRING:
-    case GTEXT_YAML_BOOL:
-    case GTEXT_YAML_INT:
-    case GTEXT_YAML_FLOAT:
-    case GTEXT_YAML_NULL:
-      return write_scalar_node(state, node, indent, flow, tag_override);
-    case GTEXT_YAML_SEQUENCE:
-    case GTEXT_YAML_OMAP:
-    case GTEXT_YAML_PAIRS:
-      return write_sequence_node(state, node, indent, flow, tag_override, leading_newline);
-    case GTEXT_YAML_MAPPING:
-    case GTEXT_YAML_SET:
-      return write_mapping_node(state, node, indent, flow, tag_override, leading_newline);
-    case GTEXT_YAML_ALIAS:
-      return write_alias_node(state, node);
-    default:
-      return GTEXT_YAML_E_INVALID;
-  }
 }
 
 GTEXT_API GTEXT_YAML_Status gtext_yaml_write_document(

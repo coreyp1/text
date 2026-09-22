@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <algorithm>
 #include <string>
 
 extern "C" {
@@ -188,6 +189,40 @@ TEST(YamlBuiltDepth, AnUnboundedCloneDoesNotUseTheCStack) {
 	ASSERT_NE(copy, nullptr);
 	EXPECT_EQ(MeasureDepth(copy), depth)
 		<< "the clone came back shallower than what it copied";
+
+	gtext_yaml_free(doc);
+}
+
+/* The writer's half of the same guarantee.
+   
+   write_node() recursed at about 228 bytes a level, so a built document past
+   roughly 37000 levels took the process down on the usual 8 MiB - and the
+   writer is the half a caller reaches without parsing anything.
+   
+   Written in flow style on purpose: block style indents two spaces a level,
+   so 100000 levels of it is some ten gigabytes of output, and this test would
+   be measuring the sink rather than the walk. */
+TEST(YamlBuiltDepth, AnUnboundedWriteDoesNotUseTheCStack) {
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.max_depth = SIZE_MAX;
+
+	const size_t depth = 100000;
+	GTEXT_YAML_Document *doc = BuildNested(depth, &opts);
+	ASSERT_NE(doc, nullptr);
+	ASSERT_EQ(MeasureDepth(gtext_yaml_document_root(doc)), depth);
+
+	GTEXT_YAML_Sink sink;
+	ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+	GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+	wopts.flow_style = GTEXT_YAML_FLOW_STYLE_FLOW;
+	EXPECT_EQ(gtext_yaml_write_document(doc, &sink, &wopts), GTEXT_YAML_OK);
+
+	/* The control: the output really is as deep as the document, so a walk
+	   that stopped early would not pass this by writing something short. */
+	const std::string out(
+		gtext_yaml_sink_buffer_data(&sink), gtext_yaml_sink_buffer_size(&sink));
+	EXPECT_EQ(std::count(out.begin(), out.end(), '['), (long)depth);
+	gtext_yaml_sink_buffer_free(&sink);
 
 	gtext_yaml_free(doc);
 }
