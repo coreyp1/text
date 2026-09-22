@@ -73,6 +73,18 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	double *float_out
 );
 
+/* Whether converting @p f to int64_t has a defined answer.
+ *
+ * It has none for a NaN, for either infinity, or for anything that truncates
+ * past the type's range: 6.3.1.4 leaves all of those undefined, and on
+ * x86-64 what the hardware does is hand back INT64_MIN.  Every place that
+ * turns a double into an integer asks this first.
+ *
+ * Shared rather than written twice, because the two callers had already
+ * drifted: one was a UBSan report and the other was quietly returning
+ * INT64_MIN. */
+GTEXT_INTERNAL_API bool gtext_yaml_double_fits_int64(double f);
+
 GTEXT_INTERNAL_API GTEXT_YAML_Parse_Options gtext_yaml_parse_options_effective(
 	const GTEXT_YAML_Parse_Options *opts
 );

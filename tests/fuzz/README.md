@@ -273,12 +273,24 @@ cannot index a window. It can be asked to keep the whole thing now, and the
 DOM parser asks. Those bytes are the first seed in `corpus/yaml-writer/` worth
 tracking, because it no longer traps.
 
+And then a conversion with no answer. UBSan, not ASan: `(int64_t)f` for an
+infinity is undefined, and the harness built the node that gets there - a
+scalar whose text is `.INF` and whose caller said it was an integer. Looking
+for the shape elsewhere found it again in YAML 1.1's sexagesimal integers,
+which are accumulated as a double and cast with nothing in between, so
+`1:99999999999999999999999999999999` came back as `INT64_MIN`. Neither is
+reachable from a corpus of *documents*; the first needs the DOM API, and the
+second needs 1.1 mode. `corpus/yaml-writer/int-tag-on-an-infinity.seed` is
+the reproducer, kept because it no longer traps.
+
 **This target is not yet quiet, and the notes above say so rather than
 pretending otherwise.** Every run of it so far has found something, each fix
 exposing the next - which is what a new harness does on a surface nothing had
 fuzzed before, and is the strongest available argument that the surface needed
 one. The best run so far went twenty-three thousand executions in twenty
-minutes before it found the property-column defect above. The corpus under
+minutes before it found the property-column defect above; with the corpus it
+has since grown, five minutes and 1.9 million executions were enough to reach
+the `.INF` conversion. The corpus under
 `corpus/yaml-writer/` is the record; a run that goes the full `FUZZ_TIME`
 without a find will be the first, and this paragraph should be updated when it
 happens.

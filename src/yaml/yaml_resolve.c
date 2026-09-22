@@ -631,6 +631,14 @@ static bool parse_sexagesimal_value(
 	return true;
 }
 
+/* 2^63 is exactly representable as a double and is the first one that does
+   not fit, so "< limit" is the comparison and "<= INT64_MAX" would not be -
+   (double)INT64_MAX rounds *up* to 2^63. */
+GTEXT_INTERNAL_API bool gtext_yaml_double_fits_int64(double f) {
+	static const double limit = 9223372036854775808.0;  /* 2^63 */
+	return isfinite(f) && f >= -limit && f < limit;
+}
+
 /* Whether @p c is a digit of @p base, which is 2, 8, 10 or 16 here. */
 static bool digit_in_base(char c, int base) {
 	int value;
@@ -1671,7 +1679,13 @@ static GTEXT_YAML_Status resolve_scalar(
 				double sexa = 0.0;
 				bool is_int = false;
 				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int)) {
-					if (!is_int) {
+					/* A fraction makes it a float and not this tag's type;
+					   a whole number past int64_t has nothing to convert to,
+					   and "!!int 99999999999999999999999" is already refused
+					   for the same reason - strtoll() says ERANGE and
+					   parse_int_value() gives up.  Converting it anyway is
+					   undefined, and what it gave was INT64_MIN. */
+					if (!is_int || !gtext_yaml_double_fits_int64(sexa)) {
 						if (error) {
 							error->code = GTEXT_YAML_E_INVALID;
 							error->message = "Invalid integer scalar for explicit tag";
@@ -1891,7 +1905,13 @@ static GTEXT_YAML_Status resolve_scalar(
 	if (yaml_1_1) {
 		double sexa = 0.0;
 		bool is_int = false;
-		if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &is_int)) {
+		/* A whole sexagesimal past int64_t is not an int this library can
+		   hold, and converting it is undefined - INT64_MIN, in practice.
+		   Left to the rows below, which have no sexagesimal among them, so
+		   it stays the string it was written as.  That is what a decimal
+		   too large for the type already resolves to. */
+		if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &is_int)
+				&& (!is_int || gtext_yaml_double_fits_int64(sexa))) {
 			if (is_int) {
 				node->type = GTEXT_YAML_INT;
 				node->as.scalar.type = GTEXT_YAML_INT;

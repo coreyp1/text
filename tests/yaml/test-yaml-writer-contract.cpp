@@ -763,6 +763,41 @@ TEST(YamlWriterContract, ADeclaredHandleDoesNotCarryToTheNextDocument) {
 		<< "wrote: " << ignored;
 }
 
+/* gtext_yaml_node_new_scalar_typed() takes the caller's word for the type,
+   and with no tag on the node there is no assertion to check it against. So
+   the text and the claim can disagree, and the constructor still has to have
+   a defined answer: ".INF" claimed as an int is a double of infinity, and
+   converting that to int64_t is undefined behaviour - 6.3.1.4 - which UBSan
+   reported from the writer fuzzer, having built exactly that node.
+
+   The union stays at its zero, which is what text that resolves to neither
+   an int nor a float already gets, and what the constructor documents. */
+TEST(YamlWriterContract, AnUnrepresentableFloatClaimedAsAnIntHasAValue) {
+	const char *texts[] = { ".INF", "-.INF", ".nan", "1e400", "-1e400" };
+	for (const char *text : texts) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
+			doc, text, strlen(text), GTEXT_YAML_INT, nullptr, nullptr);
+		ASSERT_NE(node, nullptr) << text;
+		EXPECT_EQ(gtext_yaml_node_type(node), GTEXT_YAML_INT) << text;
+		int64_t value = -1;
+		EXPECT_TRUE(gtext_yaml_node_as_int(node, &value)) << text;
+		EXPECT_EQ(value, 0) << text << " converted to something";
+		gtext_yaml_free(doc);
+	}
+
+	/* A float that does fit is still converted, so this is a bound and not a
+	   refusal to look at the text. */
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
+		doc, "1.9", 3, GTEXT_YAML_INT, nullptr, nullptr);
+	ASSERT_NE(node, nullptr);
+	int64_t value = -1;
+	EXPECT_TRUE(gtext_yaml_node_as_int(node, &value));
+	EXPECT_EQ(value, 1);
+	gtext_yaml_free(doc);
+}
+
 /* A tag names the type whose syntax 10.3.2 defines, and the constructor is
    where a caller's claim about it is checked - the parser checks the same
    claim on the way in and refuses '!!int ""'. Without this the writer put
@@ -787,6 +822,11 @@ TEST(YamlWriterContract, ATaggedScalarHasToBeWhatItsTagSays) {
 		{ "!!float", "1.5", true },
 		/* An integer spelling is a float spelling too. */
 		{ "!!float", "12", true },
+		/* A float spelling is not an integer one, and these two in
+		   particular have no integer to be converted to at all. */
+		{ "!!int", ".INF", false }, { "!!int", "-.inf", false },
+		{ "!!int", ".nan", false }, { "!!int", "1.5", false },
+		{ "!!float", ".INF", true },{ "!!float", ".nan", true },
 		{ "!!null", "", true },     { "!!null", "~", true },
 		{ "!!null", "NULL", true }, { "!!null", "x", false },
 		/* A string takes any text at all, which is what makes it the

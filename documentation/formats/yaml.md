@@ -981,6 +981,11 @@ part:
   not ask what followed it, the property that was part of its key in one place
   and not the next. A writer is a cheap spelling-changer, which is why it
   keeps finding these.
+- **A conversion with no defined answer.** A double turned into an `int64_t`
+  without asking whether it fits. Undefined for a NaN, an infinity, or
+  anything past the range, and what the hardware gives is `INT64_MIN` -
+  a plausible-looking number, which is why the sexagesimal one sat there
+  unnoticed while the other tripped UBSan.
 - **Two coordinate systems for one document.** The parser measured positions
   in the text the caller handed in and was given offsets counted in the text
   the scanner had decoded. Nothing said which of the two a `size_t` meant, so
@@ -1608,6 +1613,35 @@ past the end of the caller's buffer made its first read land outside the
 allocation. ASan reported a heap-buffer-overflow 22 bytes before whatever the
 allocator had put next. The reproducing bytes are still a test and a tracked
 fuzz seed.
+
+### A conversion with no answer, in two places
+
+`(int64_t)f` where `f` is an infinity is undefined behaviour - 6.3.1.4 - and
+UBSan says so in as many words: *"inf is outside the range of representable
+values of type 'long'"*. What the hardware does on x86-64 is hand back
+`INT64_MIN`.
+
+The writer fuzzer built the node that reaches it: a scalar whose text is
+`.INF` and whose caller said it was an integer.
+`gtext_yaml_node_new_scalar_typed()` takes that claim, and with no tag on the
+node there is no assertion for the constructor to check it against - so the
+text and the type disagree, and the conversion still has to have a defined
+answer. It leaves the union at its zero now, which is what text resolving to
+neither an int nor a float already gets.
+
+Looking for the same shape elsewhere found it a second time, quietly: YAML
+1.1's sexagesimal integers are accumulated in floating point and then cast,
+with nothing between. So `1:99999999999999999999999999999999` resolved to the
+integer **-9223372036854775808**, and `!!int` on it did too. A *decimal*
+that large has always been handled - `strtoll()` reports `ERANGE`,
+`parse_int_value()` gives up, and the scalar stays the string it was written
+as - but the sexagesimal rows never asked. They answer the same way as the
+decimal now: a string where the text alone decides, and a refusal where the
+tag says `int` and there is no string to fall back to.
+
+The bound is one function both call. Writing the test out twice was how the
+two had come to differ in the first place, and `(double)INT64_MAX` rounds
+*up* to 2^63, so `<= INT64_MAX` is not the comparison - `< 2^63` is.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

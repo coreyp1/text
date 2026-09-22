@@ -1116,7 +1116,12 @@ static GTEXT_YAML_Node *dom_new_scalar(
 			if (type == GTEXT_YAML_FLOAT && from_text == GTEXT_YAML_INT) {
 				node->as.scalar.float_value = (double)i;
 			}
-			else if (type == GTEXT_YAML_INT && from_text == GTEXT_YAML_FLOAT) {
+			/* ".INF" claimed as an int has no integer to be converted to,
+			   and converting it anyway is undefined - UBSan said so, from a
+			   node the writer fuzzer built.  The union stays at its zero,
+			   which is what text that is neither already gets. */
+			else if (type == GTEXT_YAML_INT && from_text == GTEXT_YAML_FLOAT
+					&& gtext_yaml_double_fits_int64(f)) {
 				node->as.scalar.int_value = (int64_t)f;
 			}
 			break;
