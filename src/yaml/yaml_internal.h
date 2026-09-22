@@ -44,6 +44,19 @@ typedef struct GTEXT_YAML_Stream GTEXT_YAML_Stream;
    refuses on the way in and the writer refuses on the way out. */
 GTEXT_INTERNAL_API bool gtext_yaml_tag_is_defined_standard(const char *suffix);
 
+/* Whether @p entry may be added to the !!omap @p omap.
+   
+   An omap is an ordered mapping: 10.x's !!omap takes a sequence of
+   single-pair mappings whose keys are unique, and the resolver refuses a
+   parsed one that breaks either rule.  The DOM appenders ask this so that
+   they refuse the same thing, using the same comparison - a node the
+   constructors accept and the parser will not read back is a node nothing
+   can write.  Pass NULL for @p omap to ask only about the entry's shape. */
+GTEXT_INTERNAL_API bool gtext_yaml_omap_can_take(
+	const GTEXT_YAML_Node *omap,
+	const GTEXT_YAML_Node *entry
+);
+
 /* True when @p value, written as a plain scalar, would resolve to something
    other than a string under the 1.2 core schema.  The writer asks so that a
    string node whose text spells a number or a null goes out in quotes rather

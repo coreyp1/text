@@ -1629,6 +1629,17 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_append(
 	GTEXT_YAML_Node *child
 ) {
 	if (!doc || !doc->ctx || !sequence || !node_is_sequence_type(sequence) || !child) return NULL;
+	/* An omap is an ordered mapping, so what may go into one is not what may
+	   go into any other sequence: a single-pair mapping whose key is not
+	   already there.  The resolver holds a parsed omap to both rules and
+	   these appenders held it to neither, so an omap with the same key twice
+	   was built happily, written as '!!omap [{a: 1}, {a: 2}]', and refused by
+	   this library's own parser.  !!pairs is the type that takes duplicates -
+	   that is what distinguishes the two - and is deliberately not checked. */
+	if (sequence->type == GTEXT_YAML_OMAP
+			&& !gtext_yaml_omap_can_take(sequence, child)) {
+		return NULL;
+	}
 	
 	/* Create new sequence with room for one more child */
 	size_t new_count = sequence->as.sequence.count + 1;
@@ -1653,6 +1664,17 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_sequence_insert(
 ) {
 	if (!doc || !doc->ctx || !sequence || !node_is_sequence_type(sequence) || !child) return NULL;
 	if (index > sequence->as.sequence.count) return NULL;
+	/* An omap is an ordered mapping, so what may go into one is not what may
+	   go into any other sequence: a single-pair mapping whose key is not
+	   already there.  The resolver holds a parsed omap to both rules and
+	   these appenders held it to neither, so an omap with the same key twice
+	   was built happily, written as '!!omap [{a: 1}, {a: 2}]', and refused by
+	   this library's own parser.  !!pairs is the type that takes duplicates -
+	   that is what distinguishes the two - and is deliberately not checked. */
+	if (sequence->type == GTEXT_YAML_OMAP
+			&& !gtext_yaml_omap_can_take(sequence, child)) {
+		return NULL;
+	}
 	
 	/* Create new sequence with room for one more child */
 	size_t new_count = sequence->as.sequence.count + 1;

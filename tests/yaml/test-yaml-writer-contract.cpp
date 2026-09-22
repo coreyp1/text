@@ -933,6 +933,95 @@ TEST(YamlWriterContract, TheTypedConstructorAgreesWithTheTagOnTheWayIn) {
 	}
 }
 
+/* An omap is an ordered mapping, and both halves of that have to hold.
+ *
+ * !!omap takes a sequence of single-pair mappings whose keys are unique. The
+ * resolver holds a parsed one to both rules; the DOM appenders held it to
+ * neither, so an omap with the key "a" twice was built happily, written as
+ * "!!omap [{a: 1}, {a: 2}]", and refused by this library's own parser -
+ * "omap keys must be unique". The writer fuzzer built exactly that.
+ *
+ * !!pairs is the type that takes duplicate keys; that is what distinguishes
+ * the two, so it is deliberately not checked. */
+TEST(YamlWriterContract, AnOmapWillNotTakeAKeyItAlreadyHas) {
+	auto pair = [](GTEXT_YAML_Document *doc, const char *k, const char *v) {
+		GTEXT_YAML_Node *m = gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+		return gtext_yaml_mapping_set(doc, m,
+			gtext_yaml_node_new_scalar(doc, k, nullptr, nullptr),
+			gtext_yaml_node_new_scalar(doc, v, nullptr, nullptr));
+	};
+
+	/* Both appenders, because both could build it. */
+	for (int insert = 0; insert < 2; ++insert) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *omap = gtext_yaml_node_new_omap(doc, nullptr, nullptr);
+		omap = gtext_yaml_sequence_append(doc, omap, pair(doc, "a", "1"));
+		ASSERT_NE(omap, nullptr);
+
+		/* The same key again is refused... */
+		GTEXT_YAML_Node *again = insert
+			? gtext_yaml_sequence_insert(doc, omap, 0, pair(doc, "a", "2"))
+			: gtext_yaml_sequence_append(doc, omap, pair(doc, "a", "2"));
+		EXPECT_EQ(again, nullptr) << (insert ? "insert" : "append");
+
+		/* ...a different one is not, so this is a rule and not a refusal to
+		   grow. */
+		GTEXT_YAML_Node *other = insert
+			? gtext_yaml_sequence_insert(doc, omap, 0, pair(doc, "b", "2"))
+			: gtext_yaml_sequence_append(doc, omap, pair(doc, "b", "2"));
+		ASSERT_NE(other, nullptr) << (insert ? "insert" : "append");
+
+		/* An entry that is not a single-pair mapping cannot go in either:
+		   the resolver refuses one, so the constructor has to as well. */
+		EXPECT_EQ(gtext_yaml_sequence_append(doc, other,
+			gtext_yaml_node_new_scalar(doc, "loose", nullptr, nullptr)),
+			nullptr);
+		GTEXT_YAML_Node *two = gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+		two = gtext_yaml_mapping_set(doc, two,
+			gtext_yaml_node_new_scalar(doc, "c", nullptr, nullptr),
+			gtext_yaml_node_new_scalar(doc, "3", nullptr, nullptr));
+		two = gtext_yaml_mapping_set(doc, two,
+			gtext_yaml_node_new_scalar(doc, "d", nullptr, nullptr),
+			gtext_yaml_node_new_scalar(doc, "4", nullptr, nullptr));
+		EXPECT_EQ(gtext_yaml_sequence_append(doc, other, two), nullptr)
+			<< "a two-pair mapping is not an omap entry";
+
+		/* What was built is what this library reads back. */
+		gtext_yaml_document_set_root(doc, other);
+		Written w = write_doc(doc);
+		ASSERT_EQ(w.status, GTEXT_YAML_OK);
+		GTEXT_YAML_Error err;
+		memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+		GTEXT_YAML_Document *back =
+			gtext_yaml_parse(w.text.data(), w.text.size(), &popts, &err);
+		ASSERT_NE(back, nullptr) << "wrote <<" << w.text << ">>: "
+			<< (err.message ? err.message : "");
+		gtext_yaml_error_free(&err);
+		EXPECT_EQ(gtext_yaml_sequence_length(gtext_yaml_document_root(back)), 2u)
+			<< "wrote <<" << w.text << ">>";
+		gtext_yaml_free(back);
+		gtext_yaml_free(doc);
+	}
+
+	/* !!pairs exists to hold what an omap will not, and still does. */
+	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+	GTEXT_YAML_Node *pairs = gtext_yaml_node_new_pairs(doc, nullptr, nullptr);
+	pairs = gtext_yaml_sequence_append(doc, pairs, pair(doc, "a", "1"));
+	pairs = gtext_yaml_sequence_append(doc, pairs, pair(doc, "a", "2"));
+	ASSERT_NE(pairs, nullptr) << "!!pairs refused a duplicate key";
+	gtext_yaml_document_set_root(doc, pairs);
+	Written w = write_doc(doc);
+	ASSERT_EQ(w.status, GTEXT_YAML_OK);
+	GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+	GTEXT_YAML_Document *back =
+		gtext_yaml_parse(w.text.data(), w.text.size(), &popts, nullptr);
+	ASSERT_NE(back, nullptr) << "wrote <<" << w.text << ">>";
+	EXPECT_EQ(gtext_yaml_sequence_length(gtext_yaml_document_root(back)), 2u);
+	gtext_yaml_free(back);
+	gtext_yaml_free(doc);
+}
+
 /* Quoting is a free choice only for a string.
  *
  * scalar_needs_quotes() admits a small whitelist and quotes everything else,

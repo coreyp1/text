@@ -628,27 +628,14 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-One is open, and the writer fuzzer found it on a run that predates this
-session's work - it is an untriaged artifact rather than a new find.
+None is open.
 
-**Canonical form writes a null the parser then refuses.** A null scalar goes
-out as `!!null ""`, and this library will not read that back: a quoted scalar
-is a string, so the tag contradicts the style, which is exactly the check
-`gtext_yaml_node_new_scalar()` applies on the way in. Canonical form quotes
-everything by design - that is what canonical means - and the null row is the
-one where quoting and the tag cannot both be right. The other styles ask the
-null question before any style question and are fine; canonical skips that
-branch. Either canonical has to leave a null plain behind its tag, which
-makes it not-quite-canonical, or the reader has to accept a tag that names
-the type a quoted empty scalar could carry. The reproducer is a stored fuzz
-artifact.
-
-There is one more thing worth knowing, which is a limit rather than a defect.
-**A null cannot survive a round trip through the failsafe schema.** That
-schema resolves nothing, so `null` is written and the string `"null"` comes
-back. Nothing else is available: there is no spelling the failsafe schema
-reads as a null, because having none is what asking for it means. It is a
-test asserting the limit.
+What stands here instead is a limit rather than a defect. **A null cannot
+survive a round trip through the failsafe schema.** That schema resolves
+nothing, so `null` is written and the string `"null"` comes back. Nothing
+else is available: there is no spelling the failsafe schema reads as a null,
+because having none is what asking for it means. It is a test asserting the
+limit.
 
 The one that stood here until recently - that a block mapping with two entries
 did not parse in UTF-16 - is fixed, and it was worse than this page said: the
@@ -1718,6 +1705,40 @@ tagged `!!int` and declared a string was built, the writer emitted
 names is what `dom_scalar_type()` answers, and the declared type has to match
 it; a tag this library does not resolve still answers "string", so a custom
 tag leaves the type to the caller, which is the point of one.
+
+### An omap is an ordered mapping, and only half of that was enforced
+
+`!!omap` takes a sequence of single-pair mappings whose keys are **unique**.
+The resolver holds a parsed one to both rules and refuses either violation -
+*"omap entries must be single-pair mappings"*, *"omap keys must be unique"*.
+The DOM appenders held it to neither:
+
+```
+  new_omap(), append {a: 1}, append {a: 2}   built
+  written                    !!omap [{a: 1}, {a: 2}]
+  read back                  omap keys must be unique
+```
+
+The same shape as the typed constructor above: a node the constructors accept
+and the parser will not read back is a node nothing can write, so the
+appenders ask the question now, using `nodes_equal()` - the comparison the
+resolver uses - so that the two doors cannot drift apart on what *the same
+key* means. `gtext_yaml_sequence_insert()` had it too and is fixed alongside.
+
+`!!pairs` is the type that takes duplicate keys; that is the whole difference
+between the two, so it is deliberately left alone.
+
+It was found as a stored fuzz artifact from an earlier run, and it is worth
+recording how nearly it was miscatalogued. The artifact's output was 434
+bytes of UTF-16 holding six levels of nested flow mappings, and read by eye
+the striking thing in it was `!!null ""` - a quoted empty scalar behind a
+`!!null` tag, which looks exactly like the style-versus-tag contradiction this
+page describes elsewhere. That went into *Known defects* as the diagnosis.
+It was wrong: `!!null ""` parses perfectly well, because a tag decides the
+type and the empty string is a legal null content. Decoding the artifact and
+asking the parser for its *error message* - rather than reading its output and
+inferring one - gave the answer in four words. **The failing input says which
+fault it hit; look at that before looking at the bytes.**
 
 ### Quoting is a free choice only for a string
 

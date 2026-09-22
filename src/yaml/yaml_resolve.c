@@ -2106,6 +2106,38 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
 	return gtext_yaml_plain_text_classify(value, len, NULL, NULL, NULL);
 }
 
+GTEXT_INTERNAL_API bool gtext_yaml_omap_can_take(
+	const GTEXT_YAML_Node *omap,
+	const GTEXT_YAML_Node *entry
+) {
+	/* !!omap is an ordered *mapping*: its entries are single-pair mappings
+	   and its keys are unique.  The resolver holds a parsed one to both rules
+	   - see the is_omap arm of resolve_collection_tags() - and the DOM
+	   constructors held it to neither, so gtext_yaml_sequence_append() built
+	   an omap with the key "a" twice, the writer emitted
+	   '!!omap [{a: 1}, {a: 2}]', and this library refused to read back what
+	   it had just written.
+
+	   The comparison is nodes_equal(), which is the one the resolver uses, so
+	   the two doors cannot drift apart on what "the same key" means. */
+	const GTEXT_YAML_Node *item = deref_alias(entry);
+	if (!item || item->type != GTEXT_YAML_MAPPING
+			|| item->as.mapping.count != 1) {
+		return false;
+	}
+	if (!omap) return true;
+	const GTEXT_YAML_Node *key = item->as.mapping.pairs[0].key;
+	for (size_t i = 0; i < omap->as.sequence.count; i++) {
+		const GTEXT_YAML_Node *prev = deref_alias(omap->as.sequence.children[i]);
+		if (!prev || prev->type != GTEXT_YAML_MAPPING
+				|| prev->as.mapping.count != 1) {
+			continue;
+		}
+		if (nodes_equal(key, prev->as.mapping.pairs[0].key, 0, 0)) return false;
+	}
+	return true;
+}
+
 GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string(
 	const char *value,
 	size_t len

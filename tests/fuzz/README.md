@@ -355,9 +355,17 @@ anything. The other half was the quoting whitelist, which treated `:` as
 needing quotes where 7.3.3 does not, and quoting a *non*-string changes what
 it is.
 
-One stored artifact still traps, and predates all of that: canonical form
-writes a null as `!!null ""` and this library refuses to read it back. It is
-on the format page under *Known defects*.
+A stored artifact that predates all of that turned out to be an omap built
+with the same key twice - the DOM appenders enforced neither of `!!omap`'s two
+rules, where the resolver enforces both. All twelve stored artifacts pass now.
+
+Its triage is the lesson worth keeping. Read by eye, the 434 bytes of UTF-16
+it produced contained `!!null ""`, which looks like a defect this library has
+had before; that guess went into the documentation before it was checked, and
+it was wrong. Decoding the output and asking the parser for its *error
+message* said `omap keys must be unique`. The harness prints what the writer
+wrote because an artifact says nothing on its own - but the parser's own
+complaint is shorter and truer than anything inferred from the output.
 
 Three notes for whoever runs it next. The header is **two bytes** now, not
 one - path and dialect in the first, write options in the second - so a

@@ -1015,6 +1015,18 @@ defects lived - a character 5.1 forbids written raw, an unchecked anchor
 name, a tag gaining a layer of percent-encoding on every round trip, and the
 dropped directives above.
 
+### Building an omap
+
+`!!omap` is an *ordered mapping*, so `gtext_yaml_sequence_append()` and
+`gtext_yaml_sequence_insert()` hold one to both halves of that: an entry has
+to be a single-pair mapping, and its key must not already be in the omap.
+Either violation returns NULL. The parser refuses a document that breaks
+either rule, so an omap the appenders accepted but the parser would not read
+back could not be written by anything.
+
+`!!pairs` is the sequence-shaped type that *does* take repeated keys, and is
+not checked.
+
 ### Building scalars
 
 `gtext_yaml_node_new_scalar()` takes the node's type from its text, which is
