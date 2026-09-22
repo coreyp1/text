@@ -110,6 +110,12 @@ GTEXT_API GTEXT_YAML_Write_Options gtext_yaml_write_options_default(void)
   opts.enable_custom_tags = false;
   opts.custom_tags = NULL;
   opts.custom_tag_count = 0;
+  /* The dialect the output is meant to be read back in.  These are the 1.2
+     core schema, which is what the writer has always emitted and what
+     gtext_yaml_parse_options_default() reads, so the default output does not
+     change. */
+  opts.schema = GTEXT_YAML_SCHEMA_CORE;
+  opts.yaml_1_1 = false;
   return opts;
 }
 

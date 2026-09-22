@@ -374,6 +374,31 @@ typedef struct {
   bool enable_custom_tags;
   const GTEXT_YAML_Custom_Tag * custom_tags;
   size_t custom_tag_count;
+
+  /* The dialect the output is meant to be read back in.
+   *
+   * Only a plain scalar is resolved by its contents (10.3.2), so whether a
+   * scalar may go out plain is a question about what *that* schema and
+   * version resolve - and the writer had no way to be told, so it answered
+   * with the 1.2 core schema always. Every other dialect then read something
+   * back that was not written:
+   *
+   *   the string "yes"  written plain, read back under 1_1   the bool true
+   *   the string "012"  written plain, read back under 1_1   the integer 10
+   *   a null            written "~",   read back under JSON  the string "~"
+   *
+   * These default to the 1.2 core schema, which is what the writer has always
+   * emitted and what @ref gtext_yaml_parse_options_default reads. Set them to
+   * the parse options a document came from - or will go to - and a string
+   * that spells one of that dialect's words is quoted, and a null is spelled
+   * the way that dialect spells one.
+   *
+   * @ref GTEXT_YAML_SCHEMA_FAILSAFE resolves nothing, so nothing needs
+   * quoting for its sake; by the same token a document written for it cannot
+   * carry a type at all, which is what asking for the failsafe schema means.
+   */
+  GTEXT_YAML_Schema schema;
+  bool yaml_1_1;
 } GTEXT_YAML_Write_Options;
 
 /**

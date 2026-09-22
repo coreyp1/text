@@ -245,8 +245,20 @@ GTEXT_YAML_Parse_Options parse_options_from(uint8_t knobs) {
  * counted in the decoded stream while its positional helpers read the raw
  * buffer, which broke every non-UTF-8 encoding and went unnoticed for exactly
  * that reason.  A round trip through all five is cheap here. */
-GTEXT_YAML_Write_Options write_options_from(uint8_t sel, Bytes * extra) {
+GTEXT_YAML_Write_Options write_options_from(
+    uint8_t sel, Bytes * extra, const GTEXT_YAML_Parse_Options * read_as) {
   GTEXT_YAML_Write_Options w = gtext_yaml_write_options_default();
+  /* Write for the dialect this document will be read back in, which is the
+     one it was read *from*.  Without this the round trip asked the writer to
+     produce output for the 1.2 core schema and then read it under something
+     else, and every disagreement between the two looked like a writer bug:
+     "0:0" is the integer 0 in 1.1 and a string in 1.2, so the writer quoted
+     it by the 1.2 rule and the 1.1 reader got a string back.  That one was a
+     real find, and it is the missing option rather than the quoting. */
+  if (read_as) {
+    w.schema = read_as->schema;
+    w.yaml_1_1 = read_as->yaml_1_1;
+  }
   w.flow_style = (GTEXT_YAML_Flow_Style)(sel % 3);
   w.pretty = (sel & 0x04) != 0;
   w.encoding = (GTEXT_YAML_Encoding)(((sel >> 3) & 0x07) % 5);
@@ -419,7 +431,7 @@ GTEXT_YAML_Document * build_document(Bytes & b, bool inline_comments_safe) {
 /** Documents the parser could never hand the writer. */
 void fuzz_built_dom(const uint8_t * data, size_t size, uint8_t sel) {
   Bytes b{data, size};
-  GTEXT_YAML_Write_Options wopts = write_options_from(sel, &b);
+  GTEXT_YAML_Write_Options wopts = write_options_from(sel, &b, nullptr);
   GTEXT_YAML_Document * doc = build_document(
       b, wopts.flow_style == GTEXT_YAML_FLOW_STYLE_BLOCK);
   if (!doc) return;
@@ -443,7 +455,7 @@ void fuzz_built_dom(const uint8_t * data, size_t size, uint8_t sel) {
  * did not close the document before it was found by hand. */
 void fuzz_built_multidoc(const uint8_t * data, size_t size, uint8_t sel) {
   Bytes b{data, size};
-  GTEXT_YAML_Write_Options wopts = write_options_from(sel, &b);
+  GTEXT_YAML_Write_Options wopts = write_options_from(sel, &b, nullptr);
   const size_t count = (b.next() & 0x03) + 1;
 
   GTEXT_YAML_Document * docs[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -502,7 +514,7 @@ void fuzz_parsed(const uint8_t * data, size_t size, uint8_t knobs, uint8_t sel) 
   gtext_yaml_error_free(&err);
   if (!doc) return;
 
-  GTEXT_YAML_Write_Options wopts = write_options_from(sel, nullptr);
+  GTEXT_YAML_Write_Options wopts = write_options_from(sel, nullptr, &popts);
   std::string text;
   if (write_document(doc, &wopts, &text)) {
     must_round_trip(doc, text, &popts,
@@ -525,7 +537,7 @@ void fuzz_parsed_multidoc(
   if (!docs) return;
 
   if (count > 0) {
-    GTEXT_YAML_Write_Options wopts = write_options_from(sel, nullptr);
+    GTEXT_YAML_Write_Options wopts = write_options_from(sel, nullptr, &popts);
     GTEXT_YAML_Sink sink;
     if (gtext_yaml_sink_buffer(&sink) == GTEXT_YAML_OK) {
       if (gtext_yaml_write_documents(docs, count, &sink, &wopts)
@@ -609,11 +621,14 @@ void fuzz_event_pipe(const uint8_t * data, size_t size, uint8_t knobs) {
 
   GTEXT_YAML_Sink sink;
   if (gtext_yaml_sink_buffer(&sink) != GTEXT_YAML_OK) return;
+  GTEXT_YAML_Parse_Options popts = parse_options_from(knobs);
   GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+  /* The dialect the events came from is the one the output goes back to. */
+  wopts.schema = popts.schema;
+  wopts.yaml_1_1 = popts.yaml_1_1;
   Pipe pipe{gtext_yaml_writer_new(sink, &wopts), GTEXT_YAML_OK};
   if (!pipe.writer) { gtext_yaml_sink_buffer_free(&sink); return; }
 
-  GTEXT_YAML_Parse_Options popts = parse_options_from(knobs);
   popts.dupkeys = GTEXT_YAML_DUPKEY_KEEP_ALL;
   GTEXT_YAML_Stream * st = gtext_yaml_stream_new(&popts, pipe_event, &pipe);
   if (!st) {

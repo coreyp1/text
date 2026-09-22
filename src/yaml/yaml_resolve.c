@@ -2011,9 +2011,11 @@ static bool plain_text_has_space(const char *value, size_t len) {
 	return false;
 }
 
-GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
 	const char *value,
 	size_t len,
+	GTEXT_YAML_Schema schema,
+	bool yaml_1_1,
 	bool *bool_out,
 	int64_t *int_out,
 	double *float_out
@@ -2023,7 +2025,23 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	double f = 0.0;
 	GTEXT_YAML_Node_Type type = GTEXT_YAML_STRING;
 
+	/* The same flags resolve_scalar_by_text() derives, derived the same way.
+	   They were spelled out a second time here with the 1.2 core answers
+	   hard-coded, on the reasoning that "a document written here is not read
+	   back in 1.1 mode" - which is a statement about the caller, not about
+	   the library, and the writer fuzzer falsified it. */
+	const bool json_only = (schema == GTEXT_YAML_SCHEMA_JSON);
+	const bool v11 = yaml_1_1 && (schema == GTEXT_YAML_SCHEMA_CORE);
+	const bool allow_underscore = v11;
+	const bool allow_base_prefix = (schema == GTEXT_YAML_SCHEMA_CORE);
+	const bool allow_binary_and_upper_prefix = v11;
+
 	if (!value) {
+		type = GTEXT_YAML_STRING;
+	}
+	/* The failsafe schema resolves nothing: every scalar is a string, which
+	   is what asking for it means. */
+	else if (schema == GTEXT_YAML_SCHEMA_FAILSAFE) {
 		type = GTEXT_YAML_STRING;
 	}
 	else if (len == 0) {
@@ -2032,23 +2050,33 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	else if (plain_text_has_space(value, len)) {
 		type = GTEXT_YAML_STRING;
 	}
-	else if (parse_null_value(value, len, false)) {
+	else if (parse_null_value(value, len, json_only)) {
 		type = GTEXT_YAML_NULL;
 	}
-	else if (parse_bool_value(value, len, false, false, &b)) {
+	else if (parse_bool_value(value, len, json_only, v11, &b)) {
 		type = GTEXT_YAML_BOOL;
 	}
-	else if (has_disallowed_leading_zero(value, len, false)) {
+	else if (v11 && parse_sexagesimal_value(value, len, allow_underscore, &f,
+			&b)) {
+		/* b is reused as "is an integer" here, the way the resolver reads it,
+		   and is put back below before anything else can see it. */
+		if (b && gtext_yaml_double_fits_int64(f)) {
+			type = GTEXT_YAML_INT;
+			i = (int64_t)f;
+		}
+		else if (!b) {
+			type = GTEXT_YAML_FLOAT;
+		}
+		b = false;
+	}
+	else if (!v11 && has_disallowed_leading_zero(value, len, allow_underscore)) {
 		type = GTEXT_YAML_STRING;
 	}
-	/* allow_base_prefix is on for the core schema, which is the default and
-	   what the writer emits: "0x1f" and "0o17" are 1.2 integers.  The 1.1
-	   forms - underscores, "0b101", "0X1F" - are not, and a document written
-	   here is not read back in 1.1 mode. */
-	else if (parse_int_value(value, len, false, true, false, false, &i)) {
+	else if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
+			allow_binary_and_upper_prefix, v11, &i)) {
 		type = GTEXT_YAML_INT;
 	}
-	else if (parse_float_value(value, len, false, &f)) {
+	else if (parse_float_value(value, len, allow_underscore, &f)) {
 		type = GTEXT_YAML_FLOAT;
 	}
 
@@ -2056,6 +2084,19 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	if (int_out) *int_out = i;
 	if (float_out) *float_out = f;
 	return type;
+}
+
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
+	const char *value,
+	size_t len,
+	bool *bool_out,
+	int64_t *int_out,
+	double *float_out
+) {
+	/* The 1.2 core schema, which is what the DOM constructors document and
+	   what this used to be the only spelling of. */
+	return gtext_yaml_plain_text_classify_as(value, len,
+		GTEXT_YAML_SCHEMA_CORE, false, bool_out, int_out, float_out);
 }
 
 GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
@@ -2070,6 +2111,28 @@ GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string(
 	size_t len
 ) {
 	return gtext_yaml_plain_text_type(value, len) != GTEXT_YAML_STRING;
+}
+
+GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string_as(
+	const char *value,
+	size_t len,
+	GTEXT_YAML_Schema schema,
+	bool yaml_1_1
+) {
+	return gtext_yaml_plain_text_classify_as(value, len, schema, yaml_1_1,
+		NULL, NULL, NULL) != GTEXT_YAML_STRING;
+}
+
+GTEXT_INTERNAL_API const char *gtext_yaml_null_spelling_for(
+	GTEXT_YAML_Schema schema
+) {
+	/* "~" is a null in 1.1 and in the 1.2 core schema and in neither of the
+	   other two.  The JSON schema has exactly one null spelling and it is the
+	   word; the failsafe schema has none at all, so a null cannot survive a
+	   round trip through it whatever is written - the word is what a reader
+	   of that document would expect to see, and is the honest thing to put
+	   there. */
+	return (schema == GTEXT_YAML_SCHEMA_CORE) ? "~" : "null";
 }
 
 static GTEXT_YAML_Status resolve_node(

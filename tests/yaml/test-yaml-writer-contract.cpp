@@ -933,6 +933,158 @@ TEST(YamlWriterContract, TheTypedConstructorAgreesWithTheTagOnTheWayIn) {
 	}
 }
 
+/* The writer has to be told which dialect its output is for.
+ *
+ * Only a plain scalar is resolved by its contents (10.3.2), so whether a
+ * scalar may go out plain is a question about what the *reader* resolves -
+ * and the writer had no way to be told, so it answered with the 1.2 core
+ * schema always. Every other dialect then read back something that was not
+ * written. Under 1.1 the damage is the quiet kind: the string "yes" went out
+ * plain and came back as the bool true, and "012" as the integer 10.
+ *
+ * The oracle is this library's own parser, told the same dialect. That is the
+ * point of the option - not that some table of spellings is right, but that
+ * the two ends agree. */
+TEST(YamlWriterContract, AStringSurvivesTheDialectItIsWrittenFor) {
+	/* Spellings 1.1 resolves and 1.2 does not, plus controls that neither
+	   does and that both do. */
+	const char *texts[] = {
+		"yes", "no", "on", "off", "y", "n", "Yes", "OFF",
+		"012", "0b101", "1_000", "0:0", "1:30:00",
+		/* Both dialects resolve these; both have to quote them. */
+		"true", "null", "~", "12", "1.5", "0x1f",
+		/* Neither does: these may stay plain in either. */
+		"word", "x12y", "a.b",
+	};
+
+	struct Dialect { GTEXT_YAML_Schema schema; bool v11; const char *name; };
+	const Dialect dialects[] = {
+		{ GTEXT_YAML_SCHEMA_CORE,     false, "1.2 core" },
+		{ GTEXT_YAML_SCHEMA_CORE,     true,  "1.1" },
+		{ GTEXT_YAML_SCHEMA_JSON,     false, "JSON" },
+		{ GTEXT_YAML_SCHEMA_FAILSAFE, false, "failsafe" },
+	};
+
+	for (const Dialect &d : dialects) {
+		for (const char *text : texts) {
+			GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+			GTEXT_YAML_Node *root = gtext_yaml_node_new_scalar_typed(
+				doc, text, strlen(text), GTEXT_YAML_STRING, nullptr, nullptr);
+			ASSERT_NE(root, nullptr) << text;
+			gtext_yaml_document_set_root(doc, root);
+
+			GTEXT_YAML_Sink sink;
+			ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+			GTEXT_YAML_Write_Options wopts = gtext_yaml_write_options_default();
+			wopts.schema = d.schema;
+			wopts.yaml_1_1 = d.v11;
+			ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts),
+				GTEXT_YAML_OK) << d.name << " " << text;
+			const std::string out(gtext_yaml_sink_buffer_data(&sink),
+				gtext_yaml_sink_buffer_size(&sink));
+			gtext_yaml_sink_buffer_free(&sink);
+
+			GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+			popts.schema = d.schema;
+			popts.yaml_1_1 = d.v11;
+			GTEXT_YAML_Document *back =
+				gtext_yaml_parse(out.data(), out.size(), &popts, nullptr);
+			ASSERT_NE(back, nullptr) << d.name << ": wrote <<" << out << ">>";
+			const GTEXT_YAML_Node *node = gtext_yaml_document_root(back);
+			EXPECT_EQ(gtext_yaml_node_type(node), GTEXT_YAML_STRING)
+				<< d.name << ": the string <<" << text << ">> was written <<"
+				<< out << ">> and came back something else";
+			EXPECT_STREQ(gtext_yaml_node_as_string(node), text)
+				<< d.name << ": wrote <<" << out << ">>";
+			gtext_yaml_free(back);
+			gtext_yaml_free(doc);
+		}
+	}
+}
+
+/* ...and a null has to be spelled the way its reader spells one.
+ *
+ * "~" is a null in the core schema and in 1.1, and in neither of the other
+ * two. The writer wrote it regardless, so a null went out as "[~]" and came
+ * back under the JSON schema as the *string* "~" - which is the case this
+ * library's own format page recorded as the open question.
+ *
+ * The failsafe schema is the exception, and not a fixable one: it resolves
+ * nothing, so no null can survive a round trip through it whatever is
+ * written. That is what asking for the failsafe schema means. */
+TEST(YamlWriterContract, ANullIsSpelledTheWayItsSchemaSpellsOne) {
+	struct Case { GTEXT_YAML_Schema schema; bool v11; bool survives; const char *name; };
+	const Case cases[] = {
+		{ GTEXT_YAML_SCHEMA_CORE,     false, true,  "1.2 core" },
+		{ GTEXT_YAML_SCHEMA_CORE,     true,  true,  "1.1" },
+		{ GTEXT_YAML_SCHEMA_JSON,     false, true,  "JSON" },
+		{ GTEXT_YAML_SCHEMA_FAILSAFE, false, false, "failsafe" },
+	};
+
+	/* Both positions: a sequence entry, where 7.2 has no empty alternative
+	   and the spelling has to be written out, and a mapping value, where the
+	   empty node is a spelling of its own. */
+	for (const Case &c : cases) {
+		for (int in_sequence = 0; in_sequence < 2; ++in_sequence) {
+			/* And both ways the text can arrive: an empty scalar, and one
+			   carrying a spelling of its own. */
+			for (const char *text : { "", "~", "null", "NULL" }) {
+				GTEXT_YAML_Document *doc =
+					gtext_yaml_document_new(nullptr, nullptr);
+				GTEXT_YAML_Node *null_node = gtext_yaml_node_new_scalar_typed(
+					doc, text, strlen(text), GTEXT_YAML_NULL, nullptr, nullptr);
+				ASSERT_NE(null_node, nullptr) << text;
+				GTEXT_YAML_Node *root = nullptr;
+				if (in_sequence) {
+					root = gtext_yaml_node_new_sequence(doc, nullptr, nullptr);
+					root = gtext_yaml_sequence_append(doc, root, null_node);
+				}
+				else {
+					root = gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+					GTEXT_YAML_Node *k =
+						gtext_yaml_node_new_scalar(doc, "k", nullptr, nullptr);
+					root = gtext_yaml_mapping_set(doc, root, k, null_node);
+				}
+				ASSERT_NE(root, nullptr);
+				gtext_yaml_document_set_root(doc, root);
+
+				GTEXT_YAML_Sink sink;
+				ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+				GTEXT_YAML_Write_Options wopts =
+					gtext_yaml_write_options_default();
+				wopts.schema = c.schema;
+				wopts.yaml_1_1 = c.v11;
+				ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &wopts),
+					GTEXT_YAML_OK) << c.name;
+				const std::string out(gtext_yaml_sink_buffer_data(&sink),
+					gtext_yaml_sink_buffer_size(&sink));
+				gtext_yaml_sink_buffer_free(&sink);
+
+				GTEXT_YAML_Parse_Options popts =
+					gtext_yaml_parse_options_default();
+				popts.schema = c.schema;
+				popts.yaml_1_1 = c.v11;
+				GTEXT_YAML_Document *back =
+					gtext_yaml_parse(out.data(), out.size(), &popts, nullptr);
+				ASSERT_NE(back, nullptr)
+					<< c.name << ": wrote <<" << out << ">>";
+				const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+				const GTEXT_YAML_Node *got = in_sequence
+					? gtext_yaml_sequence_get(r, 0)
+					: gtext_yaml_mapping_get(r, "k");
+				ASSERT_NE(got, nullptr)
+					<< c.name << ": wrote <<" << out << ">>";
+				EXPECT_EQ(gtext_yaml_node_type(got) == GTEXT_YAML_NULL,
+					c.survives)
+					<< c.name << (in_sequence ? " sequence" : " mapping")
+					<< " <<" << text << ">> wrote <<" << out << ">>";
+				gtext_yaml_free(back);
+				gtext_yaml_free(doc);
+			}
+		}
+	}
+}
+
 /* The streaming writer's comment event has to end up being a comment.
  *
  * "#" starts one only at the start of a line or after white space (7.1).

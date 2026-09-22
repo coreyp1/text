@@ -347,9 +347,13 @@ through the DOM API, which was wrong. The parser produces the same node from
 refused to read back.
 
 It has since also found the writer's missing **schema**: `0:0` parsed with
-`yaml_1_1` is the integer 0, and the writer quotes it by the 1.2 rule for that
-text, so it reads back as the string. That one is still open, on the format
-page.
+`yaml_1_1` is the integer 0, and it came back a string. Half of that was the
+writer never being told which dialect its output was for, which the
+`schema` and `yaml_1_1` write options now answer - this harness writes for the
+dialect it parsed in, which is the only version of the round trip that means
+anything. The other half is still open on the format page: the quoting
+whitelist treats `:` as needing quotes, and quoting a *non*-string changes what
+it is.
 
 Three notes for whoever runs it next. The header is **two bytes** now, not
 one - path and dialect in the first, write options in the second - so a

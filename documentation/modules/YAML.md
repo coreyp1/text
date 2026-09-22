@@ -1025,6 +1025,16 @@ the difference with quotes, which the writer then supplies.
 `gtext_yaml_node_new_scalar_n()` and `gtext_yaml_node_scalar_length()` are for
 values holding a NUL, which `\0` makes a legal thing for a scalar to hold.
 
+The writer has to be told which dialect the output is for, and
+`GTEXT_YAML_Write_Options` has `schema` and `yaml_1_1` for it. They default to
+the 1.2 core schema, which is what `gtext_yaml_parse_options_default()` reads.
+Set them to match the options a document was parsed with, or will be parsed
+with, and the writer quotes what that dialect would otherwise resolve - the
+string `"yes"` needs quotes for a 1.1 reader and not for a 1.2 one - and
+spells a null the way that dialect spells one, which is `null` rather than `~`
+under the JSON schema. The failsafe schema resolves nothing, so nothing is
+quoted for its sake and no type survives a round trip through it.
+
 Saying otherwise is not the same as saying anything. The type has to be true
 of the text, so every type but `GTEXT_YAML_STRING` is checked against it and a
 claim the characters cannot carry returns NULL: `"NO"` declared null is

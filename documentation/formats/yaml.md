@@ -628,27 +628,34 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-None is open. What stands here is a gap rather than a defect - the writer was
-never given a question, rather than answering it wrongly.
+One is open. The writer fuzzer found it while the missing schema option
+below - which had stood here as the last of these - was being closed, and it
+is what is left of that one after the option was added.
 
-**The writer cannot be told which schema to target.**
-`GTEXT_YAML_Write_Options` carries no schema and no version, so the writer
-answers "what would this text resolve to" with the 1.2 core schema whatever
-the document was read under. A document parsed under the JSON schema - where
-`~` is not a null spelling - is written `[~]` and reads back under that same
-schema as the string `"~"`.
-
-The writer fuzzer found the same gap through the 1.1 door, and there it costs
-a *value* rather than a spelling:
+**The writer quotes a non-string for a reason that only holds for strings.**
 
 ```
   parsed with yaml_1_1   0:0     the sexagesimal integer 0
-  written                "0:0"   quoted, by the 1.2 rule for that text
+  written                "0:0"   quoted
   read back with 1_1     "0:0"   the string
 ```
 
-Nothing is wrong with the writer's reasoning; it was never given the question
-its answer depends on.
+`scalar_needs_quotes()` admits a small whitelist of characters and quotes
+everything else, and says why: *"quoting is value-preserving here: neither
+text resolves to anything but a string"*. That is true of a string and of
+nothing else. `:` is not on the whitelist, `0:0` is nonetheless a perfectly
+legal plain scalar - 7.3.3 admits `:` where an `ns-plain-safe` character
+follows it - and quoting it turns the integer the document held into a
+string.
+
+The exposure is narrow, because in the 1.2 core schema `0:0` is a string
+either way and quoting a string costs nothing. It is 1.1, where sexagesimals
+resolve, that the quoting reaches. Two ways out: widen the whitelist to the
+`ns-plain` productions it stands in for, which is the accurate fix and the
+one with room to break other things, or refuse to quote a node that is not a
+string, which is exact for the DOM writer and unavailable to the streaming
+one - an event stream reports a scalar as written and does not say what it
+resolved to.
 
 The one that stood here until recently - that a block mapping with two entries
 did not parse in UTF-16 - is fixed, and it was worse than this page said: the
@@ -1718,6 +1725,45 @@ tagged `!!int` and declared a string was built, the writer emitted
 names is what `dom_scalar_type()` answers, and the declared type has to match
 it; a tag this library does not resolve still answers "string", so a custom
 tag leaves the type to the caller, which is the point of one.
+
+### The writer was never told which dialect it was writing for
+
+Only a plain scalar is resolved by its contents (10.3.2), so *may this go out
+plain* is a question about what the reader resolves - and the reader's answer
+is what a schema and a version **are**. `GTEXT_YAML_Write_Options` carried
+neither, so the writer answered with the 1.2 core schema whatever the document
+had been read as, and every other dialect read back something that had not
+been written:
+
+```
+  the string "yes"   written plain   read back under 1_1   the bool true
+  the string "012"   written plain   read back under 1_1   the integer 10
+  a null             written "~"     read back under JSON  the string "~"
+```
+
+Six of the eight 1.1 spellings probed came back as the wrong type. The page
+had recorded only the `[~]` case, and called it a gap rather than a defect on
+the grounds that the writer had never been given the question - which was
+right about the cause and too generous about the cost, because the 1.1 half
+loses a *value* and not a spelling.
+
+The options carry `schema` and `yaml_1_1` now, defaulting to the 1.2 core
+schema, which is what this writer emitted before it could be told and what
+`gtext_yaml_parse_options_default()` reads - so no output changes until a
+caller says otherwise. Set them to the parse options a document came from and
+a string spelling one of that dialect's words is quoted, and a null is spelled
+the way that dialect spells one.
+
+Two things fell out of doing it rather than being aimed at. The rows that
+decide all this were written out a second time inside
+`gtext_yaml_plain_text_classify()` with the core-schema answers hard-coded,
+under a comment reasoning that *"a document written here is not read back in
+1.1 mode"* - a claim about the caller rather than about the library, and the
+fuzzer falsified it. There is one copy now and the 1.2 spelling is a call to
+it. And the failsafe schema turns out to be the one dialect a null cannot
+survive at all: it resolves nothing, so `null` is written and a string comes
+back. That is what asking for the failsafe schema means, and it is a test
+asserting the limit rather than a defect.
 
 ### A comment is only a comment where nothing follows it
 

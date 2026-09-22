@@ -53,6 +53,25 @@ GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string(
 	size_t len
 );
 
+/* The same question asked of a named dialect rather than of the 1.2 core
+   schema.  Which texts resolve is what a schema and a version *are*, so the
+   writer has to ask about the one its output is meant to be read back in:
+   "yes" is a bool in 1.1 and a string in 1.2, so the string "yes" needs
+   quotes for one reader and not for the other. */
+GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string_as(
+	const char *value,
+	size_t len,
+	GTEXT_YAML_Schema schema,
+	bool yaml_1_1
+);
+
+/* A plain spelling @p schema resolves to null.  "~" is one for the core
+   schema and for 1.1; the JSON schema knows only the word, and the failsafe
+   schema knows neither - a null cannot survive that one at all. */
+GTEXT_INTERNAL_API const char *gtext_yaml_null_spelling_for(
+	GTEXT_YAML_Schema schema
+);
+
 /* The type @p value would resolve to if it were written as a plain scalar
    under the 1.2 core schema.  The DOM constructors use it so that a node
    built from text reports the same type a parsed one would. */
@@ -68,6 +87,18 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
 GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	const char *value,
 	size_t len,
+	bool *bool_out,
+	int64_t *int_out,
+	double *float_out
+);
+
+/* The same, under a named schema and version.  The one above is this with the
+   1.2 core schema, rather than a second copy of the rows. */
+GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
+	const char *value,
+	size_t len,
+	GTEXT_YAML_Schema schema,
+	bool yaml_1_1,
 	bool *bool_out,
 	int64_t *int_out,
 	double *float_out

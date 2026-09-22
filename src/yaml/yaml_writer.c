@@ -617,6 +617,28 @@ static bool writer_root_is_flow(const GTEXT_YAML_Write_Options * opts) {
   return !opts->pretty;
 }
 
+/* The dialect the output is meant to be read back in.  Which texts resolve is
+   what a schema and a version *are*, so every "may this go out plain" answer
+   below depends on them; they default to the 1.2 core schema, which is what
+   this writer emitted before it could be told. */
+static GTEXT_YAML_Schema writer_schema(const GTEXT_YAML_Write_Options * opts) {
+  return opts ? opts->schema : GTEXT_YAML_SCHEMA_CORE;
+}
+
+static bool writer_yaml_1_1(const GTEXT_YAML_Write_Options * opts) {
+  return opts ? opts->yaml_1_1 : false;
+}
+
+/* Whether @p value, written plain, comes back as the null it is meant to be.
+   A node holding the text "~" is a null where the core schema reads it and
+   the string "~" where the JSON schema does. */
+static bool writer_text_reads_as_null(
+    const GTEXT_YAML_Write_Options * opts, const char * value, size_t len) {
+  return gtext_yaml_plain_text_classify_as(
+      value, len, writer_schema(opts), writer_yaml_1_1(opts),
+      NULL, NULL, NULL) == GTEXT_YAML_NULL;
+}
+
 static const char *writer_newline(const GTEXT_YAML_Write_Options * opts) {
   if (!opts || !opts->newline) {
     return "\n";
@@ -1524,6 +1546,8 @@ static GTEXT_YAML_Scalar_Style plan_scalar_style(
     int line_width,
     size_t content_indent,
     int parent_indent,
+    GTEXT_YAML_Schema schema,
+    bool yaml_1_1,
     yaml_block_plan *plan) {
   memset(plan, 0, sizeof(*plan));
 
@@ -1545,9 +1569,17 @@ static GTEXT_YAML_Scalar_Style plan_scalar_style(
        quoted, or the plain spelling resolves it back to that instead.
        gtext_yaml_node_new_scalar() makes a string of whatever it is given,
        so a caller who built the string "1" and wrote it got the integer 1
-       back. */
+       back.
+
+       Which texts spell what is the target dialect's to say, and this used to
+       ask the 1.2 core schema whatever the output was for.  1.1 resolves
+       strictly more of them - "yes", "off", "012", "0:0" - so the strings
+       spelling those went out plain and came back as a bool or an integer;
+       the failsafe schema resolves none of them, so quoting for its sake
+       protects nothing. */
     else if (is_string
-             && gtext_yaml_plain_text_resolves_to_non_string(value, len)) {
+             && gtext_yaml_plain_text_resolves_to_non_string_as(
+                    value, len, schema, yaml_1_1)) {
       style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
     }
     else if (!in_flow && pretty && line_width > 0 &&
@@ -1914,27 +1946,43 @@ static GTEXT_YAML_Status write_scalar_node(
   /* The null spellings are asked about before any other style question.  "~"
      is not a character scalar_needs_quotes() would leave alone, and quoting
      it would put the one-character string "~" into the document in place of
-     the null the document held. */
+     the null the document held.
+
+     Which spellings are nulls is the schema's to say, and the writer used to
+     answer for it: it wrote "~", or whatever text the node carried, without
+     asking whether the reader this output is for would read either as a
+     null.  Under the JSON schema neither the empty scalar nor "~" is one, so
+     a null went out as "[~]" and came back as the string "~". */
   if (!canonical && style == GTEXT_YAML_SCALAR_STYLE_PLAIN &&
       node->type == GTEXT_YAML_NULL) {
-    if (!value || value[0] == '\0') {
-      /* Properties are enough to make a flow sequence entry a node, so an
-         anchored or tagged empty scalar can stay empty even there. */
-      bool has_properties =
-          node_anchor(node) || resolved_tag || node_tag(node);
-      if (state->empty_scalar_ok || has_properties) {
-        status = write_node_prefix(state, node, resolved_tag, false);
-        if (status != GTEXT_YAML_OK) return status;
-        state->key_absorbs_colon = has_properties;
-        return write_inline_comment(state, node_inline_comment(node));
-      }
-      status = write_node_prefix(state, node, resolved_tag, true);
+    const bool empty = (!value || value[0] == '\0');
+    const bool as_written =
+        writer_text_reads_as_null(state->opts, value, empty ? 0 : value_len);
+    /* Properties are enough to make a flow sequence entry a node, so an
+       anchored or tagged empty scalar can stay empty even there. */
+    const bool has_properties =
+        node_anchor(node) || resolved_tag || node_tag(node);
+    if (empty && as_written
+        && (state->empty_scalar_ok || has_properties)) {
+      status = write_node_prefix(state, node, resolved_tag, false);
       if (status != GTEXT_YAML_OK) return status;
-      return write_str(state, "~");
+      state->key_absorbs_colon = has_properties;
+      return write_inline_comment(state, node_inline_comment(node));
     }
     status = write_node_prefix(state, node, resolved_tag, true);
     if (status != GTEXT_YAML_OK) return status;
-    return write_str(state, value);
+    /* The node's own text where the target dialect reads it as a null, and
+       that dialect's own spelling everywhere else - which covers two cases,
+       not one.  The obvious is text the dialect does not read as a null.  The
+       other is an *empty* text that it does: ns-flow-seq-entry has no empty
+       alternative, so there is nowhere to put it here and the spelling has to
+       be written out. */
+    status = (as_written && !empty)
+        ? write_bytes(state, value, value_len)
+        : write_str(state,
+              gtext_yaml_null_spelling_for(writer_schema(state->opts)));
+    if (status != GTEXT_YAML_OK) return status;
+    return write_inline_comment(state, node_inline_comment(node));
   }
 
   yaml_block_plan block;
@@ -1943,7 +1991,8 @@ static GTEXT_YAML_Status write_scalar_node(
       node->type == GTEXT_YAML_STRING, canonical, flow,
       state->opts && state->opts->pretty, writer_line_width(state->opts),
       indent + (size_t)writer_indent_spaces(state->opts),
-      state->block_parent_indent, &block);
+      state->block_parent_indent,
+      writer_schema(state->opts), writer_yaml_1_1(state->opts), &block);
 
   status = write_node_prefix(state, node, resolved_tag, true);
   if (status != GTEXT_YAML_OK) return status;
@@ -2876,7 +2925,14 @@ static GTEXT_YAML_Status writer_emit_scalar(
     return GTEXT_YAML_OK;
   }
   if (needs_tilde) {
-    if (writer_write_string(writer, "~") != 0) return GTEXT_YAML_E_WRITE;
+    /* ns-flow-seq-entry has no empty alternative, so the empty node has to be
+       spelled out - in whatever spelling the target dialect reads as a null,
+       which is not "~" for all of them. */
+    if (writer_write_string(
+            writer,
+            gtext_yaml_null_spelling_for(writer_schema(&writer->opts))) != 0) {
+      return GTEXT_YAML_E_WRITE;
+    }
     writer->key_absorbs_colon = false;
     writer_finish_value(writer, is_key);
     return GTEXT_YAML_OK;
@@ -2902,7 +2958,8 @@ static GTEXT_YAML_Status writer_emit_scalar(
       writer->opts.canonical, in_flow, writer->opts.pretty,
       writer_line_width(&writer->opts),
       base_indent + (size_t)writer_indent_spaces(&writer->opts),
-      view.block_parent_indent, &block);
+      view.block_parent_indent,
+      writer_schema(&writer->opts), writer_yaml_1_1(&writer->opts), &block);
 
   GTEXT_YAML_Status st = GTEXT_YAML_OK;
   switch (style) {
