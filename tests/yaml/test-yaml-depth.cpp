@@ -187,3 +187,61 @@ int main(int argc, char **argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }
+
+/* max_depth = SIZE_MAX is the documented way to say "no depth limit", and it
+   used to be a way to end the process instead.
+   
+   Parsing is iterative and survives any depth, but the resolver that runs
+   over the finished DOM was a recursion at about 344 bytes of C stack a
+   level, so a document past roughly 24000 levels took the parse down after
+   the hard part was over. The resolver keeps its stack on the heap now.
+   
+   40000 is chosen to be past that 24000 with room to spare - 40000 levels
+   at 344 bytes is 13.8 MB against the usual 8 MB stack - and no further,
+   because parsing this shape is super-linear in depth for reasons that have
+   nothing to do with the resolver: at 100000 the parse takes 19.5s, 99.6% of
+   it inside property_left_of_open_collection() and block_node_begins_line(),
+   with the resolver not appearing in the profile at all. That is worth
+   fixing and is not this test's business to pay for.
+   
+   Like the clone's equivalent in test-yaml-built-depth.cpp, this crashes
+   rather than fails if the walk goes back to recursing, which is the honest
+   way to report the thing it exists to prevent. */
+TEST(YamlDepth, NoLimitDoesNotMeanNoStack) {
+	const size_t n = 40000;
+	const std::string in =
+		std::string(n, '[') + "x" + std::string(n, ']');
+
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.max_depth = SIZE_MAX;
+	opts.max_total_bytes = 0; /* the default, which is far more than this */
+
+	GTEXT_YAML_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document *doc =
+		gtext_yaml_parse(in.data(), in.size(), &opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+	gtext_yaml_error_free(&err);
+
+	/* The control: a document that is not actually this deep would have been
+	   resolved by any implementation. */
+	const GTEXT_YAML_Node *node = gtext_yaml_document_root(doc);
+	size_t seen = 0;
+	while (node && gtext_yaml_node_type(node) == GTEXT_YAML_SEQUENCE
+			&& gtext_yaml_sequence_length(node) > 0) {
+		node = gtext_yaml_sequence_get(node, 0);
+		seen++;
+	}
+	EXPECT_EQ(seen, n);
+
+	gtext_yaml_free(doc);
+}
+
+/* And the limit still binds where it is set, so moving the stack to the heap
+   did not turn max_depth off for parsed documents either. */
+TEST(YamlDepth, TheParsedLimitStillBinds) {
+	EXPECT_EQ(ParseStatus(std::string(50, '[') + "x" + std::string(50, ']'), 256),
+		GTEXT_YAML_OK);
+	EXPECT_EQ(ParseStatus(std::string(500, '[') + "x" + std::string(500, ']'), 256),
+		GTEXT_YAML_E_DEPTH);
+}

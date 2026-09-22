@@ -2167,6 +2167,273 @@ GTEXT_INTERNAL_API const char *gtext_yaml_null_spelling_for(
 	return (schema == GTEXT_YAML_SCHEMA_CORE) ? "~" : "null";
 }
 
+/* Out of memory, said the same way in each of the places the walk below can
+   run out of it. */
+static GTEXT_YAML_Status resolve_oom(GTEXT_YAML_Error *error) {
+	if (error) {
+		error->code = GTEXT_YAML_E_OOM;
+		error->message = "Out of memory resolving the document";
+	}
+	return GTEXT_YAML_E_OOM;
+}
+
+/* The work a collection needs before its children are resolved, and the work
+   it needs after. Splitting them out is what lets the walk below be a loop:
+   the "after" half is the reason a plain worklist will not do here, since a
+   merge key can replace the mapping it was found in and a custom tag
+   constructor has to see finished children. */
+static GTEXT_YAML_Status resolve_enter_sequence(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	/* Read before resolving: the brackets are what say the tag
+	   was written verbatim, and resolve_tag_handle() takes
+	   them off. */
+	const bool was_verbatim = node->as.sequence.tag
+		&& node->as.sequence.tag[0] == '<';
+	if (node->as.sequence.tag) {
+		node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
+	}
+	{
+		const char *tag = node->as.sequence.tag;
+		GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
+		if (tag_status != GTEXT_YAML_OK) return tag_status;
+	}
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status resolve_exit_sequence(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	{
+		const char *seq_suffix = tag_suffix(node->as.sequence.tag);
+		bool is_omap = seq_suffix && strcmp(seq_suffix, "omap") == 0;
+		bool is_pairs = seq_suffix && strcmp(seq_suffix, "pairs") == 0;
+		if (node->type == GTEXT_YAML_OMAP) {
+			is_omap = true;
+			is_pairs = false;
+		} else if (node->type == GTEXT_YAML_PAIRS) {
+			is_pairs = true;
+			is_omap = false;
+		}
+		if (is_omap) {
+			for (size_t i = 0; i < node->as.sequence.count; i++) {
+				const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
+				if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
+					if (error) {
+						error->code = GTEXT_YAML_E_INVALID;
+						error->message = "omap entries must be single-pair mappings";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+				const GTEXT_YAML_Node *key = item->as.mapping.pairs[0].key;
+				for (size_t j = 0; j < i; j++) {
+					const GTEXT_YAML_Node *prev = deref_alias(node->as.sequence.children[j]);
+					if (!prev || prev->type != GTEXT_YAML_MAPPING) continue;
+					if (nodes_equal(key, prev->as.mapping.pairs[0].key, 0, opts ? opts->max_depth : 0)) {
+						if (error) {
+							error->code = GTEXT_YAML_E_DUPKEY;
+							error->message = "omap keys must be unique";
+						}
+						return GTEXT_YAML_E_DUPKEY;
+					}
+				}
+			}
+			node->type = GTEXT_YAML_OMAP;
+			node->as.sequence.type = GTEXT_YAML_OMAP;
+		} else if (is_pairs) {
+			for (size_t i = 0; i < node->as.sequence.count; i++) {
+				const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
+				if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
+					if (error) {
+						error->code = GTEXT_YAML_E_INVALID;
+						error->message = "pairs entries must be single-pair mappings";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+			}
+			node->type = GTEXT_YAML_PAIRS;
+			node->as.sequence.type = GTEXT_YAML_PAIRS;
+		}
+	}
+	{
+		const char *tag = node->as.sequence.tag;
+		GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+			doc,
+			node,
+			opts,
+			tag,
+			error
+		);
+		if (custom != GTEXT_YAML_OK) return custom;
+	}
+	return GTEXT_YAML_OK;
+}
+
+static GTEXT_YAML_Status resolve_enter_mapping(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	GTEXT_YAML_Error *error
+) {
+	/* Read before resolving: the brackets are what say the tag
+	   was written verbatim, and resolve_tag_handle() takes
+	   them off. */
+	const bool was_verbatim = node->as.mapping.tag
+		&& node->as.mapping.tag[0] == '<';
+	if (node->as.mapping.tag) {
+		node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
+	}
+	{
+		const char *tag = node->as.mapping.tag;
+		GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
+		if (tag_status != GTEXT_YAML_OK) return tag_status;
+	}
+	return GTEXT_YAML_OK;
+}
+
+/* node_ptr is the slot the mapping sits in, because apply_merge_keys() can
+   hand back a different node and whoever is holding this one has to be told. */
+static GTEXT_YAML_Status resolve_exit_mapping(
+	GTEXT_YAML_Document *doc,
+	GTEXT_YAML_Node **node_ptr,
+	GTEXT_YAML_Node *node,
+	const GTEXT_YAML_Parse_Options *opts,
+	yaml_merge_replacement **replacements,
+	size_t *replacement_count,
+	size_t *replacement_capacity,
+	GTEXT_YAML_Error *error
+) {
+	{
+		GTEXT_YAML_Node *merged_node = node;
+		bool replaced = false;
+		GTEXT_YAML_Status st = apply_merge_keys(
+			doc,
+			node,
+			opts,
+			&merged_node,
+			&replaced,
+			error
+		);
+		if (st != GTEXT_YAML_OK) return st;
+		if (replaced) {
+			if (*replacement_count >= *replacement_capacity) {
+				size_t new_cap = *replacement_capacity == 0 ? 4 : *replacement_capacity * 2;
+				yaml_merge_replacement *new_items = (yaml_merge_replacement *)realloc(
+					*replacements,
+					new_cap * sizeof(yaml_merge_replacement)
+				);
+				if (!new_items) {
+					if (error) {
+						error->code = GTEXT_YAML_E_OOM;
+						error->message = "Out of memory tracking merge replacements";
+					}
+					return GTEXT_YAML_E_OOM;
+				}
+				*replacements = new_items;
+				*replacement_capacity = new_cap;
+			}
+			(*replacements)[*replacement_count].old_node = node;
+			(*replacements)[*replacement_count].new_node = merged_node;
+			(*replacement_count)++;
+			*node_ptr = merged_node;
+			node = merged_node;
+		}
+	}
+	{
+		const char *map_suffix = tag_suffix(node->as.mapping.tag);
+		bool is_set = map_suffix && strcmp(map_suffix, "set") == 0;
+		if (node->type == GTEXT_YAML_SET) {
+			is_set = true;
+		}
+		if (is_set) {
+			for (size_t i = 0; i < node->as.mapping.count; i++) {
+				if (!node_is_null(node->as.mapping.pairs[i].value)) {
+					if (error) {
+						error->code = GTEXT_YAML_E_INVALID;
+						error->message = "set values must be null";
+					}
+					return GTEXT_YAML_E_INVALID;
+				}
+			}
+			node->type = GTEXT_YAML_SET;
+			node->as.mapping.type = GTEXT_YAML_SET;
+		}
+	}
+	{
+		const char *tag = node->as.mapping.tag;
+		GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+			doc,
+			node,
+			opts,
+			tag,
+			error
+		);
+		if (custom != GTEXT_YAML_OK) return custom;
+	}
+	return apply_dupkey_policy(doc, node, opts, error);
+}
+
+/* One node part-way through being resolved.
+ *
+ * stage is where in the node's own work we are: 0 before its children, 1
+ * among them, 2 after them. sub is the extra state a mapping pair needs,
+ * because validate_mapping_key() runs between the key and the value rather
+ * than before or after both.
+ *
+ * node_ptr is the slot this node sits in rather than a copy of the pointer,
+ * so a merge-key replacement lands where the parent will read it. The
+ * recursion used a local and copied it back; pointing at the slot does the
+ * same thing with one less step. */
+typedef struct {
+	GTEXT_YAML_Node **node_ptr;
+	GTEXT_YAML_Node *node;
+	size_t index;
+	unsigned char stage;
+	unsigned char sub;
+} resolve_frame;
+
+typedef struct {
+	resolve_frame *items;
+	size_t count;
+	size_t capacity;
+} resolve_stack;
+
+static bool resolve_stack_push(resolve_stack *stack, GTEXT_YAML_Node **node_ptr) {
+	if (stack->count == stack->capacity) {
+		size_t new_capacity = stack->capacity == 0 ? 32 : stack->capacity * 2;
+		resolve_frame *items = (resolve_frame *)realloc(
+			stack->items, new_capacity * sizeof(resolve_frame)
+		);
+		if (!items) return false;
+		stack->items = items;
+		stack->capacity = new_capacity;
+	}
+	stack->items[stack->count].node_ptr = node_ptr;
+	stack->items[stack->count].node = *node_ptr;
+	stack->items[stack->count].index = 0;
+	stack->items[stack->count].stage = 0;
+	stack->items[stack->count].sub = 0;
+	stack->count++;
+	return true;
+}
+
+/* Resolve a node and everything under it.
+ *
+ * This was a recursion, at about 344 bytes of C stack a level, so a document
+ * nested past about 24000 levels ended the process instead of being resolved.
+ * The parser's max_depth normally keeps a parsed document well short of that
+ * - but SIZE_MAX is the documented way to say "no depth limit", and a caller
+ * who says it is asking for a deep document, not for a segmentation fault.
+ * The stack is on the heap now, so depth costs memory rather than a frame.
+ *
+ * The loop always works on the top frame and never holds a pointer to it
+ * across a push, since a push can move the array. */
 static GTEXT_YAML_Status resolve_node(
 	GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Node **node_ptr,
@@ -2176,231 +2443,118 @@ static GTEXT_YAML_Status resolve_node(
 	size_t *replacement_capacity,
 	GTEXT_YAML_Error *error
 ) {
+	resolve_stack stack = {NULL, 0, 0};
+	GTEXT_YAML_Status status = GTEXT_YAML_OK;
+
 	if (!node_ptr || !*node_ptr) return GTEXT_YAML_OK;
-	GTEXT_YAML_Node *node = *node_ptr;
+	if (!resolve_stack_push(&stack, node_ptr)) return resolve_oom(error);
 
-	switch (node->type) {
-		case GTEXT_YAML_STRING:
-		case GTEXT_YAML_BOOL:
-		case GTEXT_YAML_INT:
-		case GTEXT_YAML_FLOAT:
-		case GTEXT_YAML_NULL:
-			return resolve_scalar(doc, node, opts, error);
-		case GTEXT_YAML_SEQUENCE:
-		case GTEXT_YAML_OMAP:
-		case GTEXT_YAML_PAIRS:
-		{
-			/* Read before resolving: the brackets are what say the tag
-			   was written verbatim, and resolve_tag_handle() takes
-			   them off. */
-			const bool was_verbatim = node->as.sequence.tag
-				&& node->as.sequence.tag[0] == '<';
-			if (node->as.sequence.tag) {
-				node->as.sequence.tag = resolve_tag_handle(doc, node->as.sequence.tag);
-			}
-			{
-				const char *tag = node->as.sequence.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
-				if (tag_status != GTEXT_YAML_OK) return tag_status;
-			}
-			for (size_t i = 0; i < node->as.sequence.count; i++) {
-				GTEXT_YAML_Node *child = node->as.sequence.children[i];
-				GTEXT_YAML_Status st = resolve_node(
-					doc,
-					&child,
-					opts,
-					replacements,
-					replacement_count,
-					replacement_capacity,
-					error
-				);
-				if (st != GTEXT_YAML_OK) return st;
-				node->as.sequence.children[i] = child;
-			}
-			{
-				const char *seq_suffix = tag_suffix(node->as.sequence.tag);
-				bool is_omap = seq_suffix && strcmp(seq_suffix, "omap") == 0;
-				bool is_pairs = seq_suffix && strcmp(seq_suffix, "pairs") == 0;
-				if (node->type == GTEXT_YAML_OMAP) {
-					is_omap = true;
-					is_pairs = false;
-				} else if (node->type == GTEXT_YAML_PAIRS) {
-					is_pairs = true;
-					is_omap = false;
-				}
-				if (is_omap) {
-					for (size_t i = 0; i < node->as.sequence.count; i++) {
-						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
-						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
-							if (error) {
-								error->code = GTEXT_YAML_E_INVALID;
-								error->message = "omap entries must be single-pair mappings";
-							}
-							return GTEXT_YAML_E_INVALID;
-						}
-						const GTEXT_YAML_Node *key = item->as.mapping.pairs[0].key;
-						for (size_t j = 0; j < i; j++) {
-							const GTEXT_YAML_Node *prev = deref_alias(node->as.sequence.children[j]);
-							if (!prev || prev->type != GTEXT_YAML_MAPPING) continue;
-							if (nodes_equal(key, prev->as.mapping.pairs[0].key, 0, opts ? opts->max_depth : 0)) {
-								if (error) {
-									error->code = GTEXT_YAML_E_DUPKEY;
-									error->message = "omap keys must be unique";
-								}
-								return GTEXT_YAML_E_DUPKEY;
-							}
-						}
-					}
-					node->type = GTEXT_YAML_OMAP;
-					node->as.sequence.type = GTEXT_YAML_OMAP;
-				} else if (is_pairs) {
-					for (size_t i = 0; i < node->as.sequence.count; i++) {
-						const GTEXT_YAML_Node *item = deref_alias(node->as.sequence.children[i]);
-						if (!item || item->type != GTEXT_YAML_MAPPING || item->as.mapping.count != 1) {
-							if (error) {
-								error->code = GTEXT_YAML_E_INVALID;
-								error->message = "pairs entries must be single-pair mappings";
-							}
-							return GTEXT_YAML_E_INVALID;
-						}
-					}
-					node->type = GTEXT_YAML_PAIRS;
-					node->as.sequence.type = GTEXT_YAML_PAIRS;
-				}
-			}
-			{
-				const char *tag = node->as.sequence.tag;
-				GTEXT_YAML_Status custom = apply_custom_tag_constructor(
-					doc,
-					node,
-					opts,
-					tag,
-					error
-				);
-				if (custom != GTEXT_YAML_OK) return custom;
-			}
-			return GTEXT_YAML_OK;
-		}
-		case GTEXT_YAML_MAPPING:
-		case GTEXT_YAML_SET:
-		{
-			/* Read before resolving: the brackets are what say the tag
-			   was written verbatim, and resolve_tag_handle() takes
-			   them off. */
-			const bool was_verbatim = node->as.mapping.tag
-				&& node->as.mapping.tag[0] == '<';
-			if (node->as.mapping.tag) {
-				node->as.mapping.tag = resolve_tag_handle(doc, node->as.mapping.tag);
-			}
-			{
-				const char *tag = node->as.mapping.tag;
-				GTEXT_YAML_Status tag_status = enforce_tag_policy(doc, tag, was_verbatim, opts, error);
-				if (tag_status != GTEXT_YAML_OK) return tag_status;
-			}
-			for (size_t i = 0; i < node->as.mapping.count; i++) {
-				GTEXT_YAML_Node *key = node->as.mapping.pairs[i].key;
-				GTEXT_YAML_Status st = resolve_node(
-					doc,
-					&key,
-					opts,
-					replacements,
-					replacement_count,
-					replacement_capacity,
-					error
-				);
-				if (st != GTEXT_YAML_OK) return st;
-				node->as.mapping.pairs[i].key = key;
-				st = validate_mapping_key(key, opts, error);
-				if (st != GTEXT_YAML_OK) return st;
+	while (status == GTEXT_YAML_OK && stack.count > 0) {
+		resolve_frame *frame = &stack.items[stack.count - 1];
+		GTEXT_YAML_Node *node = frame->node;
+		GTEXT_YAML_Node **slot = NULL;
 
-				GTEXT_YAML_Node *value = node->as.mapping.pairs[i].value;
-				st = resolve_node(
-					doc,
-					&value,
-					opts,
-					replacements,
-					replacement_count,
-					replacement_capacity,
-					error
-				);
-				if (st != GTEXT_YAML_OK) return st;
-				node->as.mapping.pairs[i].value = value;
-			}
-			{
-				GTEXT_YAML_Node *merged_node = node;
-				bool replaced = false;
-				GTEXT_YAML_Status st = apply_merge_keys(
-					doc,
-					node,
-					opts,
-					&merged_node,
-					&replaced,
-					error
-				);
-				if (st != GTEXT_YAML_OK) return st;
-				if (replaced) {
-					if (*replacement_count >= *replacement_capacity) {
-						size_t new_cap = *replacement_capacity == 0 ? 4 : *replacement_capacity * 2;
-						yaml_merge_replacement *new_items = (yaml_merge_replacement *)realloc(
-							*replacements,
-							new_cap * sizeof(yaml_merge_replacement)
+		switch (node->type) {
+			case GTEXT_YAML_STRING:
+			case GTEXT_YAML_BOOL:
+			case GTEXT_YAML_INT:
+			case GTEXT_YAML_FLOAT:
+			case GTEXT_YAML_NULL:
+				status = resolve_scalar(doc, node, opts, error);
+				stack.count--;
+				break;
+
+			case GTEXT_YAML_SEQUENCE:
+			case GTEXT_YAML_OMAP:
+			case GTEXT_YAML_PAIRS:
+				if (frame->stage == 0) {
+					status = resolve_enter_sequence(doc, node, opts, error);
+					frame->stage = 1;
+					break;
+				}
+				if (frame->stage == 1) {
+					if (frame->index >= node->as.sequence.count) {
+						frame->stage = 2;
+						break;
+					}
+					slot = &node->as.sequence.children[frame->index++];
+					/* A NULL child resolved to OK in the recursion, by its
+					   own first line, and is skipped here for the same
+					   reason. */
+					if (*slot && !resolve_stack_push(&stack, slot)) {
+						status = resolve_oom(error);
+					}
+					break;
+				}
+				status = resolve_exit_sequence(doc, node, opts, error);
+				stack.count--;
+				break;
+
+			case GTEXT_YAML_MAPPING:
+			case GTEXT_YAML_SET:
+				if (frame->stage == 0) {
+					status = resolve_enter_mapping(doc, node, opts, error);
+					frame->stage = 1;
+					break;
+				}
+				if (frame->stage == 1) {
+					if (frame->index >= node->as.mapping.count) {
+						frame->stage = 2;
+						break;
+					}
+					if (frame->sub == 0) {
+						frame->sub = 1;
+						slot = &node->as.mapping.pairs[frame->index].key;
+						if (*slot && !resolve_stack_push(&stack, slot)) {
+							status = resolve_oom(error);
+						}
+						break;
+					}
+					if (frame->sub == 1) {
+						/* Asked of the slot rather than of what was pushed,
+						   because the recursion validated a NULL key too -
+						   it reached validate_mapping_key() by way of a
+						   resolve that returned OK without doing anything. */
+						status = validate_mapping_key(
+							node->as.mapping.pairs[frame->index].key,
+							opts,
+							error
 						);
-						if (!new_items) {
-							if (error) {
-								error->code = GTEXT_YAML_E_OOM;
-								error->message = "Out of memory tracking merge replacements";
-							}
-							return GTEXT_YAML_E_OOM;
+						if (status != GTEXT_YAML_OK) break;
+						frame->sub = 2;
+						slot = &node->as.mapping.pairs[frame->index].value;
+						if (*slot && !resolve_stack_push(&stack, slot)) {
+							status = resolve_oom(error);
 						}
-						*replacements = new_items;
-						*replacement_capacity = new_cap;
+						break;
 					}
-					(*replacements)[*replacement_count].old_node = node;
-					(*replacements)[*replacement_count].new_node = merged_node;
-					(*replacement_count)++;
-					*node_ptr = merged_node;
-					node = merged_node;
+					frame->index++;
+					frame->sub = 0;
+					break;
 				}
-			}
-			{
-				const char *map_suffix = tag_suffix(node->as.mapping.tag);
-				bool is_set = map_suffix && strcmp(map_suffix, "set") == 0;
-				if (node->type == GTEXT_YAML_SET) {
-					is_set = true;
-				}
-				if (is_set) {
-					for (size_t i = 0; i < node->as.mapping.count; i++) {
-						if (!node_is_null(node->as.mapping.pairs[i].value)) {
-							if (error) {
-								error->code = GTEXT_YAML_E_INVALID;
-								error->message = "set values must be null";
-							}
-							return GTEXT_YAML_E_INVALID;
-						}
-					}
-					node->type = GTEXT_YAML_SET;
-					node->as.mapping.type = GTEXT_YAML_SET;
-				}
-			}
-			{
-				const char *tag = node->as.mapping.tag;
-				GTEXT_YAML_Status custom = apply_custom_tag_constructor(
+				status = resolve_exit_mapping(
 					doc,
+					frame->node_ptr,
 					node,
 					opts,
-					tag,
+					replacements,
+					replacement_count,
+					replacement_capacity,
 					error
 				);
-				if (custom != GTEXT_YAML_OK) return custom;
-			}
-			return apply_dupkey_policy(doc, node, opts, error);
-		}
-		case GTEXT_YAML_ALIAS:
-		default:
-			return GTEXT_YAML_OK;
-	}
-}
+				stack.count--;
+				break;
 
+			case GTEXT_YAML_ALIAS:
+			default:
+				stack.count--;
+				break;
+		}
+	}
+
+	free(stack.items);
+	return status;
+}
 GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
 	GTEXT_YAML_Document *doc,
 	GTEXT_YAML_Error *error
