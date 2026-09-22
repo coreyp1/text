@@ -341,19 +341,21 @@ GTEXT_YAML_Node * build(
     else {
       /* The type the text carries, or string, which carries any text.
        *
-       * Not an arbitrary type: gtext_yaml_node_new_scalar_typed() takes the
-       * caller's word where no tag is present, so it will build a node
-       * declared null whose text is "NO" - and *nothing* can then write that
-       * node correctly.  Canonical form emits '!!null "NO"', which this
-       * library refuses to read; plain form emits NO, which reads back as a
-       * string.  The contradiction is in the node, not in the writer, and
-       * asserting a round trip on it asks the writer for something that does
-       * not exist.
+       * Not an arbitrary type, for two reasons that used to be one.
        *
-       * So this builds nodes that are not self-contradictory, and the
-       * contradiction itself is an open question on the YAML format page
-       * rather than a trap here.  The same claim made with a *tag* is
-       * already refused at construction, which is the inconsistency. */
+       * It used to be a correctness problem: the typed constructor took the
+       * caller's word where no tag was present, so an arbitrary type built a
+       * node declared null whose text was "NO", and *nothing* could write
+       * that node correctly.  Canonical form emitted '!!null "NO"', which
+       * this library refuses to read; plain form emitted NO, which reads back
+       * as a string.  Asserting a round trip on it asked the writer for
+       * something that does not exist.  The constructor refuses that claim
+       * now, tag or no tag, so the trap is gone.
+       *
+       * What is left is coverage.  An arbitrary type is refused far more
+       * often than not, and a NULL here just makes the document smaller -
+       * so guessing would spend the fuzzer's budget on documents that were
+       * never built.  The refusal itself is a unit test, where it belongs. */
       /* _n, with the length: a chunk can hold a NUL, and c_str() would stop
          the probe there while the node below takes the whole run - so the
          probe answered "int" for "622222222222\0\0..." and built a node

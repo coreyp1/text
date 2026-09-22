@@ -960,9 +960,18 @@ GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar_n(
  * value from the integer `1`, and YAML spells the difference with quotes:
  * only a plain scalar is resolved by its contents (10.3.2). Pass
  * @ref GTEXT_YAML_STRING here and the writer quotes it, so it comes back a
- * string. Pass @ref GTEXT_YAML_INT for text that does not look like one and
- * the node says integer while the document says otherwise - the type is the
- * caller's to assert, and asserting it wrongly is the caller's to avoid.
+ * string.
+ *
+ * **The claim has to be true of the text.** @p type says what the characters
+ * in @p value spell, so every type but @ref GTEXT_YAML_STRING is checked
+ * against them and a claim the text cannot carry returns NULL:
+ * `(doc, "NO", 2, GTEXT_YAML_NULL, ...)` is refused, because `NO` is not a
+ * null spelling and a node claiming it was one could not be written. A
+ * string is not checked, and needs no checking: any text is a string, and
+ * text that would resolve to something else is quoted so that it stays one.
+ *
+ * An integer spelling is a float spelling too - 10.3.2's float row makes the
+ * fraction optional - so @ref GTEXT_YAML_FLOAT takes `"12"`.
  *
  * @param doc Document that will own the node
  * @param value Value bytes (will be copied); may hold a NUL
@@ -970,7 +979,8 @@ GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar_n(
  * @param type One of GTEXT_YAML_STRING, BOOL, INT, FLOAT or NULL
  * @param tag Optional tag string (may be NULL)
  * @param anchor Optional anchor name (may be NULL)
- * @return New scalar node, or NULL on error or a non-scalar @p type
+ * @return New scalar node; NULL on error, on a non-scalar @p type, or when
+ *         @p value does not spell a value of @p type
  */
 GTEXT_API GTEXT_YAML_Node * gtext_yaml_node_new_scalar_typed(
 	GTEXT_YAML_Document * doc,

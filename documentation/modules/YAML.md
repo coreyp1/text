@@ -1025,6 +1025,13 @@ the difference with quotes, which the writer then supplies.
 `gtext_yaml_node_new_scalar_n()` and `gtext_yaml_node_scalar_length()` are for
 values holding a NUL, which `\0` makes a legal thing for a scalar to hold.
 
+Saying otherwise is not the same as saying anything. The type has to be true
+of the text, so every type but `GTEXT_YAML_STRING` is checked against it and a
+claim the characters cannot carry returns NULL: `"NO"` declared null is
+refused, exactly as `!!null NO` is refused on the way in. A string is never
+refused, because any text is a string. The rule is that the typed constructor
+accepts for a type what this parser accepts behind the tag naming it.
+
 "Text a parse would report" is not the same as "text you could hand the
 parser". White space at either end makes it a string, whatever the rest says:
 `" 3"` is the *string* `" 3"`, not the integer 3, because a plain scalar's

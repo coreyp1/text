@@ -1174,7 +1174,29 @@ static GTEXT_YAML_Node *dom_new_scalar(
 			return NULL;
 		}
 	}
-	if (tag && *tag && type != GTEXT_YAML_STRING) {
+	/* The second claim is the text, and it is checked whether or not there is
+	   a tag on the node.
+
+	   It was gated on the tag, which reads as "a tag is an assertion that can
+	   be false" and is true as far as it goes.  But the tag is not what makes
+	   the claim checkable - the *type* is.  A caller who says NULL of the
+	   text "NO" has said something false with a tag and exactly as false
+	   without one, and only the tagged spelling was refused: the same claim
+	   went through one door and not the other.
+
+	   The node that got through could not be written by anything.  Canonical
+	   form emitted '!!null "NO"', which this library then refuses to read,
+	   and plain form emitted NO, which reads back as the string.  The
+	   contradiction was in the node, so this is where it stops.
+
+	   gtext_yaml_node_new_scalar() cannot produce one, because it takes the
+	   type from the text rather than from a caller; this is the only door a
+	   false claim can enter by.
+
+	   A string needs no check: 10.3.2 resolves by contents only for a plain
+	   scalar, and a string whose text would resolve to something else is
+	   given a quoted style a few lines below, which is what keeps it one. */
+	if (type != GTEXT_YAML_STRING) {
 		const GTEXT_YAML_Node_Type from_text =
 			gtext_yaml_plain_text_classify(value, value ? length : 0,
 				NULL, NULL, NULL);

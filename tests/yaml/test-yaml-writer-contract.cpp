@@ -820,39 +820,117 @@ TEST(YamlWriterContract, ADeclaredHandleDoesNotCarryToTheNextDocument) {
 		<< "wrote: " << ignored;
 }
 
-/* gtext_yaml_node_new_scalar_typed() takes the caller's word for the type,
-   and with no tag on the node there is no assertion to check it against. So
-   the text and the claim can disagree, and the constructor still has to have
-   a defined answer: ".INF" claimed as an int is a double of infinity, and
-   converting that to int64_t is undefined behaviour - 6.3.1.4 - which UBSan
-   reported from the writer fuzzer, having built exactly that node.
-
-   The union stays at its zero, which is what text that resolves to neither
-   an int nor a float already gets, and what the constructor documents. */
-TEST(YamlWriterContract, AnUnrepresentableFloatClaimedAsAnIntHasAValue) {
-	const char *texts[] = { ".INF", "-.INF", ".nan", "1e400", "-1e400" };
-	for (const char *text : texts) {
+/* A type claim has to be true of the text, with or without a tag.
+ *
+ * gtext_yaml_node_new_scalar_typed() checked the claim only when the node
+ * also carried a tag, on the reasoning that a tag is an assertion that can be
+ * false. True, and beside the point: the tag is not what makes the claim
+ * checkable, the *type* is. "NO" declared null is exactly as false with a tag
+ * as without one, and only the tagged spelling was refused.
+ *
+ * The node that got through could not be written by anything - canonical form
+ * emitted '!!null "NO"', which this library refuses to read, and plain form
+ * emitted NO, which reads back as the string. The contradiction was in the
+ * node.
+ *
+ * gtext_yaml_node_new_scalar() cannot build one, because it takes the type
+ * from the text rather than from a caller. This is the only door. */
+TEST(YamlWriterContract, ATypeClaimHasToBeTrueOfTheTextWithoutATagToo) {
+	struct Case { const char *text; GTEXT_YAML_Node_Type type; bool ok; };
+	const Case cases[] = {
+		/* The claim the write-up was opened on. */
+		{ "NO", GTEXT_YAML_NULL,  false },
+		{ "NO", GTEXT_YAML_BOOL,  false },
+		{ "NO", GTEXT_YAML_INT,   false },
+		{ "NO", GTEXT_YAML_FLOAT, false },
+		/* Any text is a string, so a string is never refused. */
+		{ "NO", GTEXT_YAML_STRING, true },
+		{ "",   GTEXT_YAML_STRING, true },
+		/* The texts that made the conversion undefined: a float spelling
+		   claimed as an integer. */
+		{ ".INF",  GTEXT_YAML_INT, false },
+		{ "-.INF", GTEXT_YAML_INT, false },
+		{ ".nan",  GTEXT_YAML_INT, false },
+		{ "1.9",   GTEXT_YAML_INT, false },
+		/* ...and the same texts claimed as what they are. */
+		{ ".INF",  GTEXT_YAML_FLOAT, true },
+		{ "-.INF", GTEXT_YAML_FLOAT, true },
+		{ ".nan",  GTEXT_YAML_FLOAT, true },
+		{ "1.9",   GTEXT_YAML_FLOAT, true },
+		/* An integer spelling is a float spelling too: 10.3.2's float row
+		   makes the fraction optional. Not the other way about. */
+		{ "12",   GTEXT_YAML_INT,   true },
+		{ "12",   GTEXT_YAML_FLOAT, true },
+		{ "0x10", GTEXT_YAML_INT,   true },
+		/* Text that resolves to no number at all is neither. */
+		{ "1e400",                   GTEXT_YAML_FLOAT, false },
+		{ "99999999999999999999999", GTEXT_YAML_INT,   false },
+		/* The null and bool spellings 1.2 core does have. */
+		{ "~",     GTEXT_YAML_NULL, true },
+		{ "null",  GTEXT_YAML_NULL, true },
+		{ "",      GTEXT_YAML_NULL, true },
+		{ "true",  GTEXT_YAML_BOOL, true },
+		{ "false", GTEXT_YAML_BOOL, true },
+		{ "yes",   GTEXT_YAML_BOOL, false },
+	};
+	for (const Case &c : cases) {
 		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
 		GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
-			doc, text, strlen(text), GTEXT_YAML_INT, nullptr, nullptr);
-		ASSERT_NE(node, nullptr) << text;
-		EXPECT_EQ(gtext_yaml_node_type(node), GTEXT_YAML_INT) << text;
-		int64_t value = -1;
-		EXPECT_TRUE(gtext_yaml_node_as_int(node, &value)) << text;
-		EXPECT_EQ(value, 0) << text << " converted to something";
+			doc, c.text, strlen(c.text), c.type, nullptr, nullptr);
+		EXPECT_EQ(node != nullptr, c.ok)
+			<< "typed(" << (int)c.type << ") of <<" << c.text << ">>";
+		if (node) {
+			EXPECT_EQ(gtext_yaml_node_type(node), c.type) << c.text;
+		}
 		gtext_yaml_free(doc);
 	}
+}
 
-	/* A float that does fit is still converted, so this is a bound and not a
-	   refusal to look at the text. */
-	GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
-	GTEXT_YAML_Node *node = gtext_yaml_node_new_scalar_typed(
-		doc, "1.9", 3, GTEXT_YAML_INT, nullptr, nullptr);
-	ASSERT_NE(node, nullptr);
-	int64_t value = -1;
-	EXPECT_TRUE(gtext_yaml_node_as_int(node, &value));
-	EXPECT_EQ(value, 1);
-	gtext_yaml_free(doc);
+/* The same claim through both doors gets the same answer.
+ *
+ * This is the property the gate was hiding rather than a second list: what
+ * the typed constructor accepts for a type is what this library's own parser
+ * accepts behind the tag that names it. A case table can be made to agree
+ * with a mistake; this cannot, because the parser is not the code under
+ * test. */
+TEST(YamlWriterContract, TheTypedConstructorAgreesWithTheTagOnTheWayIn) {
+	struct Case { const char *text; GTEXT_YAML_Node_Type type; const char *tag; };
+	const Case cases[] = {
+		{ ".INF",  GTEXT_YAML_INT,   "!!int" },
+		{ ".INF",  GTEXT_YAML_FLOAT, "!!float" },
+		{ "1.9",   GTEXT_YAML_INT,   "!!int" },
+		{ "1.9",   GTEXT_YAML_FLOAT, "!!float" },
+		{ "12",    GTEXT_YAML_INT,   "!!int" },
+		{ "12",    GTEXT_YAML_FLOAT, "!!float" },
+		{ "NO",    GTEXT_YAML_INT,   "!!int" },
+		{ "NO",    GTEXT_YAML_NULL,  "!!null" },
+		{ "NO",    GTEXT_YAML_BOOL,  "!!bool" },
+		{ "~",     GTEXT_YAML_NULL,  "!!null" },
+		{ "true",  GTEXT_YAML_BOOL,  "!!bool" },
+		{ "1e400", GTEXT_YAML_FLOAT, "!!float" },
+		{ "99999999999999999999999", GTEXT_YAML_INT, "!!int" },
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *built = gtext_yaml_node_new_scalar_typed(
+			doc, c.text, strlen(c.text), c.type, nullptr, nullptr);
+
+		const std::string source = std::string(c.tag) + " " + c.text;
+		GTEXT_YAML_Document *parsed =
+			gtext_yaml_parse(source.c_str(), source.size(), nullptr, nullptr);
+		const GTEXT_YAML_Node *root =
+			parsed ? gtext_yaml_document_root(parsed) : nullptr;
+		const bool parser_took_it =
+			root && gtext_yaml_node_type(root) == c.type;
+
+		EXPECT_EQ(built != nullptr, parser_took_it)
+			<< "<<" << source << ">>: constructor "
+			<< (built ? "built" : "refused") << ", parser "
+			<< (parser_took_it ? "took it" : "did not");
+
+		if (parsed) gtext_yaml_free(parsed);
+		gtext_yaml_free(doc);
+	}
 }
 
 /* A comment the writer cannot spell is refused, not written anyway.

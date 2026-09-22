@@ -628,9 +628,8 @@ before trusting the word "conformant" anywhere near this parser.
 
 ## Known defects
 
-Two are open, and both are questions about what an API *means* rather than
-faults with a settled answer. They are written down here rather than guessed
-at.
+One is open, and it is a question about what an API *means* rather than a
+fault with a settled answer. It is written down here rather than guessed at.
 
 **An inline comment inside a flow collection swallows the rest of the line.**
 
@@ -657,29 +656,7 @@ leading one. The first is the honest answer and the third is what the
 neighbouring code does; picking between them is a decision about whether this
 writer preserves comments or merely tolerates them.
 
-**`gtext_yaml_node_new_scalar_typed()` takes a type the text cannot carry.**
-
-```
-gtext_yaml_node_new_scalar(doc, "NO", "!!null", NULL)          -> refused
-gtext_yaml_node_new_scalar_typed(doc, "NO", 2, NULL_TYPE, ...) -> built
-```
-
-The same false claim, refused through one door and accepted through the
-other. The node that results cannot be written correctly by anything:
-canonical form emits `!!null "NO"`, which this library then refuses to read,
-and plain form emits `NO`, which reads back as the string. The contradiction
-is in the node.
-
-The tagged constructor checks the claim because "a tag is an assertion that
-can be false". The type argument is the same assertion made without a tag,
-and nothing checks it. Closing that means `new_scalar_typed()` starts
-returning NULL where it used to return a node, which is a change to published
-behaviour - hence a decision rather than a patch. The alternative is for the
-writer to emit the node's *value* rather than its stale text, which keeps the
-constructor permissive and quietly discards what the caller passed as the
-text.
-
-A third thing is worth recording next to them, and is a gap rather than a
+One more thing is worth recording next to it, and is a gap rather than a
 defect: **the writer cannot be told which schema to target.**
 `GTEXT_YAML_Write_Options` carries no schema, so a document parsed under the
 JSON schema - where `~` is not a null spelling - is written `[~]` and reads
@@ -1679,11 +1656,16 @@ values of type 'long'"*. What the hardware does on x86-64 is hand back
 
 The writer fuzzer built the node that reaches it: a scalar whose text is
 `.INF` and whose caller said it was an integer.
-`gtext_yaml_node_new_scalar_typed()` takes that claim, and with no tag on the
-node there is no assertion for the constructor to check it against - so the
-text and the type disagree, and the conversion still has to have a defined
-answer. It leaves the union at its zero now, which is what text resolving to
-neither an int nor a float already gets.
+`gtext_yaml_node_new_scalar_typed()` took that claim, and at the time nothing
+checked it - so the text and the type disagreed, and the conversion still had
+to have a defined answer. It leaves the union at its zero, which is what text
+resolving to neither an int nor a float already gets.
+
+The constructor refuses that node outright now - see *A claim was checkable
+whether or not a tag was there to check it* below - so nothing reaches the
+conversion from this door any more. The bound stays where it is: the union is
+filled before the claim is judged, so the cast still runs on the way to the
+refusal, and the resolver reaches it by another road entirely.
 
 Looking for the same shape elsewhere found it a second time, quietly: YAML
 1.1's sexagesimal integers are accumulated in floating point and then cast,
@@ -1749,6 +1731,35 @@ tagged `!!int` and declared a string was built, the writer emitted
 names is what `dom_scalar_type()` answers, and the declared type has to match
 it; a tag this library does not resolve still answers "string", so a custom
 tag leaves the type to the caller, which is the point of one.
+
+**A claim was checkable whether or not a tag was there to check it.**
+The check above ran only for a node that also carried a tag, on the reasoning
+that a tag is an assertion that can be false. True, and beside the point: the
+tag is not what makes the claim checkable, the *type* is.
+`gtext_yaml_node_new_scalar_typed(doc, "NO", 2, GTEXT_YAML_NULL, NULL, NULL)`
+is the same false claim as `!!null NO`, and only the tagged spelling was
+refused - the same assertion went through one door and not the other.
+
+What got through could not be written by anything. Canonical form emitted
+`!!null "NO"`, which this library then refuses to read; plain form emitted
+`NO`, which reads back as the string. The contradiction was in the node, so
+the constructor is where it stops.
+
+`gtext_yaml_node_new_scalar()` cannot build one - it takes the type *from* the
+text rather than from a caller - so this was the only door a false claim could
+enter by, which is what made it worth closing rather than tolerating. A string
+is still never refused, and needs no check: any text is a string, and text
+that would resolve to something else is given a quoted style so that it stays
+one.
+
+It is a change to published behaviour: the constructor returns NULL where it
+used to return a node. It is a narrow one, because no caller can have been
+relying on it for anything that worked - every such node either wrote output
+this library refuses to read, or read back as a different type than the one it
+claimed. The property the gate had been hiding is now a test in its own right:
+**what the typed constructor accepts for a type is exactly what this parser
+accepts behind the tag that names it.** That one is checked against the parser
+rather than against a table, so it cannot be made to agree with a mistake.
 
 A refused document says which fault it hit. The scanner describes
 everything it rejects, and that message now travels back with the status

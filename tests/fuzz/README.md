@@ -107,7 +107,8 @@ The rest were real, and every one is in `corpus/yaml-writer/`:
   wrote that text plain, so the string `"1"` came back as the integer `1` and
   no route through the API could write it otherwise. The constructor takes the
   type from the text now, and `gtext_yaml_node_new_scalar_typed()` is where a
-  caller says otherwise;
+  caller says otherwise - and has to say something true of the text, which it
+  once checked only when a tag was there to check it against;
 - a tag of `!-`, which the writer spells `!- ` with a space after it — and the
   parser read that as the non-specific tag `!` followed by a block entry. A
   shorthand tag's name is `ns-tag-char+`, and `-` is one. `!-[]` had always
