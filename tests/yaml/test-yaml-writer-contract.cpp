@@ -798,6 +798,187 @@ TEST(YamlWriterContract, AnUnrepresentableFloatClaimedAsAnIntHasAValue) {
 	gtext_yaml_free(doc);
 }
 
+/* A comment the writer cannot spell is refused, not written anyway.
+ *
+ * A comment is "#" followed by nb-char* (7.1). The writer emitted whatever
+ * string it was handed, and that went wrong twice over. A character 5.1
+ * forbids came out raw, so the writer produced a document this library
+ * refuses to read. Worse, a line break in an *inline* comment ended the
+ * comment and made content of the rest: a mapping of one entry with the
+ * inline comment "one\nevil: yes" was written as "k: v # one" over
+ * "evil: yes" and read back with two entries. Nothing reported either.
+ *
+ * A comment has one spelling and no escapes, so there is nothing to fall
+ * back to - the same position the writer already takes for an anchor name.
+ * A leading comment is the one exception, and only for "\n": it is rendered
+ * as one "#" line per break, which is a real spelling of a multi-line
+ * comment. */
+TEST(YamlWriterContract, AnUnwritableCommentIsRefused) {
+	struct Case { const char *comment; bool leading_ok; bool inline_ok; };
+	const Case cases[] = {
+		{ "fine",             true,  true  },
+		{ "",                 true,  true  },
+		{ "with\ttab",        true,  true  },
+		/* A break has a spelling as a leading comment and none inline. */
+		{ "one\ntwo",         true,  false },
+		{ "one\nevil: yes",   true,  false },
+		/* Nothing splits on a carriage return, so it would reach the stream
+		   raw and end the line there. */
+		{ "one\rtwo",         false, false },
+		/* Not c-printable in any position. */
+		{ "a\x18z",           false, false },
+		{ "a\x01z",           false, false },
+		{ "\x7f",             false, false },
+	};
+
+	for (const Case &c : cases) {
+		for (int inlined = 0; inlined < 2; ++inlined) {
+			GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+			GTEXT_YAML_Node *map = gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+			GTEXT_YAML_Node *k = gtext_yaml_node_new_scalar(doc, "k", nullptr, nullptr);
+			GTEXT_YAML_Node *v = gtext_yaml_node_new_scalar(doc, "v", nullptr, nullptr);
+			map = gtext_yaml_mapping_set(doc, map, k, v);
+			ASSERT_NE(map, nullptr);
+			if (inlined) {
+				gtext_yaml_node_set_inline_comment(doc, v, c.comment);
+			}
+			else {
+				gtext_yaml_node_set_leading_comment(doc, map, c.comment);
+			}
+			gtext_yaml_document_set_root(doc, map);
+
+			const bool want_ok = inlined ? c.inline_ok : c.leading_ok;
+			Written w = write_doc(doc, true);
+			EXPECT_EQ(w.status == GTEXT_YAML_OK, want_ok)
+				<< (inlined ? "inline" : "leading") << " comment <<"
+				<< c.comment << ">> wrote " << w.text;
+
+			/* Where it did write, the document has to come back the shape it
+			   went in - one entry, not two. */
+			if (w.status == GTEXT_YAML_OK) {
+				GTEXT_YAML_Error err;
+				memset(&err, 0, sizeof(err));
+				GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+				GTEXT_YAML_Document *back =
+					gtext_yaml_parse(w.text.data(), w.text.size(), &popts, &err);
+				ASSERT_NE(back, nullptr) << "wrote " << w.text << ": "
+					<< (err.message ? err.message : "");
+				gtext_yaml_error_free(&err);
+				const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+				ASSERT_NE(r, nullptr);
+				EXPECT_EQ(gtext_yaml_mapping_size(r), 1u)
+					<< "the comment escaped into the document: " << w.text;
+				gtext_yaml_free(back);
+			}
+			gtext_yaml_free(doc);
+		}
+	}
+}
+
+/* A preferred scalar style may not change what the document says.
+ *
+ * `GTEXT_YAML_Write_Options::scalar_style` is a preference, and it was being
+ * applied to every scalar whatever its type. Only a plain scalar is resolved
+ * by its contents (10.3.2), so any other style makes a scalar a *string*: the
+ * null went out as `""` and came back the empty string, the integer 42 came
+ * back "42", and true came back "true". Four of the five styles did it, to
+ * four of the five types, and the writer fuzzer found it within ninety
+ * seconds of being allowed to set the option at all.
+ *
+ * Canonical form is exempt and has to stay that way: it writes `!!int` in
+ * front of the value, and an explicit tag carries the type whatever the
+ * quoting does. */
+TEST(YamlWriterContract, APreferredStyleDoesNotChangeWhatTheScalarIs) {
+	struct Case { const char *text; GTEXT_YAML_Node_Type type; };
+	const Case cases[] = {
+		{ "",     GTEXT_YAML_NULL },
+		{ "null", GTEXT_YAML_NULL },
+		{ "~",    GTEXT_YAML_NULL },
+		{ "true", GTEXT_YAML_BOOL },
+		{ "42",   GTEXT_YAML_INT },
+		{ "1.5",  GTEXT_YAML_FLOAT },
+		{ "abc",  GTEXT_YAML_STRING },
+	};
+	const GTEXT_YAML_Scalar_Style styles[] = {
+		GTEXT_YAML_SCALAR_STYLE_PLAIN,
+		GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED,
+		GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED,
+		GTEXT_YAML_SCALAR_STYLE_LITERAL,
+		GTEXT_YAML_SCALAR_STYLE_FOLDED,
+	};
+
+	for (const Case &c : cases) {
+		for (GTEXT_YAML_Scalar_Style style : styles) {
+			for (int canonical = 0; canonical < 2; ++canonical) {
+				GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+				GTEXT_YAML_Node *root =
+					gtext_yaml_node_new_scalar(doc, c.text, nullptr, nullptr);
+				ASSERT_NE(root, nullptr) << c.text;
+				ASSERT_EQ(gtext_yaml_node_type(root), c.type) << c.text;
+				gtext_yaml_document_set_root(doc, root);
+
+				GTEXT_YAML_Sink sink;
+				ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+				GTEXT_YAML_Write_Options opts = gtext_yaml_write_options_default();
+				opts.scalar_style = style;
+				opts.canonical = canonical != 0;
+				ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &opts),
+					GTEXT_YAML_OK) << c.text;
+				const std::string text(gtext_yaml_sink_buffer_data(&sink),
+					gtext_yaml_sink_buffer_size(&sink));
+				gtext_yaml_sink_buffer_free(&sink);
+
+				GTEXT_YAML_Error err;
+				memset(&err, 0, sizeof(err));
+				GTEXT_YAML_Parse_Options popts = gtext_yaml_parse_options_default();
+				GTEXT_YAML_Document *back =
+					gtext_yaml_parse(text.data(), text.size(), &popts, &err);
+				ASSERT_NE(back, nullptr) << "style " << (int)style
+					<< " of <<" << c.text << ">> wrote " << text << ": "
+					<< (err.message ? err.message : "");
+				gtext_yaml_error_free(&err);
+				const GTEXT_YAML_Node *r = gtext_yaml_document_root(back);
+				ASSERT_NE(r, nullptr) << "wrote " << text;
+				EXPECT_EQ(gtext_yaml_node_type(r), c.type)
+					<< "style " << (int)style << (canonical ? " canonical" : "")
+					<< " turned <<" << c.text << ">> into " << text;
+				gtext_yaml_free(back);
+				gtext_yaml_free(doc);
+			}
+		}
+	}
+}
+
+/* The preference is still a preference where honouring it costs nothing: a
+   string is a string in every style, so the option has to reach it. Without
+   this the fix above could be "ignore scalar_style" and still pass. */
+TEST(YamlWriterContract, APreferredStyleStillReachesAString) {
+	struct Case { GTEXT_YAML_Scalar_Style style; char mark; };
+	const Case cases[] = {
+		{ GTEXT_YAML_SCALAR_STYLE_SINGLE_QUOTED, '\'' },
+		{ GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED, '"' },
+	};
+	for (const Case &c : cases) {
+		GTEXT_YAML_Document *doc = gtext_yaml_document_new(nullptr, nullptr);
+		GTEXT_YAML_Node *root = gtext_yaml_node_new_scalar_typed(
+			doc, "abc", 3, GTEXT_YAML_STRING, nullptr, nullptr);
+		ASSERT_NE(root, nullptr);
+		gtext_yaml_document_set_root(doc, root);
+
+		GTEXT_YAML_Sink sink;
+		ASSERT_EQ(gtext_yaml_sink_buffer(&sink), GTEXT_YAML_OK);
+		GTEXT_YAML_Write_Options opts = gtext_yaml_write_options_default();
+		opts.scalar_style = c.style;
+		ASSERT_EQ(gtext_yaml_write_document(doc, &sink, &opts), GTEXT_YAML_OK);
+		const std::string text(gtext_yaml_sink_buffer_data(&sink),
+			gtext_yaml_sink_buffer_size(&sink));
+		gtext_yaml_sink_buffer_free(&sink);
+		EXPECT_NE(text.find(c.mark), std::string::npos)
+			<< "asked for style " << (int)c.style << " and got " << text;
+		gtext_yaml_free(doc);
+	}
+}
+
 /* A tag names the type whose syntax 10.3.2 defines, and the constructor is
    where a caller's claim about it is checked - the parser checks the same
    claim on the way in and refuses '!!int ""'. Without this the writer put

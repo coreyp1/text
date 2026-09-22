@@ -1042,6 +1042,56 @@ static bool anchor_name_is_writable(const char *name) {
   return true;
 }
 
+/* Whether a comment can be written as one, and whether it stays one.
+ *
+ * A comment is "#" followed by nb-char* (7.1), so what is written after the
+ * "#" has to be nb-char: c-printable, no line break, no byte order mark.
+ * The writer emitted whatever string it was handed, which went wrong in two
+ * ways, and the second is worse than the first.
+ *
+ *   - A character 5.1 forbids came out raw, so the writer produced a
+ *     document this library refuses to read - "# a<CAN>z" over "k: v".
+ *
+ *   - A line break in an *inline* comment ended the comment and everything
+ *     after it became content.  A mapping of one entry with the inline
+ *     comment "one\nevil: yes" was written as "k: v # one" over "evil: yes"
+ *     and read back with *two* entries.  The comment escaped into the
+ *     document, which no error said anything about.
+ *
+ * There is nothing to fall back to, the same way there is nothing for an
+ * anchor: a comment has one spelling and no escapes.  So a comment that
+ * cannot be written is refused.
+ *
+ * @p allow_breaks is for a leading comment, which write_comment_lines()
+ * renders as one "#" line per "\n" - a real spelling of a multi-line
+ * comment.  A carriage return is not in it: nothing splits on one, so it
+ * would reach the stream raw and end the line there.  An inline comment has
+ * nowhere to put a second line and takes none.
+ */
+static bool comment_text_is_writable(const char *text, bool allow_breaks) {
+  size_t len = 0;
+  size_t i = 0;
+  if (!text) return true;
+  len = strlen(text);
+  while (i < len) {
+    uint32_t cp = 0;
+    size_t n = 0;
+    if (utf8_decode_one((const unsigned char *)text + i, len - i, &cp, &n) != 1) {
+      return false;
+    }
+    if (cp == 0x0A) {
+      if (!allow_breaks) return false;
+    }
+    else {
+      if (!codepoint_is_printable(cp)) return false;  /* c-printable */
+      if (cp == 0x0D) return false;                   /* b-char */
+      if (cp == 0xFEFF) return false;                 /* c-byte-order-mark */
+    }
+    i += n;
+  }
+  return true;
+}
+
 /* Whether a value has to be quoted rather than written plain.
  *
  * This is a whitelist, and deliberately a conservative one: quoting text that
@@ -1626,6 +1676,7 @@ static GTEXT_YAML_Status write_comment_lines(
     const char *comment,
     size_t indent) {
   if (!comment || !state) return GTEXT_YAML_OK;
+  if (!comment_text_is_writable(comment, true)) return GTEXT_YAML_E_INVALID;
 
   const char *line = comment;
   const char *cursor = comment;
@@ -1660,6 +1711,7 @@ static GTEXT_YAML_Status write_inline_comment(
     yaml_writer_state *state,
     const char *comment) {
   if (!comment || !state) return GTEXT_YAML_OK;
+  if (!comment_text_is_writable(comment, false)) return GTEXT_YAML_E_INVALID;
   GTEXT_YAML_Status status = write_str(state, " # ");
   if (status != GTEXT_YAML_OK) return status;
   return write_str(state, comment);
@@ -1802,6 +1854,28 @@ static GTEXT_YAML_Status write_scalar_node(
     style = GTEXT_YAML_SCALAR_STYLE_DOUBLE_QUOTED;
   } else if (style == GTEXT_YAML_SCALAR_STYLE_PLAIN) {
     style = node->as.scalar.scalar_style;
+  }
+
+  /* A style is a preference, and a preference may not change what the
+     document says.  Only a plain scalar is resolved by its contents
+     (10.3.2), so giving any other style to a scalar that is *not* a string
+     makes it one: with opts->scalar_style set, the null went out as "" and
+     came back the empty string, 42 went out as "42", and true as "true".  A
+     style stored on the node says the same thing through a different door -
+     a node built as an int and told it was double-quoted - and is refused
+     here for the same reason.
+
+     This is the rule the writer already applies to "~" a few lines below and
+     to its quoting whitelist; the option that asks for a style had simply
+     never been held to it.  plan_scalar_style() still upgrades PLAIN to a
+     quoted style where the text cannot be written plain at all, so nothing
+     unprintable escapes through this.
+
+     Canonical form is the exception, and needs no help: it writes "!!int"
+     in front of the value, and an explicit tag carries the type whatever the
+     quoting does. */
+  if (!canonical && node->type != GTEXT_YAML_STRING) {
+    style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
   }
 
   /* The null spellings are asked about before any other style question.  "~"
@@ -2863,6 +2937,10 @@ static GTEXT_YAML_Status writer_emit_comment(
   if (!writer || !event) return GTEXT_YAML_E_INVALID;
   const char *comment = event->data.comment.ptr;
   if (!comment) return GTEXT_YAML_OK;
+  /* One event, one comment line: this writes the text straight out and
+     splits nothing, so a break here has nowhere to go.  A caller wanting two
+     comment lines emits two comment events. */
+  if (!comment_text_is_writable(comment, false)) return GTEXT_YAML_E_INVALID;
 
   yaml_writer_stack_entry *top = writer_stack_top(writer);
   size_t indent = top ? top->indent : 0;
