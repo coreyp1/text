@@ -102,7 +102,15 @@ public:
 		const char *saved = setlocale(LC_NUMERIC, nullptr);
 		if (saved) previous_ = saved;
 		for (const char *name : {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8",
-				"fr_FR.utf8", "es_ES.UTF-8", "nl_NL.UTF-8", "de_DE", "fr_FR"}) {
+				"fr_FR.utf8", "es_ES.UTF-8", "nl_NL.UTF-8", "de_DE", "fr_FR"
+#ifdef _WIN32
+				/* The CRT's spellings. msvcrt, which MINGW64 links, knows
+				   none of the POSIX names above and has no UTF-8 locales;
+				   these select the code-page locales, which separate with a
+				   comma all the same. */
+				, "German_Germany", "French_France"
+#endif
+				}) {
 			if (setlocale(LC_NUMERIC, name)) {
 				const lconv *lc = localeconv();
 				if (lc && lc->decimal_point && strcmp(lc->decimal_point, ",") == 0) {
@@ -171,6 +179,12 @@ std::string JsonFromDouble(double x) {
 /* Builds <name>.UTF-8 into a directory LOCPATH points at, once per process.
    Returns true if the locale can then be selected. */
 static bool GenerateLocale(const std::string &name) {
+#ifdef _WIN32
+	/* Nothing to generate with: Windows has no localedef and no LOCPATH, and
+	   its CRT has the locales it has. CommaLocale knows their names. */
+	(void)name;
+	return false;
+#else
 	static std::string dir;
 	if (dir.empty()) {
 		char tmpl[] = "/tmp/gtext-locale-XXXXXX";
@@ -185,6 +199,7 @@ static bool GenerateLocale(const std::string &name) {
 	if (system(cmd.c_str()) != 0) return false;
 	ScopedLocale check((name + ".UTF-8").c_str());
 	return check.active();
+#endif
 }
 
 static bool EnsureCommaLocale() {
@@ -289,6 +304,34 @@ TEST(LocaleNumbers, AConversionCannotDisturbAnotherThread) {
    its rules - consuming a malformed exponent, dropping the bare "0x" case,
    and accepting a lone "." - were caught 63984, 3224 and 371362 times
    respectively by this comparison. */
+/* How much of `in` strtod consumes - the reference the extent scan answers to.
+
+   MinGW's strtod reads "nan(" through the next ')' whatever lies between,
+   where C17 7.22.1.3 allows only digits, letters and '_' there; "nan(a b)"
+   is 8 bytes to it and 3 to the standard. The scan follows the standard, so
+   on Windows the reference is corrected to what a conforming strtod would
+   say, for that one shape only. Everything else is still strtod's answer. */
+static size_t StrtodExtent(const char *in) {
+	char *end = nullptr;
+	(void)strtod(in, &end);
+	size_t n = (size_t)(end - in);
+#ifdef _WIN32
+	const char *p = in;
+	while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
+	if (*p == '+' || *p == '-') p++;
+	auto lower = [](char ch) { return (ch >= 'A' && ch <= 'Z') ? ch + 32 : ch; };
+	if (lower(p[0]) == 'n' && lower(p[1]) == 'a' && lower(p[2]) == 'n'
+			&& p[3] == '(' && n > 0 && in[n - 1] == ')') {
+		for (const char *r = p + 4; r < end - 1; r++) {
+			const bool nchar = (*r >= '0' && *r <= '9') || *r == '_'
+				|| (lower(*r) >= 'a' && lower(*r) <= 'z');
+			if (!nchar) return (size_t)(p + 3 - in);
+		}
+	}
+#endif
+	return n;
+}
+
 TEST(LocaleNumbers, TheExtentScanAgreesWithStrtod) {
 	ScopedLocale c("C");
 	ASSERT_TRUE(c.active());
@@ -302,9 +345,7 @@ TEST(LocaleNumbers, TheExtentScanAgreesWithStrtod) {
 		"-inf", "+nan", "1.2.3", "0x1.8", "1_000",
 	};
 	for (const char *in : cases) {
-		char *end = nullptr;
-		(void)strtod(in, &end);
-		EXPECT_EQ(gtext_number_c_extent(in), (size_t)(end - in))
+		EXPECT_EQ(gtext_number_c_extent(in), StrtodExtent(in))
 			<< "input \"" << in << "\"";
 	}
 
@@ -322,9 +363,7 @@ TEST(LocaleNumbers, TheExtentScanAgreesWithStrtod) {
 		size_t len = 1 + (size_t)(rnd() % 18);
 		for (size_t j = 0; j < len; j++) buf[j] = alphabet[rnd() % alpha_len];
 		buf[len] = '\0';
-		char *end = nullptr;
-		(void)strtod(buf, &end);
-		if (gtext_number_c_extent(buf) != (size_t)(end - buf)) {
+		if (gtext_number_c_extent(buf) != StrtodExtent(buf)) {
 			if (mismatches < 5) ADD_FAILURE() << "input \"" << buf << "\"";
 			mismatches++;
 		}
@@ -376,6 +415,13 @@ TEST(LocaleNumbers, AnIntegerIsSpelledTheSameInEveryLocale) {
    reports has to shorten with it, or every caller that checks "did this fit"
    is working from a number that is now wrong. */
 TEST(LocaleNumbers, AMultiByteSeparatorIsStillRepaired) {
+#ifdef _WIN32
+	/* msvcrt's locales are code-page locales, and U+066B is in none of
+	   them: its "Pashto_Afghanistan" separates with a one-byte comma. There
+	   is no locale here with a multi-byte separator to be hostile with. */
+	GTEST_SKIP() << "the Windows CRT has no locale with a multi-byte "
+		"decimal separator";
+#endif
 	ASSERT_TRUE(GenerateLocale("ps_AF"))
 		<< "could not generate ps_AF.UTF-8; without it the multi-byte "
 		   "separator path is never exercised";
