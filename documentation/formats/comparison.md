@@ -24,7 +24,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 |---|---|---|---|
 | 1 | ~~No `LICENSE` file~~ **fixed suite-wide**: all nine are LGPL-3.0-only | suite-wide | was: blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
-| 3 | The `release` build is compiled `-O0` | suite-wide | 1.5x to 2.1x slower |
+| 3 | ~~The `release` build is compiled `-O0`~~ **fixed**: release is `-O2`, debug `-O0` | suite-wide | was: 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
@@ -136,33 +136,57 @@ still refused rather than ignored.
 
 ---
 
-## 3. The optimized build is not the one anyone gets
+## 3. The optimized build is not the one anyone gets - fixed
 
-The `Makefile` sets `CFLAGS := ... -std=c17 -O0 -g`, and the directory it
-writes to is named `build/linux/release`. There is no separate optimized
-configuration, so the library a caller links against after a plain `make` is
-unoptimized.
+**`release` is now `-O2` and `debug` is `-O0`.** The level is chosen by
+`OPT_CFLAGS`, and it is the one thing that separates the two builds; `-g`
+stays in both, because a release nobody can read in a debugger is a release
+nobody can diagnose.
 
-Rebuilding with `EXTRA_CFLAGS="-O2"` and re-running the same benchmark on the
-same inputs:
+As found: `CFLAGS` held a literal `-O0` and the `ifeq ($(BUILD),debug)` block
+appended `-debug` to `BRANCH` and `VERSION_STRING` without changing how
+anything was compiled. So `release` and `debug` differed only in the name on
+the artifact, and the library a caller linked against after a plain `make` was
+unoptimized. It was never a decision: the production build doubled as the
+debugging build early on, and nothing revisited it.
 
-| Parser | `release` as shipped (`-O0`) | Rebuilt `-O2` | Gain |
+What the old default cost, measured at the time on the same inputs by
+rebuilding with `EXTRA_CFLAGS="-O2"`:
+
+| Parser | `release` as it shipped (`-O0`) | `-O2` | Gain |
 |---|---|---|---|
 | JSON DOM parse | 37.4 MB/s | 57.5 MB/s | 1.5x |
 | CSV DOM parse | 47.4 MB/s | 101.8 MB/s | 2.1x |
 
-Because `CFLAGS` appends `$(EXTRA_CFLAGS)` after `-O0`, the override works
-without editing the file, which is what made the measurement easy. That same
-ordering is what makes the default harmless to change.
+Two things about the move are worth recording, because neither is visible in
+the diff.
 
-This is template-wide, not specific to `text`.
+**The sanitizer gate moved with it, from `-O0` to `-O2`.**
+`ASAN_UBSAN_FLAGS` pins no level of its own, so `make test-asan` inherits
+whatever the release build uses. That is left inherited rather than pinned:
+strict-aliasing and signed-overflow assumptions are inert at `-O0` and live at
+`-O2`, so a UB gate compiled at `-O0` is not asking about the code anybody
+runs. `make test-asan BUILD=debug` gives `-O0` when a trace needs reading.
+`make fuzz` is unaffected, carrying `-O1` on a command line it builds itself.
+
+**What `-O2` broke was a test, not a compile.** The 54 sources compile clean,
+and that is a real zero rather than an unasked question - the same probe gives
+no diagnostics at `-O0` and two hard errors at `-O2` under these flags, so the
+warnings that need the optimizer's dataflow are armed and have nothing to say
+here. Four assertions in `CsvDialectPresets` compared dialect structs with
+`memcmp` over `sizeof`, which reads the eleven padding bytes the struct
+carries, and padding holds indeterminate values. Every named field agreed;
+one pad byte did not. A test that compares structs bytewise is the failure
+mode to look for when a library moves off `-O0`, because it is invisible to
+`-Werror` and presents as a library regression.
 
 ---
 
 ## 4. Throughput
 
 Measured with a 3.7 MB JSON document of 20,000 records and a 12.4 MB CSV of
-200,000 rows, best of three runs each, library built `-O2`, compared against
+200,000 rows, best of three runs each, library built `-O2` - which is now
+simply `make`, where it once took an override - compared against
 the Python standard library on the same machine and the same files.
 
 | Parser | This library | Python stdlib | Ratio |
