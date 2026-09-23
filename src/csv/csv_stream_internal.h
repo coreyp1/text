@@ -118,6 +118,11 @@ typedef struct csv_field_buffer {
   // Field start tracking (for chunk boundary handling)
   size_t start_offset; ///< Offset in current chunk where field started
                        ///< (SIZE_MAX if field already buffered)
+
+  /// The allocator `buffer` came from, and the one it must go back to.
+  /// Carried here so csv_field_buffer_grow() reaches it without a signature
+  /// change - it is called from five places across four files.
+  const GTEXT_Allocator * alloc;
 } csv_field_buffer;
 
 /**
@@ -226,7 +231,8 @@ static inline size_t csv_get_limit(size_t configured, size_t default_val) {
  *
  * @param fb Field buffer to initialize (must not be NULL)
  */
-void csv_field_buffer_init(csv_field_buffer * fb);
+void csv_field_buffer_init(
+    csv_field_buffer * fb, const GTEXT_Allocator * alloc);
 
 /**
  * @brief Clear a field buffer structure

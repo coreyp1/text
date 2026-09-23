@@ -33,6 +33,7 @@
 #ifndef GHOTI_IO_GTEXT_CSV_CSV_CORE_H
 #define GHOTI_IO_GTEXT_CSV_CSV_CORE_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -193,6 +194,38 @@ typedef struct {
   size_t context_radius_bytes; ///< Bytes before and after the error position to
                                ///< include in the snippet (0 = library
                                ///< default, 40)
+
+  /**
+   * Allocator for everything the parse produces, or NULL for
+   * gtext_allocator_default().
+   *
+   * The table records it, so gtext_csv_free_table() releases through the same
+   * allocator without the caller passing it again. It must stay valid for the
+   * lifetime of the table the parse returns.
+   *
+   * Covered: gtext_csv_parse_table(), gtext_csv_parse_file() and
+   * gtext_csv_stream_new() - the arena and every block in it, the table
+   * structure, the header map, every row and field array, and the streaming
+   * parser's own structure and field buffer. Also every table operation
+   * afterwards: row and column insert, append, remove and set,
+   * gtext_csv_clone(), gtext_csv_table_compact() and
+   * gtext_csv_normalize_rows(), each taking the allocator of the table it
+   * works on, so compacting never moves a caller's data onto the C heap.
+   *
+   * Not covered, and still using the C library:
+   *
+   * - GTEXT_CSV_Error and the context snippet it owns, released by
+   *   gtext_csv_error_free(), which is handed an error and no allocator. The
+   *   same is true of GTEXT_JSON_Error.
+   * - The writer: sinks, the writer structure, and the transient escape
+   *   buffer. gtext_csv_write_table() is a separate entry point taking write
+   *   options, which have no allocator, exactly as the JSON writer does not.
+   *
+   * Neither of those is ever freed through a caller's allocator or vice
+   * versa, so there is no path on which the two mix. `make check-allocators`
+   * is what keeps that true.
+   */
+  const GTEXT_Allocator * allocator;
 } GTEXT_CSV_Parse_Options;
 
 /**

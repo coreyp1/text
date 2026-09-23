@@ -33,9 +33,16 @@
 #include <ghoti.io/text/macros.h>
 #include "csv_stream_internal.h"
 // Field buffer helper functions
-void csv_field_buffer_init(csv_field_buffer * fb) {
+void csv_field_buffer_init(
+    csv_field_buffer * fb, const GTEXT_Allocator * alloc) {
+  // The allocator is a parameter rather than something the caller assigns
+  // afterwards because this memset would wipe it. It did: the assignment sat
+  // above this call, the buffer grew through the C library, and
+  // gtext_csv_stream_free() then released it through the caller's allocator -
+  // which the tracking allocator's guard word caught as a block it never made.
   memset(fb, 0, sizeof(*fb));
   fb->start_offset = SIZE_MAX;
+  fb->alloc = alloc;
 }
 
 void csv_field_buffer_clear(csv_field_buffer * fb) {
@@ -108,7 +115,7 @@ GTEXT_CSV_Status csv_field_buffer_grow(csv_field_buffer * fb, size_t needed) {
     return GTEXT_CSV_E_OOM;
   }
 
-  char * new_buffer = realloc(fb->buffer, new_size);
+  char * new_buffer = gtext_allocator_realloc(fb->alloc, fb->buffer, new_size);
   if (!new_buffer) {
     return GTEXT_CSV_E_OOM;
   }

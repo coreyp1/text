@@ -30,6 +30,7 @@
 #ifndef GHOTI_IO_GTEXT_SRC_CSV_CSV_INTERNAL_H
 #define GHOTI_IO_GTEXT_SRC_CSV_CSV_INTERNAL_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 
 #include <stdbool.h>
@@ -161,6 +162,12 @@ struct csv_arena {
   csv_arena_block * first;   ///< First block in the arena
   csv_arena_block * current; ///< Current block being used
   size_t block_size;         ///< Size of each new block
+  /// The allocator every block came from, and the one they must go back to.
+  /// Held here rather than only on the context because csv_arena_free() has
+  /// to release the blocks after the context that named the allocator is
+  /// already gone in some paths - and freeing a block through the wrong
+  /// allocator corrupts the heap rather than leaking.
+  const GTEXT_Allocator * alloc;
 };
 
 /**
@@ -199,6 +206,10 @@ typedef struct csv_context {
   const char *
       input_buffer; ///< Original input buffer (for in-situ mode, caller-owned)
   size_t input_buffer_len; ///< Length of input buffer (for in-situ mode)
+  /// The caller's allocator, or NULL for gtext_allocator_default(). Every
+  /// allocation a table owns is reachable from here, which is what makes
+  /// `table->ctx->alloc` the answer at almost every site in csv_table.c.
+  const GTEXT_Allocator * alloc;
 } csv_context;
 
 /**
@@ -208,7 +219,8 @@ typedef struct csv_context {
  *
  * @return New context, or NULL on failure
  */
-GTEXT_INTERNAL_API csv_context * csv_context_new(void);
+GTEXT_INTERNAL_API csv_context * csv_context_new(
+    const GTEXT_Allocator * alloc);
 
 /**
  * @brief Set input buffer for in-situ mode
@@ -419,6 +431,10 @@ typedef struct {
                                ///< csv_preallocate_column_field_data)
   size_t * field_data_lengths; ///< Array of field data lengths (from
                                ///< csv_preallocate_column_field_data)
+  /// The allocator every array above came from. Carried in the structure
+  /// so the cleanup paths reach it without a signature change, and so an
+  /// unwind that runs before the context exists still frees correctly.
+  const GTEXT_Allocator * alloc;
 } csv_column_op_temp_arrays;
 
 /**
@@ -429,6 +445,10 @@ typedef struct {
   csv_table_row * new_rows;            ///< New rows array
   csv_table_field ** new_field_arrays; ///< Array of field arrays
   char *** new_field_data_ptrs;        ///< Array of field data pointer arrays
+  /// The allocator every array above came from. Carried in the structure
+  /// so the cleanup paths reach it without a signature change, and so an
+  /// unwind that runs before the context exists still frees correctly.
+  const GTEXT_Allocator * alloc;
 } csv_compact_structures;
 
 /**
@@ -586,6 +606,10 @@ typedef struct {
   csv_table_row * new_rows;            ///< New rows array
   csv_table_field ** new_field_arrays; ///< Array of field array pointers
   char *** new_field_data_ptrs;        ///< Array of field data pointer arrays
+  /// The allocator every array above came from. Carried in the structure
+  /// so the cleanup paths reach it without a signature change, and so an
+  /// unwind that runs before the context exists still frees correctly.
+  const GTEXT_Allocator * alloc;
 } csv_clone_structures;
 
 /**

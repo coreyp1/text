@@ -12,9 +12,11 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <gtest/gtest.h>
 
 #include <ghoti.io/text/allocator.h>
+#include <ghoti.io/text/csv.h>
 #include <ghoti.io/text/json.h>
 
 namespace {
@@ -327,4 +329,239 @@ TEST(Allocator, ExplicitDefaultMatchesTheNullFallback) {
 	c = gtext_allocator_realloc(nullptr, c, 64);
 	ASSERT_NE(c, nullptr);
 	gtext_allocator_free(def, c);
+}
+
+
+// ---------------------------------------------------------------------------
+// CSV
+//
+// The hazard documentation/formats/allocator-todo.md names is not a leak: a
+// table whose arena came from the caller's allocator and whose structure came
+// from the C library corrupts the heap when it is freed, and the caller cannot
+// see it coming. The tracking allocator's guard word is what catches it - a
+// free() that reached the C library instead leaves live_blocks above zero, and
+// a free() of a block this allocator never made trips the guard outright.
+//
+// So every test below asserts both halves: that the count went up, so the
+// allocator is really in the path, and that it came back to zero.
+// ---------------------------------------------------------------------------
+
+TEST(Allocator, CsvParseAndFreeBalanceThroughTheAllocator) {
+	// Chosen to reach the paths that allocate: a header row and its map,
+	// quoted fields needing an unescape buffer, an embedded newline, and
+	// enough rows to grow past the initial capacity.
+	std::string src = "name,value,note\n";
+	for (int i = 0; i < 40; i++) {
+		src += "row" + std::to_string(i) + ",\"a,b\",\"multi\nline\"\n";
+	}
+
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.allocator = &alloc;
+	opts.dialect.treat_first_row_as_header = true;
+
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src.data(), src.size(), &opts, &err);
+	ASSERT_NE(t, nullptr) << (err.message ? err.message : "parse failed");
+	EXPECT_GT(c.total_allocations, 0u);
+	EXPECT_GT(c.live_blocks, 0u);
+	EXPECT_EQ(gtext_csv_row_count(t), 40u);
+
+	gtext_csv_free_table(t);
+	gtext_csv_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, CsvTableMutationStaysWithTheTablesAllocator) {
+	// The paths allocator-todo.md calls out by name: the temporary arrays in
+	// the column operations, and the clone and compact paths that build a
+	// second set of structures before swapping them in. Each takes the
+	// allocator of the table it works on, so none of them may move a caller's
+	// data onto the C heap.
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+
+	const char * headers[3] = {"a", "b", "c"};
+	GTEXT_CSV_Table * t = gtext_csv_new_table_with_headers_and_allocator(
+	    headers, nullptr, 3, &alloc);
+	ASSERT_NE(t, nullptr);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	for (int i = 0; i < 20; i++) {
+		std::string v = "v" + std::to_string(i);
+		const char * row[3] = {v.c_str(), "second", "third"};
+		ASSERT_EQ(gtext_csv_row_append(t, row, nullptr, 3, nullptr),
+		    GTEXT_CSV_OK);
+	}
+
+	// One entry per row, the header row included: csv_get_rows_to_modify()
+	// counts it, so 20 data rows plus the header is 21.
+	const char * col[21];
+	col[0] = "d";
+	for (int i = 1; i < 21; i++) {
+		col[i] = "added";
+	}
+	EXPECT_EQ(
+	    gtext_csv_column_append_with_values(t, "d", 1, col, nullptr),
+	    GTEXT_CSV_OK);
+	EXPECT_EQ(gtext_csv_normalize_to_max(t), GTEXT_CSV_OK);
+	EXPECT_EQ(gtext_csv_table_compact(t), GTEXT_CSV_OK);
+
+	GTEXT_CSV_Table * clone = gtext_csv_clone(t);
+	ASSERT_NE(clone, nullptr) << "a clone inherits the source's allocator";
+
+	gtext_csv_free_table(clone);
+	gtext_csv_free_table(t);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, CsvStreamBalancesThroughTheAllocator) {
+	// The streaming parser's own structure and its field buffer, which grows
+	// across chunk boundaries - fed one byte at a time so that it must.
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.allocator = &alloc;
+
+	GTEXT_CSV_Event_cb cb = [](const GTEXT_CSV_Event *, void *) {
+		return GTEXT_CSV_OK;
+	};
+	GTEXT_CSV_Stream * st = gtext_csv_stream_new(&opts, cb, nullptr);
+	ASSERT_NE(st, nullptr);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	std::string src = "a,\"quoted,field\",c\n";
+	for (int i = 0; i < 30; i++) {
+		src += "\"a long quoted field that forces the buffer to grow\",b,c\n";
+	}
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	for (size_t i = 0; i < src.size(); i++) {
+		ASSERT_EQ(gtext_csv_stream_feed(st, src.data() + i, 1, &err),
+		    GTEXT_CSV_OK)
+		    << (err.message ? err.message : "feed failed") << " at " << i;
+	}
+	EXPECT_EQ(gtext_csv_stream_finish(st, &err), GTEXT_CSV_OK);
+	gtext_csv_stream_free(st);
+	gtext_csv_error_free(&err);
+
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+/*
+ * Empty input takes its own path - csv_create_empty_table() rather than the
+ * parse - and that path was not covered until a planted defect went unnoticed
+ * by every test above. Planting the exact fault allocator-todo.md describes
+ * (the table structure on the C library, its arena on the caller's allocator)
+ * left the suite green, because nothing here had ever parsed zero bytes.
+ */
+TEST(Allocator, CsvEmptyInputBalancesThroughTheAllocator) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.allocator = &alloc;
+
+	GTEXT_CSV_Table * t = gtext_csv_parse_table("", 0, &opts, nullptr);
+	ASSERT_NE(t, nullptr);
+	EXPECT_GT(c.total_allocations, 0u) << "the allocator was bypassed";
+	EXPECT_GT(c.live_blocks, 0u);
+	EXPECT_EQ(gtext_csv_row_count(t), 0u);
+
+	gtext_csv_free_table(t);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, CsvParseBalancesOnTheErrorPath) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.allocator = &alloc;
+
+	const char * bad = "a,\"unterminated";
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(bad, std::strlen(bad), &opts, &err);
+	if (t) {
+		gtext_csv_free_table(t);
+	}
+	gtext_csv_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, CsvParseSurvivesAllocationFailure) {
+	const char * src = "a,b,c\n1,2,3\n4,\"5,5\",6\n";
+	for (size_t budget = 1; budget <= 8; budget++) {
+		Counters c;
+		c.fail_after = budget;
+		GTEXT_Allocator alloc = make_allocator(&c);
+		GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+		opts.allocator = &alloc;
+
+		GTEXT_CSV_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_CSV_Table * t =
+		    gtext_csv_parse_table(src, std::strlen(src), &opts, &err);
+		if (t) {
+			gtext_csv_free_table(t);
+		}
+		gtext_csv_error_free(&err);
+		EXPECT_EQ(c.live_blocks, 0u) << "leak with budget " << budget;
+	}
+}
+
+TEST(Allocator, TwoCsvTablesWithDifferentAllocatorsStaySeparate) {
+	// The table records its allocator, so freeing one must not touch the
+	// other - and must not free through the other, which is what the guard
+	// word would catch.
+	const char * src = "a,b\n1,2\n";
+	Counters c1, c2;
+	GTEXT_Allocator a1 = make_allocator(&c1);
+	GTEXT_Allocator a2 = make_allocator(&c2);
+
+	GTEXT_CSV_Parse_Options o1 = gtext_csv_parse_options_default();
+	o1.allocator = &a1;
+	GTEXT_CSV_Parse_Options o2 = gtext_csv_parse_options_default();
+	o2.allocator = &a2;
+
+	GTEXT_CSV_Table * t1 =
+	    gtext_csv_parse_table(src, std::strlen(src), &o1, nullptr);
+	GTEXT_CSV_Table * t2 =
+	    gtext_csv_parse_table(src, std::strlen(src), &o2, nullptr);
+	ASSERT_NE(t1, nullptr);
+	ASSERT_NE(t2, nullptr);
+
+	size_t before = c2.live_blocks;
+	gtext_csv_free_table(t1);
+	EXPECT_EQ(c1.live_blocks, 0u);
+	EXPECT_EQ(c2.live_blocks, before) << "freeing one touched the other";
+
+	gtext_csv_free_table(t2);
+	EXPECT_EQ(c2.live_blocks, 0u);
+}
+
+TEST(Allocator, CsvNullAllocatorOptionStillWorks) {
+	// The default path must be unchanged: no allocator named, nothing
+	// reaching a caller's allocator, and the table still correct.
+	const char * src = "a,b\n1,2\n";
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	EXPECT_EQ(opts.allocator, nullptr) << "no allocator by default";
+
+	GTEXT_CSV_Table * t =
+	    gtext_csv_parse_table(src, std::strlen(src), &opts, nullptr);
+	ASSERT_NE(t, nullptr);
+	EXPECT_EQ(gtext_csv_row_count(t), 2u);
+	gtext_csv_free_table(t);
+
+	GTEXT_CSV_Table * plain = gtext_csv_new_table_with_allocator(nullptr);
+	ASSERT_NE(plain, nullptr);
+	gtext_csv_free_table(plain);
 }

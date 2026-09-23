@@ -47,8 +47,9 @@ static const char csv_empty_field_string[] = "";
 #define CSV_ARENA_DEFAULT_BLOCK_SIZE (64 * 1024)
 
 // Create a new arena allocator
-static csv_arena * csv_arena_new(size_t initial_block_size) {
-  csv_arena * arena = malloc(sizeof(csv_arena));
+static csv_arena * csv_arena_new(
+    size_t initial_block_size, const GTEXT_Allocator * alloc) {
+  csv_arena * arena = gtext_allocator_malloc(alloc, sizeof(csv_arena));
   if (!arena) {
     return NULL;
   }
@@ -57,6 +58,7 @@ static csv_arena * csv_arena_new(size_t initial_block_size) {
                                              : CSV_ARENA_DEFAULT_BLOCK_SIZE;
   arena->first = NULL;
   arena->current = NULL;
+  arena->alloc = alloc;
 
   return arena;
 }
@@ -105,7 +107,7 @@ static void * csv_arena_alloc(csv_arena * arena, size_t size, size_t align) {
   if (block_alloc_size < block_size) { // Overflow check
     return NULL;
   }
-  csv_arena_block * block = malloc(block_alloc_size);
+  csv_arena_block * block = gtext_allocator_malloc(arena->alloc, block_alloc_size);
   if (!block) {
     return NULL;
   }
@@ -118,7 +120,7 @@ static void * csv_arena_alloc(csv_arena * arena, size_t size, size_t align) {
   size_t aligned_offset = (offset + align_mask) & ~align_mask;
   // Check for overflow before assignment
   if (aligned_offset > SIZE_MAX - size) {
-    free(block);
+    gtext_allocator_free(arena->alloc, block);
     return NULL; // Overflow
   }
   block->used = aligned_offset + size;
@@ -141,51 +143,58 @@ static void csv_arena_free(csv_arena * arena) {
     return;
   }
 
+  // Captured before the loop: the last free below releases the structure this
+  // was read from, so reading it afterwards is a use-after-free.
+  const GTEXT_Allocator * alloc = arena->alloc;
+
   csv_arena_block * block = arena->first;
   while (block) {
     csv_arena_block * next = block->next;
-    free(block);
+    gtext_allocator_free(alloc, block);
     block = next;
   }
 
-  free(arena);
+  gtext_allocator_free(alloc, arena);
 }
 
 // Create a new CSV context with arena
-GTEXT_INTERNAL_API csv_context * csv_context_new(void) {
-  csv_context * ctx = malloc(sizeof(csv_context));
+GTEXT_INTERNAL_API csv_context * csv_context_new(
+    const GTEXT_Allocator * alloc) {
+  csv_context * ctx = gtext_allocator_malloc(alloc, sizeof(csv_context));
   if (!ctx) {
     return NULL;
   }
 
-  ctx->arena = csv_arena_new(0); // Use default block size
+  ctx->arena = csv_arena_new(0, alloc); // Use default block size
   if (!ctx->arena) {
-    free(ctx);
+    gtext_allocator_free(alloc, ctx);
     return NULL;
   }
 
   ctx->input_buffer = NULL;
   ctx->input_buffer_len = 0;
+  ctx->alloc = alloc;
 
   return ctx;
 }
 
 // Create a new CSV context with arena and specified initial block size
 static csv_context * csv_context_new_with_block_size(
-    size_t initial_block_size) {
-  csv_context * ctx = malloc(sizeof(csv_context));
+    size_t initial_block_size, const GTEXT_Allocator * alloc) {
+  csv_context * ctx = gtext_allocator_malloc(alloc, sizeof(csv_context));
   if (!ctx) {
     return NULL;
   }
 
-  ctx->arena = csv_arena_new(initial_block_size);
+  ctx->arena = csv_arena_new(initial_block_size, alloc);
   if (!ctx->arena) {
-    free(ctx);
+    gtext_allocator_free(alloc, ctx);
     return NULL;
   }
 
   ctx->input_buffer = NULL;
   ctx->input_buffer_len = 0;
+  ctx->alloc = alloc;
 
   return ctx;
 }
@@ -206,8 +215,9 @@ void csv_context_free(csv_context * ctx) {
     return;
   }
 
+  const GTEXT_Allocator * alloc = ctx->alloc;
   csv_arena_free(ctx->arena);
-  free(ctx);
+  gtext_allocator_free(alloc, ctx);
 }
 
 // Allocate memory from a context's arena
@@ -273,7 +283,11 @@ static void csv_set_field_count_error(GTEXT_CSV_Error * err,
 
   // Allocate and format error message with expected and actual counts
   size_t msg_len = 128; // Sufficient for formatted message
-  char * msg = (char *)malloc(msg_len);
+  // allocator-exempt: a GTEXT_CSV_Error owns its own strings and is released
+  // by gtext_csv_error_free(), which has no allocator to release them through.
+  // Errors are on the C library in both this module and JSON, and never cross
+  // into anything a caller's allocator owns.
+  char * msg = (char *)malloc(msg_len); // allocator-exempt
   if (msg) {
     if (row_index != SIZE_MAX) {
       snprintf(msg, msg_len,
@@ -313,8 +327,9 @@ static GTEXT_CSV_Status csv_preallocate_column_field_data(
     const char * const * values, const size_t * value_lengths,
     char *** field_data_array_out, size_t ** field_data_lengths_out);
 
-static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(
-    size_t rows_to_modify, csv_column_op_temp_arrays * temp_arrays_out);
+static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(size_t rows_to_modify,
+    csv_column_op_temp_arrays * temp_arrays_out,
+    const GTEXT_Allocator * alloc);
 
 static void csv_column_op_cleanup_temp_arrays(
     csv_column_op_temp_arrays * temp_arrays);
@@ -737,14 +752,16 @@ static GTEXT_CSV_Status csv_table_event_callback(
 }
 
 // Helper function to create an empty table
-static GTEXT_CSV_Table * csv_create_empty_table(GTEXT_CSV_Error * err) {
-  csv_context * ctx = csv_context_new();
+static GTEXT_CSV_Table * csv_create_empty_table(
+    GTEXT_CSV_Error * err, const GTEXT_Allocator * alloc) {
+  csv_context * ctx = csv_context_new(alloc);
   if (!ctx) {
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to create context");
     return NULL;
   }
 
-  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)malloc(sizeof(GTEXT_CSV_Table));
+  GTEXT_CSV_Table * table =
+      (GTEXT_CSV_Table *)gtext_allocator_malloc(alloc, sizeof(GTEXT_CSV_Table));
   if (!table) {
     csv_context_free(ctx);
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to allocate table");
@@ -757,7 +774,7 @@ static GTEXT_CSV_Table * csv_create_empty_table(GTEXT_CSV_Error * err) {
   table->rows = (csv_table_row *)csv_arena_alloc_for_context(
       ctx, sizeof(csv_table_row) * table->row_capacity, 8);
   if (!table->rows) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to allocate rows");
     return NULL;
@@ -819,25 +836,28 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
     return NULL;
   }
 
-  // Empty input is valid - return empty table
-  if (len == 0) {
-    return csv_create_empty_table(err);
-  }
-
   GTEXT_CSV_Parse_Options default_opts;
   if (!opts) {
     default_opts = gtext_csv_parse_options_default();
     opts = &default_opts;
   }
+  const GTEXT_Allocator * alloc = opts->allocator;
+
+  // Empty input is valid - return empty table.  Moved below the option
+  // defaulting above, because it needs the allocator the options name and
+  // used to run before they had been read.
+  if (len == 0) {
+    return csv_create_empty_table(err, alloc);
+  }
 
   // Create context and allocate table structure
-  csv_context * ctx = csv_context_new();
+  csv_context * ctx = csv_context_new(alloc);
   if (!ctx) {
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to create context");
     return NULL;
   }
 
-  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)malloc(sizeof(GTEXT_CSV_Table));
+  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)gtext_allocator_malloc(alloc, sizeof(GTEXT_CSV_Table));
   if (!table) {
     csv_context_free(ctx);
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to allocate table");
@@ -850,7 +870,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
   table->rows = (csv_table_row *)csv_arena_alloc_for_context(
       ctx, sizeof(csv_table_row) * table->row_capacity, 8);
   if (!table->rows) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     CSV_SET_ERROR(err, GTEXT_CSV_E_OOM, "Failed to allocate rows");
     return NULL;
@@ -866,7 +886,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
         csv_strip_bom(&input, &input_len, &pos, true, &was_stripped);
     if (status != GTEXT_CSV_OK) {
       CSV_SET_ERROR(err, status, "Overflow in BOM stripping");
-      free(table);
+      gtext_allocator_free(alloc, table);
       csv_context_free(ctx);
       return NULL;
     }
@@ -898,7 +918,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
         err->line = vpos.line;
         err->column = vpos.column;
       }
-      free(table);
+      gtext_allocator_free(alloc, table);
       csv_context_free(ctx);
       return NULL;
     }
@@ -932,7 +952,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
 
   // Build header map from first row
   table->header_map_size = 16;
-  table->header_map = (csv_header_entry **)calloc(
+  table->header_map = (csv_header_entry **)gtext_allocator_calloc(alloc, 
       table->header_map_size, sizeof(csv_header_entry *));
   if (!table->header_map) {
     gtext_csv_free_table(table);
@@ -962,7 +982,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_parse_table(const void * data, size_t len,
     if (found_duplicate) {
       switch (opts->dialect.header_dup_mode) {
       case GTEXT_CSV_DUPCOL_ERROR:
-        free(table->header_map);
+        gtext_allocator_free(alloc, table->header_map);
         table->header_map = NULL;
         gtext_csv_free_table(table);
         CSV_SET_ERROR(
@@ -1009,12 +1029,18 @@ GTEXT_API void gtext_csv_free_table(GTEXT_CSV_Table * table) {
     return;
   }
 
+  // Read before csv_context_free() releases the context it lives in. This is
+  // the free that allocator-todo.md names as the hazard: releasing the arena
+  // through the caller's allocator and the table through the C library's is
+  // heap corruption, not a leak, and nothing the caller can see coming.
+  const GTEXT_Allocator * alloc = table->ctx ? table->ctx->alloc : NULL;
+
   if (table->header_map) {
-    free(table->header_map);
+    gtext_allocator_free(alloc, table->header_map);
   }
 
   csv_context_free(table->ctx);
-  free(table);
+  gtext_allocator_free(alloc, table);
 }
 
 GTEXT_API size_t gtext_csv_row_count(const GTEXT_CSV_Table * table) {
@@ -1918,6 +1944,7 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
 
   // Initialize output structure
   structures_out->new_ctx = new_ctx;
+  structures_out->alloc = new_ctx->alloc; // see the clone path for why
   structures_out->new_rows = NULL;
   structures_out->new_field_arrays = NULL;
   structures_out->new_field_data_ptrs = NULL;
@@ -1938,12 +1965,12 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
   csv_table_field ** new_field_arrays = NULL;
   char *** new_field_data_ptrs = NULL; // Array of arrays of char * pointers
   if (table->row_count > 0) {
-    new_field_arrays = (csv_table_field **)malloc(
+    new_field_arrays = (csv_table_field **)gtext_allocator_malloc(new_ctx->alloc, 
         sizeof(csv_table_field *) * table->row_count);
-    new_field_data_ptrs = (char ***)malloc(sizeof(char **) * table->row_count);
+    new_field_data_ptrs = (char ***)gtext_allocator_malloc(new_ctx->alloc, sizeof(char **) * table->row_count);
     if (!new_field_arrays || !new_field_data_ptrs) {
-      free(new_field_arrays);
-      free(new_field_data_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+      gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
       return GTEXT_CSV_E_OOM;
     }
   }
@@ -1968,10 +1995,10 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
     if (!new_fields) {
       // Free temporary arrays
       for (size_t j = 0; j < row_idx; j++) {
-        free(new_field_data_ptrs[j]);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
       }
-      free(new_field_arrays);
-      free(new_field_data_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+      gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
       return GTEXT_CSV_E_OOM;
     }
     new_field_arrays[row_idx] = new_fields;
@@ -1987,13 +2014,13 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
     }
 
     if (non_in_situ_count > 0) {
-      field_data_ptrs = (char **)malloc(sizeof(char *) * old_row->field_count);
+      field_data_ptrs = (char **)gtext_allocator_malloc(new_ctx->alloc, sizeof(char *) * old_row->field_count);
       if (!field_data_ptrs) {
         for (size_t j = 0; j < row_idx; j++) {
-          free(new_field_data_ptrs[j]);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
         }
-        free(new_field_arrays);
-        free(new_field_data_ptrs);
+        gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
         return GTEXT_CSV_E_OOM;
       }
 
@@ -2008,12 +2035,12 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
 
         // Check for overflow
         if (old_field->length > SIZE_MAX - 1) {
-          free(field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, field_data_ptrs);
           for (size_t j = 0; j < row_idx; j++) {
-            free(new_field_data_ptrs[j]);
+            gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
           }
-          free(new_field_arrays);
-          free(new_field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
           return GTEXT_CSV_E_OOM;
         }
 
@@ -2021,12 +2048,12 @@ static GTEXT_CSV_Status csv_preallocate_compact_structures(
             new_ctx, old_field->length + 1, 1);
         if (!field_data) {
           // Free temporary arrays
-          free(field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, field_data_ptrs);
           for (size_t j = 0; j < row_idx; j++) {
-            free(new_field_data_ptrs[j]);
+            gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
           }
-          free(new_field_arrays);
-          free(new_field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
           return GTEXT_CSV_E_OOM;
         }
         field_data_ptrs[i] = field_data;
@@ -2124,7 +2151,7 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
 
   // Allocate new header map array (malloc'd, not in arena)
   // Always allocate, even if empty, to replace old map
-  csv_header_entry ** new_header_map = (csv_header_entry **)calloc(
+  csv_header_entry ** new_header_map = (csv_header_entry **)gtext_allocator_calloc(new_ctx->alloc, 
       table->header_map_size, sizeof(csv_header_entry *));
   if (!new_header_map) {
     return GTEXT_CSV_E_OOM;
@@ -2134,13 +2161,13 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
   char ** new_name_ptrs = NULL;
 
   if (total_header_entries > 0) {
-    new_entry_ptrs = (csv_header_entry **)malloc(
+    new_entry_ptrs = (csv_header_entry **)gtext_allocator_malloc(new_ctx->alloc, 
         sizeof(csv_header_entry *) * total_header_entries);
-    new_name_ptrs = (char **)malloc(sizeof(char *) * total_header_entries);
+    new_name_ptrs = (char **)gtext_allocator_malloc(new_ctx->alloc, sizeof(char *) * total_header_entries);
     if (!new_entry_ptrs || !new_name_ptrs) {
-      free(new_header_map);
-      free(new_entry_ptrs);
-      free(new_name_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_header_map);
+      gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
       return GTEXT_CSV_E_OOM;
     }
 
@@ -2156,9 +2183,9 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
                 new_ctx, sizeof(csv_header_entry), 8);
         if (!new_entry) {
           // Free temporary arrays
-          free(new_header_map);
-          free(new_entry_ptrs);
-          free(new_name_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_header_map);
+          gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
           return GTEXT_CSV_E_OOM;
         }
         new_entry_ptrs[entry_idx] = new_entry;
@@ -2183,17 +2210,17 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
             // Copy name to new arena
             // Check for overflow
             if (old_entry->name_len > SIZE_MAX - 1) {
-              free(new_header_map);
-              free(new_entry_ptrs);
-              free(new_name_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_header_map);
+              gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
               return GTEXT_CSV_E_OOM;
             }
             char * name_data = (char *)csv_arena_alloc_for_context(
                 new_ctx, old_entry->name_len + 1, 1);
             if (!name_data) {
-              free(new_header_map);
-              free(new_entry_ptrs);
-              free(new_name_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_header_map);
+              gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
               return GTEXT_CSV_E_OOM;
             }
             new_name_ptrs[entry_idx] = name_data;
@@ -2265,8 +2292,8 @@ static GTEXT_CSV_Status csv_rebuild_header_map(const GTEXT_CSV_Table * table,
     }
 
     // Free temporary arrays
-    free(new_entry_ptrs);
-    free(new_name_ptrs);
+    gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+    gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
   }
 
   header_map_out->new_header_map = new_header_map;
@@ -2288,7 +2315,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_table_compact(GTEXT_CSV_Table * table) {
   }
 
   // Create new context/arena with calculated block size
-  csv_context * new_ctx = csv_context_new_with_block_size(total_size);
+  csv_context * new_ctx = csv_context_new_with_block_size(total_size, table->ctx->alloc);
   if (!new_ctx) {
     return GTEXT_CSV_E_OOM;
   }
@@ -2307,11 +2334,11 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_table_compact(GTEXT_CSV_Table * table) {
     // Free temporary arrays
     if (structures.new_field_data_ptrs) {
       for (size_t row_idx = 0; row_idx < table->row_count; row_idx++) {
-        free(structures.new_field_data_ptrs[row_idx]);
+        gtext_allocator_free(table->ctx->alloc, structures.new_field_data_ptrs[row_idx]);
       }
     }
-    free(structures.new_field_arrays);
-    free(structures.new_field_data_ptrs);
+    gtext_allocator_free(table->ctx->alloc, structures.new_field_arrays);
+    gtext_allocator_free(table->ctx->alloc, structures.new_field_data_ptrs);
     csv_context_free(new_ctx);
     return status;
   }
@@ -2319,11 +2346,11 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_table_compact(GTEXT_CSV_Table * table) {
   // Free temporary arrays (field data pointers)
   if (structures.new_field_data_ptrs) {
     for (size_t row_idx = 0; row_idx < table->row_count; row_idx++) {
-      free(structures.new_field_data_ptrs[row_idx]);
+      gtext_allocator_free(table->ctx->alloc, structures.new_field_data_ptrs[row_idx]);
     }
   }
-  free(structures.new_field_arrays);
-  free(structures.new_field_data_ptrs);
+  gtext_allocator_free(table->ctx->alloc, structures.new_field_arrays);
+  gtext_allocator_free(table->ctx->alloc, structures.new_field_data_ptrs);
 
   // Save old context for header map copying (need input_buffer reference)
   csv_context * old_ctx = table->ctx;
@@ -2347,7 +2374,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_table_compact(GTEXT_CSV_Table * table) {
   table->rows = structures.new_rows;
   if (header_map.new_header_map) {
     // Free old header map array before updating pointer
-    free(table->header_map);
+    gtext_allocator_free(table->ctx->alloc, table->header_map);
     table->header_map = header_map.new_header_map;
 
     // Rebuild reverse mapping
@@ -2523,6 +2550,10 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
 
   // Initialize output structures
   structures_out->new_ctx = new_ctx;
+  // Set with the rest, and before anything is allocated, so that a failure on
+  // the first allocation still leaves the caller's unwind path a valid
+  // allocator to free through.
+  structures_out->alloc = new_ctx->alloc;
   structures_out->new_table = NULL;
   structures_out->new_rows = NULL;
   structures_out->new_field_arrays = NULL;
@@ -2536,7 +2567,7 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
   // Allocate new table structure (not in arena, use calloc to ensure
   // zero-initialization)
   GTEXT_CSV_Table * new_table =
-      (GTEXT_CSV_Table *)calloc(1, sizeof(GTEXT_CSV_Table));
+      (GTEXT_CSV_Table *)gtext_allocator_calloc(new_ctx->alloc, 1, sizeof(GTEXT_CSV_Table));
   if (!new_table) {
     return GTEXT_CSV_E_OOM;
   }
@@ -2555,7 +2586,7 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
   csv_table_row * new_rows = (csv_table_row *)csv_arena_alloc_for_context(
       new_ctx, sizeof(csv_table_row) * source->row_capacity, 8);
   if (!new_rows) {
-    free(new_table);
+    gtext_allocator_free(new_ctx->alloc, new_table);
     return GTEXT_CSV_E_OOM;
   }
 
@@ -2569,13 +2600,13 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
   csv_table_field ** new_field_arrays = NULL;
   char *** new_field_data_ptrs = NULL; // Array of arrays of char * pointers
   if (source->row_count > 0) {
-    new_field_arrays = (csv_table_field **)calloc(
+    new_field_arrays = (csv_table_field **)gtext_allocator_calloc(new_ctx->alloc, 
         source->row_count, sizeof(csv_table_field *));
-    new_field_data_ptrs = (char ***)calloc(source->row_count, sizeof(char **));
+    new_field_data_ptrs = (char ***)gtext_allocator_calloc(new_ctx->alloc, source->row_count, sizeof(char **));
     if (!new_field_arrays || !new_field_data_ptrs) {
-      free(new_field_arrays);
-      free(new_field_data_ptrs);
-      free(new_table);
+      gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+      gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_table);
       return GTEXT_CSV_E_OOM;
     }
   }
@@ -2600,11 +2631,11 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
     if (!new_fields) {
       // Free temporary arrays
       for (size_t j = 0; j < row_idx; j++) {
-        free(new_field_data_ptrs[j]);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
       }
-      free(new_field_arrays);
-      free(new_field_data_ptrs);
-      free(new_table);
+      gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+      gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_table);
       return GTEXT_CSV_E_OOM;
     }
     new_field_arrays[row_idx] = new_fields;
@@ -2620,14 +2651,14 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
     }
 
     if (non_empty_count > 0) {
-      field_data_ptrs = (char **)calloc(old_row->field_count, sizeof(char *));
+      field_data_ptrs = (char **)gtext_allocator_calloc(new_ctx->alloc, old_row->field_count, sizeof(char *));
       if (!field_data_ptrs) {
         for (size_t j = 0; j < row_idx; j++) {
-          free(new_field_data_ptrs[j]);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
         }
-        free(new_field_arrays);
-        free(new_field_data_ptrs);
-        free(new_table);
+        gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+        gtext_allocator_free(new_ctx->alloc, new_table);
         return GTEXT_CSV_E_OOM;
       }
 
@@ -2642,13 +2673,13 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
 
         // Check for overflow
         if (old_field->length > SIZE_MAX - 1) {
-          free(field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, field_data_ptrs);
           for (size_t j = 0; j < row_idx; j++) {
-            free(new_field_data_ptrs[j]);
+            gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
           }
-          free(new_field_arrays);
-          free(new_field_data_ptrs);
-          free(new_table);
+          gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_table);
           return GTEXT_CSV_E_OOM;
         }
 
@@ -2656,13 +2687,13 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
             new_ctx, old_field->length + 1, 1);
         if (!field_data) {
           // Free temporary arrays
-          free(field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, field_data_ptrs);
           for (size_t j = 0; j < row_idx; j++) {
-            free(new_field_data_ptrs[j]);
+            gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
           }
-          free(new_field_arrays);
-          free(new_field_data_ptrs);
-          free(new_table);
+          gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+          gtext_allocator_free(new_ctx->alloc, new_table);
           return GTEXT_CSV_E_OOM;
         }
         field_data_ptrs[i] = field_data;
@@ -2685,36 +2716,36 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
     header_map_out->total_header_entries = total_header_entries;
 
     // Allocate new header map array (malloc'd, not in arena)
-    csv_header_entry ** new_header_map = (csv_header_entry **)calloc(
+    csv_header_entry ** new_header_map = (csv_header_entry **)gtext_allocator_calloc(new_ctx->alloc, 
         source->header_map_size, sizeof(csv_header_entry *));
     if (!new_header_map) {
       // Free temporary arrays
       for (size_t j = 0; j < source->row_count; j++) {
-        free(new_field_data_ptrs[j]);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
       }
-      free(new_field_arrays);
-      free(new_field_data_ptrs);
-      free(new_table);
+      gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+      gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+      gtext_allocator_free(new_ctx->alloc, new_table);
       return GTEXT_CSV_E_OOM;
     }
     header_map_out->new_header_map = new_header_map;
 
     if (total_header_entries > 0) {
-      csv_header_entry ** new_entry_ptrs = (csv_header_entry **)malloc(
+      csv_header_entry ** new_entry_ptrs = (csv_header_entry **)gtext_allocator_malloc(new_ctx->alloc, 
           sizeof(csv_header_entry *) * total_header_entries);
       char ** new_name_ptrs =
-          (char **)malloc(sizeof(char *) * total_header_entries);
+          (char **)gtext_allocator_malloc(new_ctx->alloc, sizeof(char *) * total_header_entries);
       if (!new_entry_ptrs || !new_name_ptrs) {
-        free(new_header_map);
-        free(new_entry_ptrs);
-        free(new_name_ptrs);
+        gtext_allocator_free(new_ctx->alloc, new_header_map);
+        gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+        gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
         // Free temporary arrays
         for (size_t j = 0; j < source->row_count; j++) {
-          free(new_field_data_ptrs[j]);
+          gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
         }
-        free(new_field_arrays);
-        free(new_field_data_ptrs);
-        free(new_table);
+        gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+        gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+        gtext_allocator_free(new_ctx->alloc, new_table);
         return GTEXT_CSV_E_OOM;
       }
       header_map_out->new_entry_ptrs = new_entry_ptrs;
@@ -2732,15 +2763,15 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
                   new_ctx, sizeof(csv_header_entry), 8);
           if (!new_entry) {
             // Free temporary arrays
-            free(new_header_map);
-            free(new_entry_ptrs);
-            free(new_name_ptrs);
+            gtext_allocator_free(new_ctx->alloc, new_header_map);
+            gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+            gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
             for (size_t j = 0; j < source->row_count; j++) {
-              free(new_field_data_ptrs[j]);
+              gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
             }
-            free(new_field_arrays);
-            free(new_field_data_ptrs);
-            free(new_table);
+            gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+            gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+            gtext_allocator_free(new_ctx->alloc, new_table);
             return GTEXT_CSV_E_OOM;
           }
           new_entry_ptrs[entry_idx] = new_entry;
@@ -2754,29 +2785,29 @@ static GTEXT_CSV_Status csv_clone_preallocate_structures(
             // Copy name to new arena (including in-situ names)
             // Check for overflow
             if (old_entry->name_len > SIZE_MAX - 1) {
-              free(new_header_map);
-              free(new_entry_ptrs);
-              free(new_name_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_header_map);
+              gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
               for (size_t j = 0; j < source->row_count; j++) {
-                free(new_field_data_ptrs[j]);
+                gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
               }
-              free(new_field_arrays);
-              free(new_field_data_ptrs);
-              free(new_table);
+              gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+              gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_table);
               return GTEXT_CSV_E_OOM;
             }
             char * name_data = (char *)csv_arena_alloc_for_context(
                 new_ctx, old_entry->name_len + 1, 1);
             if (!name_data) {
-              free(new_header_map);
-              free(new_entry_ptrs);
-              free(new_name_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_header_map);
+              gtext_allocator_free(new_ctx->alloc, new_entry_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_name_ptrs);
               for (size_t j = 0; j < source->row_count; j++) {
-                free(new_field_data_ptrs[j]);
+                gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs[j]);
               }
-              free(new_field_arrays);
-              free(new_field_data_ptrs);
-              free(new_table);
+              gtext_allocator_free(new_ctx->alloc, new_field_arrays);
+              gtext_allocator_free(new_ctx->alloc, new_field_data_ptrs);
+              gtext_allocator_free(new_ctx->alloc, new_table);
               return GTEXT_CSV_E_OOM;
             }
             new_name_ptrs[entry_idx] = name_data;
@@ -2854,10 +2885,10 @@ static GTEXT_CSV_Status csv_clone_copy_data(const GTEXT_CSV_Table * source,
 
   // Free temporary arrays (field data pointers)
   for (size_t row_idx = 0; row_idx < source->row_count; row_idx++) {
-    free(new_field_data_ptrs[row_idx]);
+    gtext_allocator_free(structures->alloc, new_field_data_ptrs[row_idx]);
   }
-  free(new_field_arrays);
-  free(new_field_data_ptrs);
+  gtext_allocator_free(structures->alloc, new_field_arrays);
+  gtext_allocator_free(structures->alloc, new_field_data_ptrs);
 
   // Copy Header Map Data
   if (source->has_header && source->header_map &&
@@ -2909,8 +2940,8 @@ static GTEXT_CSV_Status csv_clone_copy_data(const GTEXT_CSV_Table * source,
     }
 
     // Free temporary arrays
-    free(new_entry_ptrs);
-    free(new_name_ptrs);
+    gtext_allocator_free(structures->alloc, new_entry_ptrs);
+    gtext_allocator_free(structures->alloc, new_name_ptrs);
 
     // Set header map in new table
     new_table->header_map = new_header_map;
@@ -2941,7 +2972,8 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_clone(const GTEXT_CSV_Table * source) {
   }
 
   // Create new context/arena with calculated block size
-  csv_context * new_ctx = csv_context_new_with_block_size(total_size);
+  csv_context * new_ctx = csv_context_new_with_block_size(
+      total_size, source->ctx->alloc);
   if (!new_ctx) {
     return NULL;
   }
@@ -2954,7 +2986,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_clone(const GTEXT_CSV_Table * source) {
   if (status != GTEXT_CSV_OK) {
     // Cleanup: free table if allocated, then free context
     if (structures.new_table) {
-      free(structures.new_table);
+      gtext_allocator_free(source->ctx->alloc, structures.new_table);
     }
     csv_context_free(new_ctx);
     return NULL;
@@ -2964,7 +2996,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_clone(const GTEXT_CSV_Table * source) {
   status = csv_clone_copy_data(source, &structures, &header_map);
   if (status != GTEXT_CSV_OK) {
     // Cleanup: free table and context
-    free(structures.new_table);
+    gtext_allocator_free(source->ctx->alloc, structures.new_table);
     csv_context_free(new_ctx);
     return NULL;
   }
@@ -3159,11 +3191,11 @@ static GTEXT_CSV_Status csv_preallocate_column_field_data(
   size_t * field_data_lengths = NULL;
 
   if (!is_empty_column && rows_to_modify > 0) {
-    field_data_array = (char **)malloc(sizeof(char *) * rows_to_modify);
-    field_data_lengths = (size_t *)malloc(sizeof(size_t) * rows_to_modify);
+    field_data_array = (char **)gtext_allocator_malloc(table->ctx->alloc, sizeof(char *) * rows_to_modify);
+    field_data_lengths = (size_t *)gtext_allocator_malloc(table->ctx->alloc, sizeof(size_t) * rows_to_modify);
     if (!field_data_array || !field_data_lengths) {
-      free(field_data_array);
-      free(field_data_lengths);
+      gtext_allocator_free(table->ctx->alloc, field_data_array);
+      gtext_allocator_free(table->ctx->alloc, field_data_lengths);
       return GTEXT_CSV_E_OOM;
     }
 
@@ -3187,15 +3219,15 @@ static GTEXT_CSV_Status csv_preallocate_column_field_data(
       else {
         // Allocate and copy field data
         if (value_len > SIZE_MAX - 1) {
-          free(field_data_array);
-          free(field_data_lengths);
+          gtext_allocator_free(table->ctx->alloc, field_data_array);
+          gtext_allocator_free(table->ctx->alloc, field_data_lengths);
           return GTEXT_CSV_E_OOM;
         }
         char * field_data =
             (char *)csv_arena_alloc_for_context(table->ctx, value_len + 1, 1);
         if (!field_data) {
-          free(field_data_array);
-          free(field_data_lengths);
+          gtext_allocator_free(table->ctx->alloc, field_data_array);
+          gtext_allocator_free(table->ctx->alloc, field_data_lengths);
           return GTEXT_CSV_E_OOM;
         }
         memcpy(field_data, value, value_len);
@@ -3212,8 +3244,9 @@ static GTEXT_CSV_Status csv_preallocate_column_field_data(
   return GTEXT_CSV_OK;
 }
 
-static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(
-    size_t rows_to_modify, csv_column_op_temp_arrays * temp_arrays_out) {
+static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(size_t rows_to_modify,
+    csv_column_op_temp_arrays * temp_arrays_out,
+    const GTEXT_Allocator * alloc) {
   if (!temp_arrays_out) {
     return GTEXT_CSV_E_INVALID;
   }
@@ -3223,13 +3256,16 @@ static GTEXT_CSV_Status csv_column_op_alloc_temp_arrays(
   temp_arrays_out->old_field_counts = NULL;
   temp_arrays_out->field_data_array = NULL;
   temp_arrays_out->field_data_lengths = NULL;
+  // Recorded before anything is allocated, so the cleanup path below frees
+  // through the same allocator even when the first allocation is what failed.
+  temp_arrays_out->alloc = alloc;
 
   // Allocate new_field_arrays and old_field_counts if we have rows to modify
   if (rows_to_modify > 0) {
-    temp_arrays_out->new_field_arrays =
-        (csv_table_field **)malloc(sizeof(csv_table_field *) * rows_to_modify);
-    temp_arrays_out->old_field_counts =
-        (size_t *)malloc(sizeof(size_t) * rows_to_modify);
+    temp_arrays_out->new_field_arrays = (csv_table_field **)
+        gtext_allocator_malloc(alloc, sizeof(csv_table_field *) * rows_to_modify);
+    temp_arrays_out->old_field_counts = (size_t *)gtext_allocator_malloc(
+        alloc, sizeof(size_t) * rows_to_modify);
     if (!temp_arrays_out->new_field_arrays ||
         !temp_arrays_out->old_field_counts) {
       csv_column_op_cleanup_temp_arrays(temp_arrays_out);
@@ -3251,26 +3287,28 @@ static void csv_column_op_cleanup_temp_arrays(
     return;
   }
 
-  free(temp_arrays->new_field_arrays);
+  const GTEXT_Allocator * alloc = temp_arrays->alloc;
+
+  gtext_allocator_free(alloc, temp_arrays->new_field_arrays);
   temp_arrays->new_field_arrays = NULL;
 
-  free(temp_arrays->old_field_counts);
+  gtext_allocator_free(alloc, temp_arrays->old_field_counts);
   temp_arrays->old_field_counts = NULL;
 
-  free(temp_arrays->field_data_array);
+  gtext_allocator_free(alloc, temp_arrays->field_data_array);
   temp_arrays->field_data_array = NULL;
 
-  free(temp_arrays->field_data_lengths);
+  gtext_allocator_free(alloc, temp_arrays->field_data_lengths);
   temp_arrays->field_data_lengths = NULL;
 }
 
-static void csv_column_op_cleanup_individual(
+static void csv_column_op_cleanup_individual(const GTEXT_Allocator * alloc,
     csv_table_field ** new_field_arrays, size_t * old_field_counts,
     char ** field_data_array, size_t * field_data_lengths) {
-  free(new_field_arrays);
-  free(old_field_counts);
-  free(field_data_array);
-  free(field_data_lengths);
+  gtext_allocator_free(alloc, new_field_arrays);
+  gtext_allocator_free(alloc, old_field_counts);
+  gtext_allocator_free(alloc, field_data_array);
+  gtext_allocator_free(alloc, field_data_lengths);
 }
 
 static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
@@ -3357,7 +3395,8 @@ static GTEXT_CSV_Status csv_column_operation_internal(GTEXT_CSV_Table * table,
   // Pre-allocate all new field arrays before updating any row structures
   csv_column_op_temp_arrays temp_arrays;
   GTEXT_CSV_Status alloc_status =
-      csv_column_op_alloc_temp_arrays(rows_to_modify, &temp_arrays);
+      csv_column_op_alloc_temp_arrays(
+          rows_to_modify, &temp_arrays, table->ctx->alloc);
   if (alloc_status != GTEXT_CSV_OK) {
     return alloc_status;
   }
@@ -3750,7 +3789,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_append(
   // Only after all allocations and copies succeed:
   // 1. Update column_count
   if (table->column_count == SIZE_MAX) {
-    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+    csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
         field_data_array, field_data_lengths);
     return GTEXT_CSV_E_OOM;
   }
@@ -3789,8 +3829,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_append(
   }
 
   // Free temporary arrays
-  csv_column_op_cleanup_individual(
-      new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
+  csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
   return GTEXT_CSV_OK;
 }
@@ -3839,7 +3879,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_append_with_values(
   // Only after all allocations and copies succeed:
   // 1. Update column_count
   if (table->column_count == SIZE_MAX) {
-    csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+    csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
         field_data_array, field_data_lengths);
     return GTEXT_CSV_E_OOM;
   }
@@ -3878,8 +3919,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_append_with_values(
   }
 
   // Free temporary arrays
-  csv_column_op_cleanup_individual(
-      new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
+  csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
   return GTEXT_CSV_OK;
 }
@@ -3972,7 +4013,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
   if (col_idx > table->column_count) {
     // Inserting beyond current max: new max is col_idx + 1
     if (col_idx == SIZE_MAX) {
-      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+      csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
           field_data_array, field_data_lengths);
       return GTEXT_CSV_E_OOM;
     }
@@ -3981,7 +4023,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
   else {
     // Normal case: increment column_count
     if (table->column_count == SIZE_MAX) {
-      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+      csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
           field_data_array, field_data_lengths);
       return GTEXT_CSV_E_OOM;
     }
@@ -4034,8 +4077,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert_with_values(
   }
 
   // Free temporary arrays
-  csv_column_op_cleanup_individual(
-      new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
+  csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
   return GTEXT_CSV_OK;
 }
@@ -4121,7 +4164,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
   if (col_idx > table->column_count) {
     // Inserting beyond current max: new max is col_idx + 1
     if (col_idx == SIZE_MAX) {
-      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+      csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
           field_data_array, field_data_lengths);
       return GTEXT_CSV_E_OOM;
     }
@@ -4130,7 +4174,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
   else {
     // Normal case: increment column_count
     if (table->column_count == SIZE_MAX) {
-      csv_column_op_cleanup_individual(new_field_arrays, old_field_counts,
+      csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts,
           field_data_array, field_data_lengths);
       return GTEXT_CSV_E_OOM;
     }
@@ -4183,8 +4228,8 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_column_insert(GTEXT_CSV_Table * table,
   }
 
   // Free temporary arrays
-  csv_column_op_cleanup_individual(
-      new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
+  csv_column_op_cleanup_individual(table->ctx->alloc,
+new_field_arrays, old_field_counts, field_data_array, field_data_lengths);
 
   return GTEXT_CSV_OK;
 }
@@ -4627,7 +4672,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_rows(GTEXT_CSV_Table * table,
 
   // Phase 4: Pre-allocate all new field arrays (atomic)
   csv_table_field ** new_field_arrays =
-      (csv_table_field **)calloc(table->row_count, sizeof(csv_table_field *));
+      (csv_table_field **)gtext_allocator_calloc(table->ctx->alloc, table->row_count, sizeof(csv_table_field *));
   if (!new_field_arrays) {
     return GTEXT_CSV_E_OOM;
   }
@@ -4643,7 +4688,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_rows(GTEXT_CSV_Table * table,
       for (size_t j = 0; j < i; j++) {
         // Arrays are in arena, no individual free needed
       }
-      free(new_field_arrays);
+      gtext_allocator_free(table->ctx->alloc, new_field_arrays);
       return GTEXT_CSV_E_OOM;
     }
     new_field_arrays[i] = new_fields;
@@ -4678,7 +4723,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_normalize_rows(GTEXT_CSV_Table * table,
   table->column_count = actual_target;
 
   // Free temporary array (field arrays themselves are in arena)
-  free(new_field_arrays);
+  gtext_allocator_free(table->ctx->alloc, new_field_arrays);
 
   return GTEXT_CSV_OK;
 }
@@ -4867,7 +4912,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(
 
     // Clear existing header map (if any) - must be done atomically
     if (table->header_map) {
-      free(table->header_map);
+      gtext_allocator_free(table->ctx->alloc, table->header_map);
       table->header_map = NULL;
       table->header_map_size = 0;
     }
@@ -4875,7 +4920,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(
     // Build new header map from first row
     // All allocations must succeed before state changes
     table->header_map_size = 16;
-    table->header_map = (csv_header_entry **)calloc(
+    table->header_map = (csv_header_entry **)gtext_allocator_calloc(table->ctx->alloc, 
         table->header_map_size, sizeof(csv_header_entry *));
     if (!table->header_map) {
       return GTEXT_CSV_E_OOM;
@@ -4910,7 +4955,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(
               table->ctx, sizeof(csv_header_entry), 8);
       if (!new_entry) {
         // Allocation failed - clean up and return error
-        free(table->header_map);
+        gtext_allocator_free(table->ctx->alloc, table->header_map);
         table->header_map = NULL;
         table->header_map_size = 0;
         return GTEXT_CSV_E_OOM;
@@ -4936,7 +4981,7 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(
 
     // Clear header map (atomic - must complete before state changes)
     if (table->header_map) {
-      free(table->header_map);
+      gtext_allocator_free(table->ctx->alloc, table->header_map);
       table->header_map = NULL;
       table->header_map_size = 0;
     }
@@ -4950,14 +4995,19 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_set_header_row(
 }
 
 GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table(void) {
+  return gtext_csv_new_table_with_allocator(NULL);
+}
+
+GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_allocator(
+    const GTEXT_Allocator * alloc) {
   // Create context with arena
-  csv_context * ctx = csv_context_new();
+  csv_context * ctx = csv_context_new(alloc);
   if (!ctx) {
     return NULL;
   }
 
   // Allocate table structure
-  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)malloc(sizeof(GTEXT_CSV_Table));
+  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)gtext_allocator_malloc(alloc, sizeof(GTEXT_CSV_Table));
   if (!table) {
     csv_context_free(ctx);
     return NULL;
@@ -4977,7 +5027,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table(void) {
   table->rows = (csv_table_row *)csv_arena_alloc_for_context(
       ctx, sizeof(csv_table_row) * table->row_capacity, 8);
   if (!table->rows) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     return NULL;
   }
@@ -4988,19 +5038,26 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table(void) {
 GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
     const char * const * headers, const size_t * header_lengths,
     size_t header_count) {
+  return gtext_csv_new_table_with_headers_and_allocator(
+      headers, header_lengths, header_count, NULL);
+}
+
+GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers_and_allocator(
+    const char * const * headers, const size_t * header_lengths,
+    size_t header_count, const GTEXT_Allocator * alloc) {
   // Validate inputs
   if (!headers || header_count == 0) {
     return NULL;
   }
 
   // Create context with arena
-  csv_context * ctx = csv_context_new();
+  csv_context * ctx = csv_context_new(alloc);
   if (!ctx) {
     return NULL;
   }
 
   // Allocate table structure
-  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)malloc(sizeof(GTEXT_CSV_Table));
+  GTEXT_CSV_Table * table = (GTEXT_CSV_Table *)gtext_allocator_malloc(alloc, sizeof(GTEXT_CSV_Table));
   if (!table) {
     csv_context_free(ctx);
     return NULL;
@@ -5020,7 +5077,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
   table->rows = (csv_table_row *)csv_arena_alloc_for_context(
       ctx, sizeof(csv_table_row) * table->row_capacity, 8);
   if (!table->rows) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     return NULL;
   }
@@ -5033,7 +5090,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
       (csv_table_field *)csv_arena_alloc_for_context(
           ctx, sizeof(csv_table_field) * header_count, 8);
   if (!header_fields) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     return NULL;
   }
@@ -5057,7 +5114,7 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
     GTEXT_CSV_Status status =
         csv_allocate_and_copy_field(ctx, header_data, header_len, field);
     if (status != GTEXT_CSV_OK) {
-      free(table);
+      gtext_allocator_free(alloc, table);
       csv_context_free(ctx);
       return NULL;
     }
@@ -5070,10 +5127,10 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
 
   // Build header map (hash table) for lookup
   table->header_map_size = 16;
-  table->header_map = (csv_header_entry **)calloc(
+  table->header_map = (csv_header_entry **)gtext_allocator_calloc(alloc, 
       table->header_map_size, sizeof(csv_header_entry *));
   if (!table->header_map) {
-    free(table);
+    gtext_allocator_free(alloc, table);
     csv_context_free(ctx);
     return NULL;
   }
@@ -5098,9 +5155,9 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
 
     if (found_duplicate) {
       // Duplicate header name - free resources and return NULL
-      free(table->header_map);
+      gtext_allocator_free(alloc, table->header_map);
       table->header_map = NULL;
-      free(table);
+      gtext_allocator_free(alloc, table);
       csv_context_free(ctx);
       return NULL;
     }
@@ -5110,9 +5167,9 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
         (csv_header_entry *)csv_arena_alloc_for_context(
             ctx, sizeof(csv_header_entry), 8);
     if (!new_entry) {
-      free(table->header_map);
+      gtext_allocator_free(alloc, table->header_map);
       table->header_map = NULL;
-      free(table);
+      gtext_allocator_free(alloc, table);
       csv_context_free(ctx);
       return NULL;
     }

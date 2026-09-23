@@ -216,6 +216,20 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_header_index_next(
 GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table(void);
 
 /**
+ * @brief Create an empty table whose memory comes from @p alloc
+ *
+ * gtext_csv_new_table() takes no options, so there is nowhere to name an
+ * allocator; this is that function with the one parameter it needs. The table
+ * records the allocator, so gtext_csv_free_table() and every operation on the
+ * table afterwards use it without being told again.
+ *
+ * @param alloc Allocator, or NULL for gtext_allocator_default()
+ * @return New empty table, or NULL on allocation failure
+ */
+GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_allocator(
+    const GTEXT_Allocator * alloc);
+
+/**
  * @brief Create a CSV table with specified column headers
  *
  * Creates a new table with the specified column headers. Headers are treated
@@ -239,6 +253,19 @@ GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table(void);
 GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers(
     const char * const * headers, const size_t * header_lengths,
     size_t header_count);
+
+/**
+ * @brief gtext_csv_new_table_with_headers() with an allocator
+ *
+ * @param headers Array of header names (must not be NULL)
+ * @param header_lengths Array of header lengths, or NULL if null-terminated
+ * @param header_count Number of headers (must be > 0)
+ * @param alloc Allocator, or NULL for gtext_allocator_default()
+ * @return New table with a header row, or NULL on failure
+ */
+GTEXT_API GTEXT_CSV_Table * gtext_csv_new_table_with_headers_and_allocator(
+    const char * const * headers, const size_t * header_lengths,
+    size_t header_count, const GTEXT_Allocator * alloc);
 
 /**
  * @brief Append a row to the end of the table

@@ -135,7 +135,12 @@ GTEXT_API GTEXT_CSV_Stream * gtext_csv_stream_new(
     return NULL;
   }
 
-  GTEXT_CSV_Stream * stream = calloc(1, sizeof(GTEXT_CSV_Stream));
+  // Read before the structure is allocated: the structure is the first thing
+  // the caller's allocator has to own, and the options are where it is named.
+  const GTEXT_Allocator * alloc = opts ? opts->allocator : NULL;
+
+  GTEXT_CSV_Stream * stream =
+      gtext_allocator_calloc(alloc, 1, sizeof(GTEXT_CSV_Stream));
   if (!stream) {
     return NULL;
   }
@@ -146,6 +151,11 @@ GTEXT_API GTEXT_CSV_Stream * gtext_csv_stream_new(
   else {
     stream->opts = gtext_csv_parse_options_default();
   }
+  // Both arms leave stream->opts.allocator equal to `alloc`: the copy carries
+  // it, and the default options name none.  gtext_csv_stream_free() reads it
+  // from there, so the two must not drift.  The field buffer is given the
+  // allocator by csv_field_buffer_init() below rather than assigned here,
+  // because that function memsets the structure.
 
   stream->callback = callback;
   stream->user_data = user_data;
@@ -158,7 +168,7 @@ GTEXT_API GTEXT_CSV_Stream * gtext_csv_stream_new(
   stream->pos.column = 1;
   stream->total_bytes_consumed = 0;
   stream->original_input_buffer = NULL;
-  csv_field_buffer_init(&stream->field);
+  csv_field_buffer_init(&stream->field, alloc);
   stream->original_input_buffer_len = 0;
 
   // Set limits
@@ -732,10 +742,12 @@ GTEXT_API void gtext_csv_stream_free(GTEXT_CSV_Stream * stream) {
     return;
   }
 
-  free(stream->input_buffer);
-  free(stream->field.buffer);
+  const GTEXT_Allocator * alloc = stream->opts.allocator;
+
+  gtext_allocator_free(alloc, stream->input_buffer);
+  gtext_allocator_free(alloc, stream->field.buffer);
   gtext_csv_error_free(&stream->error);
-  free(stream);
+  gtext_allocator_free(alloc, stream);
 }
 
 GTEXT_INTERNAL_API void csv_stream_mark_bom_resolved(

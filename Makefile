@@ -767,7 +767,10 @@ ALLOCATOR_CLEAN_SOURCES := \
 	src/json/json_dom.c \
 	src/json/json_lexer.c \
 	src/json/json_number.c \
-	src/json/json_parser.c
+	src/json/json_parser.c \
+	src/csv/csv_stream.c \
+	src/csv/csv_stream_buffer.c \
+	src/csv/csv_table.c
 
 check-allocators: ## Fail if a converted file allocates without the allocator
 	@raw=$$(grep -nE '(^|[^_[:alnum:]])(malloc|calloc|realloc|free)[[:space:]]*\(' \

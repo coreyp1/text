@@ -25,7 +25,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 1 | ~~No `LICENSE` file~~ **fixed suite-wide**: all nine are LGPL-3.0-only | suite-wide | was: blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | ~~The `release` build is compiled `-O0`~~ **fixed**: release is `-O2`, debug `-O0` | suite-wide | was: 1.5x to 2.1x slower |
-| 4 | No custom allocator hook in any format | JSON parse done; CSV, YAML open | blocks embedded and arena callers |
+| 4 | No custom allocator hook in any format | JSON parse and CSV done; YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
@@ -239,16 +239,34 @@ that would settle it.
 
 ---
 
-## 5. No custom allocator hook - JSON parse done, CSV and YAML open
+## 5. No custom allocator hook - JSON parse and CSV done, YAML open
 
-**Partly addressed.** `GTEXT_JSON_Parse_Options::allocator` now routes the
-whole JSON parse path - the arena, every DOM node, key and string in it, the
+**Partly addressed.** `GTEXT_JSON_Parse_Options::allocator` routes the whole
+JSON parse path - the arena, every DOM node, key and string in it, the
 preserved number lexemes and the parser's transient buffers - through a
 caller-supplied `GTEXT_Allocator`, with `gtext_json_free()` releasing through
-the same one. `make check-allocators` fails the build if a converted file
-calls `malloc`, `calloc`, `realloc` or `free` directly, so the coverage claim
-is enforced rather than promised. Still open: the JSON writer, streaming
-parser, Pointer, Patch and Schema, and all of CSV and YAML.
+the same one. `GTEXT_CSV_Parse_Options::allocator` now does the same for CSV,
+and covers more: the parse, the streaming parser and its field buffer, the
+table structure and header map, and every operation on the table afterwards,
+including clone and compact, each taking the allocator of the table it works on
+so that compacting never moves a caller's data onto the C heap. Two entry
+points were added for tables that are built rather than parsed,
+`gtext_csv_new_table_with_allocator()` and
+`gtext_csv_new_table_with_headers_and_allocator()`, because the old ones take
+no options and so have nowhere to name an allocator.
+
+`make check-allocators` fails the build if a converted file calls `malloc`,
+`calloc`, `realloc` or `free` directly, so the coverage claim is enforced
+rather than promised - and the conversion was checked the other way too, by
+planting the exact defect `allocator-todo.md` warns about and confirming both
+the gate and a balanced-count test reject it. The first plant found a hole in
+the tests rather than in the code, which is why there is now a test for
+parsing zero bytes.
+
+Still open: the JSON writer, streaming parser, Pointer, Patch and Schema; all
+of YAML; and, in both formats deliberately, the error structures and the
+writers - each a separate entry point on the C library, with no path on which
+the two allocators mix.
 
 `GTEXT_Allocator` **is** cutil's `GCU_Allocator`, under a local name, which is
 what `image`, `model` and `compress` do. For a while `text` declared its own
@@ -397,6 +415,10 @@ suite*, not in the parser, and it is now closed:
   into a correctness pass - writing a test per preset was the first time
   several dialect options had been exercised, and three of them turned out to
   do nothing at all. See the \ref format_csv "CSV page".
+- ~~A custom allocator.~~ **Done**: `GTEXT_CSV_Parse_Options::allocator` covers
+  the parse, the table and every operation on it afterwards. The writer and
+  `GTEXT_CSV_Error` stay on the C library, as they do in JSON, and cannot mix
+  with it.
 - Dialect sniffing, equivalent to Python's `csv.Sniffer`.
 - ~~Quoting policies beyond a `quote_all_fields` boolean.~~ **Added**:
   `GTEXT_CSV_Write_Options::quoting` takes `GTEXT_CSV_QUOTE_MINIMAL`, `_ALL`,
