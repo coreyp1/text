@@ -1255,6 +1255,46 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json(
 );
 
 /**
+ * @brief Convert a JSON value to a YAML document
+ *
+ * The direction gtext_yaml_to_json() does not go. Unlike that one, this cannot
+ * fail on the grammar: YAML 1.2 section 10.2 makes JSON a subset of YAML, so
+ * every JSON value has a YAML spelling. It can fail on `max_depth`, and it can
+ * fail to allocate.
+ *
+ * **Types are preserved rather than re-resolved.** YAML resolves a plain scalar
+ * by its contents, so a JSON string whose text reads `true`, `null`, `42` or
+ * `1.5` would change type if it were written as a plain scalar. Every string
+ * becomes a node explicitly typed GTEXT_YAML_STRING, keys included - an object
+ * name of `"true"` is the text `true` and not a boolean - and the writer quotes
+ * whatever needs quoting because it knows the node is a string.
+ *
+ * Numbers keep the lexeme the JSON parser preserved, not a reformatted double.
+ * `1.0` stays `1.0`, `1e3` stays `1e3`, and an integer too large for any C type
+ * stays exactly as written. A lexeme containing `.`, `e` or `E` is a
+ * GTEXT_YAML_FLOAT and anything else a GTEXT_YAML_INT, which is the question
+ * YAML 1.2's 10.3.2 rows ask of the same text.
+ *
+ * The document is the caller's and must be released with gtext_yaml_free().
+ *
+ * @param json JSON value to convert (must not be NULL)
+ * @param options Parse options for the new document, or NULL for defaults.
+ *                `max_depth` bounds the conversion and `allocator` covers
+ *                everything it builds.
+ * @param out_doc Receives the document (must not be NULL); NULL on failure
+ * @param out_err Error output (may be NULL)
+ * @return GTEXT_YAML_OK, GTEXT_YAML_E_DEPTH if the JSON nests deeper than
+ *         `max_depth` allows, GTEXT_YAML_E_OOM, or GTEXT_YAML_E_INVALID for a
+ *         NULL argument
+ */
+GTEXT_API GTEXT_YAML_Status gtext_json_to_yaml(
+	const GTEXT_JSON_Value * json,
+	const GTEXT_YAML_Parse_Options * options,
+	GTEXT_YAML_Document ** out_doc,
+	GTEXT_YAML_Error * out_err
+);
+
+/**
  * @enum GTEXT_YAML_JSON_Large_Int_Policy
  * @brief Controls handling of integers outside JSON safe range.
  */

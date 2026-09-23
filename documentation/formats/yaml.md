@@ -657,6 +657,26 @@ written down instead, on each of those fields.
 
 ## Not implemented
 
+- **JSON to YAML is implemented**, which this list used to omit in both
+  directions. `gtext_json_to_yaml()` is the reverse of `gtext_yaml_to_json()`.
+  YAML 1.2 section 10.2 makes JSON a subset of YAML, so it cannot fail on the
+  grammar; it can fail on `max_depth`.
+
+  Types are preserved rather than re-resolved, which is the whole of it. YAML
+  resolves a plain scalar by its contents, so a JSON string reading `true`,
+  `null`, `42`, `1.5`, `~` or `yes` would change type if it were written plain.
+  Every string becomes a node explicitly typed `GTEXT_YAML_STRING`, object names
+  included, and the writer quotes what needs quoting because it knows. Numbers
+  keep the lexeme the JSON parser preserved, so `1.0`, `1e3` and an integer of
+  thirty digits all survive as written rather than being reformatted through a
+  double.
+
+  One case is lossy and says so: a JSON integer too large for an `int64` has no
+  YAML integer node here, and becomes a string. That is not a third answer
+  invented for the conversion - it is what this library's own YAML parser does
+  with the same digits, which the test establishes by parsing them rather than
+  assuming it.
+
 - **Comment preservation on write.** Comments can be retained in the DOM but
   the DOM writer does not re-emit them. The streaming writer does write a
   COMMENT event it is given.

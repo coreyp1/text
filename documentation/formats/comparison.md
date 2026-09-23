@@ -404,7 +404,9 @@ real advantages over cJSON and jansson.
   normalized names. It requires `validate_utf8` and turns off in-situ for
   strings, both deliberately - see the \ref format_json "JSON page".
 - JSON5 proper, as distinct from the JSONC subset that is supported.
-- Conversion to YAML. The reverse direction exists.
+- ~~Conversion to YAML.~~ **Added**: `gtext_json_to_yaml()`. Types are preserved
+  rather than re-resolved, which is the whole difficulty - a JSON string reading
+  `true` or `42` must not become a boolean or an integer.
 - SIMD-accelerated scanning, which is what the throughput gap is really about.
 
 ### CSV
@@ -491,7 +493,8 @@ file's comments is a case where this library is the better choice outright.
 - ~~A custom allocator.~~ **Done**: `GTEXT_YAML_Parse_Options::allocator`, covering
   every parse entry point, the scanner, the arena and the DOM functions.
 - In-situ zero-copy parsing, which JSON and CSV both offer.
-- Conversion from JSON, the reverse of the supported direction.
+- ~~Conversion from JSON, the reverse of the supported direction.~~ **Added**:
+  `gtext_json_to_yaml()`.
 - ~~A documented thread-safety position.~~ **Fixed**, and it was already fixed
   when this line still said otherwise - section 7 above closed it, and
   `documentation/modules/YAML.md` section 16 is the per-module statement.
