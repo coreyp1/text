@@ -161,13 +161,33 @@ rebuilding with `EXTRA_CFLAGS="-O2"`:
 Two things about the move are worth recording, because neither is visible in
 the diff.
 
-**The sanitizer gate moved with it, from `-O0` to `-O2`.**
-`ASAN_UBSAN_FLAGS` pins no level of its own, so `make test-asan` inherits
-whatever the release build uses. That is left inherited rather than pinned:
-strict-aliasing and signed-overflow assumptions are inert at `-O0` and live at
-`-O2`, so a UB gate compiled at `-O0` is not asking about the code anybody
-runs. `make test-asan BUILD=debug` gives `-O0` when a trace needs reading.
-`make fuzz` is unaffected, carrying `-O1` on a command line it builds itself.
+**The sanitizer gate is pinned at `-O1`, not inherited.** It had inherited
+the release level, which meant this change moved it from `-O0` to `-O2` as a
+side effect. It is now `-O1` in `ASAN_UBSAN_FLAGS`, matching `make fuzz`,
+which has always carried `-O1` on a command line it builds itself.
+
+The first argument for inheriting was that a UB gate should compile the code
+that ships. Measured, it buys nothing. One defect per program, so that halting
+at the first finding cannot hide a later one:
+
+| Defect | `-O1` | `-O2` |
+|---|---|---|
+| heap-use-after-free | caught | caught |
+| stack-buffer-overflow | caught | caught |
+| signed integer overflow | caught | caught |
+| float-to-int overflow | caught | caught |
+| strict-aliasing violation | **not caught** | **not caught** |
+
+The last row is the one that decided it. Aliasing was the specific hazard the
+inheriting argument named - inert at `-O0`, live at `-O2` - and no sanitizer
+in this toolchain detects it at any level, so running the gate at the release
+level never bought that coverage. The instrumented build is also not the
+shipped binary in any case: it carries redzones and different inlining, so
+"the level that ships" was less true than it sounded.
+
+What pinning does buy is that the gate and the fuzzers share one codegen, so a
+finding reproduces between them, and that neither changes silently the next
+time the release level does.
 
 **What `-O2` broke was a test, not a compile.** The 54 sources compile clean,
 and that is a real zero rather than an unasked question - the same probe gives

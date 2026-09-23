@@ -177,9 +177,9 @@ PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(
 #
 # Everything that wants a different level appends its own -O after this one,
 # since the last -O on the command line wins: `make coverage` passes
-# EXTRA_CFLAGS="--coverage -O0" and EXTRA_CFLAGS is last in CFLAGS, and the
-# fuzzers carry -O1 in FUZZ_SAN, which does not derive from CFLAGS at all.
-# ASAN_UBSAN_FLAGS deliberately carries no -O: see ASAN_CFLAGS.
+# EXTRA_CFLAGS="--coverage -O0" and EXTRA_CFLAGS is last in CFLAGS, the
+# sanitizer build carries -O1 in ASAN_UBSAN_FLAGS, and the fuzzers carry -O1
+# in FUZZ_SAN, which does not derive from CFLAGS at all.
 ifeq ($(BUILD),debug)
 OPT_CFLAGS := -O0
 else
@@ -341,9 +341,24 @@ VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=all --track-origins=yes --
 # "[  FAILED  ]" line at all - a summary that counts those reads a firing
 # gate as green.
 UBSAN_CHECKS := undefined,float-cast-overflow
+# -O1, pinned rather than inherited from OPT_CFLAGS, and it must stay last so
+# it wins: ASAN_CFLAGS puts these after $(CFLAGS).
+#
+# Pinned because the level buys the gate nothing and costs it independence.
+# Measured on gcc 14.2, one defect per program so that halting at the first
+# finding cannot hide a later one: heap-use-after-free, stack-buffer-overflow,
+# signed overflow and float-cast-overflow are all caught identically at -O1
+# and -O2, with identical reports.  A strict-aliasing violation is caught at
+# neither, which is worth saying because it was the argument for inheriting:
+# no sanitizer in this toolchain detects one, so running the gate at the
+# release level does not buy the aliasing coverage it sounds like it should.
+#
+# Pinning also keeps this gate and the fuzzers on the same codegen - FUZZ_SAN
+# is -O1 too - so a finding reproduces between them, and it stops the gate
+# silently changing the next time the release level does.
 ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
                     -fno-sanitize-recover=$(UBSAN_CHECKS) \
-                    -fno-omit-frame-pointer -g
+                    -fno-omit-frame-pointer -g -O1
 
 # Sanitizer build directory
 ASAN_BUILD_DIR := $(BUILD_DIR)-asan
@@ -606,12 +621,9 @@ $(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c \
 ####################################################################
 
 # Compile flags for ASan builds (include UBSan for comprehensive checking)
-# ASAN_UBSAN_FLAGS carries no -O of its own, so the sanitizer build inherits
-# OPT_CFLAGS and `make test-asan` runs at the level that ships. That is the
-# point: strict aliasing and signed-overflow assumptions are inert at -O0 and
-# exploitable at -O2, so a UB gate compiled at -O0 is not asking about the
-# code anybody runs. `make test-asan BUILD=debug` gives -O0 when a trace needs
-# reading instead.
+# ASAN_UBSAN_FLAGS comes after $(CFLAGS) and carries its own -O1, so that is
+# the level the sanitizer build uses whatever OPT_CFLAGS says.  See the note
+# there for why it is pinned rather than inherited.
 ASAN_CFLAGS := $(CFLAGS) $(ASAN_UBSAN_FLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD
 ASAN_CXXFLAGS := $(CXXFLAGS) $(ASAN_UBSAN_FLAGS)
 ASAN_LDFLAGS := $(LDFLAGS) $(ASAN_UBSAN_FLAGS)
