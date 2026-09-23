@@ -301,6 +301,27 @@ The remaining 35 cases are marked `i_`, meaning the suite leaves the answer to
 the implementation - very deep nesting, lone surrogates, huge exponents. This
 parser accepts 14 of them. They are reported rather than scored.
 
+**The streaming parser is now compared against the DOM parser.** It was not,
+and they had drifted. `make conformance-json` scores the DOM parser, and the 47
+streaming tests each fed input chosen to exercise the feature under test, so
+nothing asked the two parsers the same question. Six disagreements had
+accumulated, four of them the streaming parser *accepting* input the DOM parser
+refuses:
+
+| Input | Streaming parser | DOM parser |
+|---|---|---|
+| `{}`, `{ }`, `{"a":{}}`, `[{}]` | refused | accepted |
+| `{"a":}` | accepted | refused |
+| `[1,]` | accepted whatever `allow_trailing_commas` said | refused |
+| `[1 2]` fed a byte at a time | accepted | refused |
+| `[1,2,3],` in one feed | accepted | refused |
+
+`JsonStreamDom.TheTwoParsersAgreeOnWhatJsonIs` asks both parsers about 46
+inputs, each marked with what RFC 8259 says, and asks the streaming parser twice
+- in one feed and a byte at a time, since a chunk boundary is its own way to
+disagree. It is the instrument rather than six separate cases, so the next drift
+shows up as a disagreement instead of waiting for someone to think of it.
+
 **The schema engine has an oracle of its own**, which this page previously did
 not mention at all. `make conformance-json-schema` clones
 [JSON-Schema-Test-Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)

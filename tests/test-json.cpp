@@ -9136,6 +9136,232 @@ TEST(StateValidation, IncompleteStructure) {
  * refusal - and in particular the two places where an implementation can
  * appear to work while doing nothing.
  */
+/*
+ * The streaming parser and the DOM parser must agree about what JSON is.
+ *
+ * They had drifted, and nothing could see it: make conformance-json scores the
+ * DOM parser against JSONTestSuite, and the 47 streaming tests each fed input
+ * chosen to exercise the feature under test. Neither arrangement compares the
+ * two parsers to each other, so four disagreements had accumulated - three of
+ * them the streaming parser *accepting* input the DOM parser refuses, which is
+ * the direction that matters for a parser reading bytes it did not write.
+ *
+ *   {}           refused by the stream, accepted by the DOM
+ *   {"a":{}}     likewise - every empty object, at any chunk size
+ *   [1,]         accepted by the stream whatever allow_trailing_commas said
+ *   {"a":}       accepted by the stream: a member with no value
+ *
+ * The cause of the first two and the fourth was one inversion. `}` was handled
+ * in JSON_STREAM_STATE_EXPECT_VALUE, labelled "end of object (empty object)" -
+ * but that state is reached inside an object only by way of a colon, so a `}`
+ * there is a missing value and never an empty object. Meanwhile
+ * JSON_STREAM_STATE_OBJECT_KEY, which is exactly where `{` and a member comma
+ * leave the parser, accepted a string and nothing else. The handler was in the
+ * one state where it is wrong and absent from the state where it is right.
+ *
+ * The third was an asymmetry between two copies of the array-close code: the one
+ * reached from the VALUE state tested for a trailing comma and the one reached
+ * from EXPECT_VALUE did not. Both read correctly on their own.
+ *
+ * This test is the instrument rather than a list of the four: it asks the same
+ * question of both parsers over every case, so the next drift shows up as a
+ * disagreement instead of waiting for someone to write a case for it.
+ */
+TEST(JsonStreamDom, TheTwoParsersAgreeOnWhatJsonIs) {
+	struct Case {
+		const char * src;
+		bool valid;
+	};
+	// Each marked with what RFC 8259 says, so the test is also a claim about
+	// the grammar and not only about the two implementations matching.
+	const Case cases[] = {
+	    // Empty containers, nested and not.
+	    {"{}", true},
+	    {"{ }", true},
+	    {"[]", true},
+	    {"[ ]", true},
+	    {"[[]]", true},
+	    {"[{}]", true},
+	    {"{\"a\":{}}", true},
+	    {"{\"a\":[]}", true},
+	    {"[{},{}]", true},
+	    {"{\"a\":{},\"b\":[]}", true},
+	    {"[[[[]]]]", true},
+
+	    // Ordinary documents.
+	    {"{\"a\":1}", true},
+	    {"[1,2,3]", true},
+	    {"{\"a\":[1,{\"b\":null}],\"c\":true}", true},
+	    {"\"bare string\"", true},
+	    {"0", true},
+	    {"null", true},
+	    {"false", true},
+
+	    // Trailing commas, refused by default in both containers.
+	    {"[1,]", false},
+	    {"{\"a\":1,}", false},
+	    {"[1,2,]", false},
+	    {"[[1,]]", false},
+	    {"{\"a\":[1,]}", false},
+
+	    // A member or element with nothing in it.
+	    {"{\"a\":}", false},
+	    {"{\"a\":1,\"b\":}", false},
+	    {"[,]", false},
+	    {"[1,,2]", false},
+	    {"{,}", false},
+	    {"{\"a\":,}", false},
+	    {"{\"a\"}", false},
+	    {"{:1}", false},
+	    {"{\"a\":1,,}", false},
+
+	    // Mismatched and unbalanced.
+	    {"{]", false},
+	    {"[}", false},
+	    {"{\"a\":1", false},
+	    {"[1", false},
+	    {"}", false},
+	    {"]", false},
+	    {"", false},
+
+	    // Other refusals, to keep the agreement from being vacuous.
+	    {"[1 2]", false},
+	    {"{\"a\":1 \"b\":2}", false},
+	    {"tru", false},
+	    {"[01]", false},
+	    {"{\"a\":1}extra", false},
+	    {"'single'", false},
+	    {"[1,2,3],", false},
+	};
+
+	for (const Case & c : cases) {
+		GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+
+		// The DOM parser.
+		GTEXT_JSON_Error derr;
+		std::memset(&derr, 0, sizeof(derr));
+		GTEXT_JSON_Value * v =
+		    gtext_json_parse(c.src, std::strlen(c.src), &opts, &derr);
+		bool dom_ok = (v != nullptr);
+		if (v) {
+			gtext_json_free(v);
+		}
+		gtext_json_error_free(&derr);
+
+		// The streaming parser, in one feed and then one byte at a time, since
+		// a chunk boundary is its own way to disagree.
+		for (size_t chunk : {std::strlen(c.src) ? std::strlen(c.src) : 1,
+		         (size_t)1}) {
+			GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+			                             GTEXT_JSON_Error *) {
+				return GTEXT_JSON_OK;
+			};
+			GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+			ASSERT_NE(st, nullptr);
+			GTEXT_JSON_Error serr;
+			std::memset(&serr, 0, sizeof(serr));
+			GTEXT_JSON_Status status = GTEXT_JSON_OK;
+			size_t len = std::strlen(c.src);
+			for (size_t i = 0; i < len; i += chunk) {
+				size_t n = std::min(chunk, len - i);
+				status = gtext_json_stream_feed(st, c.src + i, n, &serr);
+				if (status != GTEXT_JSON_OK) {
+					break;
+				}
+			}
+			if (status == GTEXT_JSON_OK) {
+				status = gtext_json_stream_finish(st, &serr);
+			}
+			bool stream_ok = (status == GTEXT_JSON_OK);
+			gtext_json_stream_free(st);
+
+			EXPECT_EQ(stream_ok, c.valid)
+			    << "streaming parser, chunk " << chunk << ", input [" << c.src
+			    << "]: " << (serr.message ? serr.message : "no message");
+			EXPECT_EQ(stream_ok, dom_ok)
+			    << "the two parsers disagree about [" << c.src << "] at chunk "
+			    << chunk;
+			gtext_json_error_free(&serr);
+		}
+
+		EXPECT_EQ(dom_ok, c.valid) << "DOM parser, input [" << c.src << "]";
+	}
+}
+
+/* And with the option on, a trailing comma is accepted by both - so the test
+   above is pinning the default rather than an inability. */
+TEST(JsonStreamDom, TrailingCommasAreAcceptedByBothWhenAskedFor) {
+	const char * cases[] = {"[1,]", "{\"a\":1,}", "[1,2,]", "{\"a\":[1,]}"};
+	for (const char * src : cases) {
+		GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+		opts.allow_trailing_commas = true;
+
+		GTEXT_JSON_Error derr;
+		std::memset(&derr, 0, sizeof(derr));
+		GTEXT_JSON_Value * v =
+		    gtext_json_parse(src, std::strlen(src), &opts, &derr);
+		EXPECT_NE(v, nullptr)
+		    << "DOM: " << src << ": "
+		    << (derr.message ? derr.message : "no message");
+		if (v) {
+			gtext_json_free(v);
+		}
+		gtext_json_error_free(&derr);
+
+		GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+		                             GTEXT_JSON_Error *) {
+			return GTEXT_JSON_OK;
+		};
+		GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+		ASSERT_NE(st, nullptr);
+		GTEXT_JSON_Error serr;
+		std::memset(&serr, 0, sizeof(serr));
+		GTEXT_JSON_Status status =
+		    gtext_json_stream_feed(st, src, std::strlen(src), &serr);
+		if (status == GTEXT_JSON_OK) {
+			status = gtext_json_stream_finish(st, &serr);
+		}
+		EXPECT_EQ(status, GTEXT_JSON_OK)
+		    << "stream: " << src << ": "
+		    << (serr.message ? serr.message : "no message");
+		gtext_json_stream_free(st);
+		gtext_json_error_free(&serr);
+	}
+}
+
+/* The empty object must also produce the right events, not merely be accepted:
+   OBJECT_BEGIN then OBJECT_END, with nothing between them. */
+TEST(JsonStreamDom, AnEmptyObjectEmitsBeginAndEndAndNothingElse) {
+	struct Collected {
+		std::vector<GTEXT_JSON_Event_Type> types;
+	} got;
+
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	GTEXT_JSON_Event_cb cb = [](void * user, const GTEXT_JSON_Event * ev,
+	                             GTEXT_JSON_Error *) {
+		((Collected *)user)->types.push_back(ev->type);
+		return GTEXT_JSON_OK;
+	};
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, &got);
+	ASSERT_NE(st, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	const char * src = "{\"a\":{},\"b\":[]}";
+	ASSERT_EQ(gtext_json_stream_feed(st, src, std::strlen(src), &err),
+	    GTEXT_JSON_OK)
+	    << (err.message ? err.message : "");
+	ASSERT_EQ(gtext_json_stream_finish(st, &err), GTEXT_JSON_OK);
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+
+	EXPECT_EQ(got.types,
+	    (std::vector<GTEXT_JSON_Event_Type>{GTEXT_JSON_EVT_OBJECT_BEGIN,
+	        GTEXT_JSON_EVT_KEY, GTEXT_JSON_EVT_OBJECT_BEGIN,
+	        GTEXT_JSON_EVT_OBJECT_END, GTEXT_JSON_EVT_KEY,
+	        GTEXT_JSON_EVT_ARRAY_BEGIN, GTEXT_JSON_EVT_ARRAY_END,
+	        GTEXT_JSON_EVT_OBJECT_END}));
+}
+
 TEST(JsonNormalizeUnicode, ComposesADecomposedScalar) {
 	const char *src = "{\"a\":\"e\\u0301\"}";
 

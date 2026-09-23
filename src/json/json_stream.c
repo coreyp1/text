@@ -328,25 +328,23 @@ static GTEXT_JSON_Status json_stream_process_tokens(
     // comma/closing bracket). If we're in VALUE state, it means the state
     // changed between when we detected the incomplete token and now. We need to
     // fix the state to expect a value.
-    if (st->state == JSON_STREAM_STATE_VALUE &&
-        (st->token_buffer.type == JSON_TOKEN_BUFFER_STRING ||
-            st->token_buffer.type == JSON_TOKEN_BUFFER_NUMBER)) {
-      // We're resuming a value token, so we should be expecting a value
-      // Determine the correct state based on context
-      json_stream_stack_entry * top = json_stream_top(st);
-      if (top && top->is_array) {
-        // In an array, expecting a value
-        st->state = JSON_STREAM_STATE_EXPECT_VALUE;
-      }
-      else if (top && !top->is_array) {
-        // In an object, expecting a value after colon
-        st->state = JSON_STREAM_STATE_EXPECT_VALUE;
-      }
-      else {
-        // At root level, expecting first value
-        st->state = JSON_STREAM_STATE_INIT;
-      }
-    }
+    /*
+     * There used to be a state rewrite here: if the state was
+     * JSON_STREAM_STATE_VALUE while a string or number was buffered, it was
+     * reset to EXPECT_VALUE, on the reasoning that "the state changed between
+     * when we detected the incomplete token and now".
+     *
+     * That reasoning is wrong in the case that matters. `[1 2]` fed a byte at a
+     * time leaves the parser in VALUE after the space completes the first
+     * number, and the buffered `2` is a genuine second value that the grammar
+     * forbids - so rewriting the state to EXPECT_VALUE made the parser accept
+     * it. In one feed the same input was refused with "Unexpected token after
+     * value", which means the answer depended on where the caller's chunk
+     * boundaries fell.
+     *
+     * Removing it changed no other test: the JSON binary's other 364 cases pass
+     * unaltered, so the rewrite was repairing a state that was already right.
+     */
   }
 
   // Process tokens until we can't continue (EOF or error)
@@ -418,11 +416,36 @@ static GTEXT_JSON_Status json_stream_process_tokens(
       return GTEXT_JSON_OK;
     }
 
-    // Validate state before processing token (defensive check)
-    if (st->state == JSON_STREAM_STATE_ERROR ||
-        st->state == JSON_STREAM_STATE_DONE) {
+    // An error has already been reported; say nothing further about it.
+    if (st->state == JSON_STREAM_STATE_ERROR) {
       json_token_cleanup(&token);
       return GTEXT_JSON_OK;
+    }
+
+    /*
+     * A token after the document has ended is trailing garbage.
+     *
+     * This used to return GTEXT_JSON_OK and drop the token, so anything that
+     * lexed cleanly after a complete document was silently ignored: `[1,2,3],`
+     * and `{"a":1},` were accepted in a single feed, while `{"a":1}extra` was
+     * refused - not by this check but because `extra` fails to lex. Which
+     * trailing bytes were caught depended on whether they happened to tokenize.
+     *
+     * Delivered across two feeds the same input was already refused, because
+     * json_stream_validate_state() rejects a feed in the DONE state. So the
+     * answer also depended on where the caller's chunk boundaries fell.
+     *
+     * Whitespace does not reach here - the lexer skips it - and neither does
+     * EOF, handled above.
+     */
+    if (st->state == JSON_STREAM_STATE_DONE) {
+      json_position pos = {
+          .offset = st->buffer_start_offset + token.pos.offset,
+          .line = token.pos.line,
+          .col = token.pos.col};
+      json_token_cleanup(&token);
+      return json_stream_set_error(st, GTEXT_JSON_E_TRAILING_GARBAGE,
+          "Trailing content after the document", pos, err);
     }
 
     // Process token based on current state
@@ -471,6 +494,122 @@ static GTEXT_JSON_Status json_stream_validate_state(
 }
 
 // Handle a token based on current parser state
+
+
+/*
+ * Close an array: the `]` half, in one place, for the same reason as
+ * json_stream_close_object().
+ *
+ * The trailing-comma test lives here, and that is the fix as much as the
+ * sharing is. There were two copies: the one reached from
+ * JSON_STREAM_STATE_VALUE had the test, and the one reached from
+ * JSON_STREAM_STATE_EXPECT_VALUE did not - so `[1,]` was accepted whatever
+ * allow_trailing_commas said, while `{"a":1,}` was correctly refused. The
+ * asymmetry was invisible because each copy read correctly on its own.
+ *
+ * EXPECT_VALUE is entered three ways: `[` for a first element, `,` inside an
+ * array, and `:` inside an object. `has_elements` is what separates the first
+ * from the second, which is why an empty array passes and a trailing comma does
+ * not.
+ */
+static GTEXT_JSON_Status json_stream_close_array(GTEXT_JSON_Stream * st,
+    const json_token * token, GTEXT_JSON_Error * err) {
+  json_stream_stack_entry * array_top = json_stream_top(st);
+  json_position pos = {.offset = st->buffer_start_offset + token->pos.offset,
+      .line = token->pos.line,
+      .col = token->pos.col};
+
+  if (!array_top || !array_top->is_array) {
+    return json_stream_set_error(
+        st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected ]", pos, err);
+  }
+
+  if (array_top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE
+      && !st->opts.allow_trailing_commas) {
+    return json_stream_set_error(
+        st, GTEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
+  }
+
+  GTEXT_JSON_Event evt;
+  evt.type = GTEXT_JSON_EVT_ARRAY_END;
+  GTEXT_JSON_Status status =
+      json_stream_emit_event(st, GTEXT_JSON_EVT_ARRAY_END, &evt);
+  if (status != GTEXT_JSON_OK) {
+    return status;
+  }
+
+  json_stream_pop(st);
+  if (st->stack_size == 0) {
+    st->state = JSON_STREAM_STATE_DONE;
+  }
+  else {
+    json_stream_stack_entry * parent_top = json_stream_top(st);
+    if (parent_top) {
+      parent_top->has_elements = 1;
+    }
+    st->state = JSON_STREAM_STATE_VALUE;
+  }
+  return GTEXT_JSON_OK;
+}
+
+/*
+ * Close an object: the `}` half of the grammar, in one place.
+ *
+ * There were two copies of this and a third case that needed it and did not
+ * have it. JSON_STREAM_STATE_OBJECT_KEY - the state a `{` leaves the parser in,
+ * and the state a `,` inside an object returns it to - accepted a string and
+ * nothing else, so every empty object was refused with "Expected object key
+ * (string)": {}, { }, {"a":{}} and [{}] alike, at any chunk size, while the DOM
+ * parser accepted all of them. An empty array was fine, which is why this was
+ * not obvious.
+ *
+ * The trailing-comma test belongs here rather than at the call sites because it
+ * is the reason the two cases differ at all: reaching `}` with elements already
+ * emitted and a key expected means the last thing seen was a comma. In the
+ * VALUE state that condition is false by construction, which is why the copy
+ * there tested a state it could never be in.
+ */
+static GTEXT_JSON_Status json_stream_close_object(GTEXT_JSON_Stream * st,
+    const json_token * token, GTEXT_JSON_Error * err) {
+  json_stream_stack_entry * object_top = json_stream_top(st);
+  json_position pos = {.offset = st->buffer_start_offset + token->pos.offset,
+      .line = token->pos.line,
+      .col = token->pos.col};
+
+  if (!object_top || object_top->is_array) {
+    return json_stream_set_error(
+        st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected }", pos, err);
+  }
+
+  if (object_top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY
+      && !st->opts.allow_trailing_commas) {
+    return json_stream_set_error(
+        st, GTEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
+  }
+
+  GTEXT_JSON_Event evt;
+  evt.type = GTEXT_JSON_EVT_OBJECT_END;
+  GTEXT_JSON_Status status =
+      json_stream_emit_event(st, GTEXT_JSON_EVT_OBJECT_END, &evt);
+  if (status != GTEXT_JSON_OK) {
+    return status;
+  }
+
+  json_stream_pop(st);
+  if (st->stack_size == 0) {
+    st->state = JSON_STREAM_STATE_DONE;
+  }
+  else {
+    // A nested object counts as an element of whatever holds it.
+    json_stream_stack_entry * parent_top = json_stream_top(st);
+    if (parent_top) {
+      parent_top->has_elements = 1;
+    }
+    st->state = JSON_STREAM_STATE_VALUE;
+  }
+  return GTEXT_JSON_OK;
+}
+
 static GTEXT_JSON_Status json_stream_handle_token(
     GTEXT_JSON_Stream * st, const json_token * token, GTEXT_JSON_Error * err) {
   // Validate state before processing token
@@ -511,98 +650,10 @@ static GTEXT_JSON_Status json_stream_handle_token(
       return GTEXT_JSON_OK;
     }
     else if (token->type == JSON_TOKEN_RBRACKET) {
-      // End of array
-      json_stream_stack_entry * array_top = json_stream_top(st);
-      if (!array_top || !array_top->is_array) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected ]", pos, err);
-      }
-
-      // Check for trailing comma (if container has elements and we're expecting
-      // a value)
-        if (array_top->has_elements && st->state == JSON_STREAM_STATE_EXPECT_VALUE &&
-          !st->opts.allow_trailing_commas) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
-      }
-
-      // Emit array end event
-      GTEXT_JSON_Event evt;
-      evt.type = GTEXT_JSON_EVT_ARRAY_END;
-      status = json_stream_emit_event(st, GTEXT_JSON_EVT_ARRAY_END, &evt);
-      if (status != GTEXT_JSON_OK) {
-        return status;
-      }
-
-      json_stream_pop(st);
-      if (st->stack_size == 0) {
-        st->state = JSON_STREAM_STATE_DONE;
-      }
-      else {
-        // Mark that parent container has elements (nested array counts as
-        // element)
-        json_stream_stack_entry * parent_top = json_stream_top(st);
-        if (parent_top) {
-          parent_top->has_elements = 1;
-        }
-        st->state = JSON_STREAM_STATE_VALUE;
-      }
-      return GTEXT_JSON_OK;
+      return json_stream_close_array(st, token, err);
     }
     else if (token->type == JSON_TOKEN_RBRACE) {
-      // End of object
-      json_stream_stack_entry * object_top = json_stream_top(st);
-      if (!object_top || object_top->is_array) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected }", pos, err);
-      }
-
-      // Check for trailing comma (if container has elements and we're expecting
-      // a key)
-        if (object_top->has_elements && st->state == JSON_STREAM_STATE_OBJECT_KEY &&
-          !st->opts.allow_trailing_commas) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Trailing comma not allowed", pos, err);
-      }
-
-      // Emit object end event
-      GTEXT_JSON_Event evt;
-      evt.type = GTEXT_JSON_EVT_OBJECT_END;
-      status = json_stream_emit_event(st, GTEXT_JSON_EVT_OBJECT_END, &evt);
-      if (status != GTEXT_JSON_OK) {
-        return status;
-      }
-
-      json_stream_pop(st);
-      if (st->stack_size == 0) {
-        st->state = JSON_STREAM_STATE_DONE;
-      }
-      else {
-        // Mark that parent container has elements (nested object counts as
-        // element)
-        json_stream_stack_entry * parent_top = json_stream_top(st);
-        if (parent_top) {
-          parent_top->has_elements = 1;
-        }
-        st->state = JSON_STREAM_STATE_VALUE;
-      }
-      return GTEXT_JSON_OK;
+      return json_stream_close_object(st, token, err);
     }
     else {
       // Unexpected token
@@ -619,78 +670,33 @@ static GTEXT_JSON_Status json_stream_handle_token(
     return json_stream_handle_value_token(st, token, err);
 
   case JSON_STREAM_STATE_EXPECT_VALUE:
-    // Expecting a value (after colon in object, or first element in array)
-    // But also check for empty containers (closing bracket/brace)
+    // Expecting a value: after `[` for a first element, after `,` inside an
+    // array, or after `:` inside an object.
+    //
+    // `]` may close an array here - empty when nothing has been emitted, a
+    // trailing comma when something has - and json_stream_close_array() tells
+    // those apart.
     if (token->type == JSON_TOKEN_RBRACKET) {
-      // End of array (empty array)
-      json_stream_stack_entry * array_top = json_stream_top(st);
-      if (!array_top || !array_top->is_array) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected ]", pos, err);
-      }
-
-      // Emit array end event
-      GTEXT_JSON_Event evt;
-      evt.type = GTEXT_JSON_EVT_ARRAY_END;
-      status = json_stream_emit_event(st, GTEXT_JSON_EVT_ARRAY_END, &evt);
-      if (status != GTEXT_JSON_OK) {
-        return status;
-      }
-
-      json_stream_pop(st);
-      if (st->stack_size == 0) {
-        st->state = JSON_STREAM_STATE_DONE;
-      }
-      else {
-        json_stream_stack_entry * parent = json_stream_top(st);
-        if (parent) {
-          parent->has_elements = 1;
-        }
-        st->state = JSON_STREAM_STATE_VALUE;
-      }
-      return GTEXT_JSON_OK;
+      return json_stream_close_array(st, token, err);
     }
-    else if (token->type == JSON_TOKEN_RBRACE) {
-      // End of object (empty object)
-      json_stream_stack_entry * object_top = json_stream_top(st);
-      if (!object_top || object_top->is_array) {
-        json_position pos = {
-            .offset = st->buffer_start_offset + token->pos.offset,
-            .line = token->pos.line,
-            .col = token->pos.col};
-        return json_stream_set_error(
-            st, GTEXT_JSON_E_BAD_TOKEN, "Unexpected }", pos, err);
-      }
-
-      // Emit object end event
-      GTEXT_JSON_Event evt;
-      evt.type = GTEXT_JSON_EVT_OBJECT_END;
-      status = json_stream_emit_event(st, GTEXT_JSON_EVT_OBJECT_END, &evt);
-      if (status != GTEXT_JSON_OK) {
-        return status;
-      }
-
-      json_stream_pop(st);
-      if (st->stack_size == 0) {
-        st->state = JSON_STREAM_STATE_DONE;
-      }
-      else {
-        json_stream_stack_entry * parent = json_stream_top(st);
-        if (parent) {
-          parent->has_elements = 1;
-        }
-        st->state = JSON_STREAM_STATE_VALUE;
-      }
-      return GTEXT_JSON_OK;
-    }
+    // `}` may not. This state is only ever reached inside an object by way of a
+    // colon, so a `}` here is a member with no value: `{"a":}`. It used to be
+    // handled as "end of object (empty object)", which is the one state where
+    // that reading is wrong - and it was missing from the state where it is
+    // right. So the streaming parser accepted {"a":} and refused {}, both
+    // against the DOM parser. Falling through to the value handler gives the
+    // error the token deserves.
     // Otherwise, handle as value token
     return json_stream_handle_value_token(st, token, err);
 
   case JSON_STREAM_STATE_OBJECT_KEY:
+    // `}` here closes an object with no members - or, if members have already
+    // been emitted, follows a comma and is a trailing one. Both answers are in
+    // json_stream_close_object(); what this state used to do was refuse every
+    // empty object.
+    if (token->type == JSON_TOKEN_RBRACE) {
+      return json_stream_close_object(st, token, err);
+    }
     // Expecting object key
     if (token->type != JSON_TOKEN_STRING) {
       json_position pos = {
