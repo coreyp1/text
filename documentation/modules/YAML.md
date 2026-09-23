@@ -339,6 +339,14 @@ no parent pointers, so asking a node how deep it sits would cost a walk on
 every append — and a document built through the API can therefore nest as far
 as memory allows.
 
+Parsing is **linear in nesting depth**. It was quadratic until recently, for
+two independent reasons that are worth knowing if you are looking at a
+profile: a property sentinel with two spellings made a stack walk run for
+every event that had no properties, and five helpers each walked backwards
+to the start of the current line — which, in a deeply nested *flow*
+document, is the whole document. A 100,000-deep parse took 11.3 seconds and
+now takes 0.03, and the shape holds out to 800,000 levels.
+
 `SIZE_MAX` removes the limit, and removing it is safe. That was not always
 true: the three walks recursed on the C stack at roughly 344 bytes a level
 while resolving, 228 in the DOM writer and 113 in the clone, so "no limit"
@@ -1304,15 +1312,15 @@ Part of the ghoti.io text library.
 
 **Last Updated:** September 22, 2026  
 **Module Version:** 0.1.0 (Alpha)  
-**Test count:** 713 YAML test cases across 100 binaries, of 1,625 across the
+**Test count:** 723 YAML test cases across 103 binaries, of 1,635 across the
 suite, all passing.
 
 Both figures count each binary once. `make test` has three group targets
 (`Text tests`, `JSON tests`, `CSV tests`) that re-run binaries the per-target
-rules have already run, so summing every `[  PASSED  ]` line gives 2,457 -
+rules have already run, so summing every `[  PASSED  ]` line gives 2,467 -
 832 more than there are tests. The rule is to count only what follows a
-single-token `### Running <name> ###` header, and to note that 112 such
-headers appear while 111 report a total: `testHeaders` is a plain C program
+single-token `### Running <name> ###` header, and to note that 115 such
+headers appear while 114 report a total: `testHeaders` is a plain C program
 rather than a gtest binary and prints none.
 
 `make test` exits non-zero when any suite fails, which is worth stating
