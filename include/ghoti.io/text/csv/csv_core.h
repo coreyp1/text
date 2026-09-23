@@ -82,7 +82,17 @@ typedef enum {
   /// `always_escape_quotes` is set, because the escape it would emit means a
   /// quote to no reader. The write stops with this status instead of emitting
   /// a document that says something other than the table did.
-  GTEXT_CSV_E_UNQUOTABLE_FIELD
+  GTEXT_CSV_E_UNQUOTABLE_FIELD,
+
+  /// More input is needed before there is anything to report.
+  ///
+  /// Appended for the same reason as the enumerator above: no existing value
+  /// moves. Returned by gtext_csv_reader_next() when the queue is empty and
+  /// end of input has not been signalled - the pull reader's ordinary "not
+  /// yet", and distinct from GTEXT_CSV_E_STATE, which means there will never
+  /// be another event. JSON and YAML have had this status; CSV had no reader
+  /// to need it.
+  GTEXT_CSV_E_INCOMPLETE
 } GTEXT_CSV_Status;
 
 /**

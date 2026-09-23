@@ -27,7 +27,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 3 | ~~The `release` build is compiled `-O0`~~ **fixed**: release is `-O2`, debug `-O0` | suite-wide | was: 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | JSON parse and CSV done; YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
-| 6 | No pull/iterator reader for JSON or CSV | JSON, CSV | forces an inverted control flow |
+| 6 | No pull/iterator reader for JSON or CSV | CSV done; JSON open | forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
 | 8 | ~~No dialect presets~~ **fixed**; no sniffing | CSV | was: small friction, common need |
 
@@ -409,7 +409,10 @@ suite*, not in the parser, and it is now closed:
 
 **Missing.**
 
-- A pull reader, as above.
+- ~~A pull reader.~~ **Added**: `gtext_csv_reader_new()`, `_feed()`, `_next()`
+  and `_free()`, the same shape as the YAML reader. It wraps the push parser and
+  copies each event's bytes into a queue, because the push callback's pointer
+  lives only for the duration of the call.
 - ~~Dialect presets.~~ **Added**: `gtext_csv_dialect_tsv()`, `_semicolon()`,
   `_backslash_escape()`, `_excel()` and `_permissive()`. Exporting them turned
   into a correctness pass - writing a test per preset was the first time

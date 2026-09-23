@@ -458,7 +458,19 @@ was written, so this pins existing behavior rather than recording a fix.
   `_backslash_escape()`, `_excel()` and `_permissive()`, each differing from
   `gtext_csv_dialect_default()` only in the field it names.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or
-  dates, by design.
+  dates, by design. `GTEXT_CSV_QUOTE_NONNUMERIC` asks whether a field's text
+  *spells* a number when deciding whether to quote it, which is a question about
+  bytes and not a type.
+
+A pull reader used to be listed here and is now implemented:
+`gtext_csv_reader_new()`, `gtext_csv_reader_feed()`, `gtext_csv_reader_next()`
+and `gtext_csv_reader_free()`. It wraps the streaming parser, so it adds no
+grammar, and it copies each event's bytes into its queue - the push callback's
+`data` points into the caller's chunk or into a field buffer about to be reused,
+so a reader that kept the pointer would hand back overwritten memory. That is
+pinned by a test which overwrites the chunk in place after feeding it, and the
+copy was confirmed load-bearing by removing it: three tests fail, one reporting
+every field as the same reused buffer.
 
 ---
 

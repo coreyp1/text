@@ -548,6 +548,44 @@ TEST(Allocator, TwoCsvTablesWithDifferentAllocatorsStaySeparate) {
 	EXPECT_EQ(c2.live_blocks, 0u);
 }
 
+/* The pull reader copies every event's bytes into its queue, so it allocates
+   where the push parser does not - and it must do so through the caller's
+   allocator like everything else the parse options cover. */
+TEST(Allocator, CsvPullReaderBalancesThroughTheAllocator) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+	opts.allocator = &alloc;
+
+	GTEXT_CSV_Reader * r = gtext_csv_reader_new(&opts);
+	ASSERT_NE(r, nullptr);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	// Enough records to grow the queue past its initial capacity, and enough
+	// unread events at the end that freeing has queued events to release.
+	std::string src;
+	for (int i = 0; i < 50; i++) {
+		src += "field" + std::to_string(i) + ",\"quoted,value\",third\n";
+	}
+	GTEXT_CSV_Error err;
+	std::memset(&err, 0, sizeof(err));
+	ASSERT_EQ(gtext_csv_reader_feed(r, src.data(), src.size(), &err),
+	    GTEXT_CSV_OK);
+	ASSERT_EQ(gtext_csv_reader_feed(r, nullptr, 0, &err), GTEXT_CSV_OK);
+
+	// Read only a few, so the rest are still queued at free time.
+	for (int i = 0; i < 5; i++) {
+		GTEXT_CSV_Event ev;
+		std::memset(&ev, 0, sizeof(ev));
+		EXPECT_EQ(gtext_csv_reader_next(r, &ev), GTEXT_CSV_OK);
+	}
+
+	gtext_csv_reader_free(r);
+	gtext_csv_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u) << "queued events were not released";
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
 TEST(Allocator, CsvNullAllocatorOptionStillWorks) {
 	// The default path must be unchanged: no allocator named, nothing
 	// reaching a caller's allocator, and the table still correct.

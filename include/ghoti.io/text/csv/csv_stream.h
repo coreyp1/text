@@ -126,6 +126,76 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_stream_finish(
  */
 GTEXT_API void gtext_csv_stream_free(GTEXT_CSV_Stream * stream);
 
+/**
+ * @brief Opaque pull-model reader structure
+ */
+typedef struct GTEXT_CSV_Reader GTEXT_CSV_Reader;
+
+/**
+ * @brief Create a new pull-model CSV reader
+ *
+ * The push parser calls the caller; this lets the caller call the parser. Which
+ * way round that is decides the shape of the program on top of it: a callback
+ * that has to remember where it is becomes a state machine, and a loop that
+ * reads a record at a time does not.
+ *
+ * It wraps the streaming parser and queues events for
+ * gtext_csv_reader_next(). Every event's bytes are copied into that queue,
+ * which is what makes the lifetime documented on gtext_csv_reader_next() true -
+ * the push parser's `data` pointer lives only for the duration of its
+ * callback.
+ *
+ * @param opts Parse options, or NULL for defaults.
+ *             GTEXT_CSV_Parse_Options::allocator covers the reader, its queue
+ *             and the copied bytes.
+ * @return New reader, or NULL on allocation failure
+ */
+GTEXT_API GTEXT_CSV_Reader * gtext_csv_reader_new(
+    const GTEXT_CSV_Parse_Options * opts);
+
+/**
+ * @brief Feed input to the pull reader
+ *
+ * To signal end of input, call with `data` NULL and `len` 0, which finishes the
+ * parse and enqueues any remaining events. Doing that twice is accepted and
+ * does nothing, so a loop that finishes on a short read may finish again
+ * without it being an error. Feeding bytes after end of input is
+ * GTEXT_CSV_E_STATE.
+ *
+ * @param reader Reader (must not be NULL)
+ * @param data Input chunk, or NULL with len 0 for end of input
+ * @param len Length of the chunk
+ * @param err Error output, or NULL
+ * @return GTEXT_CSV_OK, or the parse error
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_reader_feed(GTEXT_CSV_Reader * reader,
+    const void * data, size_t len, GTEXT_CSV_Error * err);
+
+/**
+ * @brief Take the next available event from the reader
+ *
+ * @param reader Reader (must not be NULL)
+ * @param out_event Receives the event (must not be NULL)
+ * @return GTEXT_CSV_OK when an event was available;
+ *         GTEXT_CSV_E_INCOMPLETE when more input is needed;
+ *         GTEXT_CSV_E_STATE when input has ended and the queue is empty;
+ *         or the parse error, repeated on every later call once one has
+ *         happened, so that a failure is never mistaken for the end.
+ *
+ * The event's `data` pointer stays valid until the next call to
+ * gtext_csv_reader_next() or gtext_csv_reader_free(), whichever comes first.
+ * Copy it if it must outlive that.
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_reader_next(
+    GTEXT_CSV_Reader * reader, GTEXT_CSV_Event * out_event);
+
+/**
+ * @brief Free the reader, its queue and any event still held
+ *
+ * Passing NULL is a no-op.
+ */
+GTEXT_API void gtext_csv_reader_free(GTEXT_CSV_Reader * reader);
+
 #ifdef __cplusplus
 }
 #endif
