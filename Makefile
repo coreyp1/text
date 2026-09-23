@@ -163,10 +163,33 @@ endif
 PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(PKG_CONFIG_PATH)
 
 
+# The optimization level is the one thing that distinguishes the two builds'
+# compile flags. `release` is what gets installed and what anything linking
+# against this library actually runs, so it is compiled for speed; `debug` is
+# compiled for stepping through. -g stays in both, because a release build
+# that cannot be read in a debugger is a release build nobody can diagnose,
+# and the symbols cost only file size.
+#
+# Until 2026-09 both were -O0. That was never decided: the production build
+# doubled as the debugging build early on and nothing revisited it, so the
+# `ifeq ($(BUILD),debug)` block above renamed the artifact and changed nothing
+# about how it was compiled. The suite-wide floor is now -O2.
+#
+# Everything that wants a different level appends its own -O after this one,
+# since the last -O on the command line wins: `make coverage` passes
+# EXTRA_CFLAGS="--coverage -O0" and EXTRA_CFLAGS is last in CFLAGS, and the
+# fuzzers carry -O1 in FUZZ_SAN, which does not derive from CFLAGS at all.
+# ASAN_UBSAN_FLAGS deliberately carries no -O: see ASAN_CFLAGS.
+ifeq ($(BUILD),debug)
+OPT_CFLAGS := -O0
+else
+OPT_CFLAGS := -O2
+endif
+
 CXX := g++
 CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
 CC := cc
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GTEXT_BUILD enables DLL export on Windows (checked by GTEXT_API macro)
 # GTEXT_TEST_BUILD enables export of internal functions for testing (checked by GTEXT_INTERNAL_API macro)
@@ -583,6 +606,12 @@ $(APP_DIR)/examples/yaml/%$(EXE_EXTENSION): examples/yaml/%.c \
 ####################################################################
 
 # Compile flags for ASan builds (include UBSan for comprehensive checking)
+# ASAN_UBSAN_FLAGS carries no -O of its own, so the sanitizer build inherits
+# OPT_CFLAGS and `make test-asan` runs at the level that ships. That is the
+# point: strict aliasing and signed-overflow assumptions are inert at -O0 and
+# exploitable at -O2, so a UB gate compiled at -O0 is not asking about the
+# code anybody runs. `make test-asan BUILD=debug` gives -O0 when a trace needs
+# reading instead.
 ASAN_CFLAGS := $(CFLAGS) $(ASAN_UBSAN_FLAGS) -DGTEXT_BUILD -DGTEXT_TEST_BUILD
 ASAN_CXXFLAGS := $(CXXFLAGS) $(ASAN_UBSAN_FLAGS)
 ASAN_LDFLAGS := $(LDFLAGS) $(ASAN_UBSAN_FLAGS)
