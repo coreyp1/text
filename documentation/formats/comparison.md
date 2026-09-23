@@ -27,7 +27,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 3 | ~~The `release` build is compiled `-O0`~~ **fixed**: release is `-O2`, debug `-O0` | suite-wide | was: 1.5x to 2.1x slower |
 | 4 | No custom allocator hook in any format | JSON parse and CSV done; YAML open | blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
-| 6 | No pull/iterator reader for JSON or CSV | CSV done; JSON open | forces an inverted control flow |
+| 6 | ~~No pull/iterator reader for JSON or CSV~~ **both done** | JSON, CSV | was: forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
 | 8 | ~~No dialect presets~~ **fixed**; no sniffing | CSV | was: small friction, common need |
 
@@ -292,23 +292,32 @@ reject a C parser outright.
 
 ---
 
-## 6. Push streaming exists everywhere; pull only in YAML
+## 6. Push streaming exists everywhere; pull now in all three - fixed
 
 | Format | DOM | Push (feed) | Pull (next) |
 |---|---|---|---|
-| JSON | yes | `gtext_json_stream_feed()` | none |
-| CSV | yes | `gtext_csv_stream_feed()` | none |
+| JSON | yes | `gtext_json_stream_feed()` | `gtext_json_reader_next()` |
+| CSV | yes | `gtext_csv_stream_feed()` | `gtext_csv_reader_next()` |
 | YAML | yes | `gtext_yaml_stream_feed()` | `gtext_yaml_reader_next()` |
 
-YAML's pull reader is the interface a caller wants when the consuming code owns
-the loop, which is the usual case when parsing into an application's own types.
-With only a push interface, a JSON or CSV caller has to invert control, hold
-their own state machine, and reassemble structure across callbacks.
+**Now closed.** A pull reader is the interface a caller wants when the consuming
+code owns the loop, which is the usual case when parsing into an application's
+own types: with only a push interface the caller has to invert control, hold
+their own state machine, and reassemble structure across callbacks. YAML's
+reader showed the intended shape already existed here, which made the asymmetry
+an omission rather than a design position.
 
-`gtext_yaml_reader_next()` shows the intended shape already exists in this
-codebase, which makes the asymmetry an omission rather than a design position.
-For JSON in particular, the pull reader is the interface that the fastest
-competing libraries lead with.
+All three are the same four calls in the same order, and all three copy each
+event's bytes into a queue rather than passing on the parser's pointer - which
+the push callbacks' events do not outlive. That copy is what the pull reader
+buys the caller, and it is where such a wrapper goes wrong invisibly, since a
+stale pointer stays readable for a while. Each reader has a test that overwrites
+the fed chunk in place and then reads the events back.
+
+Writing the JSON one is also what found six grammar divergences between the
+streaming parser and the DOM parser, four of them the streaming parser accepting
+invalid JSON. Its chunk-invariance test - same bytes, different chunk sizes,
+same events - was what refused to pass. See the \ref format_json "JSON page".
 
 ---
 
@@ -365,7 +374,9 @@ real advantages over cJSON and jansson.
 
 **Missing.**
 
-- A pull reader, as above.
+- ~~A pull reader.~~ **Added**: `gtext_json_reader_new()`, `_feed()`, `_next()`
+  and `_free()`. Writing it is what exposed six grammar divergences between the
+  streaming parser and the DOM parser - see the \ref format_json "JSON page".
 - ~~Schema beyond the core subset, and honest failure when a schema exceeds
   it.~~ **Both done**, and the first is no longer a subset: 2020-12 by default
   with 2019-09, draft-07 and draft-06 read as themselves, scored 1,301 of 1,301

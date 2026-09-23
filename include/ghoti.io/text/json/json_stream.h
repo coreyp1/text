@@ -245,6 +245,72 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_finish(
  */
 GTEXT_API void gtext_json_stream_free(GTEXT_JSON_Stream * st);
 
+/**
+ * @brief Opaque pull-model reader structure
+ */
+typedef struct GTEXT_JSON_Reader GTEXT_JSON_Reader;
+
+/**
+ * @brief Create a new pull-model JSON reader
+ *
+ * The streaming parser above calls the caller; this lets the caller call the
+ * parser. It wraps the streaming parser and queues events for
+ * gtext_json_reader_next(), copying each event's bytes into that queue - which
+ * it has to, because the events this header describes are "valid only for the
+ * duration of the callback invocation".
+ *
+ * The same four calls as the YAML and CSV readers, in the same order.
+ *
+ * @param opts Parse options, or NULL for defaults.
+ *             GTEXT_JSON_Parse_Options::allocator covers the reader, its queue
+ *             and the copied bytes.
+ * @return New reader, or NULL on allocation failure
+ */
+GTEXT_API GTEXT_JSON_Reader * gtext_json_reader_new(
+    const GTEXT_JSON_Parse_Options * opts);
+
+/**
+ * @brief Feed input to the pull reader
+ *
+ * To signal end of input, call with `data` NULL and `len` 0, which finishes the
+ * parse and enqueues any remaining events. Doing that twice is accepted and does
+ * nothing. Feeding bytes after end of input is GTEXT_JSON_E_STATE.
+ *
+ * @param reader Reader (must not be NULL)
+ * @param data Input chunk, or NULL with len 0 for end of input
+ * @param len Length of the chunk
+ * @param err Error output, or NULL
+ * @return GTEXT_JSON_OK, or the parse error
+ */
+GTEXT_API GTEXT_JSON_Status gtext_json_reader_feed(GTEXT_JSON_Reader * reader,
+    const void * data, size_t len, GTEXT_JSON_Error * err);
+
+/**
+ * @brief Take the next available event from the reader
+ *
+ * @param reader Reader (must not be NULL)
+ * @param out_event Receives the event (must not be NULL)
+ * @return GTEXT_JSON_OK when an event was available;
+ *         GTEXT_JSON_E_INCOMPLETE when more input is needed;
+ *         GTEXT_JSON_E_STATE when input has ended and the queue is empty;
+ *         or the parse error, repeated on every later call once one has
+ *         happened, so a failure is never mistaken for the end.
+ *
+ * The event's string and number pointers stay valid until the next call to
+ * gtext_json_reader_next() or gtext_json_reader_free(), whichever comes first -
+ * which is longer than the push callback's events live, and is the reason this
+ * reader copies.
+ */
+GTEXT_API GTEXT_JSON_Status gtext_json_reader_next(
+    GTEXT_JSON_Reader * reader, GTEXT_JSON_Event * out_event);
+
+/**
+ * @brief Free the reader, its queue and any event still held
+ *
+ * Passing NULL is a no-op.
+ */
+GTEXT_API void gtext_json_reader_free(GTEXT_JSON_Reader * reader);
+
 #ifdef __cplusplus
 }
 #endif
