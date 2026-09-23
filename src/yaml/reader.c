@@ -26,6 +26,7 @@
  * line, and column. It's intentionally minimal to bootstrap scanner work.
  */
 
+#include <ghoti.io/text/allocator.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -41,17 +42,23 @@ typedef struct GTEXT_YAML_CharReader {
   int line;
   int col;
   int suppress_lf; /* 1 if previous char was CR and LF should not advance line */
+  /* The allocator this reader came from, so the free path needs no second
+     argument. */
+  const GTEXT_Allocator *alloc;
 } GTEXT_YAML_CharReader;
 
 GTEXT_INTERNAL_API GTEXT_YAML_CharReader *gtext_yaml_char_reader_new(
   const char *data,
-  size_t len
+  size_t len,
+  const GTEXT_Allocator *alloc
 )
 {
-  GTEXT_YAML_CharReader *r = (GTEXT_YAML_CharReader *)malloc(sizeof(*r));
+  GTEXT_YAML_CharReader *r =
+      (GTEXT_YAML_CharReader *)gtext_allocator_malloc(alloc, sizeof(*r));
   if (!r) {
     return NULL;
   }
+  r->alloc = alloc;
 
   r->data = data;
   r->len = len;
@@ -68,7 +75,7 @@ GTEXT_INTERNAL_API void gtext_yaml_char_reader_free(GTEXT_YAML_CharReader *r)
     return;
   }
 
-  free(r);
+  gtext_allocator_free(r->alloc, r);
 }
 
 GTEXT_INTERNAL_API int gtext_yaml_char_reader_peek(GTEXT_YAML_CharReader *r)

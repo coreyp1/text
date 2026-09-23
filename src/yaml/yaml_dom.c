@@ -1003,7 +1003,8 @@ GTEXT_API GTEXT_YAML_Document *gtext_yaml_document_new(
 	(void)error;  /* Not used yet - future error reporting */
 	
 	/* Create context */
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx =
+		yaml_context_new(options ? options->allocator : NULL);
 	if (!ctx) {
 		if (error) {
 			error->code = GTEXT_YAML_E_OOM;
@@ -1116,7 +1117,7 @@ static GTEXT_YAML_Node *dom_new_scalar(
 			double f = 0.0;
 			const GTEXT_YAML_Node_Type from_text =
 				gtext_yaml_plain_text_classify(
-					value, value ? length : 0, &b, &i, &f);
+					value, value ? length : 0, &b, &i, &f, doc->ctx->alloc);
 			if (type == GTEXT_YAML_BOOL) node->as.scalar.bool_value = b;
 			else if (type == GTEXT_YAML_INT) node->as.scalar.int_value = i;
 			else node->as.scalar.float_value = f;
@@ -1203,7 +1204,7 @@ static GTEXT_YAML_Node *dom_new_scalar(
 	if (type != GTEXT_YAML_STRING) {
 		const GTEXT_YAML_Node_Type from_text =
 			gtext_yaml_plain_text_classify(value, value ? length : 0,
-				NULL, NULL, NULL);
+				NULL, NULL, NULL, doc->ctx->alloc);
 		bool ok;
 		switch (type) {
 			case GTEXT_YAML_NULL:
@@ -1440,6 +1441,9 @@ typedef struct {
 	 * fail, and SIZE_MAX means what it says rather than meaning a
 	 * segmentation fault at about 74000 levels. */
 	size_t max_depth;
+	/* Carried so the growth and clear paths reach it without a signature
+	   change, and set at the declaration so no insert can precede it. */
+	const GTEXT_Allocator *alloc;
 } yaml_clone_map;
 
 /* Source node to its clone.
@@ -1498,7 +1502,7 @@ static void clone_map_place(
 
 static bool clone_map_grow(yaml_clone_map *map) {
 	size_t new_capacity = map->capacity == 0 ? 64 : map->capacity * 2;
-	yaml_clone_entry *entries = (yaml_clone_entry *)calloc(
+	yaml_clone_entry *entries = (yaml_clone_entry *)gtext_allocator_calloc(map->alloc, 
 		new_capacity, sizeof(yaml_clone_entry)
 	);
 	if (!entries) return false;
@@ -1508,7 +1512,7 @@ static bool clone_map_grow(yaml_clone_map *map) {
 				map->entries[i].source, map->entries[i].clone);
 		}
 	}
-	free(map->entries);
+	gtext_allocator_free(map->alloc, map->entries);
 	map->entries = entries;
 	map->capacity = new_capacity;
 	return true;
@@ -1563,6 +1567,7 @@ typedef struct {
 	yaml_clone_task *items;
 	size_t count;
 	size_t capacity;
+	const GTEXT_Allocator *alloc;  /* as yaml_clone_map's, and for the same reason */
 } yaml_clone_stack;
 
 static bool clone_stack_push(
@@ -1573,7 +1578,7 @@ static bool clone_stack_push(
 ) {
 	if (stack->count == stack->capacity) {
 		size_t new_capacity = stack->capacity == 0 ? 32 : stack->capacity * 2;
-		yaml_clone_task *items = (yaml_clone_task *)realloc(
+		yaml_clone_task *items = (yaml_clone_task *)gtext_allocator_realloc(stack->alloc, 
 			stack->items, new_capacity * sizeof(yaml_clone_task)
 		);
 		if (!items) return false;
@@ -1777,7 +1782,7 @@ static GTEXT_YAML_Node *clone_node(
 	yaml_clone_map *map
 ) {
 	GTEXT_YAML_Node *root = NULL;
-	yaml_clone_stack stack = {NULL, 0, 0};
+	yaml_clone_stack stack = {NULL, 0, 0, ctx ? ctx->alloc : NULL};
 	bool ok;
 
 	if (!ctx || !node || !map) return NULL;
@@ -1787,7 +1792,7 @@ static GTEXT_YAML_Node *clone_node(
 		const yaml_clone_task task = stack.items[--stack.count];
 		ok = clone_one(ctx, &task, map, &stack);
 	}
-	free(stack.items);
+	gtext_allocator_free(ctx->alloc, stack.items);
 
 	/* A partly-built clone is left where it is: every node of it came from
 	   the document's own arena and goes when the document does. */
@@ -2053,6 +2058,7 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_clone(
 	const GTEXT_YAML_Node *node
 ) {
 	yaml_clone_map map = {0};
+	map.alloc = doc->ctx->alloc;
 	GTEXT_YAML_Node *clone = NULL;
 
 	if (!doc || !doc->ctx || !node) return NULL;
@@ -2062,6 +2068,6 @@ GTEXT_API GTEXT_YAML_Node *gtext_yaml_node_clone(
 	map.max_depth = doc->options.max_depth;
 
 	clone = clone_node(doc->ctx, node, &map);
-	free(map.entries);
+	gtext_allocator_free(doc->ctx->alloc, map.entries);
 	return clone;
 }

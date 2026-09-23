@@ -230,71 +230,71 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
 	
 	/* Allocate initial stack capacity */
 	p->stack.capacity = 32;
-	p->stack.nodes = (GTEXT_YAML_Node **)malloc(p->stack.capacity * sizeof(GTEXT_YAML_Node *));
-	p->stack.states = (int *)malloc(p->stack.capacity * sizeof(int));
-	p->stack.indents = (int *)malloc(p->stack.capacity * sizeof(int));
-	p->stack.is_block = (bool *)malloc(p->stack.capacity * sizeof(bool));
-	p->stack.flow_flags = (unsigned char *)calloc(p->stack.capacity, 1);
-	p->stack.temps = (saved_temp *)calloc(p->stack.capacity, sizeof(saved_temp));
+	p->stack.nodes = (GTEXT_YAML_Node **)gtext_allocator_malloc(p->ctx->alloc, p->stack.capacity * sizeof(GTEXT_YAML_Node *));
+	p->stack.states = (int *)gtext_allocator_malloc(p->ctx->alloc, p->stack.capacity * sizeof(int));
+	p->stack.indents = (int *)gtext_allocator_malloc(p->ctx->alloc, p->stack.capacity * sizeof(int));
+	p->stack.is_block = (bool *)gtext_allocator_malloc(p->ctx->alloc, p->stack.capacity * sizeof(bool));
+	p->stack.flow_flags = (unsigned char *)gtext_allocator_calloc(p->ctx->alloc, p->stack.capacity, 1);
+	p->stack.temps = (saved_temp *)gtext_allocator_calloc(p->ctx->alloc, p->stack.capacity, sizeof(saved_temp));
 	
 	if (!p->stack.nodes || !p->stack.states || !p->stack.indents ||
 		!p->stack.is_block || !p->stack.flow_flags || !p->stack.temps) {
-		free(p->stack.nodes);
-		free(p->stack.states);
-		free(p->stack.indents);
-		free(p->stack.is_block);
-		free(p->stack.flow_flags);
-		free(p->stack.temps);
+		gtext_allocator_free(p->ctx->alloc, p->stack.nodes);
+		gtext_allocator_free(p->ctx->alloc, p->stack.states);
+		gtext_allocator_free(p->ctx->alloc, p->stack.indents);
+		gtext_allocator_free(p->ctx->alloc, p->stack.is_block);
+		gtext_allocator_free(p->ctx->alloc, p->stack.flow_flags);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps);
 		return false;
 	}
 	
 	/* Allocate temporary storage for collection children */
 	p->temp.capacity = 16;
-	p->temp.items = (GTEXT_YAML_Node **)malloc(p->temp.capacity * sizeof(GTEXT_YAML_Node *));
+	p->temp.items = (GTEXT_YAML_Node **)gtext_allocator_malloc(p->ctx->alloc, p->temp.capacity * sizeof(GTEXT_YAML_Node *));
 	if (!p->temp.items) {
-		free(p->stack.nodes);
-		free(p->stack.states);
-		free(p->stack.indents);
-		free(p->stack.is_block);
-		free(p->stack.flow_flags);
-		free(p->stack.temps);
+		gtext_allocator_free(p->ctx->alloc, p->stack.nodes);
+		gtext_allocator_free(p->ctx->alloc, p->stack.states);
+		gtext_allocator_free(p->ctx->alloc, p->stack.indents);
+		gtext_allocator_free(p->ctx->alloc, p->stack.is_block);
+		gtext_allocator_free(p->ctx->alloc, p->stack.flow_flags);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps);
 		return false;
 	}
 	
 	/* Allocate anchor map */
 	p->anchors.capacity = 16;
-	p->anchors.entries = (anchor_entry *)calloc(p->anchors.capacity, sizeof(anchor_entry));
+	p->anchors.entries = (anchor_entry *)gtext_allocator_calloc(p->ctx->alloc, p->anchors.capacity, sizeof(anchor_entry));
 	if (!p->anchors.entries) {
-		free(p->stack.nodes);
-		free(p->stack.states);
-		free(p->stack.indents);
-		free(p->stack.is_block);
-		free(p->stack.flow_flags);
-		free(p->stack.temps);
-		free(p->temp.items);
+		gtext_allocator_free(p->ctx->alloc, p->stack.nodes);
+		gtext_allocator_free(p->ctx->alloc, p->stack.states);
+		gtext_allocator_free(p->ctx->alloc, p->stack.indents);
+		gtext_allocator_free(p->ctx->alloc, p->stack.is_block);
+		gtext_allocator_free(p->ctx->alloc, p->stack.flow_flags);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps);
+		gtext_allocator_free(p->ctx->alloc, p->temp.items);
 		return false;
 	}
 	
 	/* Allocate alias list */
 	p->aliases.capacity = 16;
-	p->aliases.nodes = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
-	p->aliases.targets = (GTEXT_YAML_Node **)malloc(p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
-	p->aliases.deferred = (bool *)malloc(p->aliases.capacity * sizeof(bool));
+	p->aliases.nodes = (GTEXT_YAML_Node **)gtext_allocator_malloc(p->ctx->alloc, p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
+	p->aliases.targets = (GTEXT_YAML_Node **)gtext_allocator_malloc(p->ctx->alloc, p->aliases.capacity * sizeof(GTEXT_YAML_Node *));
+	p->aliases.deferred = (bool *)gtext_allocator_malloc(p->ctx->alloc, p->aliases.capacity * sizeof(bool));
 	if (!p->aliases.nodes || !p->aliases.targets || !p->aliases.deferred) {
-		free(p->aliases.nodes);
-		free(p->aliases.targets);
-		free(p->aliases.deferred);
+		gtext_allocator_free(p->ctx->alloc, p->aliases.nodes);
+		gtext_allocator_free(p->ctx->alloc, p->aliases.targets);
+		gtext_allocator_free(p->ctx->alloc, p->aliases.deferred);
 		p->aliases.nodes = NULL;
 		p->aliases.targets = NULL;
 		p->aliases.deferred = NULL;
-		free(p->stack.nodes);
-		free(p->stack.states);
-		free(p->stack.indents);
-		free(p->stack.is_block);
-		free(p->stack.flow_flags);
-		free(p->stack.temps);
-		free(p->temp.items);
-		free(p->anchors.entries);
+		gtext_allocator_free(p->ctx->alloc, p->stack.nodes);
+		gtext_allocator_free(p->ctx->alloc, p->stack.states);
+		gtext_allocator_free(p->ctx->alloc, p->stack.indents);
+		gtext_allocator_free(p->ctx->alloc, p->stack.is_block);
+		gtext_allocator_free(p->ctx->alloc, p->stack.flow_flags);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps);
+		gtext_allocator_free(p->ctx->alloc, p->temp.items);
+		gtext_allocator_free(p->ctx->alloc, p->anchors.entries);
 		return false;
 	}
 
@@ -336,46 +336,50 @@ static bool parser_init(parser_state *p, yaml_context *ctx, GTEXT_YAML_Error *er
  * @brief Free parser state.
  */
 static void parser_free(parser_state *p) {
+	/* Read once, before anything is released: every free below goes through
+	   the allocator the context named, and the context outlives this call. */
+	const GTEXT_Allocator *alloc = p->ctx ? p->ctx->alloc : NULL;
+
 	/* Free saved temp arrays and metadata */
 	for (size_t i = 0; i < p->stack.depth; i++) {
-		free(p->stack.temps[i].items);
-		free(p->stack.temps[i].anchor);
-		free(p->stack.temps[i].tag);
+		gtext_allocator_free(alloc, p->stack.temps[i].items);
+		gtext_allocator_free(alloc, p->stack.temps[i].anchor);
+		gtext_allocator_free(alloc, p->stack.temps[i].tag);
 	}
 	/* Also check capacity range for any lingering allocated metadata */
 	for (size_t i = p->stack.depth; i < p->stack.capacity; i++) {
-		free(p->stack.temps[i].anchor);
-		free(p->stack.temps[i].tag);
+		gtext_allocator_free(alloc, p->stack.temps[i].anchor);
+		gtext_allocator_free(alloc, p->stack.temps[i].tag);
 	}
-	free(p->stack.nodes);
-	free(p->stack.states);
-	free(p->stack.indents);
-	free(p->stack.is_block);
-	free(p->stack.flow_flags);
-	free(p->stack.temps);
-	free(p->temp.items);
+	gtext_allocator_free(alloc, p->stack.nodes);
+	gtext_allocator_free(alloc, p->stack.states);
+	gtext_allocator_free(alloc, p->stack.indents);
+	gtext_allocator_free(alloc, p->stack.is_block);
+	gtext_allocator_free(alloc, p->stack.flow_flags);
+	gtext_allocator_free(alloc, p->stack.temps);
+	gtext_allocator_free(alloc, p->temp.items);
 	
 	/* Free anchor map */
 	for (size_t i = 0; i < p->anchors.count; i++) {
-		free(p->anchors.entries[i].name);
+		gtext_allocator_free(alloc, p->anchors.entries[i].name);
 	}
-	free(p->anchors.entries);
+	gtext_allocator_free(alloc, p->anchors.entries);
 	
 	/* Free alias list */
-	free(p->aliases.nodes);
-	free(p->aliases.targets);
-	free(p->aliases.deferred);
+	gtext_allocator_free(alloc, p->aliases.nodes);
+	gtext_allocator_free(alloc, p->aliases.targets);
+	gtext_allocator_free(alloc, p->aliases.deferred);
 
-	free(p->pending_leading_comment);
-	free(p->outer_anchor);
-	free(p->outer_tag);
+	gtext_allocator_free(alloc, p->pending_leading_comment);
+	gtext_allocator_free(alloc, p->outer_anchor);
+	gtext_allocator_free(alloc, p->outer_tag);
 
 	/* Free tag handles */
 	for (size_t i = 0; i < p->tag_handles.count; i++) {
-		free(p->tag_handles.entries[i].handle);
-		free(p->tag_handles.entries[i].prefix);
+		gtext_allocator_free(alloc, p->tag_handles.entries[i].handle);
+		gtext_allocator_free(alloc, p->tag_handles.entries[i].prefix);
 	}
-	free(p->tag_handles.entries);
+	gtext_allocator_free(alloc, p->tag_handles.entries);
 }
 
 /* Forward declarations */
@@ -425,7 +429,7 @@ static void parser_attach_leading_comment(parser_state *p, GTEXT_YAML_Node *node
 		default:
 			break;
 	}
-	free(p->pending_leading_comment);
+	gtext_allocator_free(p->ctx->alloc, p->pending_leading_comment);
 	p->pending_leading_comment = NULL;
 }
 
@@ -824,7 +828,7 @@ static GTEXT_YAML_Document *yaml_parse_json_document_internal(
 	}
 	gtext_json_error_free(&json_err);
 
-	ctx = yaml_context_new();
+	ctx = yaml_context_new(opts->allocator);
 	if (!ctx) {
 		gtext_json_free(json_root);
 		if (error) {
@@ -892,7 +896,7 @@ static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEX
 	/* Check if we need to grow the anchor map */
 	if (p->anchors.count >= p->anchors.capacity) {
 		size_t new_cap = p->anchors.capacity * 2;
-		anchor_entry *new_entries = (anchor_entry *)realloc(
+		anchor_entry *new_entries = (anchor_entry *)gtext_allocator_realloc(p->ctx->alloc, 
 			p->anchors.entries, new_cap * sizeof(anchor_entry)
 		);
 		if (!new_entries) {
@@ -909,7 +913,7 @@ static GTEXT_YAML_Status register_anchor(parser_state *p, const char *name, GTEX
 	}
 
 	/* Add the anchor */
-	p->anchors.entries[p->anchors.count].name = strdup(name);
+	p->anchors.entries[p->anchors.count].name = gtext_yaml_strdup(name, p->ctx->alloc);
 	p->anchors.entries[p->anchors.count].node = node;
 	if (!p->anchors.entries[p->anchors.count].name) {
 		p->failed = true;
@@ -988,17 +992,17 @@ static bool track_alias(
 	/* Check if we need to grow the alias list */
 	if (p->aliases.count >= p->aliases.capacity) {
 		size_t new_cap = p->aliases.capacity * 2;
-		GTEXT_YAML_Node **new_nodes = (GTEXT_YAML_Node **)realloc(
+		GTEXT_YAML_Node **new_nodes = (GTEXT_YAML_Node **)gtext_allocator_realloc(p->ctx->alloc, 
 			p->aliases.nodes, new_cap * sizeof(GTEXT_YAML_Node *)
 		);
 		if (!new_nodes) return false;
 		p->aliases.nodes = new_nodes;
-		GTEXT_YAML_Node **new_targets = (GTEXT_YAML_Node **)realloc(
+		GTEXT_YAML_Node **new_targets = (GTEXT_YAML_Node **)gtext_allocator_realloc(p->ctx->alloc, 
 			p->aliases.targets, new_cap * sizeof(GTEXT_YAML_Node *)
 		);
 		if (!new_targets) return false;
 		p->aliases.targets = new_targets;
-		bool *new_deferred = (bool *)realloc(
+		bool *new_deferred = (bool *)gtext_allocator_realloc(p->ctx->alloc, 
 			p->aliases.deferred, new_cap * sizeof(bool)
 		);
 		if (!new_deferred) return false;
@@ -1070,9 +1074,9 @@ static bool tag_handle_add(parser_state *p, const char *handle, const char *pref
 
 	for (size_t i = 0; i < p->tag_handles.count; i++) {
 		if (strcmp(p->tag_handles.entries[i].handle, handle) == 0) {
-			char *new_prefix = strdup(prefix);
+			char *new_prefix = gtext_yaml_strdup(prefix, p->ctx->alloc);
 			if (!new_prefix) return false;
-			free(p->tag_handles.entries[i].prefix);
+			gtext_allocator_free(p->ctx->alloc, p->tag_handles.entries[i].prefix);
 			p->tag_handles.entries[i].prefix = new_prefix;
 			return true;
 		}
@@ -1080,7 +1084,7 @@ static bool tag_handle_add(parser_state *p, const char *handle, const char *pref
 
 	if (p->tag_handles.count >= p->tag_handles.capacity) {
 		size_t new_cap = p->tag_handles.capacity == 0 ? 8 : p->tag_handles.capacity * 2;
-		tag_handle_entry *new_entries = (tag_handle_entry *)realloc(
+		tag_handle_entry *new_entries = (tag_handle_entry *)gtext_allocator_realloc(p->ctx->alloc, 
 			p->tag_handles.entries, new_cap * sizeof(tag_handle_entry)
 		);
 		if (!new_entries) return false;
@@ -1088,12 +1092,12 @@ static bool tag_handle_add(parser_state *p, const char *handle, const char *pref
 		p->tag_handles.capacity = new_cap;
 	}
 
-	p->tag_handles.entries[p->tag_handles.count].handle = strdup(handle);
-	p->tag_handles.entries[p->tag_handles.count].prefix = strdup(prefix);
+	p->tag_handles.entries[p->tag_handles.count].handle = gtext_yaml_strdup(handle, p->ctx->alloc);
+	p->tag_handles.entries[p->tag_handles.count].prefix = gtext_yaml_strdup(prefix, p->ctx->alloc);
 	if (!p->tag_handles.entries[p->tag_handles.count].handle ||
 		!p->tag_handles.entries[p->tag_handles.count].prefix) {
-		free(p->tag_handles.entries[p->tag_handles.count].handle);
-		free(p->tag_handles.entries[p->tag_handles.count].prefix);
+		gtext_allocator_free(p->ctx->alloc, p->tag_handles.entries[p->tag_handles.count].handle);
+		gtext_allocator_free(p->ctx->alloc, p->tag_handles.entries[p->tag_handles.count].prefix);
 		return false;
 	}
 	p->tag_handles.count++;
@@ -1214,23 +1218,23 @@ static bool stack_push(
 	if (p->stack.depth >= p->stack.capacity) {
 		/* Grow stack */
 		size_t new_cap = p->stack.capacity * 2;
-		GTEXT_YAML_Node **new_nodes = (GTEXT_YAML_Node **)realloc(
+		GTEXT_YAML_Node **new_nodes = (GTEXT_YAML_Node **)gtext_allocator_realloc(p->ctx->alloc, 
 			p->stack.nodes, new_cap * sizeof(GTEXT_YAML_Node *)
 		);
-		int *new_states = (int *)realloc(p->stack.states, new_cap * sizeof(int));
-		int *new_indents = (int *)realloc(p->stack.indents, new_cap * sizeof(int));
-		bool *new_is_block = (bool *)realloc(p->stack.is_block, new_cap * sizeof(bool));
-		unsigned char *new_flow_flags = (unsigned char *)realloc(p->stack.flow_flags, new_cap);
-		saved_temp *new_temps = (saved_temp *)realloc(p->stack.temps, new_cap * sizeof(saved_temp));
+		int *new_states = (int *)gtext_allocator_realloc(p->ctx->alloc, p->stack.states, new_cap * sizeof(int));
+		int *new_indents = (int *)gtext_allocator_realloc(p->ctx->alloc, p->stack.indents, new_cap * sizeof(int));
+		bool *new_is_block = (bool *)gtext_allocator_realloc(p->ctx->alloc, p->stack.is_block, new_cap * sizeof(bool));
+		unsigned char *new_flow_flags = (unsigned char *)gtext_allocator_realloc(p->ctx->alloc, p->stack.flow_flags, new_cap);
+		saved_temp *new_temps = (saved_temp *)gtext_allocator_realloc(p->ctx->alloc, p->stack.temps, new_cap * sizeof(saved_temp));
 		
 		if (!new_nodes || !new_states || !new_indents || !new_is_block ||
 			!new_flow_flags || !new_temps) {
-			free(new_nodes);
-			free(new_states);
-			free(new_indents);
-			free(new_is_block);
-			free(new_flow_flags);
-			free(new_temps);
+			gtext_allocator_free(p->ctx->alloc, new_nodes);
+			gtext_allocator_free(p->ctx->alloc, new_states);
+			gtext_allocator_free(p->ctx->alloc, new_indents);
+			gtext_allocator_free(p->ctx->alloc, new_is_block);
+			gtext_allocator_free(p->ctx->alloc, new_flow_flags);
+			gtext_allocator_free(p->ctx->alloc, new_temps);
 			return false;
 		}
 		
@@ -1251,22 +1255,22 @@ static bool stack_push(
 	p->stack.temps[p->stack.depth].items = p->temp.items;
 	p->stack.temps[p->stack.depth].count = p->temp.count;
 	p->stack.temps[p->stack.depth].capacity = p->temp.capacity;
-	p->stack.temps[p->stack.depth].anchor = anchor ? strdup(anchor) : NULL;
-	p->stack.temps[p->stack.depth].tag = tag ? strdup(tag) : NULL;
+	p->stack.temps[p->stack.depth].anchor = gtext_yaml_strdup(anchor, p->ctx->alloc);
+	p->stack.temps[p->stack.depth].tag = gtext_yaml_strdup(tag, p->ctx->alloc);
 	p->stack.temps[p->stack.depth].source_offset = source_offset;
 	p->stack.temps[p->stack.depth].source_line = source_line;
 	p->stack.temps[p->stack.depth].source_col = source_col;
 	
 	/* Allocate new temp storage for this level */
 	p->temp.capacity = 16;
-	p->temp.items = (GTEXT_YAML_Node **)malloc(p->temp.capacity * sizeof(GTEXT_YAML_Node *));
+	p->temp.items = (GTEXT_YAML_Node **)gtext_allocator_malloc(p->ctx->alloc, p->temp.capacity * sizeof(GTEXT_YAML_Node *));
 	if (!p->temp.items) {
 		/* Restore old temp on failure */
 		p->temp.items = p->stack.temps[p->stack.depth].items;
 		p->temp.count = p->stack.temps[p->stack.depth].count;
 		p->temp.capacity = p->stack.temps[p->stack.depth].capacity;
-		free(p->stack.temps[p->stack.depth].anchor);
-		free(p->stack.temps[p->stack.depth].tag);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps[p->stack.depth].anchor);
+		gtext_allocator_free(p->ctx->alloc, p->stack.temps[p->stack.depth].tag);
 		p->stack.temps[p->stack.depth].anchor = NULL;
 		p->stack.temps[p->stack.depth].tag = NULL;
 		return false;
@@ -1291,7 +1295,7 @@ static void stack_pop(parser_state *p) {
 		p->stack.depth--;
 		
 		/* Free current temp and restore saved temp state */
-		free(p->temp.items);
+		gtext_allocator_free(p->ctx->alloc, p->temp.items);
 		p->temp.items = p->stack.temps[p->stack.depth].items;
 		p->temp.count = p->stack.temps[p->stack.depth].count;
 		p->temp.capacity = p->stack.temps[p->stack.depth].capacity;
@@ -1423,7 +1427,7 @@ static bool temp_add(parser_state *p, GTEXT_YAML_Node *node) {
 	if (p->temp.count >= p->temp.capacity) {
 		/* Grow temp storage */
 		size_t new_cap = p->temp.capacity * 2;
-		GTEXT_YAML_Node **new_items = (GTEXT_YAML_Node **)realloc(
+		GTEXT_YAML_Node **new_items = (GTEXT_YAML_Node **)gtext_allocator_realloc(p->ctx->alloc, 
 			p->temp.items, new_cap * sizeof(GTEXT_YAML_Node *)
 		);
 		if (!new_items) return false;
@@ -1923,13 +1927,13 @@ static GTEXT_YAML_Status adopt_own_line_tag(
 		if (!p->stack.temps[held].tag) {
 			p->stack.temps[held].tag = p->outer_tag;
 		} else {
-			free(p->outer_tag);
+			gtext_allocator_free(p->ctx->alloc, p->outer_tag);
 		}
 		p->outer_tag = NULL;
 
 		if (p->last_scalar_tag_own_line && node->type < GTEXT_YAML_SEQUENCE
 				&& node->as.scalar.tag) {
-			p->outer_tag = strdup(node->as.scalar.tag);
+			p->outer_tag = gtext_yaml_strdup(node->as.scalar.tag, p->ctx->alloc);
 			if (!p->outer_tag) return GTEXT_YAML_OK; /* keep it on the node */
 			node->as.scalar.tag = NULL;
 			p->last_scalar_tag_own_line = false;
@@ -1949,7 +1953,7 @@ static GTEXT_YAML_Status adopt_own_line_tag(
 	/* the collection already has one */
 	if (p->stack.temps[top].tag) return GTEXT_YAML_OK;
 
-	char *moved = strdup(tag);
+	char *moved = gtext_yaml_strdup(tag, p->ctx->alloc);
 	/* leaving the tag on the scalar beats losing it */
 	if (!moved) return GTEXT_YAML_OK;
 
@@ -2008,13 +2012,13 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 		if (!p->stack.temps[held].anchor) {
 			p->stack.temps[held].anchor = p->outer_anchor;
 		} else {
-			free(p->outer_anchor);
+			gtext_allocator_free(p->ctx->alloc, p->outer_anchor);
 		}
 		p->outer_anchor = NULL;
 
 		if (p->last_scalar_anchor_own_line && node->type < GTEXT_YAML_SEQUENCE
 				&& node->as.scalar.anchor) {
-			p->outer_anchor = strdup(node->as.scalar.anchor);
+			p->outer_anchor = gtext_yaml_strdup(node->as.scalar.anchor, p->ctx->alloc);
 			if (!p->outer_anchor) return GTEXT_YAML_OK; /* keep it on the node */
 			unregister_anchor(p, node->as.scalar.anchor, node);
 			node->as.scalar.anchor = NULL;
@@ -2033,7 +2037,7 @@ static GTEXT_YAML_Status adopt_own_line_anchor(
 	/* the collection already has one */
 	if (p->stack.temps[top].anchor) return GTEXT_YAML_OK;
 
-	char *moved = strdup(anchor);
+	char *moved = gtext_yaml_strdup(anchor, p->ctx->alloc);
 	/* leaving it on the scalar beats losing it */
 	if (!moved) return GTEXT_YAML_OK;
 
@@ -2073,7 +2077,7 @@ static GTEXT_YAML_Status parser_hold_outer_props(
 	p->outer_from_alias = event->type == GTEXT_YAML_EVENT_ALIAS;
 
 	if (event->outer_anchor && !p->outer_anchor) {
-		p->outer_anchor = strdup(event->outer_anchor);
+		p->outer_anchor = gtext_yaml_strdup(event->outer_anchor, p->ctx->alloc);
 		if (!p->outer_anchor) {
 			p->failed = true;
 			if (p->error) {
@@ -2084,7 +2088,7 @@ static GTEXT_YAML_Status parser_hold_outer_props(
 		}
 	}
 	if (event->outer_tag && !p->outer_tag) {
-		p->outer_tag = strdup(event->outer_tag);
+		p->outer_tag = gtext_yaml_strdup(event->outer_tag, p->ctx->alloc);
 		if (!p->outer_tag) {
 			p->failed = true;
 			if (p->error) {
@@ -2377,8 +2381,8 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 		}
 		node = yaml_node_new_sequence(p->ctx, p->temp.count, tag, anchor);
 		if (!node) {
-			free(anchor);
-			free(tag);
+			gtext_allocator_free(p->ctx->alloc, anchor);
+			gtext_allocator_free(p->ctx->alloc, tag);
 			if (p->error) {
 				p->error->code = GTEXT_YAML_E_OOM;
 				p->error->message = "Out of memory creating sequence";
@@ -2394,13 +2398,13 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 	} else {
 		{
 			GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
-			if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
+			if (trailing != GTEXT_YAML_OK) { gtext_allocator_free(p->ctx->alloc, anchor); gtext_allocator_free(p->ctx->alloc, tag); return trailing; }
 		}
 		size_t pair_count = p->temp.count / 2;
 		node = yaml_node_new_mapping(p->ctx, pair_count, tag, anchor);
 		if (!node) {
-			free(anchor);
-			free(tag);
+			gtext_allocator_free(p->ctx->alloc, anchor);
+			gtext_allocator_free(p->ctx->alloc, tag);
 			if (p->error) {
 				p->error->code = GTEXT_YAML_E_OOM;
 				p->error->message = "Out of memory creating mapping";
@@ -2418,8 +2422,8 @@ static GTEXT_YAML_Status finalize_top_collection(parser_state *p) {
 		}
 	}
 
-	free(anchor);
-	free(tag);
+	gtext_allocator_free(p->ctx->alloc, anchor);
+	gtext_allocator_free(p->ctx->alloc, tag);
 
 	node_set_source_location(node, source_offset, source_line, source_col);
 
@@ -3051,7 +3055,7 @@ static GTEXT_YAML_Status parse_callback(
 					: 0;
 				size_t add_len = strlen(comment);
 				size_t extra = existing > 0 ? 1 : 0;
-				char *buf = (char *)malloc(existing + add_len + extra + 1);
+				char *buf = (char *)gtext_allocator_malloc(p->ctx->alloc, existing + add_len + extra + 1);
 				if (!buf) {
 					p->failed = true;
 					if (p->error) {
@@ -3065,7 +3069,7 @@ static GTEXT_YAML_Status parse_callback(
 					buf[existing] = '\n';
 					memcpy(buf + existing + 1, comment, add_len);
 					buf[existing + 1 + add_len] = '\0';
-					free(p->pending_leading_comment);
+					gtext_allocator_free(p->ctx->alloc, p->pending_leading_comment);
 				} else {
 					memcpy(buf, comment, add_len);
 					buf[add_len] = '\0';
@@ -3328,8 +3332,8 @@ static GTEXT_YAML_Status parse_callback(
 			);
 			
 			/* Free the malloc'd anchor and tag strings */
-			free(anchor);
-			free(tag);
+			gtext_allocator_free(p->ctx->alloc, anchor);
+			gtext_allocator_free(p->ctx->alloc, tag);
 			
 			if (!node) {
 				p->failed = true;
@@ -3471,7 +3475,7 @@ static GTEXT_YAML_Status parse_callback(
 			/* temp.items should have [key0, val0, key1, val1, ...] */
 			{
 				GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
-				if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
+				if (trailing != GTEXT_YAML_OK) { gtext_allocator_free(p->ctx->alloc, anchor); gtext_allocator_free(p->ctx->alloc, tag); return trailing; }
 			}
 			size_t pair_count = p->temp.count / 2;
 			
@@ -3483,8 +3487,8 @@ static GTEXT_YAML_Status parse_callback(
 			);
 			
 			/* Free the malloc'd anchor and tag strings */
-			free(anchor);
-			free(tag);
+			gtext_allocator_free(p->ctx->alloc, anchor);
+			gtext_allocator_free(p->ctx->alloc, tag);
 			
 			if (!node) {
 				p->failed = true;
@@ -3739,8 +3743,8 @@ static GTEXT_YAML_Status parse_callback(
 						tag,
 						anchor
 					);
-					free(anchor);
-					free(tag);
+					gtext_allocator_free(p->ctx->alloc, anchor);
+					gtext_allocator_free(p->ctx->alloc, tag);
 					if (!node) {
 						p->failed = true;
 						if (p->error) {
@@ -3838,14 +3842,14 @@ static GTEXT_YAML_Status parse_callback(
 					/* temp.count should be even (key-value pairs) */
 					{
 						GTEXT_YAML_Status trailing = mapping_close_trailing_key(p);
-						if (trailing != GTEXT_YAML_OK) { free(anchor); free(tag); return trailing; }
+						if (trailing != GTEXT_YAML_OK) { gtext_allocator_free(p->ctx->alloc, anchor); gtext_allocator_free(p->ctx->alloc, tag); return trailing; }
 					}
 					size_t pair_count = p->temp.count / 2;
 					GTEXT_YAML_Node *node = yaml_node_new_mapping(
 						p->ctx, pair_count, tag, anchor
 					);
-					free(anchor);
-					free(tag);
+					gtext_allocator_free(p->ctx->alloc, anchor);
+					gtext_allocator_free(p->ctx->alloc, tag);
 					if (!node) {
 						p->failed = true;
 						if (p->error) {
@@ -4978,7 +4982,7 @@ GTEXT_YAML_Document *yaml_parse_document(
 	}
 	
 	/* Create context */
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx = yaml_context_new(opts->allocator);
 	if (!ctx) {
 		if (error) {
 			error->code = GTEXT_YAML_E_OOM;
@@ -5135,7 +5139,7 @@ static bool partial_errors_reserve(partial_state *state, size_t needed) {
 	size_t new_capacity = state->error_capacity == 0 ? 4 : state->error_capacity * 2;
 	if (new_capacity < needed) new_capacity = needed;
 
-	GTEXT_YAML_Error *errors = (GTEXT_YAML_Error *)realloc(
+	GTEXT_YAML_Error *errors = (GTEXT_YAML_Error *)gtext_allocator_realloc(state->ctx->alloc, 
 		state->errors, new_capacity * sizeof(*errors)
 	);
 	if (!errors) return false;
@@ -5154,7 +5158,7 @@ static bool partial_errors_push(partial_state *state, const GTEXT_YAML_Error *er
 
 	if (err->context_snippet && err->context_snippet_len > 0) {
 		size_t len = err->context_snippet_len;
-		char *copy = (char *)malloc(len + 1);
+		char *copy = (char *)gtext_allocator_malloc(state->ctx->alloc, len + 1);
 		if (!copy) return false;
 		memcpy(copy, err->context_snippet, len);
 		copy[len] = '\0';
@@ -5185,7 +5189,7 @@ static bool partial_top_reserve(partial_state *state, size_t needed) {
 	size_t new_capacity = state->top_capacity == 0 ? 4 : state->top_capacity * 2;
 	if (new_capacity < needed) new_capacity = needed;
 
-	GTEXT_YAML_Node **nodes = (GTEXT_YAML_Node **)realloc(
+	GTEXT_YAML_Node **nodes = (GTEXT_YAML_Node **)gtext_allocator_realloc(state->ctx->alloc, 
 		state->top_nodes, new_capacity * sizeof(*nodes)
 	);
 	if (!nodes) return false;
@@ -5213,7 +5217,7 @@ static void partial_capture_root(partial_state *state) {
 	p->last_scalar_in_temp = false;
 	p->last_scalar_temp_depth = 0;
 	if (p->pending_leading_comment) {
-		free(p->pending_leading_comment);
+		gtext_allocator_free(state->ctx->alloc, p->pending_leading_comment);
 		p->pending_leading_comment = NULL;
 	}
 }
@@ -5416,7 +5420,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 	partial_state state;
 	memset(&state, 0, sizeof(state));
 
-	state.ctx = yaml_context_new();
+	state.ctx = yaml_context_new(opts->allocator);
 	if (!state.ctx) {
 		if (out_err) {
 			out_err->code = GTEXT_YAML_E_OOM;
@@ -5483,8 +5487,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 		for (size_t i = 0; i < state.error_count; i++) {
 			gtext_yaml_error_free(&state.errors[i]);
 		}
-		free(state.errors);
-		free(state.top_nodes);
+		gtext_allocator_free(opts->allocator, state.errors);
+		gtext_allocator_free(opts->allocator, state.top_nodes);
 		yaml_context_free(state.ctx);
 		return status;
 	}
@@ -5499,8 +5503,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 			for (size_t i = 0; i < state.error_count; i++) {
 				gtext_yaml_error_free(&state.errors[i]);
 			}
-			free(state.errors);
-			free(state.top_nodes);
+			gtext_allocator_free(opts->allocator, state.errors);
+			gtext_allocator_free(opts->allocator, state.top_nodes);
 			yaml_context_free(state.ctx);
 			if (out_err) {
 				out_err->code = GTEXT_YAML_E_OOM;
@@ -5526,8 +5530,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 				for (size_t i = 0; i < state.error_count; i++) {
 					gtext_yaml_error_free(&state.errors[i]);
 				}
-				free(state.errors);
-				free(state.top_nodes);
+				gtext_allocator_free(opts->allocator, state.errors);
+				gtext_allocator_free(opts->allocator, state.top_nodes);
 				yaml_context_free(state.ctx);
 				if (out_err) {
 					*out_err = resolve_error;
@@ -5546,8 +5550,8 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 				for (size_t i = 0; i < state.error_count; i++) {
 					gtext_yaml_error_free(&state.errors[i]);
 				}
-				free(state.errors);
-				free(state.top_nodes);
+				gtext_allocator_free(opts->allocator, state.errors);
+				gtext_allocator_free(opts->allocator, state.top_nodes);
 				yaml_context_free(state.ctx);
 				if (out_err) {
 					out_err->code = GTEXT_YAML_E_OOM;
@@ -5559,7 +5563,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_parse_partial(
 	}
 
 	parser_free(&state.parser);
-	free(state.top_nodes);
+	gtext_allocator_free(opts->allocator, state.top_nodes);
 
 	*out_doc = state.doc;
 	*out_errors = state.errors;
@@ -5656,15 +5660,21 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 	/* Add to documents array */
 	if (state->count >= state->capacity) {
 		size_t new_capacity = state->capacity == 0 ? 4 : state->capacity * 2;
-		GTEXT_YAML_Document **new_docs = (GTEXT_YAML_Document **)realloc(
+		/* allocator-exempt: the array of document pointers, and only that.
+		 *
+		 * gtext_yaml_parse_all()'s published contract has the caller release it
+		 * with plain free() - the example in yaml_dom.h says so. Routing it
+		 * through a caller's allocator would turn that documented call into a
+		 * free through the wrong allocator, which is heap corruption in exactly
+		 * the code that was written against the documentation. The documents
+		 * themselves, which are all the memory of any size, do go through the
+		 * allocator.
+		 *
+		 * The array is never freed through a caller's allocator anywhere, so
+		 * the two still do not mix. */
+		GTEXT_YAML_Document **new_docs = (GTEXT_YAML_Document **)realloc( // allocator-exempt
 			state->documents, new_capacity * sizeof(GTEXT_YAML_Document *)
 		);
-		/* The allocation-failure arm.  It cannot be reached by input, only by
-		 * a failing malloc, and this file allocates with raw malloc/realloc
-		 * rather than through GTEXT_Allocator - so unlike the converted files
-		 * a caller-supplied failing allocator cannot reach it either.  It is
-		 * on tools/coverage.sh's list and stays there until yaml_parser.c
-		 * joins ALLOCATOR_CLEAN_SOURCES. */
 		if (!new_docs) {
 			state->failed = true;
 			if (state->error) {
@@ -5681,7 +5691,7 @@ static bool multidoc_finalize_document(multidoc_state *state) {
 	
 	/* Clean up parser state (but not context - it's owned by document) */
 	parser_free(state->current_parser);
-	free(state->current_parser);
+	gtext_allocator_free(state->options->allocator, state->current_parser);
 	state->current_parser = NULL;
 	state->current_context = NULL;
 	state->current_doc = NULL;
@@ -5694,7 +5704,7 @@ static bool multidoc_finalize_document(multidoc_state *state) {
  */
 static bool multidoc_start_document(multidoc_state *state) {
 	/* Create context for this document */
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx = yaml_context_new(state->options->allocator);
 	if (!ctx) {
 		state->failed = true;
 		if (state->error) {
@@ -5724,7 +5734,7 @@ static bool multidoc_start_document(multidoc_state *state) {
 	doc->document_index = state->current_doc_index++;
 	
 	/* Initialize parser state */
-	parser_state *parser = (parser_state *)malloc(sizeof(parser_state));
+	parser_state *parser = (parser_state *)gtext_allocator_malloc(state->options->allocator, sizeof(parser_state));
 	if (!parser) {
 		yaml_context_free(ctx);
 		state->failed = true;
@@ -5736,7 +5746,7 @@ static bool multidoc_start_document(multidoc_state *state) {
 	}
 	
 	if (!parser_init(parser, ctx, state->error)) {
-		free(parser);
+		gtext_allocator_free(state->options->allocator, parser);
 		yaml_context_free(ctx);
 		state->failed = true;
 		if (state->error) {
@@ -5940,12 +5950,12 @@ GTEXT_API GTEXT_YAML_Document **gtext_yaml_parse_all(
 		for (size_t i = 0; i < state.count; i++) {
 			gtext_yaml_free(state.documents[i]);
 		}
-		free(state.documents);
+		free(state.documents); // allocator-exempt: see the growth path
 		
 		/* Clean up current parser if still active */
 		if (state.current_parser) {
 			parser_free(state.current_parser);
-			free(state.current_parser);
+			gtext_allocator_free(opts->allocator, state.current_parser);
 		}
 		if (state.current_context) {
 			yaml_context_free(state.current_context);
@@ -5961,8 +5971,8 @@ GTEXT_API GTEXT_YAML_Document **gtext_yaml_parse_all(
 	 * both came back as parse errors. Hand back an empty array instead:
 	 * callers free it with free() the same way. */
 	if (state.count == 0 && !state.documents) {
-		state.documents =
-			(GTEXT_YAML_Document **)malloc(sizeof(GTEXT_YAML_Document *));
+		state.documents = (GTEXT_YAML_Document **)malloc( // allocator-exempt
+			sizeof(GTEXT_YAML_Document *));
 		if (!state.documents) {
 			if (error) {
 				error->code = GTEXT_YAML_E_OOM;

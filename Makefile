@@ -768,12 +768,26 @@ ALLOCATOR_CLEAN_SOURCES := \
 	src/json/json_lexer.c \
 	src/json/json_number.c \
 	src/json/json_parser.c \
+	src/csv/csv_pull_reader.c \
+	src/csv/csv_sniff.c \
 	src/csv/csv_stream.c \
 	src/csv/csv_stream_buffer.c \
-	src/csv/csv_table.c
+	src/csv/csv_table.c \
+	src/json/json_pull_reader.c \
+	src/yaml/reader.c \
+	src/yaml/scanner.c \
+	src/yaml/stream.c \
+	src/yaml/utf8.c \
+	src/yaml/yaml_arena.c \
+	src/yaml/yaml_context.c \
+	src/yaml/yaml_dom.c \
+	src/yaml/yaml_parser.c \
+	src/yaml/yaml_pull_reader.c \
+	src/yaml/yaml_resolve.c \
+	src/yaml/yaml_to_json.c
 
 check-allocators: ## Fail if a converted file allocates without the allocator
-	@raw=$$(grep -nE '(^|[^_[:alnum:]])(malloc|calloc|realloc|free)[[:space:]]*\(' \
+	@raw=$$(grep -nE '(^|[^_[:alnum:]])(malloc|calloc|realloc|free|strdup|strndup)[[:space:]]*\(' \
 		$(ALLOCATOR_CLEAN_SOURCES) /dev/null \
 		| grep -v 'gtext_allocator_' \
 		| grep -v 'allocator-exempt' \
@@ -786,6 +800,8 @@ check-allocators: ## Fail if a converted file allocates without the allocator
 		printf "free() here breaks that promise silently - the caller cannot detect it,\n" >&2; \
 		printf "and a free() through the wrong allocator corrupts the heap.\n" >&2; \
 		printf "Use gtext_allocator_malloc()/_calloc()/_realloc()/_free().\n" >&2; \
+		printf "strdup() counts: it allocates from the C library, and the free\n" >&2; \
+		printf "beside it will not. Fifteen of them hid here once.\n" >&2; \
 		exit 1; \
 	fi
 	@printf "\033[0;32mEvery allocation in the converted files goes through GTEXT_Allocator.\033[0m\n"

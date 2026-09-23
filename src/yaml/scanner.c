@@ -46,6 +46,10 @@ typedef enum {
 #define MAX_CONTEXT_DEPTH 32
 
 struct GTEXT_YAML_Scanner {
+  /* The caller's allocator, taken at construction so that every buffer the
+     scanner owns - including the dynamic buffers it initialises for individual
+     scalars - comes from the same place the document will be freed through. */
+  const GTEXT_Allocator *alloc;
   GTEXT_YAML_DynBuf input; /* buffered input */
   /* How far into input[] the c-printable check has got.  It runs as bytes
      arrive rather than as tokens are cut, so it sees every character
@@ -1215,7 +1219,7 @@ static bool scanner_push_context(GTEXT_YAML_Scanner *s, yaml_context_type ctx)
     int cap = s->context_capacity ? s->context_capacity * 2 : MAX_CONTEXT_DEPTH;
     yaml_context_type *grown;
     if (cap <= s->context_capacity) return false;
-    grown = (yaml_context_type *)realloc(
+    grown = (yaml_context_type *)gtext_allocator_realloc(s->alloc, 
       s->context_stack, (size_t)cap * sizeof(*grown));
     if (!grown) return false;
     s->context_stack = grown;
@@ -1233,21 +1237,22 @@ static void scanner_pop_context(GTEXT_YAML_Scanner *s)
 }
 
 
-GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void)
+GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(const GTEXT_Allocator *alloc)
 {
   /* Zeroed, so every field has a defined value before the members below set
      the ones that need something other than zero. token_payload in
      particular is freed on the first scanner_next(), which an uninitialised
      pointer would not survive. */
-  GTEXT_YAML_Scanner *s = (GTEXT_YAML_Scanner *)calloc(1, sizeof(*s));
+  GTEXT_YAML_Scanner *s = (GTEXT_YAML_Scanner *)gtext_allocator_calloc(alloc, 1, sizeof(*s));
   if (!s) return NULL;
-  if (!gtext_yaml_dynbuf_init(&s->input)) {
-    free(s);
+  s->alloc = alloc;
+  if (!gtext_yaml_dynbuf_init(&s->input, alloc)) {
+    gtext_allocator_free(alloc, s);
     return NULL;
   }
-  if (!gtext_yaml_dynbuf_init(&s->raw_prefix)) {
+  if (!gtext_yaml_dynbuf_init(&s->raw_prefix, alloc)) {
     gtext_yaml_dynbuf_free(&s->input);
-    free(s);
+    gtext_allocator_free(alloc, s);
     return NULL;
   }
   s->cursor = 0;
@@ -1294,9 +1299,11 @@ GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s)
   if (!s) return;
   gtext_yaml_dynbuf_free(&s->input);
   gtext_yaml_dynbuf_free(&s->raw_prefix);
-  free(s->token_payload);
-  free(s->context_stack);
-  free(s);
+  /* Captured before the last free releases the structure it lives in. */
+  const GTEXT_Allocator *alloc = s->alloc;
+  gtext_allocator_free(alloc, s->token_payload);
+  gtext_allocator_free(alloc, s->context_stack);
+  gtext_allocator_free(alloc, s);
 }
 
 GTEXT_INTERNAL_API int gtext_yaml_scanner_feed(GTEXT_YAML_Scanner *s, const char *data, size_t len)
@@ -1347,7 +1354,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 {
   /* The previous token's payload dies here: the caller asked for another
      token, so it is done with the last one. */
-  free(s->token_payload);
+  gtext_allocator_free(s->alloc, s->token_payload);
   s->token_payload = NULL;
 
   if (!s || !tok) return GTEXT_YAML_E_INVALID;
@@ -1535,7 +1542,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
       }
       size_t out_len = raw_len > start ? raw_len - start : 0;
       size_t alloc_len = out_len + 1;
-      char *out = (char *)malloc(alloc_len);
+      char *out = (char *)gtext_allocator_malloc(s->alloc, alloc_len);
       if (!out) {
         if (err) {
           err->code = GTEXT_YAML_E_OOM;
@@ -1621,7 +1628,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
 
     size_t out_len = trim_end > start ? trim_end - start : 0;
     size_t alloc_len = out_len > 0 ? out_len : 1;
-    char *out = (char *)malloc(alloc_len);
+    char *out = (char *)gtext_allocator_malloc(s->alloc, alloc_len);
     if (!out) {
       if (err) {
         err->code = GTEXT_YAML_E_OOM;
@@ -1781,7 +1788,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status gtext_yaml_scanner_next(GTEXT_YAML_Scanner 
   /* Collect the block scalar's lines verbatim, with their breaks normalised
      to LF. Indentation is stripped and the breaks folded afterwards. */
     GTEXT_YAML_DynBuf scalar;
-    if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
+    if (!gtext_yaml_dynbuf_init(&scalar, s->alloc)) return GTEXT_YAML_E_OOM;
 
     /* YAML 1.2.2 8.1.1.1. With an indentation indicator the block's
        indentation is the parent node's plus the indicator. With none it is
@@ -1971,10 +1978,10 @@ block_scalar_collected:
       size_t *starts = NULL;
       size_t *lens = NULL;
       if (line_count > 0) {
-        starts = (size_t *)malloc(line_count * sizeof *starts);
-        lens = (size_t *)malloc(line_count * sizeof *lens);
+        starts = (size_t *)gtext_allocator_malloc(s->alloc, line_count * sizeof *starts);
+        lens = (size_t *)gtext_allocator_malloc(s->alloc, line_count * sizeof *lens);
         if (!starts || !lens) {
-          free(starts); free(lens);
+          gtext_allocator_free(s->alloc, starts); gtext_allocator_free(s->alloc, lens);
           gtext_yaml_dynbuf_free(&scalar);
           return GTEXT_YAML_E_OOM;
         }
@@ -1997,9 +2004,9 @@ block_scalar_collected:
       }
 
       /* Content, one separator per line, and the trailing breaks. */
-      char *tmp = (char *)malloc(in_len + 4 * line_count + 8);
+      char *tmp = (char *)gtext_allocator_malloc(s->alloc, in_len + 4 * line_count + 8);
       if (!tmp) {
-        free(starts); free(lens);
+        gtext_allocator_free(s->alloc, starts); gtext_allocator_free(s->alloc, lens);
         gtext_yaml_dynbuf_free(&scalar);
         return GTEXT_YAML_E_OOM;
       }
@@ -2054,22 +2061,22 @@ block_scalar_collected:
       }
       for (size_t i = 0; i < trailing; i++) tmp[out_pos++] = '\n';
 
-      free(starts);
-      free(lens);
+      gtext_allocator_free(s->alloc, starts);
+      gtext_allocator_free(s->alloc, lens);
 
-      /* malloc(0) may legally return NULL; ask for a byte so the check below
+      /* gtext_allocator_malloc(s->alloc, 0) may legally return NULL; ask for a byte so the check below
          only ever signals a genuine allocation failure. */
-      out = (char *)malloc(out_pos ? out_pos : 1);
-      if (!out) { free(tmp); gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
+      out = (char *)gtext_allocator_malloc(s->alloc, out_pos ? out_pos : 1);
+      if (!out) { gtext_allocator_free(s->alloc, tmp); gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
       if (out_pos) memcpy(out, tmp, out_pos);
       out_len = out_pos;
-      free(tmp);
+      gtext_allocator_free(s->alloc, tmp);
     }
 
   gtext_yaml_dynbuf_free(&scalar);
 
     if (scalar_has_bom(out, out_len)) {
-      free(out);
+      gtext_allocator_free(s->alloc, out);
       if (err) {
         err->code = GTEXT_YAML_E_INVALID;
         err->message = "Byte order mark in scalar content";
@@ -2322,7 +2329,7 @@ block_scalar_collected:
   if (c == '\'' || c == '"') {
     int quote = c;
     GTEXT_YAML_DynBuf scalar;
-    if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
+    if (!gtext_yaml_dynbuf_init(&scalar, s->alloc)) return GTEXT_YAML_E_OOM;
 
     size_t look = 1; /* we will peek starting after the opening quote */
     /* Where the run of literal white space now at the end of `scalar` began.
@@ -2612,13 +2619,13 @@ block_scalar_collected:
     /* Allocate the output buffer.
        An empty quoted scalar - `a: ""`, which is ordinary YAML rather than
        anything malformed - leaves scalar.data NULL and scalar.len 0. Two
-       things went wrong there: malloc(0) may return NULL, which this would
+       things went wrong there: gtext_allocator_malloc(s->alloc, 0) may return NULL, which this would
        have reported as an allocation failure, and memcpy() declares both
        pointers non-null even for a zero length, so passing the NULL was
        undefined behavior. Ask for at least one byte, and skip the copy when
        there is nothing to copy. */
     size_t slen = scalar.len;
-    char *out = (char *)malloc(slen ? slen : 1);
+    char *out = (char *)gtext_allocator_malloc(s->alloc, slen ? slen : 1);
     if (!out) { gtext_yaml_dynbuf_free(&scalar); if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; } return GTEXT_YAML_E_OOM; }
     if (slen) { memcpy(out, scalar.data, slen); }
     gtext_yaml_dynbuf_free(&scalar);
@@ -2645,7 +2652,7 @@ block_scalar_collected:
 scan_plain_scalar:
   ;
   GTEXT_YAML_DynBuf scalar;
-  if (!gtext_yaml_dynbuf_init(&scalar)) return GTEXT_YAML_E_OOM;
+  if (!gtext_yaml_dynbuf_init(&scalar, s->alloc)) return GTEXT_YAML_E_OOM;
 
   yaml_context_type ctx = scanner_current_context(s);
   
@@ -2729,7 +2736,7 @@ scan_plain_scalar:
       return GTEXT_YAML_E_OOM;
     }
     for (size_t i = 0; i < vlen; ++i) scanner_consume(s);
-    char *vout = (char *)malloc(scalar.len);
+    char *vout = (char *)gtext_allocator_malloc(s->alloc, scalar.len);
     if (!vout) { gtext_yaml_dynbuf_free(&scalar); return GTEXT_YAML_E_OOM; }
     memcpy(vout, scalar.data, scalar.len);
     const size_t vsize = scalar.len;
@@ -3140,7 +3147,7 @@ scan_plain_scalar:
 
   /* On success, allocate heap buffer to hold scalar for token lifetime. */
   size_t slen = scalar.len;
-  char *out = (char *)malloc(slen);
+  char *out = (char *)gtext_allocator_malloc(s->alloc, slen);
   if (!out) {
     gtext_yaml_dynbuf_free(&scalar);
     if (err) { err->code = GTEXT_YAML_E_OOM; err->message = "out of memory"; }

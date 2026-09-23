@@ -154,7 +154,7 @@ GTEXT_API void gtext_yaml_error_free(GTEXT_YAML_Error *err)
   }
 
   if (err->context_snippet) {
-    free(err->context_snippet);
+    free(err->context_snippet); // allocator-exempt: see the option's docs
     err->context_snippet = NULL;
     err->context_snippet_len = 0;
   }

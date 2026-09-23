@@ -40,7 +40,7 @@ size_t NaiveLineStart(const std::string &buf, size_t offset) {
 
 struct Ctx {
 	yaml_context *c;
-	explicit Ctx(const std::string &buf) : c(yaml_context_new()) {
+	explicit Ctx(const std::string &buf) : c(yaml_context_new(nullptr)) {
 		if (c) yaml_context_set_decoded_input(c, buf.data(), buf.size());
 	}
 	~Ctx() { if (c) yaml_context_free(c); }
@@ -141,7 +141,7 @@ TEST(YamlLineStartCache, AMovedBufferDropsTheCache) {
 	const std::string second = "x\ny\nzzzzzzzz";
 	ASSERT_NE(first.data(), second.data());
 
-	yaml_context *c = yaml_context_new();
+	yaml_context *c = yaml_context_new(nullptr);
 	ASSERT_NE(c, nullptr);
 
 	yaml_context_set_decoded_input(c, first.data(), first.size());

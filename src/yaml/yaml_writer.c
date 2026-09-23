@@ -649,9 +649,11 @@ static bool writer_yaml_1_1(const GTEXT_YAML_Write_Options * opts) {
    the string "~" where the JSON schema does. */
 static bool writer_text_reads_as_null(
     const GTEXT_YAML_Write_Options * opts, const char * value, size_t len) {
+  /* NULL: the writer is a separate entry point with no allocator, as in JSON
+     and CSV, and this probe's scratch never reaches a caller. */
   return gtext_yaml_plain_text_classify_as(
       value, len, writer_schema(opts), writer_yaml_1_1(opts),
-      NULL, NULL, NULL) == GTEXT_YAML_NULL;
+      NULL, NULL, NULL, NULL) == GTEXT_YAML_NULL;
 }
 
 static const char *writer_newline(const GTEXT_YAML_Write_Options * opts) {

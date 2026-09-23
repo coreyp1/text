@@ -4,12 +4,12 @@
 
 `GTEXT_JSON_Parse_Options::allocator` routes a whole JSON parse through a
 caller-supplied `GTEXT_Allocator`, which is cutil's `GCU_Allocator` under a
-local name. **`GTEXT_CSV_Parse_Options::allocator` now does the same for CSV.**
-YAML still allocates with the C library. This page records what the remaining
-work is, because it was started, measured, and deliberately not finished by
-halves.
+local name. **CSV and YAML now do the same**, through
+`GTEXT_CSV_Parse_Options::allocator` and
+`GTEXT_YAML_Parse_Options::allocator`. What is left is the JSON entry points
+other than parsing, listed at the end.
 
-## Why it is not done yet
+## Why it had to be all or nothing
 
 A partial allocator is worse than none. If `GTEXT_CSV_Parse_Options` gained an
 `allocator` field that the arena honored but the table structure did not, then
@@ -77,18 +77,59 @@ had ever done that. `Allocator.CsvEmptyInputBalancesThroughTheAllocator`
 exists for that path, and fails on the planted defect with
 "freed a block this allocator never made".
 
-## YAML
+## YAML: done
 
-Not started, and now the only format left. `src/yaml/yaml_arena.c` is the
-equivalent chokepoint and the same shape of change applies. YAML has 296 raw
-allocation calls against the 174 CSV needed, and the resolver and the DOM
-manipulation functions both allocate outside the arena.
+`GTEXT_YAML_Parse_Options::allocator` covers every parse entry point -
+`gtext_yaml_parse()`, `_parse_all()`, `_parse_json()`, `_parse_partial()`,
+`_parse_safe()`, `gtext_yaml_document_new()`, the streaming parser and the pull
+reader - along with the scanner behind them, the arena, the alias table, the
+DOM manipulation functions, and `gtext_yaml_to_json()`. Twelve files are in
+`ALLOCATOR_CLEAN_SOURCES`. Around 280 sites.
 
-Two lessons from CSV transfer directly. Any initializer that memsets a
-structure must take the allocator as a parameter rather than have it assigned
-afterwards. And a test that exercises the ordinary path can miss a whole
-entry point: the coverage to aim for is one balanced test per way of *creating*
-a document, not one per way of using it.
+The same shape as CSV: the arena carries its own copy of the allocator because
+`yaml_arena_free()` releases the structure it was read from; `GTEXT_YAML_DynBuf`
+takes its allocator as a parameter of `gtext_yaml_dynbuf_init()` rather than
+having one assigned afterwards, which is the CSV lesson applied before it could
+bite again; and the clone map, clone stack and resolver stack each carry one,
+set at their declaration so no push can precede it.
+
+Two things are deliberately exempt and cannot mix with the rest: the error
+structures, released by `gtext_yaml_error_free()` which is handed no allocator,
+and the writer. Both match JSON and CSV.
+
+**One exemption is specific to YAML and worth knowing about.**
+`gtext_yaml_parse_all()` returns an array of document pointers, and its
+published contract - the example in `yaml_dom.h` - has the caller release that
+array with plain `free()`. Routing it through a caller's allocator would turn
+that documented call into a free through the wrong one, which is heap corruption
+in exactly the code that was written against the documentation. So the array
+stays on the C library; the documents it points at, which are all the memory of
+any size, do not. It is never freed through a caller's allocator anywhere, so
+the two still do not mix.
+
+### What the conversion caught
+
+**`strdup()` was invisible to the gate.** `make check-allocators` matched
+`malloc`, `calloc`, `realloc` and `free` - so fifteen `strdup()` calls in the
+parser and the stream went on allocating from the C library while the frees
+beside them were converted. That is a free through the wrong allocator, and it
+was caught by the tracking allocator's guard word in four of the new tests
+rather than by reading the diff. The gate matches `strdup` and `strndup` now,
+and `gtext_yaml_strdup()` exists so the call sites have somewhere to go.
+
+**Two headers declared the same function.** `src/yaml/yaml_internal.h` is the
+real one, 631 lines, included by fourteen files; `include/ghoti.io/text/yaml/
+yaml_internal.h` is a 47-line stub included by `reader.c` alone, declaring the
+character reader. Changing a signature in one left the other stale, and the
+compiler reported it as conflicting types rather than as the duplication it is.
+Both are updated.
+
+**A regex rewrite put an argument outside the call it belonged to**, turning
+`f(a, b)` into `f(a), b` - a comma expression that compiles, discards the call's
+result, and tests the wrong thing. `-Werror` caught it as a wrong argument count
+in that instance, and the whole conversion was then swept for the shape. The
+same pass also rewrote the word `free()` inside a comment. A mechanical change
+of this size needs the compiler read carefully rather than trusted to be silent.
 
 ## The other JSON entry points
 
