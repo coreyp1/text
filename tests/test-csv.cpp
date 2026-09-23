@@ -2690,6 +2690,142 @@ TEST(CsvWriter, FieldQuotingAllFields) {
   gtext_csv_sink_buffer_free(&sink);
 }
 
+/*
+ * Quoting is not a formatting preference; it is the only thing that carries a
+ * delimiter, a CR or an LF through a CSV field. With it turned off, the writer
+ * used to accept such a field, return GTEXT_CSV_OK, and emit bytes that said
+ * something else - a field holding a comma read back as two fields, one holding
+ * a newline as two records, and one holding a quote as a document this
+ * library's own parser refuses. All three are refused now.
+ *
+ * No escape mode is an alternative, which is why the answer is a refusal rather
+ * than an escape: both GTEXT_CSV_ESCAPE_DOUBLED_QUOTE and
+ * GTEXT_CSV_ESCAPE_BACKSLASH concern the quote character alone, so the parser
+ * reads `a\,b` as the two fields `a\` and `b` under either. Pinned below rather
+ * than asserted in a comment.
+ */
+static GTEXT_CSV_Write_Options CsvNoQuotingOptions(void) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quote_all_fields = false;
+	opts.quote_if_needed = false;
+	opts.quote_empty_fields = false;
+	return opts;
+}
+
+TEST(CsvWriterUnquotable, RefusesWhatUnquotedCannotCarry) {
+	struct Case {
+		const char *label;
+		std::string field;
+	} cases[] = {
+	    {"the delimiter", "a,b"},
+	    {"an LF", "a\nb"},
+	    {"a CR", "a\rb"},
+	    {"the quote character", "a\"b"},
+	};
+
+	for (const Case &c : cases) {
+		for (GTEXT_CSV_Escape_Mode mode :
+		    {GTEXT_CSV_ESCAPE_DOUBLED_QUOTE, GTEXT_CSV_ESCAPE_BACKSLASH}) {
+			GTEXT_CSV_Sink sink;
+			ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+			GTEXT_CSV_Write_Options opts = CsvNoQuotingOptions();
+			opts.dialect.escape = mode;
+
+			EXPECT_EQ(csv_write_field(&sink, c.field.data(), c.field.size(),
+			              &opts),
+			    GTEXT_CSV_E_UNQUOTABLE_FIELD)
+			    << c.label << ", escape mode " << (int)mode;
+			EXPECT_EQ(gtext_csv_sink_buffer_size(&sink), 0u)
+			    << "nothing may be written before the refusal";
+			gtext_csv_sink_buffer_free(&sink);
+		}
+	}
+}
+
+/* The control. Every field above is written without complaint by the default
+   options, which quote where quoting is needed - so the refusals are about the
+   configuration and not about the fields. */
+TEST(CsvWriterUnquotable, DefaultOptionsWriteAllOfThem) {
+	const char *fields[] = {"a,b", "a\nb", "a\rb", "a\"b"};
+	for (const char *f : fields) {
+		GTEXT_CSV_Sink sink;
+		ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+		GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+		EXPECT_EQ(csv_write_field(&sink, f, strlen(f), &opts), GTEXT_CSV_OK)
+		    << f;
+		EXPECT_GT(gtext_csv_sink_buffer_size(&sink), 0u) << f;
+		gtext_csv_sink_buffer_free(&sink);
+	}
+}
+
+/*
+ * The quote character is the one conditional case, and clearing
+ * always_escape_quotes is documented to emit it verbatim - for a reader with
+ * allow_unquoted_quotes on. That choice stays the caller's, so it must not be
+ * refused; without this test the rule above would be free to over-reach.
+ */
+TEST(CsvWriterUnquotable, AVerbatimQuoteIsStillTheCallersChoice) {
+	GTEXT_CSV_Sink sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	GTEXT_CSV_Write_Options opts = CsvNoQuotingOptions();
+	opts.always_escape_quotes = false;
+
+	const char *field = "a\"b";
+	EXPECT_EQ(csv_write_field(&sink, field, strlen(field), &opts),
+	    GTEXT_CSV_OK);
+	EXPECT_EQ(std::string(gtext_csv_sink_buffer_data(&sink),
+	              gtext_csv_sink_buffer_size(&sink)),
+	    std::string("a\"b"))
+	    << "verbatim, not escaped";
+	gtext_csv_sink_buffer_free(&sink);
+}
+
+/*
+ * A refusal in the middle of a table used to leave the earlier records in the
+ * sink, so a caller honouring the status still had a half-written file to clean
+ * up. gtext_csv_write_table has the whole table and checks it before the first
+ * byte goes out. The bad field is deliberately the second of the second record,
+ * which is the case a per-field check alone gets wrong.
+ */
+TEST(CsvWriterUnquotable, ATableRefusalWritesNothingAtAll) {
+	GTEXT_CSV_Table *t = gtext_csv_new_table();
+	ASSERT_NE(t, nullptr);
+	const char *first[2] = {"ok", "fine"};
+	const char *second[2] = {"also ok", "a,b"};
+	ASSERT_EQ(gtext_csv_row_append(t, first, nullptr, 2, nullptr),
+	    GTEXT_CSV_OK);
+	ASSERT_EQ(gtext_csv_row_append(t, second, nullptr, 2, nullptr),
+	    GTEXT_CSV_OK);
+
+	GTEXT_CSV_Sink sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	GTEXT_CSV_Write_Options opts = CsvNoQuotingOptions();
+	EXPECT_EQ(gtext_csv_write_table(&sink, &opts, t),
+	    GTEXT_CSV_E_UNQUOTABLE_FIELD);
+	EXPECT_EQ(gtext_csv_sink_buffer_size(&sink), 0u)
+	    << "the first record must not have been written";
+	gtext_csv_sink_buffer_free(&sink);
+
+	/* Control: the same table writes, and round-trips, under the defaults. */
+	GTEXT_CSV_Sink ok_sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&ok_sink), GTEXT_CSV_OK);
+	GTEXT_CSV_Write_Options dflt = gtext_csv_write_options_default();
+	EXPECT_EQ(gtext_csv_write_table(&ok_sink, &dflt, t), GTEXT_CSV_OK);
+	GTEXT_CSV_Table *back = gtext_csv_parse_table(
+	    gtext_csv_sink_buffer_data(&ok_sink),
+	    gtext_csv_sink_buffer_size(&ok_sink), nullptr, nullptr);
+	ASSERT_NE(back, nullptr);
+	EXPECT_EQ(gtext_csv_row_count(back), 2u);
+	EXPECT_EQ(gtext_csv_col_count(back, 1), 2u);
+	size_t n = 0;
+	const char *f = gtext_csv_field(back, 1, 1, &n);
+	ASSERT_NE(f, nullptr);
+	EXPECT_EQ(std::string(f, n), std::string("a,b"));
+	gtext_csv_free_table(back);
+	gtext_csv_sink_buffer_free(&ok_sink);
+	gtext_csv_free_table(t);
+}
+
 TEST(CsvWriter, FieldQuotingEmptyField) {
   GTEXT_CSV_Sink sink;
   GTEXT_CSV_Status status = gtext_csv_sink_buffer(&sink);
@@ -13162,14 +13298,40 @@ std::string csv_write_one_field(
 
 } // namespace
 
-TEST(CsvAlwaysEscapeQuotes, DefaultEscapesQuotesInUnquotedFields) {
+/*
+ * This test used to assert the opposite: that a"b becomes a""b with no
+ * surrounding quotes. That output is wrong, and wrong by the standard the
+ * sibling test three cases down already applies - it round-trips its output and
+ * requires the value back. This one asserted a byte shape and never re-read it.
+ *
+ * RFC 4180 gives a quote inside an unquoted field no special meaning, so
+ * unquoted a""b *is* the four characters a""b; doubling changes the value rather
+ * than encoding it. And a parser with the default allow_unquoted_quotes refuses
+ * the bytes outright, so the document did not even parse. Escaping a quote is
+ * meaningful only inside a quoted field, where it is unconditional.
+ *
+ * So the combination has no correct output and is refused. That leaves
+ * always_escape_quotes deciding, for an unquoted field holding a quote, between
+ * refusing and emitting it verbatim - which is what the next test pins.
+ */
+TEST(CsvAlwaysEscapeQuotes, DefaultRefusesAQuoteItCannotEscapeCorrectly) {
 	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
 	ASSERT_TRUE(opts.always_escape_quotes);
 	opts.quote_if_needed = false; // do not add surrounding quotes
 
-	// a"b -> a""b, with no surrounding quotes added.
-	std::string out = csv_write_one_field("a\"b", opts);
-	EXPECT_NE(out.find("a\"\"b"), std::string::npos) << "output was: " << out;
+	GTEXT_CSV_Sink sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	const char *field = "a\"b";
+	EXPECT_EQ(csv_write_field(&sink, field, strlen(field), &opts),
+	    GTEXT_CSV_E_UNQUOTABLE_FIELD);
+	EXPECT_EQ(gtext_csv_sink_buffer_size(&sink), 0u);
+	gtext_csv_sink_buffer_free(&sink);
+
+	/* Control: with quoting left on, the same field writes and round-trips. */
+	GTEXT_CSV_Write_Options dflt = gtext_csv_write_options_default();
+	std::string out = csv_write_one_field("a\"b", dflt);
+	EXPECT_NE(out.find("\"a\"\"b\""), std::string::npos)
+	    << "output was: " << out;
 }
 
 TEST(CsvAlwaysEscapeQuotes, ClearingEmitsTheQuoteVerbatim) {

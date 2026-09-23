@@ -465,6 +465,49 @@ static GTEXT_CSV_Status csv_field_escape(const char * field_data,
   return GTEXT_CSV_OK;
 }
 
+/*
+ * Can this field go out without quotes and still mean the same thing?
+ *
+ * Quoting is what carries the delimiter, CR and LF through a CSV field, and no
+ * escape mode is an alternative: measured, not assumed - with
+ * GTEXT_CSV_ESCAPE_BACKSLASH the parser reads `a\,b` as the two fields `a\`
+ * and `b`, exactly as the doubled-quote dialect does, because both escape
+ * modes concern the quote character alone. So a caller who turns quoting off
+ * and hands over a field holding one of those three has asked for a document
+ * that cannot exist.
+ *
+ * It used to get one. Every case below returned GTEXT_CSV_OK and wrote bytes
+ * that said something else: a field holding a comma came back as two fields, a
+ * field holding a newline came back as two records, and a field holding a quote
+ * came back as a document this library's own parser refuses.
+ *
+ * The quote character is the one conditional case. With always_escape_quotes
+ * set, an unquoted field's quote is written as an escape - `""` or `\"` - and
+ * neither spelling means a quote outside a quoted field, so that is refused
+ * too. Cleared, the quote goes out verbatim, which is what the option is
+ * documented to do and is readable by a parser with allow_unquoted_quotes on.
+ * That one is the caller's call to make, so it is left to them.
+ */
+static bool csv_field_survives_unquoted(const char * field_data,
+    size_t field_len, const GTEXT_CSV_Write_Options * opts) {
+  if (!field_data || field_len == 0) {
+    return true;
+  }
+  const char delimiter = opts->dialect.delimiter;
+  const char quote = opts->dialect.quote;
+  for (size_t i = 0; i < field_len; i++) {
+    const char c = field_data[i];
+    if (c == delimiter || c == '\n' || c == '\r') {
+      return false;
+    }
+    if (c == quote && opts->always_escape_quotes
+        && opts->dialect.escape != GTEXT_CSV_ESCAPE_NONE) {
+      return false;
+    }
+  }
+  return true;
+}
+
 GTEXT_INTERNAL_API GTEXT_CSV_Status csv_write_field(const GTEXT_CSV_Sink * sink,
     const char * field_data, size_t field_len,
     const GTEXT_CSV_Write_Options * opts) {
@@ -475,6 +518,15 @@ GTEXT_INTERNAL_API GTEXT_CSV_Status csv_write_field(const GTEXT_CSV_Sink * sink,
   const char quote_char = opts->dialect.quote;
   const GTEXT_CSV_Escape_Mode escape_mode = opts->dialect.escape;
   bool needs_quoting = csv_field_needs_quoting(field_data, field_len, opts);
+
+  // Refuse before writing anything, rather than emitting a field that will
+  // read back as something else.  Under the default options this is
+  // unreachable: quote_if_needed makes every one of these characters force
+  // quotes, so needs_quoting is already true.
+  if (!needs_quoting
+      && !csv_field_survives_unquoted(field_data, field_len, opts)) {
+    return GTEXT_CSV_E_UNQUOTABLE_FIELD;
+  }
 
   // If field doesn't need quoting and has no quotes to escape, write directly
   if (!needs_quoting && field_len > 0 && field_data) {
@@ -842,6 +894,37 @@ GTEXT_API GTEXT_CSV_Status gtext_csv_write_table(const GTEXT_CSV_Sink * sink,
   // Defensive check: verify row_count doesn't exceed capacity (sanity check)
   if (table_internal->row_count > table_internal->row_capacity) {
     return GTEXT_CSV_E_INVALID;
+  }
+
+  /*
+   * Refuse an unwritable table before the first byte reaches the sink.
+   *
+   * csv_write_field refuses a field that cannot survive unquoted, which is
+   * correct but late: by the time the third field of the second record is
+   * rejected, two records and two fields are already gone into a file the
+   * caller now has to clean up. The whole table is in hand here, so the answer
+   * is knowable in advance, and a caller who honours the status gets either a
+   * complete document or an untouched sink.
+   *
+   * This is not available to the streaming writer, which is handed one field at
+   * a time and has nothing to look ahead at. There the refusal stays per-field
+   * and the sink keeps whatever was already written - stated on
+   * gtext_csv_stream_write_field rather than left to be found.
+   */
+  for (size_t r = 0; r < table_internal->row_count; r++) {
+    const csv_table_row * row = &table_internal->rows[r];
+    if (!row->fields) {
+      continue;
+    }
+    for (size_t f = 0; f < row->field_count; f++) {
+      const csv_table_field * field = &row->fields[f];
+      if (csv_field_needs_quoting(field->data, field->length, opts)) {
+        continue;
+      }
+      if (!csv_field_survives_unquoted(field->data, field->length, opts)) {
+        return GTEXT_CSV_E_UNQUOTABLE_FIELD;
+      }
+    }
   }
 
   // Determine start row (skip header if present)

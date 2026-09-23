@@ -68,7 +68,20 @@ typedef enum {
 
   // Writing errors
   GTEXT_CSV_E_WRITE, ///< Write operation failed
-  GTEXT_CSV_E_STATE  ///< Invalid state for operation
+  GTEXT_CSV_E_STATE, ///< Invalid state for operation
+
+  /// A field cannot be written under the quoting the options ask for.
+  ///
+  /// Appended rather than grouped with the other writing errors so that no
+  /// existing enumerator's value moves.
+  ///
+  /// An unquoted field cannot contain the delimiter, a CR or an LF: no escape
+  /// mode covers them, so the bytes would re-read as more fields or more
+  /// records than were written. Nor can it contain the quote character while
+  /// `always_escape_quotes` is set, because the escape it would emit means a
+  /// quote to no reader. The write stops with this status instead of emitting
+  /// a document that says something other than the table did.
+  GTEXT_CSV_E_UNQUOTABLE_FIELD
 } GTEXT_CSV_Status;
 
 /**
@@ -196,15 +209,26 @@ typedef struct {
   bool quote_empty_fields; ///< Quote empty fields (default true)
   bool quote_if_needed;    ///< Quote fields containing delimiter/quote/newline
                            ///< (default true)
-  bool always_escape_quotes; ///< Escape the quote character when it appears in
-                             ///< a field that is not being quoted (default
-                             ///< true).  RFC 4180 gives such a quote no special
-                             ///< meaning, so clearing this emits it verbatim.
-                             ///< Quotes inside quoted fields are always
-                             ///< escaped regardless, since leaving one
-                             ///< unescaped would end the field early.  No
-                             ///< effect when the dialect's escape mode is
-                             ///< GTEXT_CSV_ESCAPE_NONE.
+  /**
+   * What to do with a quote character in a field that is *not* being quoted.
+   * Default true.
+   *
+   * Set, such a field is refused with GTEXT_CSV_E_UNQUOTABLE_FIELD. It used to
+   * be escaped, which had no correct reading: RFC 4180 gives a quote inside an
+   * unquoted field no special meaning, so unquoted `a""b` is the four
+   * characters `a""b` rather than `a"b` - the escape changed the value - and a
+   * reader with the default `allow_unquoted_quotes` refuses those bytes
+   * anyway.
+   *
+   * Cleared, the quote is emitted verbatim. That is readable by a parser with
+   * `allow_unquoted_quotes` on, and is a deliberate interoperability choice
+   * this library leaves to the caller.
+   *
+   * Quotes inside quoted fields are always escaped regardless of this option,
+   * since leaving one unescaped would end the field early. No effect when the
+   * dialect's escape mode is GTEXT_CSV_ESCAPE_NONE.
+   */
+  bool always_escape_quotes;
   bool trailing_newline;     ///< Terminate the final record with a newline
                              ///< (default true).  Records are always
                              ///< separated by one; this decides whether the

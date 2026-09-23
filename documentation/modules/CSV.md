@@ -130,7 +130,7 @@ The library provides extensive configuration options for output formatting:
 - **`quote_all_fields`**: Quote all fields — **Default: `false`**
 - **`quote_empty_fields`**: Quote empty fields — **Default: `true`**
 - **`quote_if_needed`**: Quote fields containing delimiter/quote/newline — **Default: `true`**
-- **`always_escape_quotes`**: Escape the quote character when it appears in a field that is *not* being quoted — **Default: `true`**. RFC 4180 gives such a quote no special meaning, so clearing this emits it verbatim. Quotes inside quoted fields are always escaped regardless, since leaving one unescaped would end the field early. No effect when the dialect's escape mode is `GTEXT_CSV_ESCAPE_NONE`. Only observable with `quote_if_needed` cleared, because otherwise a field containing a quote is quoted.
+- **`always_escape_quotes`**: What to do with a quote character in a field that is *not* being quoted — **Default: `true`**, which refuses it with `GTEXT_CSV_E_UNQUOTABLE_FIELD`. It used to escape it, which had no correct reading: RFC 4180 gives a quote inside an unquoted field no special meaning, so unquoted `a""b` is four characters rather than `a"b`, and a reader at the default `allow_unquoted_quotes` refuses those bytes anyway. Clearing it emits the quote verbatim, which is readable with `allow_unquoted_quotes` on and is left to the caller. Quotes inside quoted fields are always escaped regardless, since leaving one unescaped would end the field early. No effect when the dialect's escape mode is `GTEXT_CSV_ESCAPE_NONE`. Only observable with `quote_if_needed` cleared, because otherwise a field containing a quote is quoted.
 
 ### 5.2 Formatting
 

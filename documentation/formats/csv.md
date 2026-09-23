@@ -124,6 +124,28 @@ where a downstream consumer is fussier than the format.
 The newline string is configurable and `trim_trailing_empty_fields` exists
 for consumers that treat a trailing delimiter as an error.
 
+**The writer refuses a field it cannot represent.** Quoting is not a
+presentation choice in CSV; it is the only thing that carries the delimiter, a
+CR or an LF through a field. Neither escape mode is an alternative - both
+`GTEXT_CSV_ESCAPE_DOUBLED_QUOTE` and `GTEXT_CSV_ESCAPE_BACKSLASH` concern the
+quote character alone, so this parser reads `a\,b` as the two fields `a\` and
+`b` under either. So a caller who clears `quote_if_needed`, `quote_all_fields`
+and `quote_empty_fields` and then writes such a field has asked for a document
+that cannot exist, and gets `GTEXT_CSV_E_UNQUOTABLE_FIELD`.
+
+It used to get `GTEXT_CSV_OK` and bytes that said something else. A field
+holding a comma read back as two fields; one holding a newline as two records;
+one holding a quote produced `a""b`, which is four characters to RFC 4180 and
+is refused outright by this library's own parser at its default
+`allow_unquoted_quotes`. None of that was reachable under the default options,
+where those characters force quoting.
+
+`gtext_csv_write_table()` checks the whole table before the first byte reaches
+the sink, so a refusal leaves the sink untouched rather than half a file. The
+streaming writer is handed one field at a time and has nothing to look ahead
+at, so there the refusal is per-field and whatever was already written stays
+written.
+
 ## Compliance checklist
 
 | Area | Supported | Rejected / limitation |
