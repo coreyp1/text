@@ -14,12 +14,26 @@ extern "C" {
 #include <string>
 #include <unistd.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <ghoti.io/cutil/path.h>
+#else
 #include <sys/stat.h>
 #endif
 
 static std::string make_temp_path(const char *suffix) {
+#ifdef _WIN32
+  // "/tmp" names \tmp on the current drive, which does not exist, so every
+  // fopen here failed. Ask for the real temporary directory.
+  std::string path;
+  char *temp_root = nullptr;
+  if (gcu_path_temp_dir(nullptr, &temp_root) == GCU_PATH_OK) {
+    path = temp_root;
+    gcu_path_free(nullptr, temp_root);
+  }
+  path += "/ghoti_yaml_";
+#else
   std::string path = "/tmp/ghoti_yaml_";
+#endif
   path += suffix;
   path += "_";
   path += std::to_string(getpid());
