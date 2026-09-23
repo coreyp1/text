@@ -283,6 +283,30 @@ typedef struct yaml_context {
 	   when it is. */
 	const char *decoded_input;
 	size_t decoded_input_len;
+
+	/* Where the line holding the last offset anyone asked about begins.
+	 *
+	 * Five helpers in the parser need "which line is this offset on", and all
+	 * five found out by walking backwards to the nearest break. That is
+	 * O(line length) a call, and a deeply nested flow document is *one* line:
+	 * parsing 20000 nested sequences walked 199,990,000 bytes backwards, in
+	 * 19999 calls that each re-covered ground the last one had.
+	 *
+	 * The parser asks about offsets that mostly move forwards, so the answer
+	 * is kept and extended instead. line_cache_upto is how far it has been
+	 * verified: no break lies in [line_cache_start, line_cache_upto), so any
+	 * offset in that span is on the line starting at line_cache_start. A
+	 * question past it scans forward from there rather than back from the
+	 * offset, which makes the whole parse O(n) instead of O(n^2); a question
+	 * before it falls back to the walk.
+	 *
+	 * line_cache_buffer is which buffer the other two describe. The scanner
+	 * owns the input and moves it as it grows, so a moved buffer drops the
+	 * cache rather than being trusted. */
+	const char *line_cache_buffer;
+	size_t line_cache_start;
+	size_t line_cache_upto;
+
 	size_t node_count;              /* Total nodes allocated (statistics) */
 } yaml_context;
 
@@ -295,6 +319,18 @@ GTEXT_INTERNAL_API void *yaml_arena_alloc(yaml_arena *arena, size_t size, size_t
 GTEXT_INTERNAL_API yaml_context *yaml_context_new(void);
 GTEXT_INTERNAL_API void yaml_context_free(yaml_context *ctx);
 GTEXT_INTERNAL_API void yaml_context_set_decoded_input(yaml_context *ctx, const char *buf, size_t len);
+
+/**
+ * @brief Where the line containing @p offset begins.
+ *
+ * Amortised O(1) over offsets that move forwards, which is how the parser
+ * asks. Returns 0 when there is no input to answer about.
+ *
+ * @param ctx Context holding the decoded input (may be NULL)
+ * @param offset Byte offset into that input
+ * @return Offset of the first byte of that offset's line
+ */
+GTEXT_INTERNAL_API size_t yaml_context_line_start(yaml_context *ctx, size_t offset);
 GTEXT_INTERNAL_API void *yaml_context_alloc(yaml_context *ctx, size_t size, size_t align);
 
 /**

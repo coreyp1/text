@@ -1562,12 +1562,7 @@ static bool node_is_on_document_start_line(const parser_state *p, size_t offset)
 	length = p->ctx->decoded_input_len;
 	if (offset > length) offset = length;
 
-	line_start = offset;
-	while (line_start > 0) {
-		const char ch = buffer[line_start - 1];
-		if (ch == '\n' || ch == '\r') break;
-		line_start--;
-	}
+	line_start = yaml_context_line_start(p->ctx, offset);
 
 	if (length - line_start < 4) return false;
 	if (buffer[line_start] != '-' || buffer[line_start + 1] != '-'
@@ -1669,12 +1664,7 @@ static bool block_node_begins_line(const parser_state *p, size_t offset) {
 	if (offset > p->ctx->decoded_input_len) return false;
 	buffer = p->ctx->decoded_input;
 
-	line_start = offset;
-	while (line_start > 0) {
-		const char ch = buffer[line_start - 1];
-		if (ch == '\n' || ch == '\r') break;
-		line_start--;
-	}
+	line_start = yaml_context_line_start(p->ctx, offset);
 
 	i = line_start;
 	while (i < offset && (buffer[i] == ' ' || buffer[i] == '\t')) i++;
@@ -1759,12 +1749,7 @@ static int line_key_col_from_offset(const parser_state *p, size_t offset) {
 	length = p->ctx->decoded_input_len;
 	if (offset > length) offset = length;
 
-	line_start = offset;
-	while (line_start > 0) {
-		char ch = buffer[line_start - 1];
-		if (ch == '\n' || ch == '\r') break;
-		line_start--;
-	}
+	line_start = yaml_context_line_start(p->ctx, offset);
 
 	end = offset;
 	for (i = line_start; i < end; i++) {
@@ -1826,12 +1811,7 @@ static bool block_entry_may_start_at(const parser_state *p, size_t offset) {
 	length = p->ctx->decoded_input_len;
 	if (offset > length) return true;
 
-	line_start = offset;
-	while (line_start > 0) {
-		const char ch = buffer[line_start - 1];
-		if (ch == '\n' || ch == '\r') break;
-		line_start--;
-	}
+	line_start = yaml_context_line_start(p->ctx, offset);
 
 	for (size_t i = line_start; i < offset; i++) {
 		const char ch = buffer[i];
@@ -1865,12 +1845,7 @@ static bool block_key_may_start_at(const parser_state *p, size_t offset) {
 	buffer = p->ctx->decoded_input;
 	if (offset > p->ctx->decoded_input_len) return true;
 
-	line_start = offset;
-	while (line_start > 0) {
-		const char ch = buffer[line_start - 1];
-		if (ch == '\n' || ch == '\r') break;
-		line_start--;
-	}
+	line_start = yaml_context_line_start(p->ctx, offset);
 
 	i = line_start;
 	/* "*" is in the run because an alias event's offset points at the name

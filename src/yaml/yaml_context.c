@@ -70,8 +70,66 @@ void yaml_context_free(yaml_context *ctx) {
 /* Point at the scanner's decoded stream. See the field in yaml_internal.h. */
 void yaml_context_set_decoded_input(yaml_context *ctx, const char *buf, size_t len) {
 	if (!ctx) return;
+	/* The scanner grows this buffer by appending, so what is already cached
+	   still describes it - unless the buffer moved, or got shorter, which an
+	   append never does. Either of those and the cache is about something
+	   else. */
+	if (buf != ctx->line_cache_buffer || len < ctx->line_cache_upto) {
+		ctx->line_cache_buffer = NULL;
+		ctx->line_cache_start = 0;
+		ctx->line_cache_upto = 0;
+	}
 	ctx->decoded_input = buf;
 	ctx->decoded_input_len = len;
+}
+
+size_t yaml_context_line_start(yaml_context *ctx, size_t offset) {
+	const char *buffer;
+	size_t i;
+
+	if (!ctx || !ctx->decoded_input) return 0;
+	buffer = ctx->decoded_input;
+	if (offset > ctx->decoded_input_len) offset = ctx->decoded_input_len;
+
+	if (buffer == ctx->line_cache_buffer && offset >= ctx->line_cache_start) {
+		if (offset <= ctx->line_cache_upto) {
+			/* Inside the verified span: no break between the cached start
+			   and here, so the cached start is this offset's too. */
+			return ctx->line_cache_start;
+		}
+		/* Past it. Extend forwards, which costs each byte of the input once
+		   across the whole parse rather than once per question.
+		   
+		   A deeply nested flow document does not come this way: collections
+		   close innermost first, and an outer collection begins earlier in
+		   the buffer, so the offsets asked about *descend* and land inside
+		   the span the first question established. Measured on 50000 nested
+		   sequences: one backwards walk, 50000 hits, zero iterations here.
+		   Which is why removing the line below - so the span never grows -
+		   is caught by no test in the suite. It stays because it is what
+		   makes the invariant above true, not because anything measured
+		   it. */
+		for (i = ctx->line_cache_upto; i < offset; i++) {
+			if (buffer[i] == '\n' || buffer[i] == '\r') {
+				ctx->line_cache_start = i + 1;
+			}
+		}
+		ctx->line_cache_upto = offset;
+		return ctx->line_cache_start;
+	}
+
+	/* Backwards, as it always was - for the first question, and for any that
+	   goes back before what is cached. */
+	i = offset;
+	while (i > 0) {
+		const char ch = buffer[i - 1];
+		if (ch == '\n' || ch == '\r') break;
+		i--;
+	}
+	ctx->line_cache_buffer = buffer;
+	ctx->line_cache_start = i;
+	ctx->line_cache_upto = offset;
+	return i;
 }
 
 /* Allocate from context's arena */
