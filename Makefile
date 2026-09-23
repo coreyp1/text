@@ -313,6 +313,15 @@ LIBOBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 
 
 TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cflags gtest gtest_main`
+ifeq ($(OS_NAME), Windows)
+# The tests were written against Linux's 8 MiB main-thread stack, and some
+# build fixtures with the recursive JSON parser at a max_depth well past the
+# default: test-json-to-yaml parses 5000 nested arrays. A PE executable's
+# stack is fixed at link time, 2 MiB by MinGW's default, and that fixture
+# overflowed it before the code under test ran. Give the tests what they
+# assume. The library is not affected; its default max_depth fits either way.
+TESTFLAGS += -Wl,--stack,8388608
+endif
 
 
 # The static archive, not -l: a static link resolves hidden symbols, so the
