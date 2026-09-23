@@ -444,6 +444,49 @@ GTEXT_API GTEXT_CSV_Parse_Options gtext_csv_parse_options_default(void);
 GTEXT_API GTEXT_CSV_Write_Options gtext_csv_write_options_default(void);
 
 /**
+ * @brief Guess a dialect from a sample of a document
+ *
+ * The equivalent of Python's `csv.Sniffer().sniff()`, and it decides by
+ * **parsing rather than by counting characters**: each candidate delimiter and
+ * quote character is used to parse the sample, and the one whose parse gives the
+ * most rows of equal width wins. Counting occurrences is the obvious approach
+ * and gets `name,"Smith; John",42` wrong, because a frequency count cannot see
+ * that the `;` is inside a quoted field. Parsing also means the sniffer cannot
+ * disagree with the parser that reads the document afterwards, since it is the
+ * same one.
+ *
+ * Delimiters tried: `,` `;` tab `|` `:`. Quote characters: `"` then `'`.
+ * Newline style is read directly rather than scored, since it is unambiguous
+ * wherever it appears: `accept_crlf`, `accept_lf` and `accept_cr` are set from
+ * what the sample contains, and a lone CR is only accepted when one is present.
+ *
+ * Every other dialect field is left at `gtext_csv_dialect_default()`. In
+ * particular `treat_first_row_as_header` is **not** guessed: whether the first
+ * row names the columns is a question about meaning, not about the grammar, and
+ * no arrangement of bytes settles it. Python's `has_header()` guesses anyway and
+ * is unreliable for exactly that reason.
+ *
+ * **It refuses rather than guessing when the sample cannot decide.** Two cases
+ * return GTEXT_CSV_E_INVALID with a message naming which: no candidate splits
+ * the sample into more than one field, or two different delimiters explain it
+ * equally well. A caller handed a confident wrong answer has no way to tell,
+ * and pays for it by reading a whole file into the wrong shape.
+ *
+ * A sample that does not end on a record boundary has its last, truncated
+ * record dropped before scoring - so passing the first few kilobytes of a large
+ * file works, which is the case this is for.
+ *
+ * @param data Sample bytes (must not be NULL)
+ * @param len Length of the sample (must not be 0)
+ * @param out Receives the guessed dialect (must not be NULL); untouched on
+ *            failure
+ * @param err Optional error output
+ * @return GTEXT_CSV_OK, or GTEXT_CSV_E_INVALID when the sample decides nothing
+ */
+GTEXT_API GTEXT_CSV_Status gtext_csv_sniff(const void * data, size_t len,
+    GTEXT_CSV_Dialect * out, GTEXT_CSV_Error * err);
+
+/**
  * @brief Free the context snippet in an error structure
  *
  * Frees the dynamically allocated context snippet in a GTEXT_CSV_Error

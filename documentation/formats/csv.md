@@ -452,9 +452,29 @@ was written, so this pins existing behavior rather than recording a fix.
 
 - **RFC 7111 fragment identifiers** (`#row=`, `#col=`, `#cell=`). Out of
   scope: it is a URI feature, not a parsing one.
-- **Dialect sniffing.** There is no equivalent of Python's `csv.Sniffer`;
-  nothing inspects a document to guess its delimiter. Named dialects are now
-  exported, though: `gtext_csv_dialect_tsv()`, `_semicolon()`,
+- ~~**Dialect sniffing.**~~ **Added**: `gtext_csv_sniff()`. It guesses by
+  *parsing* with each candidate rather than by counting characters, which is the
+  difference that matters - a frequency count reads the `;` in
+  `name,"Smith; John",42` as structure, and cannot see that `a,b;c / d,e,f;g`
+  is regular under `;` and ragged under `,` even though `,` is twice as common.
+  Parsing also means the sniffer cannot disagree with the parser that reads the
+  document next, because it is the same one. The design was checked by replacing
+  it with a frequency count: three tests fail, and they are the three written for
+  those shapes.
+
+  It tries `,` `;` tab `|` `:` and the two quote characters, reads the newline
+  style directly rather than scoring it, and drops a truncated final record so
+  that sniffing the first few kilobytes of a large file works. **It refuses
+  rather than guessing** when no candidate splits the sample or when two explain
+  it equally well, because a confident wrong answer reads a whole file into the
+  wrong shape with nothing for the caller to check.
+
+  `treat_first_row_as_header` is deliberately not guessed: whether the first row
+  names the columns is a question about meaning rather than grammar, and no
+  arrangement of bytes settles it. Python's `has_header()` guesses and is
+  unreliable for that reason.
+
+  Named dialects are exported too: `gtext_csv_dialect_tsv()`, `_semicolon()`,
   `_backslash_escape()`, `_excel()` and `_permissive()`, each differing from
   `gtext_csv_dialect_default()` only in the field it names.
 - **Type inference.** Fields are bytes. Nothing converts them to numbers or

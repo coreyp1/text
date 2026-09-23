@@ -29,7 +29,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | ~~No pull/iterator reader for JSON or CSV~~ **both done** | JSON, CSV | was: forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
-| 8 | ~~No dialect presets~~ **fixed**; no sniffing | CSV | was: small friction, common need |
+| 8 | ~~No dialect presets~~ **fixed**; ~~no sniffing~~ **fixed** | CSV | was: small friction, common need |
 
 Findings 1 and 3 are properties of the shared template rather than of `text`,
 so they belong in the suite's `SUITE-TODO.md` rather than being fixed in this
@@ -433,7 +433,9 @@ suite*, not in the parser, and it is now closed:
   the parse, the table and every operation on it afterwards. The writer and
   `GTEXT_CSV_Error` stay on the C library, as they do in JSON, and cannot mix
   with it.
-- Dialect sniffing, equivalent to Python's `csv.Sniffer`.
+- ~~Dialect sniffing, equivalent to Python's `csv.Sniffer`.~~ **Added**:
+  `gtext_csv_sniff()`, which decides by parsing with each candidate rather than
+  by counting characters, and refuses when the sample decides nothing.
 - ~~Quoting policies beyond a `quote_all_fields` boolean.~~ **Added**:
   `GTEXT_CSV_Write_Options::quoting` takes `GTEXT_CSV_QUOTE_MINIMAL`, `_ALL`,
   `_NONNUMERIC` and `_NONE`, Python's four names. `NONNUMERIC` asks whether the
