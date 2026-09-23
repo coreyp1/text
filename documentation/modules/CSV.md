@@ -1039,9 +1039,21 @@ Comprehensive usage examples are provided in the `examples/` directory.
 
 ## 16. Future Work
 
-The following features are planned for future releases:
+This list had gone stale. A list of gaps that names something already shipped
+is worse than no list, because it is read as current.
 
-### 16.1 Integration Helpers
-
-- **Dialect presets**: Pre-configured dialects for common data pipelines (BigQuery-style CSV quirks, Excel exports, etc.)
-- **Format detection**: Automatic dialect detection from input samples
+- ~~**Dialect presets**~~ - **shipped.** `gtext_csv_dialect_tsv()`,
+  `gtext_csv_dialect_semicolon()`, `gtext_csv_dialect_backslash_escape()`,
+  `gtext_csv_dialect_excel()` and `gtext_csv_dialect_permissive()`, each
+  differing from `gtext_csv_dialect_default()` only in the field it names.
+  Exporting them turned into a correctness pass: writing a test per preset
+  was the first time several dialect options had been exercised, and three of
+  them did nothing at all.
+- **Format detection**: automatic dialect detection from an input sample, the
+  equivalent of Python's `csv.Sniffer`. Absent, and nothing inspects a
+  document to guess its delimiter.
+- **A pull reader**, so that a caller drives the parse rather than being
+  called back. Absent for CSV and JSON both; YAML has one.
+- **The custom allocator.** `GTEXT_JSON_Parse_Options` carries a
+  `GTEXT_Allocator *`; `GTEXT_CSV_Parse_Options` does not, and neither does
+  YAML's. That is what blocks embedded and arena callers.

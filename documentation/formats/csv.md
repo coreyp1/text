@@ -308,6 +308,23 @@ The fuzzer compared every dialect option except this one and
 executions with no disagreement between the table parser and the chunked
 stream.
 
+**Fixed: an escaped quote closed the field.** Inside a quoted field `""` is
+a literal quote, and the field runs on until a single quote closes it
+(RFC 4180 §2). Two branches in the stream state machine read a doubled quote
+followed by a delimiter as the end of the field, and said so in a comment, so
+the remainder was read as an unquoted field holding a stray quote and refused
+with "Unexpected quote in unquoted field". `"a"",b"`, `"x"", ""y"` and
+`"{""a"": [1, 2]}"` - JSON in a CSV column, which is how it turned up - were
+all rejected. The state machine underneath was already right: `QUOTED_FIELD`
+sees a quote, moves to `QUOTE_IN_QUOTED`, and decides between an escape and a
+close by what follows. Those two branches were fighting it.
+
+This is a behavior change, in the stricter direction.
+`field1,"text"",field2` used to parse as three fields and is now reported as
+an unterminated quoted field, because nothing ever closes it. Python's `csv`
+is lenient and returns `field1` and `text",field2`; refusing is the reading
+this parser takes elsewhere. Every other value now matches Python exactly.
+
 **Bare CR rejected by default**, as described above - stricter than Python's
 `csv` module, which accepts it.
 
@@ -344,14 +361,41 @@ coverage from 1744 edges to 2149 and immediately produced: a load of 2 from a
 the parser made no progress and spun until an unrelated limit tripped - 850ms
 for fifteen bytes. All fixed.
 
-**Reach of the oracles, and where it ends.** There is **no external CSV
-corpus and no differential test against another parser**. This matters less
-for CSV than it would for JSON, because there is no authority to be
-differentially correct against - but it matters more than nothing, because
-Python's `csv` module and `csv-spectrum` encode a widely-held reading of the
-ambiguous cases, and comparing against them would say which of this parser's
-choices are unusual. Today the answer is "unknown except where this page
-names it".
+**Reach of the oracles, and where it ends.** `make conformance-csv` scores
+this parser against [csv-spectrum](https://github.com/maxogden/csv-spectrum),
+cloned on first use and pinned to the commit named in
+`tools/conformance/CSV_SUITE_COMMIT`. Of the twelve cases it ships, **eleven
+are checkable and all eleven pass** under
+`gtext_csv_parse_options_default()`, so the figure to quote is "11 of the 11
+checkable, out of 12 shipped" and never a bare 100%. The twelfth,
+`location_coordinates`, is excluded because the suite's own fixture is a bare
+object where every other one is an array of rows, and the phone number in it
+is not the number in its own csv - a defect in the suite rather than an
+answer about this parser, so the scorer reports it as unusable instead of
+counting it against the parser. The scorer reports separately what
+`dialect.allow_unquoted_quotes` would change, so a disagreement that is a
+dialect rather than the grammar reads as one.
+
+That corpus is what found the escaped-quote defect above: before it, the
+score was 9 of 12. This page used to say there was no external CSV corpus and
+that the answer was "unknown except where this page names it". That was true
+when it was written and stopped being true in the same commit that fixed the
+defect, which updated the README and not this page.
+
+**The pass rate is scored, not enforced.** `CSS_MIN` and `CSS_MIN_CORPUS`
+make the scorer exit non-zero below a given pass rate or corpus fraction, and
+the `conformance-csv` target sets neither, so the gate prints its number and
+then succeeds whatever the number is. `conformance-roundtrip` and
+`conformance-fastpath` pass floors of 100; `conformance`, `conformance-json`
+and `conformance-csv` pass none. A score nobody is held to is a report rather
+than a gate.
+
+There is still **no differential test against another parser**. That matters
+less for CSV than it would for JSON, because there is no authority to be
+differentially correct against - but Python's `csv` module encodes a
+widely-held reading of the ambiguous cases, and the comparison against it
+recorded above was made by hand, once, rather than by anything that runs
+again.
 
 **Round-trip is now pinned.** `CsvRoundTrip.WriteThenReparsePreservesFields`
 in `tests/test-csv.cpp` parses, writes and reparses twelve documents chosen
