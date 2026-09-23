@@ -141,7 +141,18 @@ GTEXT_CSV_Status csv_stream_process_start_of_record(GTEXT_CSV_Stream * stream,
   }
 
   // Check for newline at start of record - skip trailing empty records
-  csv_newline_type nl;
+  //
+  // Initialised although csv_stream_handle_newline writes through nl on both
+  // of its GTEXT_CSV_OK returns and every other exit goes through
+  // csv_stream_set_error, which returns the non-OK code it was handed and is
+  // never called with GTEXT_CSV_OK. So the read below is guarded by the status
+  // check and cannot see this value. GCC cannot establish that: at -O3 it
+  // inlines csv_stream_handle_newline and sees the paths that skip the write,
+  // but csv_stream_set_error lives in another translation unit, so the
+  // correlation between "returned non-OK" and "wrote through nl" is invisible
+  // and -Wmaybe-uninitialized fires. Without this the library does not compile
+  // at -O3, and NONE is the conservative value if the invariant ever breaks.
+  csv_newline_type nl = CSV_NEWLINE_NONE;
   GTEXT_CSV_Status status = csv_stream_handle_newline(
       stream, process_input, process_len, offset, byte_pos, &nl);
   if (status != GTEXT_CSV_OK) {
