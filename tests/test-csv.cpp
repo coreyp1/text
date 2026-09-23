@@ -12418,10 +12418,89 @@ TEST(CsvDialectPresets, MatchTheFixturesTheyWereNamedFor) {
 	}
 }
 
+// A dialect cannot be compared with memcmp() over sizeof(). The struct is a
+// char, a char, an enum, ten bools, a pointer, a bool and an enum, which
+// leaves padding - eleven bytes of it on x86-64 - and the value of padding is
+// indeterminate. These four assertions did compare that way, and passed only
+// because the codegen they were written against happened to leave byte 18,
+// the first pad byte after the bool run, equal in both copies. Moving the
+// release build to -O2 made that byte differ while every named field still
+// agreed, so the failure belonged to the test and not to the library.
+//
+// Comparing fields instead trades that hazard for a different one: a field
+// added to the dialect would go unchecked here, which is what memcmp was
+// reaching for in the first place. kEveryDialectField below names every
+// member, so a new one stops it naming them all and
+// -Wmissing-field-initializers - in -Wextra, and these tests build -Werror -
+// fails this file rather than quietly narrowing what is compared.
+static const GTEXT_CSV_Dialect kEveryDialectField = {
+    .delimiter = ',',
+    .quote = '"',
+    .escape = GTEXT_CSV_ESCAPE_DOUBLED_QUOTE,
+    .newline_in_quotes = true,
+    .accept_lf = true,
+    .accept_crlf = true,
+    .accept_cr = false,
+    .trim_unquoted_fields = false,
+    .allow_space_after_delimiter = false,
+    .allow_unquoted_quotes = false,
+    .allow_unquoted_newlines = false,
+    .allow_comments = false,
+    .comment_prefix = "#",
+    .treat_first_row_as_header = false,
+    .header_dup_mode = GTEXT_CSV_DUPCOL_FIRST_WINS,
+};
+
+// Names the fields that differ, so a failure says which one rather than
+// printing a memcmp return value that means nothing.
+static std::string DialectDifference(
+    const GTEXT_CSV_Dialect & a, const GTEXT_CSV_Dialect & b) {
+	std::string out;
+	auto note = [&out](const char * name) {
+		if (!out.empty()) {
+			out += ", ";
+		}
+		out += name;
+	};
+#define GTEXT_FIELD(f)      \
+	if (a.f != b.f) {   \
+		note(#f);   \
+	}
+	GTEXT_FIELD(delimiter)
+	GTEXT_FIELD(quote)
+	GTEXT_FIELD(escape)
+	GTEXT_FIELD(newline_in_quotes)
+	GTEXT_FIELD(accept_lf)
+	GTEXT_FIELD(accept_crlf)
+	GTEXT_FIELD(accept_cr)
+	GTEXT_FIELD(trim_unquoted_fields)
+	GTEXT_FIELD(allow_space_after_delimiter)
+	GTEXT_FIELD(allow_unquoted_quotes)
+	GTEXT_FIELD(allow_unquoted_newlines)
+	GTEXT_FIELD(allow_comments)
+	GTEXT_FIELD(treat_first_row_as_header)
+	GTEXT_FIELD(header_dup_mode)
+#undef GTEXT_FIELD
+	// The prefix is compared by text, not by address: two dialects meaning
+	// the same thing need not have been handed the same literal.
+	if ((a.comment_prefix == nullptr) != (b.comment_prefix == nullptr)
+	    || (a.comment_prefix && b.comment_prefix
+	        && std::strcmp(a.comment_prefix, b.comment_prefix) != 0)) {
+		note("comment_prefix");
+	}
+	return out;
+}
+
 TEST(CsvDialectPresets, ExcelIsTheDefaultAndPresetsChangeOnlyWhatTheyName) {
+	// Pins the field roll itself against the default, so the initializer
+	// above cannot drift into naming every field with a wrong value in one.
+	EXPECT_EQ(DialectDifference(
+	              kEveryDialectField, gtext_csv_dialect_default()),
+	    "");
+
 	GTEXT_CSV_Dialect d = gtext_csv_dialect_default();
 	GTEXT_CSV_Dialect excel = gtext_csv_dialect_excel();
-	EXPECT_EQ(std::memcmp(&d, &excel, sizeof(d)), 0)
+	EXPECT_EQ(DialectDifference(d, excel), "")
 	    << "excel should be RFC 4180, which is the default";
 
 	// Each preset differs from the default in exactly the field it names, so
@@ -12429,17 +12508,17 @@ TEST(CsvDialectPresets, ExcelIsTheDefaultAndPresetsChangeOnlyWhatTheyName) {
 	GTEXT_CSV_Dialect tsv = gtext_csv_dialect_tsv();
 	EXPECT_EQ(tsv.delimiter, '\t');
 	tsv.delimiter = d.delimiter;
-	EXPECT_EQ(std::memcmp(&d, &tsv, sizeof(d)), 0);
+	EXPECT_EQ(DialectDifference(d, tsv), "");
 
 	GTEXT_CSV_Dialect semi = gtext_csv_dialect_semicolon();
 	EXPECT_EQ(semi.delimiter, ';');
 	semi.delimiter = d.delimiter;
-	EXPECT_EQ(std::memcmp(&d, &semi, sizeof(d)), 0);
+	EXPECT_EQ(DialectDifference(d, semi), "");
 
 	GTEXT_CSV_Dialect back = gtext_csv_dialect_backslash_escape();
 	EXPECT_EQ(back.escape, GTEXT_CSV_ESCAPE_BACKSLASH);
 	back.escape = d.escape;
-	EXPECT_EQ(std::memcmp(&d, &back, sizeof(d)), 0);
+	EXPECT_EQ(DialectDifference(d, back), "");
 }
 
 TEST(CsvDialectPresets, PermissiveRelaxesOnlyTheDocumentedThings) {
