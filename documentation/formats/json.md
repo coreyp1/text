@@ -301,14 +301,46 @@ The remaining 35 cases are marked `i_`, meaning the suite leaves the answer to
 the implementation - very deep nesting, lone surrogates, huge exponents. This
 parser accepts 14 of them. They are reported rather than scored.
 
+**The schema engine has an oracle of its own**, which this page previously did
+not mention at all. `make conformance-json-schema` clones
+[JSON-Schema-Test-Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+at the commit in `tools/conformance/JSON_SCHEMA_COMMIT` and runs the
+`draft2020-12` directory:
+
+| Set | Files | Assertions | Answered correctly | Schemas refused |
+|---|---|---|---|---|
+| `required` | 46 | 1,301 | **1,301 (100.0%)** | 0 |
+| `optional` | 13 | 162 | **162 (100.0%)** | 0 |
+| `optional/format`, asserting | 21 | 866 | **866 (100.0%)** | 0 |
+
+The "schemas refused" column is the one to read first, and is why the
+percentage is worth anything: this engine refuses a schema it cannot fully
+enforce, so a keyword it had not implemented would show up there as a case
+never run rather than as a wrong answer. Zero refused and zero wrong is the
+only combination that means what the percentage appears to mean.
+
+The denominator was checked against the corpus rather than taken from the
+runner - the 46 files hold 1,301 assertions between them, which is the number
+answered - because a harness that silently skips a file reads exactly like one
+that passes it. `pattern`, `patternProperties` and `format` need a
+regular-expression provider, and the run supplies `ghoti.io-regex`; without
+one those keywords are refused rather than ignored, and the suite is scored
+with them present because that is the configuration in which the engine is
+complete.
+
 @anchor json-not-implemented
 ## Not implemented
 
-- **No named JSON Schema draft.** The subset resembles draft-07, but nothing
-  in the code or the header says so, and a schema language without a version
-  is not citeable. Naming the draft, and listing the keywords omitted from it,
-  is a documentation fix; the alternative reading - that this is a
-  JSON-Schema-shaped validator of its own - would need saying out loud.
+- **The JSON Schema draft is named, and the engine is no longer a subset of
+  it.** This entry used to say there was no named draft and that the subset
+  "resembles draft-07". Both halves are out of date. The dialect is 2020-12 by
+  default; 2019-09, draft-07 and draft-06 are each read with their own keyword
+  set, scoped to the resource that declares `$schema`; draft-04 and earlier are
+  refused rather than misread, because they spell `exclusiveMinimum` and `$id`
+  differently and reading one as a later draft gives a wrong answer about the
+  instance instead of an unknown keyword. The nine published 2020-12
+  meta-schemas are embedded, so "this instance is a valid schema" resolves
+  without a resolver and without a socket.
 - **`pattern` and `patternProperties` need an engine the caller supplies.**
   Both are implemented, against a regular-expression provider passed in
   `GTEXT_JSON_Schema_Options` - three function pointers and a context pointer.
@@ -327,18 +359,30 @@ parser accepts 14 of them. They are reported rather than scored.
   finish becomes `GTEXT_JSON_E_LIMIT`, because a pattern that spent its budget
   has not said the instance is invalid, and recording that as "no match" turns
   a denial-of-service defence into a wrong validation result.
-- **Schema keywords absent:** `unevaluatedItems` and `unevaluatedProperties`,
-  which need annotation results collected across applicators;
-  `$recursiveRef` and `$dynamicRef`; `format`; and the `content*` family. A
-  schema using any of them is refused rather than silently under-enforced -
-  see [Deviations](#json-deviations).
+- **Schema keywords absent: three, and each is a missing dependency rather
+  than a missing implementation.** This entry used to list
+  `unevaluatedItems`, `unevaluatedProperties`, `$recursiveRef`,
+  `$dynamicRef`, `format` and the `content*` family. All of those are
+  implemented now, and between them they account for 395 of the 1,301
+  assertions the `required` suite answers. What is left:
 
-  Everything else is implemented, `$ref` included. It was the significant
-  gap, because without it a schema can be neither factored nor recursive.
-  Same-document JSON Pointer references resolve (`#` and `#/...`); an
-  external URI, a named anchor and a pointer that resolves to nothing are all
-  refused at compile time, since a reference that does not resolve constrains
-  nothing.
+  - `pattern` and `patternProperties` with no regular-expression provider.
+  - `regex` as a `format` value, with no provider. It is the only name in the
+    format vocabulary this library declines; every other one is checked.
+  - `$recursiveRef` with any value but `"#"`. 2019-09 defines exactly one, and
+    the keyword is otherwise implemented - `$recursiveRef` and
+    `$recursiveAnchor` are 2019-09's spelling of `$dynamicRef` and
+    `$dynamicAnchor`, answered by the same dynamic-scope walk.
+
+  A schema using one of these is refused rather than silently
+  under-enforced - see [Deviations](#json-deviations). The reference model is
+  the specification's and built on URIs: `$id` establishes a base and an
+  embedded resource, `$anchor` names a location in one, and `$ref` resolves
+  `#`, `#/...`, `#name`, a relative URI and an absolute one alike. Recursive
+  references work and targets are compiled once and shared. A reference that
+  leaves the document goes through
+  `GTEXT_JSON_Schema_Options::resolver`, and is refused at compile time when
+  there is none - a reference that does not resolve constrains nothing.
 - **No JSONPath**, listed as future work on the
   \ref json_module "JSON module page".
 - **`normalize_unicode` is not implemented, and now says so.** NFC

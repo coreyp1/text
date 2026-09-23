@@ -43,8 +43,11 @@
  * contentEncoding, contentMediaType and contentSchema, which 2020-12 defines
  * as annotations rather than assertions, and format, which is an annotation
  * unless GTEXT_JSON_Schema_Options::format asks for it to be asserted. So are
- * $schema, $id, $defs, definitions, $anchor and $vocabulary, which cannot
- * change which instances are valid while $ref is unsupported.
+ * $schema and $vocabulary, which choose the dialect rather than asserting
+ * anything about the instance. $id, $defs, definitions and $anchor are not in
+ * this list any more: they used to be ignored because nothing read them "while
+ * $ref is unsupported", and $ref is supported, so they are load-bearing parts
+ * of the reference model described below.
  *
  * Callers that genuinely want the old behavior can set
  * allow_unsupported_keywords in GTEXT_JSON_Schema_Options and compile with

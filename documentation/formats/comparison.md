@@ -348,10 +348,19 @@ real advantages over cJSON and jansson.
 **Missing.**
 
 - A pull reader, as above.
-- Schema beyond the core subset, and honest failure when a schema exceeds it.
+- ~~Schema beyond the core subset, and honest failure when a schema exceeds
+  it.~~ **Both done**, and the first is no longer a subset: 2020-12 by default
+  with 2019-09, draft-07 and draft-06 read as themselves, scored 1,301 of 1,301
+  on the official suite's `required` set with no schema refused. Three
+  dependencies remain rather than three gaps - see the
+  \ref format_json "JSON page".
 - A custom allocator.
-- NFC normalization. `normalize_unicode` now fails loudly rather than silently
-  doing nothing, which is the right interim behavior, but the feature is absent.
+- NFC normalization. `normalize_unicode` fails loudly rather than silently
+  doing nothing, and the parse option is still not implemented - but the
+  normalizer itself is no longer missing. `src/idna/nfc.c` is a table-driven
+  NFC with an oracle gate of its own (`make check-nfc-oracle`), written for
+  IDNA. What is absent is the wiring between it and the JSON parse option, not
+  the algorithm.
 - JSON5 proper, as distinct from the JSONC subset that is supported.
 - Conversion to YAML. The reverse direction exists.
 - SIMD-accelerated scanning, which is what the throughput gap is really about.
@@ -427,9 +436,11 @@ file's comments is a case where this library is the better choice outright.
 - A custom allocator.
 - In-situ zero-copy parsing, which JSON and CSV both offer.
 - Conversion from JSON, the reverse of the supported direction.
-- A documented thread-safety position.
-- `key: a : b` truncates rather than rejecting, already recorded on the YAML
-  page as the one open case in that family.
+- ~~A documented thread-safety position.~~ **Fixed**, and it was already fixed
+  when this line still said otherwise - section 7 above closed it, and
+  `documentation/modules/YAML.md` section 16 is the per-module statement.
+- ~~`key: a : b` truncates rather than rejecting.~~ **Fixed**: it is rejected
+  rather than rearranged. Nothing in that family is open now.
 
 ---
 
