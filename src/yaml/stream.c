@@ -394,6 +394,31 @@ static void stream_attach_pending(
   ev->prop_col = s->pending_prop_min_col;
 }
 
+/* Zero an event, and then undo the one field zeroing gets wrong.
+ *
+ * "No properties here" is spelled -1, because column 0 and line 0 are real
+ * places a property could be written. Every event was being cleared with
+ * memset and six of the seven sites left prop_line and prop_col at 0 - which
+ * reads as "a property, at the very start of the document".
+ *
+ * That was not visible as a wrong answer, because the one consumer that
+ * could have been fooled walks the whole parse stack to decide and every
+ * level compares >= against a line number of 0, so it always fell through to
+ * "no". It was visible as *time*: property_left_of_open_collection() ran that
+ * walk for every property-less event, which on a deeply nested document is
+ * O(depth) per event and quadratic overall - 200,010,000 stack steps to parse
+ * 20000 nested flow sequences, all of them to compute false.
+ *
+ * One place to spell the sentinel, so a new event type cannot get it wrong.
+ */
+static void stream_event_init(
+    GTEXT_YAML_Event * ev, GTEXT_YAML_Event_Type type) {
+  memset(ev, 0, sizeof(*ev));
+  ev->type = type;
+  ev->prop_line = -1;
+  ev->prop_col = -1;
+}
+
 /**
  * @brief Drop the properties an event has just taken.
  *
@@ -414,7 +439,7 @@ static void stream_clear_pending(GTEXT_YAML_Stream *s) {
   s->outer_tag = NULL;
   s->outer_tag_line = 0;
   s->pending_prop_min_col = -1;
-  s->pending_prop_min_line = 0;
+  s->pending_prop_min_line = -1;
 }
 
 static GTEXT_YAML_Status stream_flush_empty_node(
@@ -424,8 +449,7 @@ static GTEXT_YAML_Status stream_flush_empty_node(
   if (!s->pending_anchor && !s->pending_tag) return GTEXT_YAML_OK;
 
   GTEXT_YAML_Event ev;
-  memset(&ev, 0, sizeof(ev));
-  ev.type = GTEXT_YAML_EVENT_SCALAR;
+  stream_event_init(&ev, GTEXT_YAML_EVENT_SCALAR);
   ev.data.scalar.ptr = "";
   ev.data.scalar.len = 0;
   ev.scalar_style = GTEXT_YAML_SCALAR_STYLE_PLAIN;
@@ -487,8 +511,7 @@ static GTEXT_YAML_Status stream_emit_alias(GTEXT_YAML_Stream *s, GTEXT_YAML_Toke
   if (defer != GTEXT_YAML_OK) return defer;
 
   GTEXT_YAML_Event alias_ev;
-  memset(&alias_ev, 0, sizeof(alias_ev));
-  alias_ev.type = GTEXT_YAML_EVENT_ALIAS;
+  stream_event_init(&alias_ev, GTEXT_YAML_EVENT_ALIAS);
   alias_ev.data.alias_name = buf;
   stream_attach_pending(s, &alias_ev);
   alias_ev.offset = tok->offset;
@@ -516,8 +539,7 @@ static GTEXT_YAML_Status stream_emit_document_start(
   if (!s) return GTEXT_YAML_E_INVALID;
 
   GTEXT_YAML_Event ev;
-  memset(&ev, 0, sizeof(ev));
-  ev.type = GTEXT_YAML_EVENT_DOCUMENT_START;
+  stream_event_init(&ev, GTEXT_YAML_EVENT_DOCUMENT_START);
   if (tok) {
     ev.offset = tok->offset;
     ev.line = tok->line;
@@ -546,8 +568,7 @@ static GTEXT_YAML_Status stream_emit_document_end(
   if (!s) return GTEXT_YAML_E_INVALID;
 
   GTEXT_YAML_Event ev;
-  memset(&ev, 0, sizeof(ev));
-  ev.type = GTEXT_YAML_EVENT_DOCUMENT_END;
+  stream_event_init(&ev, GTEXT_YAML_EVENT_DOCUMENT_END);
   if (tok) {
     ev.offset = tok->offset;
     ev.line = tok->line;
@@ -639,10 +660,16 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   s->total_bytes_consumed = 0;
   s->current_depth = 0;
   s->alias_expansion_count = 0;
-  /* No property pending: column 0 is a real column, so "none" has to be -1
-     rather than the zero memset() left here. */
+  /* No property pending: column 0 and line 0 are real places, so "none" has
+     to be -1 rather than the zero memset() left here.
+     
+     Both of them. This said exactly this and then set only the column, which
+     is how an event with no properties came to report prop_col = -1 beside
+     prop_line = 0 - half a sentinel. The two are assigned together in every
+     place that records a property, and they have to be cleared together
+     too. */
   s->pending_prop_min_col = -1;
-  s->pending_prop_min_line = 0;
+  s->pending_prop_min_line = -1;
   s->scanner = gtext_yaml_scanner_new();
   if (!s->scanner) { free(s); return NULL; }
   return s;
@@ -744,7 +771,8 @@ process_token:
     }
 
     GTEXT_YAML_Event ev;
-    memset(&ev, 0, sizeof(ev));
+    /* The type is decided further down; every arm sets it. */
+    stream_event_init(&ev, GTEXT_YAML_EVENT_SCALAR);
     ev.offset = tok.offset;
     ev.line = tok.line;
     ev.col = tok.col;
@@ -862,9 +890,7 @@ process_token:
         ev.prop_line = s->pending_prop_line;
         ev.prop_col = s->pending_prop_col;
       }
-      else {
-        ev.prop_col = -1;
-      }
+      /* else: stream_event_init() already said "no properties". */
       /* indicator event */
       /* Adjust depth for simple flow indicators and enforce max_depth */
       if (tok.u.c == '[' || tok.u.c == '{') {
@@ -874,7 +900,7 @@ process_token:
         }
         /* Emit collection START event instead of INDICATOR */
         GTEXT_YAML_Event start_ev;
-        memset(&start_ev, 0, sizeof(start_ev));
+        stream_event_init(&start_ev, GTEXT_YAML_EVENT_SEQUENCE_START);
         start_ev.type = (tok.u.c == '[')
           ? GTEXT_YAML_EVENT_SEQUENCE_START
           : GTEXT_YAML_EVENT_MAPPING_START;
@@ -894,7 +920,7 @@ process_token:
         if (s->current_depth > 0) s->current_depth--;
         /* Emit collection END event instead of INDICATOR */
         GTEXT_YAML_Event end_ev;
-        memset(&end_ev, 0, sizeof(end_ev));
+        stream_event_init(&end_ev, GTEXT_YAML_EVENT_SEQUENCE_END);
         end_ev.type = (tok.u.c == ']')
           ? GTEXT_YAML_EVENT_SEQUENCE_END
           : GTEXT_YAML_EVENT_MAPPING_END;
