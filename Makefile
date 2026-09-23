@@ -213,6 +213,7 @@ endif
 
 BUILD_DIR := ./build/$(BUILD)
 OBJ_DIR := $(BUILD_DIR)/objects
+FLAGS_STAMP := $(OBJ_DIR)/.flags
 GEN_DIR := $(BUILD_DIR)/generated
 APP_DIR := $(BUILD_DIR)/apps
 
@@ -369,6 +370,7 @@ ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
 # Sanitizer build directory
 ASAN_BUILD_DIR := $(BUILD_DIR)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
+ASAN_FLAGS_STAMP := $(ASAN_OBJ_DIR)/.flags
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
 
 # Sanitizer target names
@@ -499,13 +501,13 @@ $(LIBVER_GEN): force-libver
 		'#endif // GHOTI_IO_GTEXT_LIBVER_GEN_H' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
-$(OBJ_DIR)/%.o: src/%.c | $(LIBVER_GEN)
+$(OBJ_DIR)/%.o: src/%.c $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling $@ ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 # Pattern rule for C++ source files (if any):
-$(OBJ_DIR)/%.o: src/%.cpp
+$(OBJ_DIR)/%.o: src/%.cpp $(FLAGS_STAMP)
 	@printf "\n### Compiling $@ ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -641,7 +643,7 @@ ifeq ($(UNAME_S), Linux)
 endif
 
 # Pattern rule for ASan-instrumented C object files
-$(ASAN_OBJ_DIR)/%.o: src/%.c
+$(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP)
 	@printf "\n### Compiling (ASan+UBSan instrumented): $< ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1384,6 +1386,7 @@ FUZZ_RPATH := -Wl,-rpath,$(LIB_INSTALL_PATH)/$(SUITE)
 endif
 FUZZ_DIR := $(BUILD_DIR)/fuzz
 FUZZ_OBJ_DIR := $(FUZZ_DIR)/objects
+FUZZ_FLAGS_STAMP := $(FUZZ_OBJ_DIR)/.flags
 FUZZ_APP_DIR := $(FUZZ_DIR)/apps
 FUZZ_OBJECTS := $(patsubst src/%.c,$(FUZZ_OBJ_DIR)/%.o,$(SOURCES))
 # Included here rather than added to DEPFILES, which is simply-expanded and
@@ -1398,7 +1401,7 @@ FUZZ_TIME ?= 60
 # header change rebuilds nothing here, and the stale objects disagree with the
 # fresh ones about struct layout.  That shows up as a fuzzer "finding" -
 # a _Bool loaded as 255, a SEGV in free() - in code that is correct.
-$(FUZZ_OBJ_DIR)/%.o: src/%.c
+$(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP)
 	@mkdir -p $(@D)
 	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
@@ -1623,3 +1626,39 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 
 help: ## Display this help
 	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' Makefile | sort | sed 's/\([^:]*\):.*## \(.*\)/\1:\2/' | awk -F: '{printf "%-15s %s\n", $$1, $$2}' | sed "s/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g"
+
+
+####################################################################
+# Flag stamps
+####################################################################
+# Each build tree carries the flag string it was built with. The stamp is
+# rewritten only when that string differs -- written to a scratch file,
+# compared, moved into place only on a difference -- so its mtime moves on a
+# flag change and on nothing else. The object rules above depend on it.
+#
+# This replaces listing `Makefile` as a prerequisite, which was too broad (a
+# comment-only edit recompiled everything) and too narrow (a command-line
+# override such as `make EXTRA_CFLAGS=-O2` changes no file's mtime and so was
+# invisible).
+#
+# These rules sit at the end of the file for two reasons. A rule's target
+# expands when make reads the line, so a stamp rule above its own OBJ_DIR
+# definition has an empty target: not an error, just a rule that silently does
+# not exist. And the first target in a makefile is the default goal, so a stamp
+# rule above `all:` makes a bare `make` build the stamp and nothing else.
+.PHONY: force-flags
+
+$(FLAGS_STAMP): force-flags
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
+
+$(ASAN_FLAGS_STAMP): force-flags
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
+
+$(FUZZ_FLAGS_STAMP): force-flags
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
