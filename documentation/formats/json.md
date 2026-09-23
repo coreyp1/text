@@ -301,6 +301,26 @@ The remaining 35 cases are marked `i_`, meaning the suite leaves the answer to
 the implementation - very deep nesting, lone surrogates, huge exponents. This
 parser accepts 14 of them. They are reported rather than scored.
 
+**A number parsed with no options held nothing at all.** Every entry point's
+documentation says the options argument may be NULL for defaults, and
+`json_parse_internal()` passed that NULL straight through.
+`json_parse_number()` reads its options as `if (opts && opts->parse_int64)` and
+`if (opts && opts->preserve_number_lexeme)`, so with no options every number
+came back with no preserved lexeme, no `int64` and no `double`. The value
+reported type `NUMBER` and held nothing: `gtext_json_get_i64()`,
+`_get_u64()`, `_get_double()` and `_get_number_lexeme()` all answered
+`GTEXT_JSON_E_INVALID`, and `gtext_json_write_value()` then failed with
+`GTEXT_JSON_E_WRITE` - so **any parsed document containing a number could not be
+serialized**.
+
+Passing `gtext_json_parse_options_default()` explicitly worked, which is why
+nothing saw it: every test passes options. The one test that writes numbers
+builds them with `gtext_json_new_number_i64()` rather than parsing them, and
+does not check the status either. The defaults are substituted where the options
+enter now, and the test asks the same questions with NULL and with an explicit
+default and requires the same answers - the pair being the point, since either
+alone would pass against a parser that ignored its options entirely.
+
 **The streaming parser is now compared against the DOM parser.** It was not,
 and they had drifted. `make conformance-json` scores the DOM parser, and the 47
 streaming tests each fed input chosen to exercise the feature under test, so
