@@ -17,6 +17,7 @@
 
 #include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/csv.h>
+#include <ghoti.io/text/yaml.h>
 #include <ghoti.io/text/json.h>
 
 namespace {
@@ -602,4 +603,324 @@ TEST(Allocator, CsvNullAllocatorOptionStillWorks) {
 	GTEXT_CSV_Table * plain = gtext_csv_new_table_with_allocator(nullptr);
 	ASSERT_NE(plain, nullptr);
 	gtext_csv_free_table(plain);
+}
+
+
+// ---------------------------------------------------------------------------
+// YAML
+//
+// The lesson CSV taught, applied: there is one balanced test per way of
+// *creating* a document, not one per way of using one. Planting the documented
+// defect in CSV left the whole suite green because nothing had ever parsed zero
+// bytes, and the entry point that reached it had no test of its own. YAML has
+// more ways in than CSV does - parse, parse_all, parse_json, parse_partial,
+// parse_safe, document_new, the streaming parser and the pull reader - so each
+// gets one.
+// ---------------------------------------------------------------------------
+
+TEST(Allocator, YamlParseAndFreeBalanceThroughTheAllocator) {
+	// Chosen to reach the paths that allocate outside the arena: anchors and
+	// aliases with their table, tags, comments, a merge key, a block scalar,
+	// and enough nesting to grow the parser's stack.
+	const char * src =
+	    "# leading comment\n"
+	    "defaults: &defaults\n"
+	    "  a: 1\n"
+	    "  b: two\n"
+	    "merged:\n"
+	    "  <<: *defaults\n"
+	    "  c: 3.5\n"
+	    "block: |\n"
+	    "  line one\n"
+	    "  line two\n"
+	    "folded: >\n"
+	    "  folded text\n"
+	    "tagged: !!str 42\n"
+	    "nested: [[[[1, 2]]], {x: {y: {z: null}}}]\n"
+	    "utf8: \"caf\xc3\xa9 \xe4\xb8\x80\"\n"
+	    "alias_use: *defaults\n";
+
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+	opts.retain_comments = true;
+
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src, std::strlen(src), &opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	EXPECT_GT(c.total_allocations, 0u) << "the allocator was bypassed";
+	EXPECT_GT(c.live_blocks, 0u);
+
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlParseAllBalancesThroughTheAllocator) {
+	const char * src =
+	    "--- \nfirst: 1\n--- \nsecond: [1,2,3]\n--- \nthird: &a {x: 1}\n";
+
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+
+	size_t count = 0;
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document ** docs =
+	    gtext_yaml_parse_all(src, std::strlen(src), &count, &opts, &err);
+	ASSERT_NE(docs, nullptr) << (err.message ? err.message : "parse failed");
+	EXPECT_EQ(count, 3u);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	for (size_t i = 0; i < count; i++) {
+		gtext_yaml_free(docs[i]);
+	}
+	// The array of pointers is on the C library, deliberately: parse_all's
+	// published contract has the caller release it with free(), and routing it
+	// through the allocator would make that documented call a free through the
+	// wrong one. Everything of any size is in the documents.
+	std::free(docs);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlParseJsonFastPathBalancesThroughTheAllocator) {
+	// The JSON fast path builds a YAML document from the JSON parser, which is
+	// a different route into the same arena.
+	const char * src = "{\"a\":[1,2,{\"b\":\"text\"}],\"c\":null}";
+
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+	opts.enable_json_fast_path = true;
+
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src, std::strlen(src), &opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "parse failed");
+	EXPECT_GT(c.total_allocations, 0u);
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlDocumentNewBalancesThroughTheAllocator) {
+	// A document built rather than parsed: the DOM constructors, which allocate
+	// from the same arena by a different door.
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * doc = gtext_yaml_document_new(&opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+	EXPECT_GT(c.total_allocations, 0u);
+
+	GTEXT_YAML_Node * map = gtext_yaml_node_new_mapping(doc, nullptr, nullptr);
+	ASSERT_NE(map, nullptr);
+	for (int i = 0; i < 40; i++) {
+		std::string key = "key" + std::to_string(i);
+		std::string val = "value" + std::to_string(i);
+		GTEXT_YAML_Node * k =
+		    gtext_yaml_node_new_scalar(doc, key.c_str(), nullptr, nullptr);
+		GTEXT_YAML_Node * v =
+		    gtext_yaml_node_new_scalar(doc, val.c_str(), nullptr, nullptr);
+		ASSERT_NE(k, nullptr);
+		ASSERT_NE(v, nullptr);
+		ASSERT_NE(gtext_yaml_mapping_set(doc, map, k, v), nullptr);
+	}
+	EXPECT_TRUE(gtext_yaml_document_set_root(doc, map));
+
+	// A clone takes the allocator of the document it came from.
+	GTEXT_YAML_Node * copy = gtext_yaml_node_clone(doc, map);
+	EXPECT_NE(copy, nullptr);
+
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlStreamBalancesThroughTheAllocator) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+
+	GTEXT_YAML_Stream * st = gtext_yaml_stream_new(&opts, nullptr, nullptr);
+	ASSERT_NE(st, nullptr);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	// Fed a byte at a time, so the scanner's buffers must grow.
+	const std::string src =
+	    "a: &anchor\n  b: |\n    a long block scalar that forces a buffer\n"
+	    "c: *anchor\nd: [1, 2, 3, 4, 5]\n";
+	for (size_t i = 0; i < src.size(); i++) {
+		ASSERT_EQ(gtext_yaml_stream_feed(st, src.data() + i, 1), GTEXT_YAML_OK)
+		    << "at " << i;
+	}
+	EXPECT_EQ(gtext_yaml_stream_finish(st), GTEXT_YAML_OK);
+	gtext_yaml_stream_free(st);
+
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlPullReaderBalancesThroughTheAllocator) {
+	// The reader copies every event's strings into its queue, so it allocates
+	// where the push parser does not - and some events are left unread at free
+	// time so the queued remainder has to be released too.
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+	opts.retain_comments = true;
+
+	GTEXT_YAML_Reader * r = gtext_yaml_reader_new(&opts);
+	ASSERT_NE(r, nullptr);
+	EXPECT_GT(c.total_allocations, 0u);
+
+	std::string src = "%YAML 1.2\n---\n# a comment\n";
+	for (int i = 0; i < 30; i++) {
+		src += "key" + std::to_string(i) + ": &a" + std::to_string(i) +
+		    " !!str value\n";
+	}
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	ASSERT_EQ(gtext_yaml_reader_feed(r, src.data(), src.size(), &err),
+	    GTEXT_YAML_OK)
+	    << (err.message ? err.message : "");
+	ASSERT_EQ(gtext_yaml_reader_feed(r, nullptr, 0, &err), GTEXT_YAML_OK);
+
+	for (int i = 0; i < 4; i++) {
+		GTEXT_YAML_Event ev;
+		std::memset(&ev, 0, sizeof(ev));
+		if (gtext_yaml_reader_next(r, &ev, &err) != GTEXT_YAML_OK) {
+			break;
+		}
+	}
+	gtext_yaml_reader_free(r);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u) << "queued events were not released";
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlToJsonBalancesThroughTheAllocator) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+
+	const char * src = "a: 1\nb: [1, 2, {c: text}]\nd: null\n";
+	GTEXT_YAML_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src, std::strlen(src), &opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "");
+
+	GTEXT_JSON_Value * json = nullptr;
+	EXPECT_EQ(gtext_yaml_to_json(doc, &json, nullptr), GTEXT_YAML_OK);
+	if (json) {
+		gtext_json_free(json);
+	}
+	gtext_yaml_free(doc);
+	gtext_yaml_error_free(&err);
+	EXPECT_EQ(c.live_blocks, 0u);
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlParseBalancesOnTheErrorPath) {
+	Counters c;
+	GTEXT_Allocator alloc = make_allocator(&c);
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	opts.allocator = &alloc;
+
+	// A few different ways to fail, since the unwind path differs.
+	const char * bad[] = {
+	    "a: [1, 2\n",          // unterminated flow
+	    "a: *undefined\n",     // alias with no anchor
+	    "\t- tab indent\n",    // a tab where indentation belongs
+	    "a: \"unterminated\n", // unterminated quoted scalar
+	};
+	for (const char * src : bad) {
+		GTEXT_YAML_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document * doc =
+		    gtext_yaml_parse(src, std::strlen(src), &opts, &err);
+		if (doc) {
+			gtext_yaml_free(doc);
+		}
+		gtext_yaml_error_free(&err);
+		EXPECT_EQ(c.live_blocks, 0u) << "leak after [" << src << "]";
+	}
+	EXPECT_EQ(c.live_bytes, 0u);
+}
+
+TEST(Allocator, YamlParseSurvivesAllocationFailure) {
+	const char * src = "a: &x [1, 2]\nb: *x\nc: {d: text}\n";
+	for (size_t budget = 1; budget <= 10; budget++) {
+		Counters c;
+		c.fail_after = budget;
+		GTEXT_Allocator alloc = make_allocator(&c);
+		GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+		opts.allocator = &alloc;
+
+		GTEXT_YAML_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_YAML_Document * doc =
+		    gtext_yaml_parse(src, std::strlen(src), &opts, &err);
+		if (doc) {
+			gtext_yaml_free(doc);
+		}
+		gtext_yaml_error_free(&err);
+		EXPECT_EQ(c.live_blocks, 0u) << "leak with budget " << budget;
+	}
+}
+
+TEST(Allocator, TwoYamlDocumentsWithDifferentAllocatorsStaySeparate) {
+	const char * src = "a: 1\n";
+	Counters c1, c2;
+	GTEXT_Allocator a1 = make_allocator(&c1);
+	GTEXT_Allocator a2 = make_allocator(&c2);
+
+	GTEXT_YAML_Parse_Options o1 = gtext_yaml_parse_options_default();
+	o1.allocator = &a1;
+	GTEXT_YAML_Parse_Options o2 = gtext_yaml_parse_options_default();
+	o2.allocator = &a2;
+
+	GTEXT_YAML_Document * d1 =
+	    gtext_yaml_parse(src, std::strlen(src), &o1, nullptr);
+	GTEXT_YAML_Document * d2 =
+	    gtext_yaml_parse(src, std::strlen(src), &o2, nullptr);
+	ASSERT_NE(d1, nullptr);
+	ASSERT_NE(d2, nullptr);
+
+	size_t before = c2.live_blocks;
+	gtext_yaml_free(d1);
+	EXPECT_EQ(c1.live_blocks, 0u);
+	EXPECT_EQ(c2.live_blocks, before) << "freeing one touched the other";
+	gtext_yaml_free(d2);
+	EXPECT_EQ(c2.live_blocks, 0u);
+}
+
+TEST(Allocator, YamlNullAllocatorOptionStillParses) {
+	const char * src = "a: 1\nb: [1,2]\n";
+	GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+	EXPECT_EQ(opts.allocator, nullptr) << "no allocator by default";
+	GTEXT_YAML_Document * doc =
+	    gtext_yaml_parse(src, std::strlen(src), &opts, nullptr);
+	ASSERT_NE(doc, nullptr);
+	gtext_yaml_free(doc);
 }

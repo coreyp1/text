@@ -37,14 +37,17 @@
  * a "resolver" field to NULL with a comment saying it would be created when
  * needed during parsing, and nothing ever created it, so that initialiser
  * was the only thing between the struct and a wild pointer. */
-yaml_context *yaml_context_new(void) {
-	yaml_context *ctx = (yaml_context *)calloc(1, sizeof(yaml_context));
+yaml_context *yaml_context_new(const GTEXT_Allocator *alloc) {
+	yaml_context *ctx = (yaml_context *)gtext_allocator_calloc(alloc, 1, sizeof(yaml_context));
 	if (!ctx) return NULL;
-	
+
+	/* Set before the arena, so the unwind below frees through it. */
+	ctx->alloc = alloc;
+
 	/* Create arena */
-	ctx->arena = yaml_arena_new();
+	ctx->arena = yaml_arena_new(alloc);
 	if (!ctx->arena) {
-		free(ctx);
+		gtext_allocator_free(alloc, ctx);
 		return NULL;
 	}
 	
@@ -58,13 +61,17 @@ yaml_context *yaml_context_new(void) {
 /* Free context and arena */
 void yaml_context_free(yaml_context *ctx) {
 	if (!ctx) return;
-	
+
+	/* Read before yaml_arena_free() releases the arena, and before the free
+	   below releases the structure this lives in. */
+	const GTEXT_Allocator *alloc = ctx->alloc;
+
 	/* Free arena (frees all nodes) */
 	yaml_arena_free(ctx->arena);
 	
 	/* Note: decoded_input is NOT freed (the scanner owns it) */
 	
-	free(ctx);
+	gtext_allocator_free(alloc, ctx);
 }
 
 /* Point at the scanner's decoded stream. See the field in yaml_internal.h. */

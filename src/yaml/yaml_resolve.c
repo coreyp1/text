@@ -303,16 +303,21 @@ static const char *format_timestamp(
 	return out;
 }
 
-static char *strip_underscores(const char *s, size_t len, bool allow) {
+/* The scratch copy is transient - it never escapes the caller - but it still
+   comes from the caller's allocator, because "every allocation the parse makes"
+   is what the option promises and an arena caller wants the scratch accounted
+   too. */
+static char *strip_underscores(const char *s, size_t len, bool allow,
+	const GTEXT_Allocator *alloc) {
 	if (!allow) {
-		char *copy = (char *)malloc(len + 1);
+		char *copy = (char *)gtext_allocator_malloc(alloc, len + 1);
 		if (!copy) return NULL;
 		memcpy(copy, s, len);
 		copy[len] = '\0';
 		return copy;
 	}
 
-	char *buf = (char *)malloc(len + 1);
+	char *buf = (char *)gtext_allocator_malloc(alloc, len + 1);
 	if (!buf) return NULL;
 	size_t out = 0;
 	for (size_t i = 0; i < len; i++) {
@@ -411,7 +416,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 ) {
 	if (!doc || !value || !out_data || !out_len) return false;
 
-	char *filtered = (char *)malloc(len + 1);
+	char *filtered = (char *)gtext_allocator_malloc(doc->ctx->alloc, len + 1);
 	if (!filtered) return false;
 	size_t count = 0;
 	for (size_t i = 0; i < len; i++) {
@@ -421,13 +426,13 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 			filtered[count++] = (char)c;
 			continue;
 		}
-		free(filtered);
+		gtext_allocator_free(doc->ctx->alloc, filtered);
 		return false;
 	}
 	filtered[count] = '\0';
 
 	if ((count % 4) != 0) {
-		free(filtered);
+		gtext_allocator_free(doc->ctx->alloc, filtered);
 		return false;
 	}
 
@@ -442,7 +447,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 		   characters, filtered[count - 2] reads off the front of the buffer. */
 		unsigned char *empty =
 			(unsigned char *)yaml_context_alloc(doc->ctx, 1, 1);
-		free(filtered);
+		gtext_allocator_free(doc->ctx->alloc, filtered);
 		if (!empty) return false;
 		empty[0] = '\0';
 		*out_data = empty;
@@ -454,7 +459,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 	if (filtered[count - 1] == '=') padding++;
 	if (filtered[count - 2] == '=') padding++;
 	if (padding > 2) {
-		free(filtered);
+		gtext_allocator_free(doc->ctx->alloc, filtered);
 		return false;
 	}
 
@@ -462,7 +467,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 	if (padding > 0) decoded_len -= padding;
 	unsigned char *decoded = (unsigned char *)yaml_context_alloc(doc->ctx, decoded_len, 1);
 	if (!decoded) {
-		free(filtered);
+		gtext_allocator_free(doc->ctx->alloc, filtered);
 		return false;
 	}
 
@@ -474,20 +479,20 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 		char c3 = filtered[i + 3];
 
 		if (c0 == '=' || c1 == '=') {
-			free(filtered);
+			gtext_allocator_free(doc->ctx->alloc, filtered);
 			return false;
 		}
 
 		int v0 = base64_value((unsigned char)c0);
 		int v1 = base64_value((unsigned char)c1);
 		if (v0 < 0 || v1 < 0) {
-			free(filtered);
+			gtext_allocator_free(doc->ctx->alloc, filtered);
 			return false;
 		}
 
 		if (c2 == '=') {
 			if (c3 != '=' || i + 4 != count) {
-				free(filtered);
+				gtext_allocator_free(doc->ctx->alloc, filtered);
 				return false;
 			}
 			decoded[out++] = (unsigned char)((v0 << 2) | (v1 >> 4));
@@ -496,13 +501,13 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 
 		int v2 = base64_value((unsigned char)c2);
 		if (v2 < 0) {
-			free(filtered);
+			gtext_allocator_free(doc->ctx->alloc, filtered);
 			return false;
 		}
 
 		if (c3 == '=') {
 			if (i + 4 != count) {
-				free(filtered);
+				gtext_allocator_free(doc->ctx->alloc, filtered);
 				return false;
 			}
 			decoded[out++] = (unsigned char)((v0 << 2) | (v1 >> 4));
@@ -512,7 +517,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 
 		int v3 = base64_value((unsigned char)c3);
 		if (v3 < 0) {
-			free(filtered);
+			gtext_allocator_free(doc->ctx->alloc, filtered);
 			return false;
 		}
 
@@ -521,7 +526,7 @@ GTEXT_INTERNAL_API bool gtext_yaml_base64_decode(
 		decoded[out++] = (unsigned char)(((v2 & 0x03) << 6) | v3);
 	}
 
-	free(filtered);
+	gtext_allocator_free(doc->ctx->alloc, filtered);
 	*out_data = decoded;
 	*out_len = decoded_len;
 	return true;
@@ -533,9 +538,9 @@ static bool yaml_use_1_1(const GTEXT_YAML_Document *doc, const GTEXT_YAML_Parse_
 	return false;
 }
 
-static bool has_disallowed_leading_zero(const char *s, size_t len, bool allow_underscore) {
+static bool has_disallowed_leading_zero(const char *s, size_t len, bool allow_underscore, const GTEXT_Allocator *alloc) {
 	if (!s || len == 0) return false;
-	char *clean = strip_underscores(s, len, allow_underscore);
+	char *clean = strip_underscores(s, len, allow_underscore, alloc);
 	if (!clean) return false;
 	const char *p = clean;
 	if (*p == '+' || *p == '-') p++;
@@ -547,7 +552,7 @@ static bool has_disallowed_leading_zero(const char *s, size_t len, bool allow_un
 			result = true;
 		}
 	}
-	free(clean);
+	gtext_allocator_free(alloc, clean);
 	return result;
 }
 
@@ -556,10 +561,11 @@ static bool parse_sexagesimal_value(
 	size_t len,
 	bool allow_underscore,
 	double *out,
-	bool *out_is_int
+	bool *out_is_int,
+	const GTEXT_Allocator *alloc
 ) {
 	if (!s || len == 0 || !out) return false;
-	char *clean = strip_underscores(s, len, allow_underscore);
+	char *clean = strip_underscores(s, len, allow_underscore, alloc);
 	if (!clean) return false;
 	const char *p = clean;
 	bool neg = false;
@@ -568,7 +574,7 @@ static bool parse_sexagesimal_value(
 		p++;
 	}
 	if (*p == '\0' || strchr(p, ':') == NULL) {
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return false;
 	}
 
@@ -579,7 +585,7 @@ static bool parse_sexagesimal_value(
 		bool last = colon == NULL;
 		size_t seg_len = last ? strlen(p) : (size_t)(colon - p);
 		if (seg_len == 0) {
-			free(clean);
+			gtext_allocator_free(alloc, clean);
 			return false;
 		}
 
@@ -587,7 +593,7 @@ static bool parse_sexagesimal_value(
 		if (!last) {
 			for (size_t i = 0; i < seg_len; i++) {
 				if (p[i] < '0' || p[i] > '9') {
-					free(clean);
+					gtext_allocator_free(alloc, clean);
 					return false;
 				}
 				segment = segment * 10.0 + (double)(p[i] - '0');
@@ -599,14 +605,14 @@ static bool parse_sexagesimal_value(
 				char c = p[i];
 				if (c == '.') {
 					if (seen_dot) {
-						free(clean);
+						gtext_allocator_free(alloc, clean);
 						return false;
 					}
 					seen_dot = true;
 					continue;
 				}
 				if (c < '0' || c > '9') {
-					free(clean);
+					gtext_allocator_free(alloc, clean);
 					return false;
 				}
 				if (!seen_dot) {
@@ -627,7 +633,7 @@ static bool parse_sexagesimal_value(
 	if (neg) total = -total;
 	*out = total;
 	if (out_is_int) *out_is_int = !has_fraction;
-	free(clean);
+	gtext_allocator_free(alloc, clean);
 	return true;
 }
 
@@ -656,11 +662,12 @@ static bool parse_int_value(
 	bool allow_base_prefix,
 	bool allow_binary_and_upper_prefix,
 	bool allow_yaml_1_1_octal,
-	int64_t *out
+	int64_t *out,
+	const GTEXT_Allocator *alloc
 ) {
 	if (!s || len == 0 || !out) return false;
 
-	char *clean = strip_underscores(s, len, allow_underscore);
+	char *clean = strip_underscores(s, len, allow_underscore, alloc);
 	if (!clean) return false;
 
 	const char *p = clean;
@@ -669,7 +676,7 @@ static bool parse_int_value(
 		neg = (*p == '-');
 		p++;
 	}
-	if (*p == '\0') { free(clean); return false; }
+	if (*p == '\0') { gtext_allocator_free(alloc, clean); return false; }
 
 	/* 10.3.2 spells the two prefixed int rows "0o [0-7]+" and
 	   "0x [0-9a-fA-F]+" - lower case, and no binary row at all.  "0B"/"0O"/
@@ -713,22 +720,22 @@ static bool parse_int_value(
 			}
 		}
 		if (octal) {
-			if (!digit_in_base(*p, 8)) { free(clean); return false; }
+			if (!digit_in_base(*p, 8)) { gtext_allocator_free(alloc, clean); return false; }
 			errno = 0;
 			char *end = NULL;
 			long long parsed = strtoll(p, &end, 8);
 			if (errno == ERANGE || end == p || (end && *end != '\0')) {
-				free(clean);
+				gtext_allocator_free(alloc, clean);
 				return false;
 			}
 			if (neg) parsed = -parsed;
 			*out = (int64_t)parsed;
-			free(clean);
+			gtext_allocator_free(alloc, clean);
 			return true;
 		}
 	}
 
-	if (*p == '\0') { free(clean); return false; }
+	if (*p == '\0') { gtext_allocator_free(alloc, clean); return false; }
 
 	/* strtoll() skips leading white space and would take a sign of its own,
 	   and this has already taken the sign and any base prefix - so without
@@ -736,19 +743,19 @@ static bool parse_int_value(
 	   "[-+]? [0-9]+": one optional sign, then digits, and nothing between
 	   them.  The caller above keeps white space out of the classifier
 	   entirely; this keeps the helper honest on its own. */
-	if (!digit_in_base(*p, base)) { free(clean); return false; }
+	if (!digit_in_base(*p, base)) { gtext_allocator_free(alloc, clean); return false; }
 
 	errno = 0;
 	char *end = NULL;
 	long long parsed = strtoll(p, &end, base);
 	if (errno == ERANGE || end == p || (end && *end != '\0')) {
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return false;
 	}
 
 	if (neg) parsed = -parsed;
 	*out = (int64_t)parsed;
-	free(clean);
+	gtext_allocator_free(alloc, clean);
 	return true;
 }
 
@@ -756,11 +763,12 @@ static bool parse_float_value(
 	const char *s,
 	size_t len,
 	bool allow_underscore,
-	double *out
+	double *out,
+	const GTEXT_Allocator *alloc
 ) {
 	if (!s || len == 0 || !out) return false;
 
-	char *clean = strip_underscores(s, len, allow_underscore);
+	char *clean = strip_underscores(s, len, allow_underscore, alloc);
 	if (!clean) return false;
 
 	bool has_dot = strchr(clean, '.') != NULL;
@@ -778,18 +786,18 @@ static bool parse_float_value(
 	size_t clean_len = strlen(clean);
 	if (str_eq_any(clean, clean_len, inf_spellings)) {
 		*out = clean[0] == '-' ? -INFINITY : INFINITY;
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return true;
 	}
 
 	if (str_eq_any(clean, clean_len, nan_spellings)) {
 		*out = NAN;
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return true;
 	}
 
 	if (!has_dot && !has_exp) {
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return false;
 	}
 
@@ -801,7 +809,7 @@ static bool parse_float_value(
 		const char *first = clean;
 		if (*first == '+' || *first == '-') first++;
 		if (*first != '.' && !(*first >= '0' && *first <= '9')) {
-			free(clean);
+			gtext_allocator_free(alloc, clean);
 			return false;
 		}
 	}
@@ -813,12 +821,12 @@ static bool parse_float_value(
 	   below then calls a perfectly good float a string. */
 	double parsed = gtext_number_strtod(clean, &end);
 	if (errno == ERANGE || end == clean || (end && *end != '\0')) {
-		free(clean);
+		gtext_allocator_free(alloc, clean);
 		return false;
 	}
 
 	*out = parsed;
-	free(clean);
+	gtext_allocator_free(alloc, clean);
 	return true;
 }
 
@@ -1005,11 +1013,12 @@ static bool is_merge_key(const GTEXT_YAML_Node *key) {
 static bool merge_pairs_grow(
 	yaml_merge_pair **pairs,
 	const size_t *count,
-	size_t *capacity
+	size_t *capacity,
+	const GTEXT_Allocator *alloc
 ) {
 	if (*count < *capacity) return true;
 	size_t new_cap = *capacity == 0 ? 8 : *capacity * 2;
-	yaml_merge_pair *new_pairs = (yaml_merge_pair *)realloc(
+	yaml_merge_pair *new_pairs = (yaml_merge_pair *)gtext_allocator_realloc(alloc,
 		*pairs, new_cap * sizeof(yaml_merge_pair)
 	);
 	if (!new_pairs) return false;
@@ -1039,7 +1048,8 @@ static bool merge_pairs_add_or_replace(
 	const char *key_tag,
 	const char *value_tag,
 	size_t max_depth,
-	bool from_merge
+	bool from_merge,
+	const GTEXT_Allocator *alloc
 ) {
 	long idx = merge_pairs_find(*pairs, *count, key, max_depth);
 	if (idx >= 0) {
@@ -1059,7 +1069,7 @@ static bool merge_pairs_add_or_replace(
 			return true;
 		}
 	}
-	if (!merge_pairs_grow(pairs, count, capacity)) return false;
+	if (!merge_pairs_grow(pairs, count, capacity, alloc)) return false;
 	(*pairs)[*count].key = (GTEXT_YAML_Node *)key;
 	(*pairs)[*count].value = value;
 	(*pairs)[*count].key_tag = key_tag;
@@ -1075,7 +1085,8 @@ static GTEXT_YAML_Status merge_from_mapping(
 	size_t *capacity,
 	const GTEXT_YAML_Node *source,
 	size_t max_depth,
-	GTEXT_YAML_Error *error
+	GTEXT_YAML_Error *error,
+	const GTEXT_Allocator *alloc
 ) {
 	if (!source || source->type != GTEXT_YAML_MAPPING) {
 		if (error) {
@@ -1097,7 +1108,8 @@ static GTEXT_YAML_Status merge_from_mapping(
 			pair->key_tag,
 			pair->value_tag,
 			max_depth,
-			true
+			true,
+			alloc
 		)) {
 			if (error) {
 				error->code = GTEXT_YAML_E_OOM;
@@ -1160,7 +1172,8 @@ static GTEXT_YAML_Status apply_merge_keys(
 				&merged_capacity,
 				value,
 				opts ? opts->max_depth : 0,
-				error
+				error,
+				doc->ctx->alloc
 			);
 			if (st != GTEXT_YAML_OK) break;
 		} else if (value->type == GTEXT_YAML_SEQUENCE) {
@@ -1172,7 +1185,8 @@ static GTEXT_YAML_Status apply_merge_keys(
 					&merged_capacity,
 					item,
 					opts ? opts->max_depth : 0,
-					error
+					error,
+					doc->ctx->alloc
 				);
 				if (st != GTEXT_YAML_OK) break;
 			}
@@ -1188,7 +1202,7 @@ static GTEXT_YAML_Status apply_merge_keys(
 	}
 
 	if (st != GTEXT_YAML_OK) {
-		free(merged_pairs);
+		gtext_allocator_free(doc->ctx->alloc, merged_pairs);
 		return st;
 	}
 
@@ -1204,9 +1218,10 @@ static GTEXT_YAML_Status apply_merge_keys(
 			pair->key_tag,
 			pair->value_tag,
 			opts ? opts->max_depth : 0,
-			false
+			false,
+			doc->ctx->alloc
 		)) {
-			free(merged_pairs);
+			gtext_allocator_free(doc->ctx->alloc, merged_pairs);
 			if (error) {
 				error->code = GTEXT_YAML_E_OOM;
 				error->message = "Out of memory merging mapping";
@@ -1223,7 +1238,7 @@ static GTEXT_YAML_Status apply_merge_keys(
 			node->as.mapping.pairs[i].value_tag = merged_pairs[i].value_tag;
 		}
 		node->as.mapping.count = merged_count;
-		free(merged_pairs);
+		gtext_allocator_free(doc->ctx->alloc, merged_pairs);
 		*out_node = node;
 		*out_replaced = false;
 		return GTEXT_YAML_OK;
@@ -1236,7 +1251,7 @@ static GTEXT_YAML_Status apply_merge_keys(
 		node->as.mapping.anchor
 	);
 	if (!merged) {
-		free(merged_pairs);
+		gtext_allocator_free(doc->ctx->alloc, merged_pairs);
 		if (error) {
 			error->code = GTEXT_YAML_E_OOM;
 			error->message = "Out of memory creating merged mapping";
@@ -1252,7 +1267,7 @@ static GTEXT_YAML_Status apply_merge_keys(
 	}
 	merged->as.mapping.count = merged_count;
 
-	free(merged_pairs);
+	gtext_allocator_free(doc->ctx->alloc, merged_pairs);
 	*out_node = merged;
 	*out_replaced = true;
 	return GTEXT_YAML_OK;
@@ -1353,7 +1368,8 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 	bool allow_underscore,
 	bool allow_base_prefix,
 	const GTEXT_YAML_Parse_Options *opts,
-	GTEXT_YAML_Error *error
+	GTEXT_YAML_Error *error,
+	const GTEXT_Allocator *alloc
 ) {
 	if (!opts) return GTEXT_YAML_OK;
 	if (opts->yaml_1_1) return GTEXT_YAML_OK;
@@ -1375,7 +1391,7 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 
 	double sexa = 0.0;
 	bool sexa_is_int = false;
-	if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &sexa_is_int)) {
+	if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &sexa_is_int, alloc)) {
 		GTEXT_YAML_Status st = gtext_yaml_emit_warning(
 			opts,
 			GTEXT_YAML_WARNING_YAML11_SEXAGESIMAL,
@@ -1385,10 +1401,10 @@ static GTEXT_YAML_Status warn_yaml_1_1_scalars(
 		if (st != GTEXT_YAML_OK) return st;
 	}
 
-	if (has_disallowed_leading_zero(value, len, allow_underscore)) {
+	if (has_disallowed_leading_zero(value, len, allow_underscore, alloc)) {
 		int64_t out = 0;
 		if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
-				true, true, &out)) {
+				true, true, &out, alloc)) {
 			GTEXT_YAML_Status st = gtext_yaml_emit_warning(
 				opts,
 				GTEXT_YAML_WARNING_YAML11_OCTAL,
@@ -1639,6 +1655,7 @@ static GTEXT_YAML_Status resolve_scalar(
 	const GTEXT_YAML_Parse_Options *opts,
 	GTEXT_YAML_Error *error
 ) {
+	const GTEXT_Allocator *alloc = doc ? doc->ctx->alloc : NULL;
 	const char *value = NULL;
 	size_t len = 0;
 	const char *tag = NULL;
@@ -1691,7 +1708,7 @@ static GTEXT_YAML_Status resolve_scalar(
 			if (yaml_1_1) {
 				double sexa = 0.0;
 				bool is_int = false;
-				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int)) {
+				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int, alloc)) {
 					/* A fraction makes it a float and not this tag's type;
 					   a whole number past int64_t has nothing to convert to,
 					   and "!!int 99999999999999999999999" is already refused
@@ -1717,7 +1734,7 @@ static GTEXT_YAML_Status resolve_scalar(
 			   implicit resolution follows the version would make "0b101" a
 			   string and "!!int 0b101" a five. */
 			if (!parse_int_value(value, len, yaml_1_1, true, yaml_1_1,
-					yaml_1_1, &out)) {
+					yaml_1_1, &out, alloc)) {
 				if (error) {
 					error->code = GTEXT_YAML_E_INVALID;
 					error->message = "Invalid integer scalar for explicit tag";
@@ -1735,7 +1752,7 @@ static GTEXT_YAML_Status resolve_scalar(
 			if (yaml_1_1) {
 				double sexa = 0.0;
 				bool is_int = false;
-				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int)) {
+				if (parse_sexagesimal_value(value, len, true, &sexa, &is_int, alloc)) {
 					out = sexa;
 					node->type = GTEXT_YAML_FLOAT;
 					node->as.scalar.type = GTEXT_YAML_FLOAT;
@@ -1743,7 +1760,7 @@ static GTEXT_YAML_Status resolve_scalar(
 					return GTEXT_YAML_OK;
 				}
 			}
-			if (!parse_float_value(value, len, yaml_use_1_1(doc, opts), &out)) {
+			if (!parse_float_value(value, len, yaml_use_1_1(doc, opts), &out, alloc)) {
 				/* 10.3.2's float row is
 				   "[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ..." - the
 				   fraction is optional, so "12" is in it.  Implicit
@@ -1754,7 +1771,7 @@ static GTEXT_YAML_Status resolve_scalar(
 				int64_t as_int = 0;
 				if (parse_int_value(value, len, yaml_use_1_1(doc, opts), true,
 						yaml_use_1_1(doc, opts), yaml_use_1_1(doc, opts),
-						&as_int)) {
+						&as_int, alloc)) {
 					out = (double)as_int;
 				}
 				else {
@@ -1897,7 +1914,8 @@ static GTEXT_YAML_Status resolve_scalar(
 		allow_underscore,
 		allow_base_prefix,
 		opts,
-		error
+		error,
+		alloc
 	);
 	if (warn != GTEXT_YAML_OK) return warn;
 
@@ -1923,7 +1941,7 @@ static GTEXT_YAML_Status resolve_scalar(
 		   Left to the rows below, which have no sexagesimal among them, so
 		   it stays the string it was written as.  That is what a decimal
 		   too large for the type already resolves to. */
-		if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &is_int)
+		if (parse_sexagesimal_value(value, len, allow_underscore, &sexa, &is_int, alloc)
 				&& (!is_int || gtext_yaml_double_fits_int64(sexa))) {
 			if (is_int) {
 				node->type = GTEXT_YAML_INT;
@@ -1939,11 +1957,11 @@ static GTEXT_YAML_Status resolve_scalar(
 	}
 
 	int64_t int_out = 0;
-	if (!yaml_1_1 && has_disallowed_leading_zero(value, len, allow_underscore)) {
+	if (!yaml_1_1 && has_disallowed_leading_zero(value, len, allow_underscore, alloc)) {
 		return GTEXT_YAML_OK;
 	}
 	if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
-			allow_binary_and_upper_prefix, yaml_1_1, &int_out)) {
+			allow_binary_and_upper_prefix, yaml_1_1, &int_out, alloc)) {
 		node->type = GTEXT_YAML_INT;
 		node->as.scalar.type = GTEXT_YAML_INT;
 		node->as.scalar.int_value = int_out;
@@ -1951,7 +1969,7 @@ static GTEXT_YAML_Status resolve_scalar(
 	}
 
 	double float_out = 0.0;
-	if (parse_float_value(value, len, allow_underscore, &float_out)) {
+	if (parse_float_value(value, len, allow_underscore, &float_out, alloc)) {
 		node->type = GTEXT_YAML_FLOAT;
 		node->as.scalar.type = GTEXT_YAML_FLOAT;
 		node->as.scalar.float_value = float_out;
@@ -2031,7 +2049,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
 	bool yaml_1_1,
 	bool *bool_out,
 	int64_t *int_out,
-	double *float_out
+	double *float_out,
+	const GTEXT_Allocator *alloc
 ) {
 	bool b = false;
 	int64_t i = 0;
@@ -2070,7 +2089,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
 		type = GTEXT_YAML_BOOL;
 	}
 	else if (v11 && parse_sexagesimal_value(value, len, allow_underscore, &f,
-			&b)) {
+			&b, alloc)) {
 		/* b is reused as "is an integer" here, the way the resolver reads it,
 		   and is put back below before anything else can see it. */
 		if (b && gtext_yaml_double_fits_int64(f)) {
@@ -2082,14 +2101,14 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
 		}
 		b = false;
 	}
-	else if (!v11 && has_disallowed_leading_zero(value, len, allow_underscore)) {
+	else if (!v11 && has_disallowed_leading_zero(value, len, allow_underscore, alloc)) {
 		type = GTEXT_YAML_STRING;
 	}
 	else if (parse_int_value(value, len, allow_underscore, allow_base_prefix,
-			allow_binary_and_upper_prefix, v11, &i)) {
+			allow_binary_and_upper_prefix, v11, &i, alloc)) {
 		type = GTEXT_YAML_INT;
 	}
-	else if (parse_float_value(value, len, allow_underscore, &f)) {
+	else if (parse_float_value(value, len, allow_underscore, &f, alloc)) {
 		type = GTEXT_YAML_FLOAT;
 	}
 
@@ -2104,19 +2123,22 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	size_t len,
 	bool *bool_out,
 	int64_t *int_out,
-	double *float_out
+	double *float_out,
+	const GTEXT_Allocator *alloc
 ) {
 	/* The 1.2 core schema, which is what the DOM constructors document and
 	   what this used to be the only spelling of. */
 	return gtext_yaml_plain_text_classify_as(value, len,
-		GTEXT_YAML_SCHEMA_CORE, false, bool_out, int_out, float_out);
+		GTEXT_YAML_SCHEMA_CORE, false, bool_out, int_out, float_out, alloc);
 }
 
 GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_type(
 	const char *value,
 	size_t len
 ) {
-	return gtext_yaml_plain_text_classify(value, len, NULL, NULL, NULL);
+	/* No allocator: this is the type-only probe, used where no document is in
+	   hand. Its scratch buffer is transient and never reaches a caller. */
+	return gtext_yaml_plain_text_classify(value, len, NULL, NULL, NULL, NULL);
 }
 
 GTEXT_INTERNAL_API bool gtext_yaml_omap_can_take(
@@ -2164,8 +2186,10 @@ GTEXT_INTERNAL_API bool gtext_yaml_plain_text_resolves_to_non_string_as(
 	GTEXT_YAML_Schema schema,
 	bool yaml_1_1
 ) {
+	/* No allocator: a predicate with no document in hand, whose scratch is
+	   transient. */
 	return gtext_yaml_plain_text_classify_as(value, len, schema, yaml_1_1,
-		NULL, NULL, NULL) != GTEXT_YAML_STRING;
+		NULL, NULL, NULL, NULL) != GTEXT_YAML_STRING;
 }
 
 GTEXT_INTERNAL_API const char *gtext_yaml_null_spelling_for(
@@ -2337,7 +2361,7 @@ static GTEXT_YAML_Status resolve_exit_mapping(
 		if (replaced) {
 			if (*replacement_count >= *replacement_capacity) {
 				size_t new_cap = *replacement_capacity == 0 ? 4 : *replacement_capacity * 2;
-				yaml_merge_replacement *new_items = (yaml_merge_replacement *)realloc(
+				yaml_merge_replacement *new_items = (yaml_merge_replacement *)gtext_allocator_realloc(doc->ctx->alloc, 
 					*replacements,
 					new_cap * sizeof(yaml_merge_replacement)
 				);
@@ -2415,12 +2439,15 @@ typedef struct {
 	resolve_frame *items;
 	size_t count;
 	size_t capacity;
+	/* Carried so resolve_stack_push() reaches it without a signature change,
+	   and set at the declaration so no push can precede it. */
+	const GTEXT_Allocator *alloc;
 } resolve_stack;
 
 static bool resolve_stack_push(resolve_stack *stack, GTEXT_YAML_Node **node_ptr) {
 	if (stack->count == stack->capacity) {
 		size_t new_capacity = stack->capacity == 0 ? 32 : stack->capacity * 2;
-		resolve_frame *items = (resolve_frame *)realloc(
+		resolve_frame *items = (resolve_frame *)gtext_allocator_realloc(stack->alloc,
 			stack->items, new_capacity * sizeof(resolve_frame)
 		);
 		if (!items) return false;
@@ -2456,7 +2483,7 @@ static GTEXT_YAML_Status resolve_node(
 	size_t *replacement_capacity,
 	GTEXT_YAML_Error *error
 ) {
-	resolve_stack stack = {NULL, 0, 0};
+	resolve_stack stack = {NULL, 0, 0, doc->ctx->alloc};
 	GTEXT_YAML_Status status = GTEXT_YAML_OK;
 
 	if (!node_ptr || !*node_ptr) return GTEXT_YAML_OK;
@@ -2565,7 +2592,7 @@ static GTEXT_YAML_Status resolve_node(
 		}
 	}
 
-	free(stack.items);
+	gtext_allocator_free(doc->ctx->alloc, stack.items);
 	return status;
 }
 GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
@@ -2590,7 +2617,7 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
 		error
 	);
 	if (st != GTEXT_YAML_OK) {
-		free(replacements);
+		gtext_allocator_free(doc->ctx->alloc, replacements);
 		return st;
 	}
 
@@ -2598,6 +2625,6 @@ GTEXT_INTERNAL_API GTEXT_YAML_Status yaml_resolve_document(
 	if (replacement_count > 0) {
 		update_alias_targets(doc->root, replacements, replacement_count);
 	}
-	free(replacements);
+	gtext_allocator_free(doc->ctx->alloc, replacements);
 	return GTEXT_YAML_OK;
 }

@@ -15,7 +15,7 @@ extern "C" {
 // Test: Create and destroy arena
 //
 TEST(YamlArena, CreateDestroy) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Should have initial block
@@ -31,7 +31,7 @@ TEST(YamlArena, CreateDestroy) {
 // Test: Simple allocation
 //
 TEST(YamlArena, SimpleAlloc) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Allocate small block
@@ -59,7 +59,7 @@ TEST(YamlArena, SimpleAlloc) {
 // Test: Alignment
 //
 TEST(YamlArena, Alignment) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Test various alignments
@@ -85,7 +85,7 @@ TEST(YamlArena, Alignment) {
 // Test: Multiple blocks
 //
 TEST(YamlArena, MultipleBlocks) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	yaml_arena_block *first_block = arena->first;
@@ -109,7 +109,7 @@ TEST(YamlArena, MultipleBlocks) {
 // Test: Exponential growth
 //
 TEST(YamlArena, ExponentialGrowth) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Start at 4KB
@@ -142,7 +142,7 @@ TEST(YamlArena, ExponentialGrowth) {
 // Test: Large allocation
 //
 TEST(YamlArena, LargeAlloc) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Allocate larger than max block size
@@ -162,7 +162,7 @@ TEST(YamlArena, LargeAlloc) {
 // Test: Many small allocations
 //
 TEST(YamlArena, ManySmallAllocs) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Allocate 1000 small blocks
@@ -186,7 +186,7 @@ TEST(YamlArena, ManySmallAllocs) {
 // Test: Zero-size allocation
 //
 TEST(YamlArena, ZeroSize) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	void *p = yaml_arena_alloc(arena, 0, 8);
@@ -210,7 +210,7 @@ TEST(YamlArena, NullArena) {
 // Test: Bulk free
 //
 TEST(YamlArena, BulkFree) {
-	yaml_arena *arena = yaml_arena_new();
+	yaml_arena *arena = yaml_arena_new(nullptr);
 	ASSERT_NE(arena, nullptr);
 	
 	// Allocate lots of memory
@@ -227,7 +227,7 @@ TEST(YamlArena, BulkFree) {
 // Test: Context creation
 //
 TEST(YamlContext, CreateDestroy) {
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx = yaml_context_new(nullptr);
 	ASSERT_NE(ctx, nullptr);
 	
 	EXPECT_NE(ctx->arena, nullptr);
@@ -242,7 +242,7 @@ TEST(YamlContext, CreateDestroy) {
 // Test: Context allocation
 //
 TEST(YamlContext, Alloc) {
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx = yaml_context_new(nullptr);
 	ASSERT_NE(ctx, nullptr);
 	
 	void *p1 = yaml_context_alloc(ctx, 64, 8);
@@ -259,7 +259,7 @@ TEST(YamlContext, Alloc) {
 // Test: Set the decoded input
 //
 TEST(YamlContext, SetDecodedInput) {
-	yaml_context *ctx = yaml_context_new();
+	yaml_context *ctx = yaml_context_new(nullptr);
 	ASSERT_NE(ctx, nullptr);
 	
 	const char *input = "test: yaml";

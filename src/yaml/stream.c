@@ -426,16 +426,16 @@ static void stream_event_init(
  * outer was waiting on, and from here it is the parser's to place.
  */
 static void stream_clear_pending(GTEXT_YAML_Stream *s) {
-  free(s->pending_anchor);
+  gtext_allocator_free(s->opts.allocator, s->pending_anchor);
   s->pending_anchor = NULL;
   s->pending_anchor_line = 0;
-  free(s->pending_tag);
+  gtext_allocator_free(s->opts.allocator, s->pending_tag);
   s->pending_tag = NULL;
   s->pending_tag_line = 0;
-  free(s->outer_anchor);
+  gtext_allocator_free(s->opts.allocator, s->outer_anchor);
   s->outer_anchor = NULL;
   s->outer_anchor_line = 0;
-  free(s->outer_tag);
+  gtext_allocator_free(s->opts.allocator, s->outer_tag);
   s->outer_tag = NULL;
   s->outer_tag_line = 0;
   s->pending_prop_min_col = -1;
@@ -651,7 +651,10 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
   GTEXT_YAML_Event_Callback cb,
   void * user
 ) {
-  GTEXT_YAML_Stream *s = (GTEXT_YAML_Stream *)malloc(sizeof(*s));
+  /* Read before the structure is allocated: it is the first thing the
+     caller's allocator has to own, and the options are where it is named. */
+  const GTEXT_Allocator *alloc = opts ? opts->allocator : NULL;
+  GTEXT_YAML_Stream *s = (GTEXT_YAML_Stream *)gtext_allocator_malloc(alloc, sizeof(*s));
   if (!s) return NULL;
   memset(s, 0, sizeof(*s));
   s->cb = cb;
@@ -670,20 +673,22 @@ GTEXT_API GTEXT_YAML_Stream * gtext_yaml_stream_new(
      too. */
   s->pending_prop_min_col = -1;
   s->pending_prop_min_line = -1;
-  s->scanner = gtext_yaml_scanner_new();
-  if (!s->scanner) { free(s); return NULL; }
+  s->scanner = gtext_yaml_scanner_new(alloc);
+  if (!s->scanner) { gtext_allocator_free(alloc, s); return NULL; }
   return s;
 }
 
 GTEXT_API void gtext_yaml_stream_free(GTEXT_YAML_Stream * s)
 {
   if (!s) return;
+  /* Read before the structure it lives in is released. */
+  const GTEXT_Allocator *alloc = s->opts.allocator;
   if (s->scanner) gtext_yaml_scanner_free(s->scanner);
-  if (s->pending_anchor) free(s->pending_anchor);
-  if (s->pending_tag) free(s->pending_tag);
-  if (s->outer_anchor) free(s->outer_anchor);
-  if (s->outer_tag) free(s->outer_tag);
-  free(s);
+  if (s->pending_anchor) gtext_allocator_free(alloc, s->pending_anchor);
+  if (s->pending_tag) gtext_allocator_free(alloc, s->pending_tag);
+  if (s->outer_anchor) gtext_allocator_free(alloc, s->outer_anchor);
+  if (s->outer_tag) gtext_allocator_free(alloc, s->outer_tag);
+  gtext_allocator_free(alloc, s);
 }
 
 GTEXT_INTERNAL_API bool gtext_yaml_stream_last_error(
@@ -964,7 +969,7 @@ process_token:
           &s->outer_anchor, &s->outer_anchor_line,
           "Node has more than one anchor");
         if (defer != GTEXT_YAML_OK) return defer;
-        s->pending_anchor = strdup(buf);
+        s->pending_anchor = gtext_yaml_strdup(buf, s->opts.allocator);
         s->pending_anchor_line = tok.line;
         s->pending_prop_offset = tok.offset;
         s->pending_prop_line = tok.line;
@@ -1005,7 +1010,7 @@ process_token:
             &s->outer_tag, &s->outer_tag_line,
             "Node has more than one tag");
           if (defer != GTEXT_YAML_OK) return defer;
-          s->pending_tag = strdup("!");
+          s->pending_tag = gtext_yaml_strdup("!", s->opts.allocator);
           s->pending_tag_line = tok.line;
           /* The non-specific tag is a property like any other and has to
              record where it was written, or nothing downstream can tell
@@ -1087,7 +1092,7 @@ process_token:
           &s->outer_tag, &s->outer_tag_line,
           "Node has more than one tag");
         if (defer != GTEXT_YAML_OK) return defer;
-        s->pending_tag = strdup(buf);
+        s->pending_tag = gtext_yaml_strdup(buf, s->opts.allocator);
         /* tok is the '!' that introduced the tag. */
         s->pending_tag_line = tok.line;
         s->pending_prop_offset = tok.offset;

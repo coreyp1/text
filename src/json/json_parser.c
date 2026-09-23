@@ -1661,6 +1661,26 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
     }
   }
 
+  /*
+   * "NULL for defaults", which every entry point's documentation promises, has
+   * to be made true here rather than assumed downstream.
+   *
+   * It was not. `opt` was passed on as NULL, and json_parse_number() reads its
+   * options as `if (opts && opts->preserve_number_lexeme)` and
+   * `if (opts && opts->parse_int64)` - so with no options every number came back
+   * with no preserved lexeme, no int64 and no double. The value parsed, reported
+   * type NUMBER, and held nothing: gtext_json_get_i64() and _get_double() both
+   * answered GTEXT_JSON_E_INVALID, and gtext_json_write_value() could not write
+   * it, so any parsed document containing a number failed to serialize. Passing
+   * gtext_json_parse_options_default() explicitly worked, which is why the tests
+   * never saw it - they all pass options.
+   */
+  GTEXT_JSON_Parse_Options effective_opts;
+  if (!opt) {
+    effective_opts = gtext_json_parse_options_default();
+    opt = &effective_opts;
+  }
+
   // Initialize parser state
   json_parser parser = {0};
   parser.opts = opt;

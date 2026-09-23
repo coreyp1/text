@@ -9167,6 +9167,159 @@ TEST(StateValidation, IncompleteStructure) {
  * question of both parsers over every case, so the next drift shows up as a
  * disagreement instead of waiting for someone to write a case for it.
  */
+/*
+ * "NULL for defaults" has to be true, and it was not.
+ *
+ * Every entry point's documentation says the options argument may be NULL for
+ * defaults. json_parse_internal() passed that NULL straight on, and
+ * json_parse_number() reads its options as `if (opts && opts->parse_int64)` and
+ * `if (opts && opts->preserve_number_lexeme)` - so with no options every number
+ * came back holding nothing at all. The value reported type NUMBER;
+ * gtext_json_get_i64(), _get_u64(), _get_double() and _get_number_lexeme() all
+ * answered GTEXT_JSON_E_INVALID; and gtext_json_write_value() then failed with
+ * GTEXT_JSON_E_WRITE, so *any parsed document containing a number could not be
+ * serialized*.
+ *
+ * No test saw it because they all pass options. The one that writes numbers -
+ * DOMWrite.Number - builds them with gtext_json_new_number_i64() rather than
+ * parsing them, and does not check the status either.
+ *
+ * So this test asks the same questions with NULL and with an explicit default,
+ * and requires the same answers. The pair is the point: either alone would pass
+ * against a parser that ignored its options entirely.
+ */
+TEST(JsonNullOptions, NullOptionsMeanTheDefaultsAndNotNothing) {
+	struct Case {
+		const char * src;
+		bool has_i64;
+		const char * lexeme;
+	} cases[] = {
+	    {"42", true, "42"},
+	    {"-1", true, "-1"},
+	    {"0", true, "0"},
+	    {"1.5", false, "1.5"},
+	    {"1e3", false, "1e3"},
+	    {"1.0", false, "1.0"},
+	    {"123456789012345678901234567890", false,
+	        "123456789012345678901234567890"},
+	};
+
+	GTEXT_JSON_Parse_Options dflt = gtext_json_parse_options_default();
+	ASSERT_TRUE(dflt.preserve_number_lexeme);
+	ASSERT_TRUE(dflt.parse_int64);
+
+	for (const Case & c : cases) {
+		const GTEXT_JSON_Parse_Options * both[2] = {nullptr, &dflt};
+		for (const GTEXT_JSON_Parse_Options * opt : both) {
+			const char * which = opt ? "explicit defaults" : "NULL options";
+			GTEXT_JSON_Error err;
+			std::memset(&err, 0, sizeof(err));
+			GTEXT_JSON_Value * v =
+			    gtext_json_parse(c.src, std::strlen(c.src), opt, &err);
+			ASSERT_NE(v, nullptr) << which << " " << c.src << ": "
+			                      << (err.message ? err.message : "");
+			gtext_json_error_free(&err);
+			EXPECT_EQ(gtext_json_typeof(v), GTEXT_JSON_NUMBER)
+			    << which << " " << c.src;
+
+			// The preserved lexeme, which is the option's whole purpose.
+			const char * lex = nullptr;
+			size_t lex_len = 0;
+			EXPECT_EQ(gtext_json_get_number_lexeme(v, &lex, &lex_len),
+			    GTEXT_JSON_OK)
+			    << which << ": no lexeme for " << c.src;
+			if (lex) {
+				EXPECT_EQ(std::string(lex, lex_len), std::string(c.lexeme))
+				    << which;
+			}
+
+			// A double is available for every number.
+			double d = 0;
+			EXPECT_EQ(gtext_json_get_double(v, &d), GTEXT_JSON_OK)
+			    << which << ": no double for " << c.src;
+
+			// An int64 for the ones that fit.
+			int64_t i = 0;
+			if (c.has_i64) {
+				EXPECT_EQ(gtext_json_get_i64(v, &i), GTEXT_JSON_OK)
+				    << which << ": no int64 for " << c.src;
+			}
+
+			// And the value can be written, which is what failed outright.
+			GTEXT_JSON_Sink sink;
+			ASSERT_EQ(gtext_json_sink_buffer(&sink), GTEXT_JSON_OK);
+			GTEXT_JSON_Write_Options w = gtext_json_write_options_default();
+			GTEXT_JSON_Error werr;
+			std::memset(&werr, 0, sizeof(werr));
+			EXPECT_EQ(gtext_json_write_value(&sink, &w, v, &werr),
+			    GTEXT_JSON_OK)
+			    << which << ": could not write " << c.src << ": "
+			    << (werr.message ? werr.message : "");
+			EXPECT_EQ(std::string(gtext_json_sink_buffer_data(&sink),
+			              gtext_json_sink_buffer_size(&sink)),
+			    std::string(c.lexeme))
+			    << which;
+			gtext_json_sink_buffer_free(&sink);
+			gtext_json_error_free(&werr);
+			gtext_json_free(v);
+		}
+	}
+}
+
+/* A whole document, since the failure above stopped the writer mid-output and a
+   single scalar does not show that. */
+TEST(JsonNullOptions, ADocumentParsedWithNullOptionsStillSerializes) {
+	const char * src =
+	    "{\"a\":1,\"b\":[1,2,3],\"c\":{\"d\":1.5},\"e\":\"text\",\"f\":null,"
+	    "\"g\":true}";
+	GTEXT_JSON_Value * v =
+	    gtext_json_parse(src, std::strlen(src), nullptr, nullptr);
+	ASSERT_NE(v, nullptr);
+
+	GTEXT_JSON_Sink sink;
+	ASSERT_EQ(gtext_json_sink_buffer(&sink), GTEXT_JSON_OK);
+	GTEXT_JSON_Write_Options w = gtext_json_write_options_default();
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	ASSERT_EQ(gtext_json_write_value(&sink, &w, v, &err), GTEXT_JSON_OK)
+	    << (err.message ? err.message : "");
+	EXPECT_EQ(std::string(gtext_json_sink_buffer_data(&sink),
+	              gtext_json_sink_buffer_size(&sink)),
+	    std::string(src))
+	    << "a document parsed with NULL options did not round-trip";
+	gtext_json_sink_buffer_free(&sink);
+	gtext_json_error_free(&err);
+	gtext_json_free(v);
+}
+
+/* gtext_json_parse_multiple() shares json_parse_internal(), so it shares the
+   fix; asserted rather than assumed. */
+TEST(JsonNullOptions, ParseMultipleAlsoGetsTheDefaults) {
+	const char * src = "1 2.5 3";
+	size_t consumed = 0;
+	size_t total = 0;
+	int seen = 0;
+	while (total < std::strlen(src)) {
+		GTEXT_JSON_Value * v = gtext_json_parse_multiple(
+		    src + total, std::strlen(src) - total, nullptr, nullptr, &consumed);
+		if (!v) {
+			break;
+		}
+		const char * lex = nullptr;
+		size_t lex_len = 0;
+		EXPECT_EQ(gtext_json_get_number_lexeme(v, &lex, &lex_len),
+		    GTEXT_JSON_OK)
+		    << "value " << seen << " had no lexeme";
+		gtext_json_free(v);
+		total += consumed;
+		seen++;
+		if (consumed == 0) {
+			break;
+		}
+	}
+	EXPECT_EQ(seen, 3);
+}
+
 TEST(JsonStreamDom, TheTwoParsersAgreeOnWhatJsonIs) {
 	struct Case {
 		const char * src;

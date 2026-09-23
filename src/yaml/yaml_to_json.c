@@ -170,6 +170,9 @@ typedef struct {
 	 * It still means unlimited when it happens. */
 	size_t nodes_visited;
 	size_t max_nodes;
+	/* The allocator the walk's own stack comes from: the document's, so the
+	   conversion is accounted to the same place the document is. */
+	const GTEXT_Allocator *alloc;
 } yaml_to_json_context;
 
 static bool yaml_tag_is_json_compatible(const char *tag)
@@ -312,7 +315,7 @@ static bool yaml_to_json_stack_push(
 {
 	if (ctx->stack_len == ctx->stack_cap) {
 		size_t new_cap = ctx->stack_cap == 0 ? 16 : ctx->stack_cap * 2;
-		const GTEXT_YAML_Node **new_stack = (const GTEXT_YAML_Node **)realloc(
+		const GTEXT_YAML_Node **new_stack = (const GTEXT_YAML_Node **)gtext_allocator_realloc(ctx->alloc, 
 			ctx->stack,
 			new_cap * sizeof(*new_stack)
 		);
@@ -874,6 +877,10 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_options(
 	}
 
 	ctx.options = options ? *options : gtext_yaml_to_json_options_default();
+	/* The document's allocator, so what the walk builds is accounted to the
+	   same place the document is. */
+	const GTEXT_Allocator *alloc = yaml_doc->ctx->alloc;
+	ctx.alloc = alloc;
 	/* The document keeps the options it was parsed with. */
 	ctx.max_nodes = yaml_doc->options.max_alias_expansion;
 
@@ -882,7 +889,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_options(
 			out_err->code = GTEXT_YAML_E_INVALID;
 			out_err->message = "cannot convert: YAML merge keys (<<) are not compatible with JSON";
 		}
-		free(ctx.stack);
+		gtext_allocator_free(alloc, ctx.stack);
 		return GTEXT_YAML_E_INVALID;
 	}
 
@@ -895,15 +902,15 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_to_json_with_options(
 				out_err->code = GTEXT_YAML_E_OOM;
 				out_err->message = "out of memory creating JSON null for empty document";
 			}
-			free(ctx.stack);
+			gtext_allocator_free(alloc, ctx.stack);
 			return GTEXT_YAML_E_OOM;
 		}
-		free(ctx.stack);
+		gtext_allocator_free(alloc, ctx.stack);
 		return GTEXT_YAML_OK;
 	}
 
 	status = convert_node(root, out_json, &ctx, out_err);
-	free(ctx.stack);
+	gtext_allocator_free(alloc, ctx.stack);
 	return status;
 }
 

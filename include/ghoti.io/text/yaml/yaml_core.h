@@ -34,6 +34,7 @@
 #ifndef GHOTI_IO_GTEXT_YAML_YAML_CORE_H
 #define GHOTI_IO_GTEXT_YAML_YAML_CORE_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -384,6 +385,35 @@ typedef struct {
   void * warning_user_data;
   bool warnings_as_errors;
   unsigned int warning_mask;
+
+  /**
+   * Allocator for everything the parse produces, or NULL for
+   * gtext_allocator_default().
+   *
+   * The document records it, so gtext_yaml_free() releases through the same
+   * allocator without the caller passing it again. It must stay valid for the
+   * lifetime of the document the parse returns.
+   *
+   * Covered: every parse entry point - gtext_yaml_parse(),
+   * gtext_yaml_parse_all(), gtext_yaml_parse_file() and the streaming parser,
+   * the pull reader and the scanner behind them - the arena and every node,
+   * scalar, key, anchor, tag and comment in it, the alias table, and the
+   * parser's and scanner's own transient buffers. Also the DOM manipulation
+   * functions afterwards, each using the allocator of the document it works
+   * on, and gtext_yaml_to_json() for what it builds.
+   *
+   * Not covered, and still using the C library, exactly as in JSON and CSV:
+   *
+   * - GTEXT_YAML_Error and the strings it owns, released by
+   *   gtext_yaml_error_free(), which is handed an error and no allocator.
+   * - The writer. gtext_yaml_write() and the emitter take write options, which
+   *   have no allocator, as the JSON and CSV writers do not.
+   *
+   * Neither is ever freed through a caller's allocator or vice versa, so there
+   * is no path on which the two mix. `make check-allocators` is what keeps that
+   * true.
+   */
+  const GTEXT_Allocator * allocator;
 } GTEXT_YAML_Parse_Options;
 
 /**

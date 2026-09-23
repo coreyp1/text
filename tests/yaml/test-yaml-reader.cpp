@@ -7,7 +7,7 @@ extern "C" {
 
 TEST(YamlReader, PositionTracking) {
   const char * s = "line1\nline2\nlast";
-  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s));
+  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s), nullptr);
   ASSERT_NE(r, nullptr);
 
   while (gtext_yaml_char_reader_peek(r) != -1) {
@@ -27,7 +27,7 @@ TEST(YamlReader, PositionTracking) {
 
 TEST(YamlReader, PositionTrackingCrLf) {
   const char * s = "line1\r\nline2";
-  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s));
+  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s), nullptr);
   ASSERT_NE(r, nullptr);
 
   while (gtext_yaml_char_reader_peek(r) != -1) {
@@ -46,7 +46,7 @@ TEST(YamlReader, PositionTrackingCrLf) {
 
 TEST(YamlReader, PositionTrackingCr) {
   const char * s = "line1\rline2";
-  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s));
+  GTEXT_YAML_CharReader * r = gtext_yaml_char_reader_new(s, strlen(s), nullptr);
   ASSERT_NE(r, nullptr);
 
   while (gtext_yaml_char_reader_peek(r) != -1) {

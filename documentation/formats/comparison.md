@@ -25,7 +25,7 @@ Ordered by how many callers it stops, not by how hard it is to fix.
 | 1 | ~~No `LICENSE` file~~ **fixed suite-wide**: all nine are LGPL-3.0-only | suite-wide | was: blocks all adoption |
 | 2 | ~~JSON Schema silently ignores 14 standard keywords~~ **fixed** | JSON | was: silently wrong results |
 | 3 | ~~The `release` build is compiled `-O0`~~ **fixed**: release is `-O2`, debug `-O0` | suite-wide | was: 1.5x to 2.1x slower |
-| 4 | No custom allocator hook in any format | JSON parse and CSV done; YAML open | blocks embedded and arena callers |
+| 4 | ~~No custom allocator hook in any format~~ **all three done** | JSON parse, CSV, YAML | was: blocks embedded and arena callers |
 | 5 | JSON parses at roughly a third of Python's stdlib speed | JSON | loses on throughput |
 | 6 | ~~No pull/iterator reader for JSON or CSV~~ **both done** | JSON, CSV | was: forces an inverted control flow |
 | 7 | ~~Thread-safety is documented for CSV only~~ **fixed** | JSON, YAML | was: unanswerable question |
@@ -239,7 +239,7 @@ that would settle it.
 
 ---
 
-## 5. No custom allocator hook - JSON parse and CSV done, YAML open
+## 5. No custom allocator hook - all three formats done
 
 **Partly addressed.** `GTEXT_JSON_Parse_Options::allocator` routes the whole
 JSON parse path - the arena, every DOM node, key and string in it, the
@@ -263,10 +263,22 @@ the gate and a balanced-count test reject it. The first plant found a hole in
 the tests rather than in the code, which is why there is now a test for
 parsing zero bytes.
 
-Still open: the JSON writer, streaming parser, Pointer, Patch and Schema; all
-of YAML; and, in both formats deliberately, the error structures and the
-writers - each a separate entry point on the C library, with no path on which
-the two allocators mix.
+`GTEXT_YAML_Parse_Options::allocator` completes the set, covering every parse
+entry point, the scanner, the arena, the alias table, the DOM manipulation
+functions and `gtext_yaml_to_json()` - around 280 sites across twelve files.
+
+Still open: the JSON writer, streaming parser, Pointer, Patch and Schema. And,
+in all three formats deliberately, the error structures and the writers - each a
+separate entry point on the C library, with no path on which the two allocators
+mix. YAML has one further exemption of its own: `gtext_yaml_parse_all()`'s array
+of document pointers, because its published contract has the caller release that
+with `free()` and routing it through an allocator would make the documented call
+corrupt the heap.
+
+The gate grew during this work. It matched `malloc`, `calloc`, `realloc` and
+`free`, which let fifteen `strdup()` calls keep allocating from the C library
+while the frees beside them were converted; the tracking allocator's guard word
+caught it, and the gate matches `strdup` and `strndup` now.
 
 `GTEXT_Allocator` **is** cutil's `GCU_Allocator`, under a local name, which is
 what `image`, `model` and `compress` do. For a while `text` declared its own
@@ -383,13 +395,18 @@ real advantages over cJSON and jansson.
   on the official suite's `required` set with no schema refused. Three
   dependencies remain rather than three gaps - see the
   \ref format_json "JSON page".
-- A custom allocator.
+- A custom allocator beyond the parse: `GTEXT_JSON_Parse_Options::allocator`
+  covers parsing, and the writer, streaming parser, Pointer, Patch and Schema
+  each have an entry point of their own that takes none. CSV and YAML are now
+  complete; JSON is the one with parts left.
 - ~~NFC normalization.~~ **Done.** `normalize_unicode` normalizes every string
   the lexer decodes, object names included, so duplicate-name detection sees
   normalized names. It requires `validate_utf8` and turns off in-situ for
   strings, both deliberately - see the \ref format_json "JSON page".
 - JSON5 proper, as distinct from the JSONC subset that is supported.
-- Conversion to YAML. The reverse direction exists.
+- ~~Conversion to YAML.~~ **Added**: `gtext_json_to_yaml()`. Types are preserved
+  rather than re-resolved, which is the whole difficulty - a JSON string reading
+  `true` or `42` must not become a boolean or an integer.
 - SIMD-accelerated scanning, which is what the throughput gap is really about.
 
 ### CSV
@@ -473,9 +490,11 @@ file's comments is a case where this library is the better choice outright.
 - Schema validation. The `GTEXT_YAML_Schema` option selects an implicit typing
   schema - failsafe, JSON, core - and is not a validator. There is no
   equivalent of the JSON Schema engine, nor of Kwalify or Rx.
-- A custom allocator.
+- ~~A custom allocator.~~ **Done**: `GTEXT_YAML_Parse_Options::allocator`, covering
+  every parse entry point, the scanner, the arena and the DOM functions.
 - In-situ zero-copy parsing, which JSON and CSV both offer.
-- Conversion from JSON, the reverse of the supported direction.
+- ~~Conversion from JSON, the reverse of the supported direction.~~ **Added**:
+  `gtext_json_to_yaml()`.
 - ~~A documented thread-safety position.~~ **Fixed**, and it was already fixed
   when this line still said otherwise - section 7 above closed it, and
   `documentation/modules/YAML.md` section 16 is the per-module statement.

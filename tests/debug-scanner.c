@@ -6,7 +6,7 @@
 
 int main(void) {
     const char *input = "foo - bar";
-    GTEXT_YAML_Scanner *s = gtext_yaml_scanner_new();
+    GTEXT_YAML_Scanner *s = gtext_yaml_scanner_new(NULL);
     if (!s) { fprintf(stderr, "scanner new failed\n"); return 1; }
     if (!gtext_yaml_scanner_feed(s, input, strlen(input))) { fprintf(stderr, "feed fail\n"); return 1; }
     GTEXT_YAML_Token tok;

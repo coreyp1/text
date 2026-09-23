@@ -46,10 +46,10 @@ static size_t align_size(size_t size, size_t alignment) {
 }
 
 /* Create a new arena block */
-static yaml_arena_block *block_create(size_t size) {
+static yaml_arena_block *block_create(size_t size, const GTEXT_Allocator *alloc) {
 	/* Allocate block header + data in one allocation */
 	size_t total = sizeof(yaml_arena_block) - 1 + size;  /* -1 for data[1] already counted */
-	yaml_arena_block *block = (yaml_arena_block *)malloc(total);
+	yaml_arena_block *block = (yaml_arena_block *)gtext_allocator_malloc(alloc, total);
 	if (!block) return NULL;
 	
 	block->next = NULL;
@@ -59,14 +59,18 @@ static yaml_arena_block *block_create(size_t size) {
 }
 
 /* Create new arena */
-yaml_arena *yaml_arena_new(void) {
-	yaml_arena *arena = (yaml_arena *)malloc(sizeof(yaml_arena));
+yaml_arena *yaml_arena_new(const GTEXT_Allocator *alloc) {
+	yaml_arena *arena = (yaml_arena *)gtext_allocator_malloc(alloc, sizeof(yaml_arena));
 	if (!arena) return NULL;
-	
+
+	/* Recorded before the first block, so a failure below still frees through
+	   the allocator the block came from. */
+	arena->alloc = alloc;
+
 	/* Create initial block */
-	yaml_arena_block *block = block_create(INITIAL_BLOCK_SIZE);
+	yaml_arena_block *block = block_create(INITIAL_BLOCK_SIZE, alloc);
 	if (!block) {
-		free(arena);
+		gtext_allocator_free(alloc, arena);
 		return NULL;
 	}
 	
@@ -79,16 +83,20 @@ yaml_arena *yaml_arena_new(void) {
 /* Free arena and all blocks */
 void yaml_arena_free(yaml_arena *arena) {
 	if (!arena) return;
-	
+
+	/* Captured before the loop: the last free below releases the structure this
+	   was read from, so reading it afterwards is a use-after-free. */
+	const GTEXT_Allocator *alloc = arena->alloc;
+
 	/* Free all blocks */
 	yaml_arena_block *block = arena->first;
 	while (block) {
 		yaml_arena_block *next = block->next;
-		free(block);
+		gtext_allocator_free(alloc, block);
 		block = next;
 	}
-	
-	free(arena);
+
+	gtext_allocator_free(alloc, arena);
 }
 
 /* Allocate from arena with alignment */
@@ -126,7 +134,7 @@ void *yaml_arena_alloc(yaml_arena *arena, size_t size, size_t align) {
 	}
 	
 	/* Create new block */
-	yaml_arena_block *new_block = block_create(next_block_size);
+	yaml_arena_block *new_block = block_create(next_block_size, arena->alloc);
 	if (!new_block) return NULL;  /* OOM */
 	
 	/* Link new block */

@@ -86,12 +86,23 @@ GTEXT_INTERNAL_API int gtext_utf8_validate(const char *buf, size_t len)
 }
 
 /* Dynamic buffer implementation */
-GTEXT_INTERNAL_API int gtext_yaml_dynbuf_init(GTEXT_YAML_DynBuf *b)
+GTEXT_INTERNAL_API char *gtext_yaml_strdup(const char *s, const GTEXT_Allocator *alloc)
+{
+  if (!s) return NULL;
+  size_t len = strlen(s);
+  char *out = (char *)gtext_allocator_malloc(alloc, len + 1);
+  if (!out) return NULL;
+  memcpy(out, s, len + 1);
+  return out;
+}
+
+GTEXT_INTERNAL_API int gtext_yaml_dynbuf_init(GTEXT_YAML_DynBuf *b, const GTEXT_Allocator *alloc)
 {
   if (!b) return 0;
   b->data = NULL;
   b->len = 0;
   b->cap = 0;
+  b->alloc = alloc;
   return 1;
 }
 
@@ -99,7 +110,7 @@ GTEXT_INTERNAL_API void gtext_yaml_dynbuf_free(GTEXT_YAML_DynBuf *b)
 {
   if (!b) return;
   if (b->data) {
-    free(b->data);
+    gtext_allocator_free(b->alloc, b->data);
     b->data = NULL;
   }
   b->len = 0;
@@ -110,7 +121,7 @@ static int dyn_grow(GTEXT_YAML_DynBuf *b, size_t min_cap)
 {
   size_t new_cap = b->cap ? b->cap * 2 : 64;
   if (new_cap < min_cap) new_cap = min_cap;
-  char *p = (char *)realloc(b->data, new_cap);
+  char *p = (char *)gtext_allocator_realloc(b->alloc, b->data, new_cap);
   if (!p) return 0;
   b->data = p;
   b->cap = new_cap;

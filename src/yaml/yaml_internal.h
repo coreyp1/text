@@ -26,6 +26,7 @@
 #ifndef GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H
 #define GHOTI_IO_GTEXT_SRC_YAML_YAML_INTERNAL_H
 
+#include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
 
 #include <stdlib.h>
@@ -102,7 +103,8 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify(
 	size_t len,
 	bool *bool_out,
 	int64_t *int_out,
-	double *float_out
+	double *float_out,
+	const GTEXT_Allocator *alloc
 );
 
 /* The same, under a named schema and version.  The one above is this with the
@@ -114,7 +116,10 @@ GTEXT_INTERNAL_API GTEXT_YAML_Node_Type gtext_yaml_plain_text_classify_as(
 	bool yaml_1_1,
 	bool *bool_out,
 	int64_t *int_out,
-	double *float_out
+	double *float_out,
+	/* The scratch buffer the numeric probes use. The writer passes NULL - it
+	   is a separate entry point with no allocator, as in JSON and CSV. */
+	const GTEXT_Allocator *alloc
 );
 
 /* Whether converting @p f to int64_t has a defined answer.
@@ -139,7 +144,8 @@ typedef struct GTEXT_YAML_CharReader GTEXT_YAML_CharReader;
 
 GTEXT_INTERNAL_API GTEXT_YAML_CharReader *gtext_yaml_char_reader_new(
 	const char *data,
-	size_t len
+	size_t len,
+	const GTEXT_Allocator *alloc
 );
 GTEXT_INTERNAL_API void gtext_yaml_char_reader_free(GTEXT_YAML_CharReader *r);
 GTEXT_INTERNAL_API int gtext_yaml_char_reader_peek(GTEXT_YAML_CharReader *r);
@@ -163,9 +169,29 @@ typedef struct {
 	char *data;
 	size_t len;
 	size_t cap;
+	/* The allocator `data` came from. A parameter of the initialiser rather
+	   than something a caller assigns afterwards: dynbuf_grow() reaches it
+	   from here without a signature change, and there is no window in which
+	   the buffer exists without knowing where its memory comes from. */
+	const GTEXT_Allocator *alloc;
 } GTEXT_YAML_DynBuf;
 
-GTEXT_INTERNAL_API int gtext_yaml_dynbuf_init(GTEXT_YAML_DynBuf *b);
+/**
+ * @brief strdup through an allocator.
+ *
+ * Exists because strdup() is invisible to the eye and was invisible to
+ * make check-allocators as well: the gate matched malloc, calloc, realloc and
+ * free, so fifteen strdup() calls in the parser and the stream kept allocating
+ * from the C library while the frees beside them were converted. That is a free
+ * through the wrong allocator, which is heap corruption - caught by the
+ * tracking allocator's guard word rather than by review. The gate matches
+ * strdup and strndup now too.
+ *
+ * NULL in gives NULL out, which is what every call site here wants.
+ */
+GTEXT_INTERNAL_API char *gtext_yaml_strdup(const char *s, const GTEXT_Allocator *alloc);
+
+GTEXT_INTERNAL_API int gtext_yaml_dynbuf_init(GTEXT_YAML_DynBuf *b, const GTEXT_Allocator *alloc);
 GTEXT_INTERNAL_API void gtext_yaml_dynbuf_free(GTEXT_YAML_DynBuf *b);
 GTEXT_INTERNAL_API int gtext_yaml_dynbuf_append(GTEXT_YAML_DynBuf *b, const char *data, size_t len);
 
@@ -202,7 +228,7 @@ typedef struct {
 typedef struct GTEXT_YAML_Scanner GTEXT_YAML_Scanner;
 
 /* Streaming scanner API: create empty scanner, feed chunks, mark finish. */
-GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(void);
+GTEXT_INTERNAL_API GTEXT_YAML_Scanner *gtext_yaml_scanner_new(const GTEXT_Allocator *alloc);
 GTEXT_INTERNAL_API void gtext_yaml_scanner_free(GTEXT_YAML_Scanner *s);
 GTEXT_INTERNAL_API int gtext_yaml_scanner_feed(GTEXT_YAML_Scanner *s, const char *data, size_t len);
 GTEXT_INTERNAL_API void gtext_yaml_scanner_finish(GTEXT_YAML_Scanner *s);
@@ -258,6 +284,12 @@ typedef struct yaml_arena_block {
 typedef struct yaml_arena {
 	yaml_arena_block *first;    /* First block in chain */
 	yaml_arena_block *current;  /* Current allocation block */
+	/* The allocator every block came from, and the one they go back to.
+	   Held here rather than only on the context because yaml_arena_free()
+	   releases the structure it was read from, so it has to be captured
+	   before the loop - and because freeing a block through the wrong
+	   allocator corrupts the heap rather than leaking. */
+	const GTEXT_Allocator *alloc;
 	size_t block_size;          /* Size of new blocks (grows exponentially) */
 } yaml_arena;
 
@@ -308,15 +340,19 @@ typedef struct yaml_context {
 	size_t line_cache_upto;
 
 	size_t node_count;              /* Total nodes allocated (statistics) */
+
+	/* The caller's allocator, or NULL for gtext_allocator_default(). Every
+	   allocation a document owns is reachable from here. */
+	const GTEXT_Allocator *alloc;
 } yaml_context;
 
 /* Arena API */
-GTEXT_INTERNAL_API yaml_arena *yaml_arena_new(void);
+GTEXT_INTERNAL_API yaml_arena *yaml_arena_new(const GTEXT_Allocator *alloc);
 GTEXT_INTERNAL_API void yaml_arena_free(yaml_arena *arena);
 GTEXT_INTERNAL_API void *yaml_arena_alloc(yaml_arena *arena, size_t size, size_t align);
 
 /* Context API */
-GTEXT_INTERNAL_API yaml_context *yaml_context_new(void);
+GTEXT_INTERNAL_API yaml_context *yaml_context_new(const GTEXT_Allocator *alloc);
 GTEXT_INTERNAL_API void yaml_context_free(yaml_context *ctx);
 GTEXT_INTERNAL_API void yaml_context_set_decoded_input(yaml_context *ctx, const char *buf, size_t len);
 

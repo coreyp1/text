@@ -42,6 +42,9 @@ typedef struct {
 } yaml_event_queue;
 
 struct GTEXT_YAML_Reader {
+	/* The caller's allocator: the queue and every copied string come from it,
+	   matching the JSON and CSV readers. */
+	const GTEXT_Allocator *alloc;
 	GTEXT_YAML_Stream *stream;
 	yaml_event_queue queue;
 	GTEXT_YAML_Event last_event;
@@ -85,49 +88,49 @@ static void event_zero(GTEXT_YAML_Event *event) {
 	memset(event, 0, sizeof(*event));
 }
 
-static char *dup_len(const char *src, size_t len) {
+static char *dup_len(const char *src, size_t len, const GTEXT_Allocator *alloc) {
 	if (!src) return NULL;
-	char *out = (char *)malloc(len + 1);
+	char *out = (char *)gtext_allocator_malloc(alloc, len + 1);
 	if (!out) return NULL;
 	memcpy(out, src, len);
 	out[len] = '\0';
 	return out;
 }
 
-static char *dup_str(const char *src) {
+static char *dup_str(const char *src, const GTEXT_Allocator *alloc) {
 	if (!src) return NULL;
 	size_t len = strlen(src);
-	return dup_len(src, len);
+	return dup_len(src, len, alloc);
 }
 
-static void event_free(GTEXT_YAML_Event *event) {
+static void event_free(GTEXT_YAML_Event *event, const GTEXT_Allocator *alloc) {
 	if (!event) return;
 
 	switch (event->type) {
 		case GTEXT_YAML_EVENT_SCALAR:
-			free((void *)event->data.scalar.ptr);
+			gtext_allocator_free(alloc, (void *)event->data.scalar.ptr);
 			break;
 		case GTEXT_YAML_EVENT_DIRECTIVE:
-			free((void *)event->data.directive.name);
-			free((void *)event->data.directive.value);
-			free((void *)event->data.directive.value2);
+			gtext_allocator_free(alloc, (void *)event->data.directive.name);
+			gtext_allocator_free(alloc, (void *)event->data.directive.value);
+			gtext_allocator_free(alloc, (void *)event->data.directive.value2);
 			break;
 		case GTEXT_YAML_EVENT_COMMENT:
-			free((void *)event->data.comment.ptr);
+			gtext_allocator_free(alloc, (void *)event->data.comment.ptr);
 			break;
 		case GTEXT_YAML_EVENT_ALIAS:
-			free((void *)event->data.alias_name);
+			gtext_allocator_free(alloc, (void *)event->data.alias_name);
 			break;
 		default:
 			break;
 	}
 
-	free((void *)event->anchor);
-	free((void *)event->tag);
+	gtext_allocator_free(alloc, (void *)event->anchor);
+	gtext_allocator_free(alloc, (void *)event->tag);
 	event_zero(event);
 }
 
-static bool queue_reserve(yaml_event_queue *queue, size_t needed) {
+static bool queue_reserve(yaml_event_queue *queue, size_t needed, const GTEXT_Allocator *alloc) {
 	if (!queue) return false;
 	if (queue->capacity >= needed) return true;
 
@@ -137,7 +140,7 @@ static bool queue_reserve(yaml_event_queue *queue, size_t needed) {
 		new_cap *= 2;
 	}
 
-	GTEXT_YAML_Event *items = (GTEXT_YAML_Event *)calloc(new_cap, sizeof(*items));
+	GTEXT_YAML_Event *items = (GTEXT_YAML_Event *)gtext_allocator_calloc(alloc, new_cap, sizeof(*items));
 	if (!items) return false;
 
 	for (size_t i = 0; i < queue->count; i++) {
@@ -145,16 +148,16 @@ static bool queue_reserve(yaml_event_queue *queue, size_t needed) {
 		items[i] = queue->items[idx];
 	}
 
-	free(queue->items);
+	gtext_allocator_free(alloc, queue->items);
 	queue->items = items;
 	queue->capacity = new_cap;
 	queue->head = 0;
 	return true;
 }
 
-static bool queue_push(yaml_event_queue *queue, const GTEXT_YAML_Event *event) {
+static bool queue_push(yaml_event_queue *queue, const GTEXT_YAML_Event *event, const GTEXT_Allocator *alloc) {
 	if (!queue || !event) return false;
-	if (!queue_reserve(queue, queue->count + 1)) return false;
+	if (!queue_reserve(queue, queue->count + 1, alloc)) return false;
 
 	size_t idx = (queue->head + queue->count) % queue->capacity;
 	queue->items[idx] = *event;
@@ -170,13 +173,13 @@ static bool queue_pop(yaml_event_queue *queue, GTEXT_YAML_Event *event) {
 	return true;
 }
 
-static void queue_clear(yaml_event_queue *queue) {
+static void queue_clear(yaml_event_queue *queue, const GTEXT_Allocator *alloc) {
 	if (!queue || !queue->items) return;
 	for (size_t i = 0; i < queue->count; i++) {
 		size_t idx = (queue->head + i) % queue->capacity;
-		event_free(&queue->items[idx]);
+		event_free(&queue->items[idx], alloc);
 	}
-	free(queue->items);
+	gtext_allocator_free(alloc, queue->items);
 	queue->items = NULL;
 	queue->capacity = 0;
 	queue->count = 0;
@@ -187,6 +190,7 @@ static GTEXT_YAML_Status queue_event_copy(
 	GTEXT_YAML_Reader *reader,
 	const GTEXT_YAML_Event *event
 ) {
+	const GTEXT_Allocator *alloc = reader ? reader->alloc : NULL;
 	GTEXT_YAML_Event copy;
 	event_zero(&copy);
 	copy.type = event->type;
@@ -196,51 +200,51 @@ static GTEXT_YAML_Status queue_event_copy(
 	copy.scalar_style = event->scalar_style;
 
 	if (event->anchor) {
-		copy.anchor = dup_str(event->anchor);
+		copy.anchor = dup_str(event->anchor, alloc);
 		if (!copy.anchor) return GTEXT_YAML_E_OOM;
 	}
 
 	if (event->tag) {
-		copy.tag = dup_str(event->tag);
+		copy.tag = dup_str(event->tag, alloc);
 		if (!copy.tag) {
-			event_free(&copy);
+			event_free(&copy, alloc);
 			return GTEXT_YAML_E_OOM;
 		}
 	}
 
 	switch (event->type) {
 		case GTEXT_YAML_EVENT_SCALAR:
-			copy.data.scalar.ptr = dup_len(event->data.scalar.ptr, event->data.scalar.len);
+			copy.data.scalar.ptr = dup_len(event->data.scalar.ptr, event->data.scalar.len, alloc);
 			if (!copy.data.scalar.ptr && event->data.scalar.len > 0) {
-				event_free(&copy);
+				event_free(&copy, alloc);
 				return GTEXT_YAML_E_OOM;
 			}
 			copy.data.scalar.len = event->data.scalar.len;
 			break;
 		case GTEXT_YAML_EVENT_DIRECTIVE:
-			copy.data.directive.name = dup_str(event->data.directive.name);
-			copy.data.directive.value = dup_str(event->data.directive.value);
-			copy.data.directive.value2 = dup_str(event->data.directive.value2);
+			copy.data.directive.name = dup_str(event->data.directive.name, alloc);
+			copy.data.directive.value = dup_str(event->data.directive.value, alloc);
+			copy.data.directive.value2 = dup_str(event->data.directive.value2, alloc);
 			if ((event->data.directive.name && !copy.data.directive.name) ||
 				(event->data.directive.value && !copy.data.directive.value) ||
 				(event->data.directive.value2 && !copy.data.directive.value2)) {
-				event_free(&copy);
+				event_free(&copy, alloc);
 				return GTEXT_YAML_E_OOM;
 			}
 			break;
 		case GTEXT_YAML_EVENT_COMMENT:
-			copy.data.comment.ptr = dup_len(event->data.comment.ptr, event->data.comment.len);
+			copy.data.comment.ptr = dup_len(event->data.comment.ptr, event->data.comment.len, alloc);
 			copy.data.comment.len = event->data.comment.len;
 			copy.data.comment.inline_comment = event->data.comment.inline_comment;
 			if (!copy.data.comment.ptr && event->data.comment.len > 0) {
-				event_free(&copy);
+				event_free(&copy, alloc);
 				return GTEXT_YAML_E_OOM;
 			}
 			break;
 		case GTEXT_YAML_EVENT_ALIAS:
-			copy.data.alias_name = dup_str(event->data.alias_name);
+			copy.data.alias_name = dup_str(event->data.alias_name, alloc);
 			if (!copy.data.alias_name && event->data.alias_name) {
-				event_free(&copy);
+				event_free(&copy, alloc);
 				return GTEXT_YAML_E_OOM;
 			}
 			break;
@@ -251,8 +255,8 @@ static GTEXT_YAML_Status queue_event_copy(
 			break;
 	}
 
-	if (!queue_push(&reader->queue, &copy)) {
-		event_free(&copy);
+	if (!queue_push(&reader->queue, &copy, alloc)) {
+		event_free(&copy, alloc);
 		return GTEXT_YAML_E_OOM;
 	}
 
@@ -274,21 +278,27 @@ static GTEXT_YAML_Status reader_callback(
 GTEXT_API GTEXT_YAML_Reader *gtext_yaml_reader_new(
 	const GTEXT_YAML_Parse_Options *opts
 ) {
-	GTEXT_YAML_Reader *reader = (GTEXT_YAML_Reader *)calloc(1, sizeof(*reader));
+	/* Read before the structure is allocated: it is the first thing the
+	   caller's allocator has to own. */
+	const GTEXT_Allocator *alloc = opts ? opts->allocator : NULL;
+
+	GTEXT_YAML_Reader *reader =
+		(GTEXT_YAML_Reader *)gtext_allocator_calloc(alloc, 1, sizeof(*reader));
 	if (!reader) return NULL;
+	reader->alloc = alloc;
 
 	reader->stream = gtext_yaml_stream_new(opts, reader_callback, reader);
 	if (!reader->stream) {
-		free(reader);
+		gtext_allocator_free(alloc, reader);
 		return NULL;
 	}
 
 	GTEXT_YAML_Event start_event;
 	event_zero(&start_event);
 	start_event.type = GTEXT_YAML_EVENT_STREAM_START;
-	if (!queue_push(&reader->queue, &start_event)) {
+	if (!queue_push(&reader->queue, &start_event, alloc)) {
 		gtext_yaml_stream_free(reader->stream);
-		free(reader);
+		gtext_allocator_free(alloc, reader);
 		return NULL;
 	}
 
@@ -301,6 +311,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_feed(
 	size_t len,
 	GTEXT_YAML_Error *out_err
 ) {
+	const GTEXT_Allocator *alloc = reader ? reader->alloc : NULL;
 	if (!reader) {
 		if (out_err) {
 			out_err->code = GTEXT_YAML_E_INVALID;
@@ -332,7 +343,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_feed(
 			GTEXT_YAML_Event end_event;
 			event_zero(&end_event);
 			end_event.type = GTEXT_YAML_EVENT_STREAM_END;
-			if (!queue_push(&reader->queue, &end_event)) {
+			if (!queue_push(&reader->queue, &end_event, alloc)) {
 				if (out_err) {
 					out_err->code = GTEXT_YAML_E_OOM;
 					out_err->message = "Out of memory queueing stream end";
@@ -358,6 +369,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_next(
 	GTEXT_YAML_Event *out_event,
 	GTEXT_YAML_Error *out_err
 ) {
+	const GTEXT_Allocator *alloc = reader ? reader->alloc : NULL;
 	if (!reader || !out_event) {
 		if (out_err) {
 			out_err->code = GTEXT_YAML_E_INVALID;
@@ -367,7 +379,7 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_next(
 	}
 
 	if (reader->has_last_event) {
-		event_free(&reader->last_event);
+		event_free(&reader->last_event, alloc);
 		reader->has_last_event = false;
 	}
 
@@ -388,11 +400,13 @@ GTEXT_API GTEXT_YAML_Status gtext_yaml_reader_next(
 
 GTEXT_API void gtext_yaml_reader_free(GTEXT_YAML_Reader *reader) {
 	if (!reader) return;
+	/* Read before the structure it lives in is released. */
+	const GTEXT_Allocator *alloc = reader->alloc;
 	if (reader->has_last_event) {
-		event_free(&reader->last_event);
+		event_free(&reader->last_event, alloc);
 		reader->has_last_event = false;
 	}
-	queue_clear(&reader->queue);
+	queue_clear(&reader->queue, alloc);
 	gtext_yaml_stream_free(reader->stream);
-	free(reader);
+	gtext_allocator_free(alloc, reader);
 }

@@ -138,6 +138,7 @@
 #define gtext_csv_reader_next GHOTIIO_TEXT(gtext_csv_reader_next)
 #define gtext_csv_reader_free GHOTIIO_TEXT(gtext_csv_reader_free)
 #define gtext_csv_sniff GHOTIIO_TEXT(gtext_csv_sniff)
+#define gtext_json_to_yaml GHOTIIO_TEXT(gtext_json_to_yaml)
 #define GTEXT_JSON_Reader GHOTIIO_TEXT(GTEXT_JSON_Reader)
 #define gtext_json_reader_new GHOTIIO_TEXT(gtext_json_reader_new)
 #define gtext_json_reader_feed GHOTIIO_TEXT(gtext_json_reader_feed)
