@@ -196,6 +196,58 @@ typedef struct {
 } GTEXT_CSV_Parse_Options;
 
 /**
+ * @brief When the writer puts quotes around a field
+ *
+ * The four policies Python's `csv` module names, which is where callers will
+ * have met them. `GTEXT_CSV_QUOTE_MINIMAL` is zero, so a zero-initialized
+ * GTEXT_CSV_Write_Options keeps the behavior this writer has always had.
+ *
+ * The older booleans still work and are not going away. `quote_all_fields`
+ * wins over this field when set, so code written before this enum existed
+ * behaves as it did; the rest are read where the policy leaves room for them,
+ * which each value below states.
+ */
+typedef enum {
+  /// Quote only where the field requires it: it holds the delimiter, the quote
+  /// character, a CR or an LF. `quote_empty_fields` and `quote_if_needed` both
+  /// apply. This is the default and is RFC 4180's own rule.
+  GTEXT_CSV_QUOTE_MINIMAL = 0,
+
+  /// Quote every field, for a consumer fussier than the format.
+  /// `quote_empty_fields` and `quote_if_needed` are not consulted.
+  GTEXT_CSV_QUOTE_ALL,
+
+  /// Quote every field whose text does not spell a number.
+  ///
+  /// **This is a question about the bytes, not about a type.** Nothing in this
+  /// module infers types - fields are bytes, deliberately - so where Python
+  /// asks whether the value it holds is an int or a float, this asks whether
+  /// the text would be read as a number. The grammar is exactly:
+  ///
+  ///     [+-]? ( digits ( '.' digits? )? | '.' digits ) ( [eE] [+-]? digits )?
+  ///
+  /// and it must match the whole field. No hex, no `inf`, no `nan`, no
+  /// surrounding space, and an empty field is not a number. `+1`, `007`, `1.`
+  /// and `.5` are, because spreadsheets write them.
+  ///
+  /// A field this policy would leave bare is still quoted when it needs to be,
+  /// so the policy can only ever add quotes. That matters when the dialect's
+  /// delimiter is one of the characters a number can contain - a `.` delimiter
+  /// makes `1.5` both numeric and unwritable bare.
+  GTEXT_CSV_QUOTE_NONNUMERIC,
+
+  /// Never quote. `quote_empty_fields` and `quote_if_needed` are not
+  /// consulted.
+  ///
+  /// A field that unquoted bytes cannot carry is refused with
+  /// GTEXT_CSV_E_UNQUOTABLE_FIELD rather than written wrongly - see that
+  /// status. Python raises in the same situation; there is no escape character
+  /// here that would be the alternative, because both escape modes concern the
+  /// quote character alone.
+  GTEXT_CSV_QUOTE_NONE
+} GTEXT_CSV_Quoting;
+
+/**
  * @brief CSV write options structure
  *
  * Controls serialization behavior including dialect, quoting rules, and
@@ -237,6 +289,13 @@ typedef struct {
                              ///< no record to terminate.
   bool trim_trailing_empty_fields; ///< Trim trailing empty fields from rows
                                    ///< (default false)
+
+  /// When to put quotes around a field. Default GTEXT_CSV_QUOTE_MINIMAL, which
+  /// is zero, so this is what a zero-initialized structure already asked for.
+  ///
+  /// Appended rather than grouped with the quoting booleans above so that the
+  /// offset of every field that was already here stays where it was.
+  GTEXT_CSV_Quoting quoting;
 } GTEXT_CSV_Write_Options;
 
 /**

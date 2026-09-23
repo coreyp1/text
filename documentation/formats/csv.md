@@ -121,6 +121,26 @@ quotes for escaping, and quoting applied only where the field requires it -
 or a line break. `quote_all_fields` and `quote_empty_fields` force the issue
 where a downstream consumer is fussier than the format.
 
+`quoting` names the policy as a whole, with the four values Python's `csv`
+module uses: `GTEXT_CSV_QUOTE_MINIMAL` (the default, and RFC 4180's own rule),
+`_ALL`, `_NONNUMERIC` and `_NONE`. `MINIMAL` is zero, so a zero-initialized
+options structure means what it always meant, and `quote_all_fields` still wins
+when set, so code written before the enum existed behaves as it did.
+
+`NONNUMERIC` asks a question about the bytes rather than about a type. Nothing
+in this module infers types - fields are bytes, deliberately - so where Python
+asks whether the value is an `int` or a `float`, this asks whether the text
+would be read as a number:
+
+    [+-]? ( digits ( '.' digits? )? | '.' digits ) ( [eE] [+-]? digits )?
+
+matched against the whole field. Narrower than C's `strtod`: no hex floats, no
+`inf`, no `nan`, no surrounding space, and an empty field is not a number.
+`+1`, `007`, `1.` and `.5` are, because spreadsheets write them. The policy can
+only ever add quotes, never remove them, which matters when the dialect's
+delimiter is one of the characters a number may contain - a `.` delimiter makes
+`1.5` both numeric and unwritable bare, so it is quoted.
+
 The newline string is configurable and `trim_trailing_empty_fields` exists
 for consumers that treat a trailing delimiter as an error.
 

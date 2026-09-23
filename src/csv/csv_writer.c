@@ -278,19 +278,102 @@ GTEXT_API void gtext_csv_sink_fixed_buffer_free(GTEXT_CSV_Sink * sink) {
 // Field Escaping and Quoting Logic
 // ============================================================================
 
+/*
+ * Does this field's text spell a number?
+ *
+ * GTEXT_CSV_QUOTE_NONNUMERIC's question, and it is deliberately about the bytes
+ * rather than about a type: this module infers no types, so where Python asks
+ * whether the value is an int or a float, there is no value here to ask about -
+ * only text. The grammar is stated in the header and is checked against the
+ * whole field:
+ *
+ *   [+-]? ( digits ( '.' digits? )? | '.' digits ) ( [eE] [+-]? digits )?
+ *
+ * Narrower than C's strtod on purpose. Hex floats, `inf` and `nan` are
+ * spellings a spreadsheet does not write and a reader would not agree about,
+ * and leaving them quoted costs nothing. `+1`, `007`, `1.` and `.5` are
+ * accepted, because spreadsheets do write those.
+ */
+static bool csv_field_is_number(const char * field_data, size_t field_len) {
+  if (!field_data || field_len == 0) {
+    return false;
+  }
+  size_t i = 0;
+  if (field_data[i] == '+' || field_data[i] == '-') {
+    i++;
+  }
+
+  size_t int_digits = 0;
+  while (i < field_len && field_data[i] >= '0' && field_data[i] <= '9') {
+    i++;
+    int_digits++;
+  }
+
+  size_t frac_digits = 0;
+  if (i < field_len && field_data[i] == '.') {
+    i++;
+    while (i < field_len && field_data[i] >= '0' && field_data[i] <= '9') {
+      i++;
+      frac_digits++;
+    }
+    // "." alone, and "+." , are not numbers; one side or the other needs a
+    // digit.
+    if (int_digits == 0 && frac_digits == 0) {
+      return false;
+    }
+  }
+  else if (int_digits == 0) {
+    return false;
+  }
+
+  if (i < field_len && (field_data[i] == 'e' || field_data[i] == 'E')) {
+    i++;
+    if (i < field_len && (field_data[i] == '+' || field_data[i] == '-')) {
+      i++;
+    }
+    size_t exp_digits = 0;
+    while (i < field_len && field_data[i] >= '0' && field_data[i] <= '9') {
+      i++;
+      exp_digits++;
+    }
+    if (exp_digits == 0) {
+      return false; // "1e" and "1e+" are not numbers
+    }
+  }
+
+  // Trailing anything at all disqualifies it: "1 ", "1abc", "1,000".
+  return i == field_len;
+}
+
 static bool csv_field_needs_quoting(const char * field_data, size_t field_len,
     const GTEXT_CSV_Write_Options * opts) {
   if (!opts) {
     return false;
   }
 
-  // quote_all_fields: always quote
-  if (opts->quote_all_fields) {
+  // quote_all_fields: always quote.  Checked before `quoting` so that code
+  // written before the policy enum existed keeps behaving as it did.
+  if (opts->quote_all_fields || opts->quoting == GTEXT_CSV_QUOTE_ALL) {
     return true;
+  }
+
+  // GTEXT_CSV_QUOTE_NONE consults nothing else.  What it cannot carry is
+  // refused in csv_write_field rather than quoted here.
+  if (opts->quoting == GTEXT_CSV_QUOTE_NONE) {
+    return false;
   }
 
   // quote_empty_fields: quote if empty
   if (opts->quote_empty_fields && field_len == 0) {
+    return true;
+  }
+
+  // Non-numeric text, when that is the policy.  A numeric field falls through
+  // to the scan below rather than returning false, so a dialect whose
+  // delimiter is one of `+-.eE0-9` still gets its quotes: this policy can only
+  // ever add them.
+  if (opts->quoting == GTEXT_CSV_QUOTE_NONNUMERIC
+      && !csv_field_is_number(field_data, field_len)) {
     return true;
   }
 

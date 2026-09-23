@@ -398,8 +398,12 @@ suite*, not in the parser, and it is now closed:
   several dialect options had been exercised, and three of them turned out to
   do nothing at all. See the \ref format_csv "CSV page".
 - Dialect sniffing, equivalent to Python's `csv.Sniffer`.
-- Quoting policies beyond a `quote_all_fields` boolean. Python offers minimal,
-  all, non-numeric and none; only the first two are reachable here.
+- ~~Quoting policies beyond a `quote_all_fields` boolean.~~ **Added**:
+  `GTEXT_CSV_Write_Options::quoting` takes `GTEXT_CSV_QUOTE_MINIMAL`, `_ALL`,
+  `_NONNUMERIC` and `_NONE`, Python's four names. `NONNUMERIC` asks whether the
+  field's *text* spells a number, since this module infers no types - the
+  grammar is stated in the header. `NONE` refuses what it cannot carry rather
+  than writing it wrongly, which is what Python raises for.
 - Type inference, which is deliberate and correctly documented as such.
 - Conversion to JSON.
 - RFC 7111 fragments, deliberately out of scope.

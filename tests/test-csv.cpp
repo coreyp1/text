@@ -13296,6 +13296,111 @@ std::string csv_write_one_field(
 	return out;
 }
 
+/*
+ * The four policies Python's csv module names. Only MINIMAL and ALL used to be
+ * reachable; NONE was reachable only by clearing three booleans, and had no
+ * name and no safety.
+ */
+TEST(CsvQuotingPolicy, MinimalIsTheDefaultAndIsZero) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	EXPECT_EQ(opts.quoting, GTEXT_CSV_QUOTE_MINIMAL);
+	EXPECT_EQ((int)GTEXT_CSV_QUOTE_MINIMAL, 0)
+	    << "a zero-initialised options struct must mean what it always meant";
+
+	GTEXT_CSV_Write_Options zeroed;
+	memset(&zeroed, 0, sizeof(zeroed));
+	EXPECT_EQ(zeroed.quoting, GTEXT_CSV_QUOTE_MINIMAL);
+
+	EXPECT_EQ(csv_write_one_field("plain", opts), "plain\n");
+	EXPECT_EQ(csv_write_one_field("a,b", opts), "\"a,b\"\n");
+}
+
+TEST(CsvQuotingPolicy, AllQuotesEverything) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quoting = GTEXT_CSV_QUOTE_ALL;
+	EXPECT_EQ(csv_write_one_field("plain", opts), "\"plain\"\n");
+	EXPECT_EQ(csv_write_one_field("12", opts), "\"12\"\n");
+	EXPECT_EQ(csv_write_one_field("", opts), "\"\"\n");
+}
+
+TEST(CsvQuotingPolicy, NoneQuotesNothing) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quoting = GTEXT_CSV_QUOTE_NONE;
+	EXPECT_EQ(csv_write_one_field("plain", opts), "plain\n");
+	EXPECT_EQ(csv_write_one_field("", opts), "\n")
+	    << "quote_empty_fields is not consulted under NONE";
+
+	/* And what it cannot carry is refused, not mangled. */
+	GTEXT_CSV_Sink sink;
+	ASSERT_EQ(gtext_csv_sink_buffer(&sink), GTEXT_CSV_OK);
+	EXPECT_EQ(csv_write_field(&sink, "a,b", 3, &opts),
+	    GTEXT_CSV_E_UNQUOTABLE_FIELD);
+	gtext_csv_sink_buffer_free(&sink);
+}
+
+TEST(CsvQuotingPolicy, NonNumericAsksAboutTheBytes) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quoting = GTEXT_CSV_QUOTE_NONNUMERIC;
+
+	// Left bare: the grammar the header states.
+	const char *numbers[] = {"0", "12", "007", "+1", "-1", "1.", ".5", "-0.5",
+	    "1e9", "1E+9", "1.5e-3", "+.5"};
+	for (const char *n : numbers) {
+		EXPECT_EQ(csv_write_one_field(n, opts), std::string(n) + "\n")
+		    << "should have been left bare: " << n;
+	}
+
+	// Quoted: everything else, including the spellings deliberately excluded.
+	const char *others[] = {"abc", "", " 1", "1 ", "1abc", "1,000", "0x10",
+	    "inf", "nan", "1e", "1e+", ".", "+", "-", "+.", "1.2.3"};
+	for (const char *o : others) {
+		std::string out = csv_write_one_field(o, opts);
+		EXPECT_EQ(out.size(), strlen(o) + 3)
+		    << "should have been quoted: [" << o << "] got [" << out << "]";
+		ASSERT_FALSE(out.empty());
+		EXPECT_EQ(out.front(), '"') << o;
+		EXPECT_EQ(out[out.size() - 2], '"') << o;
+		EXPECT_EQ(out.back(), '\n') << o;
+	}
+}
+
+/*
+ * The case that makes "numeric" insufficient on its own. With a '.' delimiter,
+ * 1.5 both spells a number and cannot be written bare - so the policy must add
+ * quotes and never subtract them. Written as a round trip, because the byte
+ * shape is not the point: the point is that the field survives.
+ */
+TEST(CsvQuotingPolicy, NonNumericStillQuotesWhatTheDialectNeeds) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quoting = GTEXT_CSV_QUOTE_NONNUMERIC;
+	opts.dialect.delimiter = '.';
+
+	std::string out = csv_write_one_field("1.5", opts);
+	EXPECT_EQ(out, "\"1.5\"\n") << "a numeric field holding the delimiter";
+
+	GTEXT_CSV_Parse_Options po = gtext_csv_parse_options_default();
+	po.dialect.delimiter = '.';
+	GTEXT_CSV_Table *back =
+	    gtext_csv_parse_table(out.data(), out.size(), &po, nullptr);
+	ASSERT_NE(back, nullptr);
+	ASSERT_EQ(gtext_csv_col_count(back, 0), 1u) << "it split into two fields";
+	size_t n = 0;
+	const char *f = gtext_csv_field(back, 0, 0, &n);
+	ASSERT_NE(f, nullptr);
+	EXPECT_EQ(std::string(f, n), "1.5");
+	gtext_csv_free_table(back);
+}
+
+/* quote_all_fields predates the enum, so it keeps winning: code that set it
+   must not change behaviour because a new field defaulted to something. */
+TEST(CsvQuotingPolicy, TheOldBooleanStillWins) {
+	GTEXT_CSV_Write_Options opts = gtext_csv_write_options_default();
+	opts.quote_all_fields = true;
+	opts.quoting = GTEXT_CSV_QUOTE_NONE;
+	EXPECT_EQ(csv_write_one_field("plain", opts), "\"plain\"\n");
+}
+
+
 } // namespace
 
 /*
