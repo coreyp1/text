@@ -29,7 +29,7 @@
  */
 
 #ifndef GHOTI_IO_GTEXT_JSON_JSON_POINTER_H
-#define GHOTI_IO_TEXT_POINTER_H
+#define GHOTI_IO_GTEXT_JSON_JSON_POINTER_H
 
 #include <ghoti.io/text/json/json_core.h>
 #include <ghoti.io/text/macros.h>
