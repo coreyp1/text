@@ -385,12 +385,31 @@ complete.
   there is none - a reference that does not resolve constrains nothing.
 - **No JSONPath**, listed as future work on the
   \ref json_module "JSON module page".
-- **`normalize_unicode` is not implemented, and now says so.** NFC
-  normalization is not performed. The option used to be accepted and ignored,
-  so a caller who asked for normalization got unnormalized text with no way to
-  tell; setting it now fails the parse with `GTEXT_JSON_E_INVALID`, and
-  `gtext_json_stream_new()` returns NULL. The field is kept so that
-  implementing NFC later is not an API change.
+- ~~**`normalize_unicode` is not implemented.**~~ **Implemented.** It used to
+  be accepted and ignored, then refused; it normalizes now. The normalizer is
+  `src/idna/nfc_utf8.c` over the NFC written for IDNA, which
+  `make check-nfc-oracle` compares against Python's `unicodedata` across every
+  assigned sequence.
+
+  It applies in the lexer, at the single point where a JSON string becomes
+  bytes, so object names are normalized as well as values - which is what makes
+  it meaningful, because the parser then compares names that have already been
+  normalized. `{"\u00e9":1,"e\u0301":2}` is one name written twice, and with
+  the option on the default duplicate policy refuses it.
+
+  Two interactions are deliberate and both are pinned by a test:
+
+  - **It requires `validate_utf8`**, which is on by default. Normalizing bytes
+    that have not been established as text is not a defined operation, so the
+    pair is refused rather than half-answered.
+  - **It disables `in_situ_mode` for strings.** In-situ points the DOM at the
+    caller's buffer when the decoded string has the same length as the input,
+    and that is not evidence the bytes are the same: canonical ordering sorts
+    combining marks by combining class, so `U+4E00 U+0301 U+0327` normalizes to
+    `U+4E00 U+0327 U+0301` - seven bytes either way, different bytes. With the
+    length test alone in-situ wins and returns the un-normalized input, so the
+    option would read as implemented and do nothing. Numbers are still
+    referenced in place.
 - **Error positions are not always filled in.** Every refusal now carries a
   status and a message, but some carry line 0 and column 0 rather than the
   place the fault was found. The message names the fault; it does not always

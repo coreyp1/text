@@ -153,10 +153,28 @@ typedef struct {
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)
-  /// NFC normalization.  **Not implemented.**  Setting it makes the parse
-  /// fail with GTEXT_JSON_E_INVALID rather than silently returning
-  /// unnormalized text; the field is kept so that enabling it later is not an
-  /// API change.  Default: off.
+  /**
+   * Normalize every string to Unicode NFC. Default: off.
+   *
+   * Applies to object names as well as values, which is what makes
+   * duplicate-name detection meaningful: `{"\u00e9":1,"e\u0301":2}` is one
+   * name written twice, and with this off it is two. Normalization happens
+   * before the parser compares names, so dupkeys sees the normalized form.
+   *
+   * Two interactions, both deliberate:
+   *
+   * - **Requires validate_utf8**, which is on by default. Normalizing bytes
+   *   that have not been established as text is not defined; asking for one
+   *   without the other fails the parse with GTEXT_JSON_E_INVALID rather than
+   *   normalizing some strings and not others.
+   * - **Disables in_situ_mode for strings.** Normalization has to copy, and
+   *   the length equality in-situ tests for is not evidence the bytes are
+   *   unchanged - canonical ordering reorders combining marks without changing
+   *   how many bytes they occupy. Numbers are still referenced in place.
+   *
+   * A string that is not well-formed UTF-8 fails with
+   * GTEXT_JSON_E_BAD_UNICODE, the same status the validator uses.
+   */
   bool normalize_unicode;
   bool in_situ_mode;      ///< Zero-copy mode: reference input buffer directly
 

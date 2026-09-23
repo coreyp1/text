@@ -908,9 +908,9 @@ GTEXT_API GTEXT_JSON_Stream * gtext_json_stream_new(
     return NULL;
   }
 
-  // normalize_unicode has never been implemented; refuse it rather than
-  // silently ignore it.  See json_parse_internal() for the same check.
-  if (opt && opt->normalize_unicode) {
+  // normalize_unicode is implemented; what is refused is asking for it
+  // without validate_utf8.  See json_parse_internal() for why.
+  if (opt && opt->normalize_unicode && !opt->validate_utf8) {
     return NULL;
   }
 

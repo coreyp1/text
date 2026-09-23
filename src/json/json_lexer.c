@@ -35,6 +35,7 @@
 
 #include <ghoti.io/text/allocator.h>
 #include <ghoti.io/text/macros.h>
+#include "../idna/nfc_utf8_internal.h"
 #include "json_internal.h"
 #include "json_stream_internal.h"
 
@@ -871,6 +872,33 @@ static GTEXT_JSON_Status json_lexer_parse_string(
       json_token_buffer_clear(tb);
     }
     return status;
+  }
+
+  /*
+   * NFC, if it was asked for. This is the only place a JSON string becomes
+   * bytes, so normalising here covers object names as well as values - which
+   * is the point, because it means duplicate-name detection in the parser
+   * compares names that have already been normalised. Two names that differ
+   * only in how a mark was encoded are the same name, and a parser that
+   * decided that before normalising would answer otherwise.
+   *
+   * The result always replaces the decoded buffer, even when normalisation
+   * changed nothing: the alternative is two ownership paths out of one branch.
+   */
+  if (lexer->opts && lexer->opts->normalize_unicode) {
+    char * normalized = NULL;
+    size_t normalized_len = 0;
+    int nfc = gtext_nfc_utf8(lexer->opts->allocator, decoded, decoded_len,
+        &normalized, &normalized_len);
+    gtext_allocator_free(lexer->opts->allocator, decoded);
+    if (nfc != 1) {
+      if (tb) {
+        json_token_buffer_clear(tb);
+      }
+      return nfc == 0 ? GTEXT_JSON_E_BAD_UNICODE : GTEXT_JSON_E_OOM;
+    }
+    decoded = normalized;
+    decoded_len = normalized_len;
   }
 
   token->type = JSON_TOKEN_STRING;

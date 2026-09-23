@@ -97,7 +97,10 @@ The library provides extensive configuration options for parsing behavior:
 
 - **`allow_leading_bom`**: Allow UTF-8 BOM at the start of input — **Default: `true`**
 - **`validate_utf8`**: Validate UTF-8 sequences in input — **Default: `true`**
-- **`normalize_unicode`**: Apply NFC normalization to strings — **Default: `false`**
+- **`normalize_unicode`**: Apply NFC normalization to strings, object names
+  included, so duplicate-name detection compares normalized names. Requires
+  `validate_utf8`; turns off `in_situ_mode` for strings, because normalizing
+  has to copy. — **Default: `false`**
 - **`in_situ_mode`**: Zero-copy mode that references input buffer directly — **Default: `false`**
 
 ### 4.3 Duplicate Key Handling

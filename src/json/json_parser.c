@@ -193,10 +193,21 @@ static GTEXT_JSON_Status json_parse_array_element(json_parser * parser,
     // Check if we can use in-situ mode
     // Conditions: in-situ mode enabled, context has input buffer, no escape
     // sequences
+    /*
+     * in_situ_mode points the DOM at the caller's bytes, which is only sound
+     * when the decoded string *is* those bytes. The length test below is the
+     * proxy for that, and normalisation breaks it: canonical ordering reorders
+     * combining marks without changing how many bytes they take, so a
+     * normalised string can be the same length as the input and different from
+     * it. In-situ would then hand back the un-normalised original and the
+     * option would appear to do nothing. Normalising always copies, so the two
+     * are mutually exclusive and normalisation wins.
+     */
     int use_in_situ = 0;
     size_t original_start = 0;
     size_t original_len = 0;
-    if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
+    if (parser->opts && parser->opts->in_situ_mode &&
+        !parser->opts->normalize_unicode && ctx->input_buffer &&
         ctx->input_buffer_len > 0 &&
         token->data.string.value_len == token->data.string.original_len) {
       // Verify the original string position is within bounds
@@ -1259,7 +1270,10 @@ static GTEXT_JSON_Status json_parse_value(
       int use_in_situ = 0;
       size_t original_start = 0;
       size_t original_len = 0;
-      if (parser->opts && parser->opts->in_situ_mode && ctx->input_buffer &&
+      // Same exclusion as the other in-situ string site: a normalised string
+      // can match the input's length without matching its bytes.
+      if (parser->opts && parser->opts->in_situ_mode &&
+          !parser->opts->normalize_unicode && ctx->input_buffer &&
           ctx->input_buffer_len > 0 &&
           token.data.string.value_len == token.data.string.original_len) {
         // Verify the original string position is within bounds
@@ -1586,13 +1600,17 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
     return NULL;
   }
 
-  // normalize_unicode has never been implemented.  Refuse it rather than
-  // accept the option and silently hand back unnormalized text: a caller that
-  // asked for NFC and did not get it would have no way to tell.
-  if (opt && opt->normalize_unicode) {
+  // normalize_unicode is implemented now - the lexer normalises every string
+  // it decodes.  What is refused is asking for NFC without asking for UTF-8
+  // validation, because normalising bytes that have not been established as
+  // text is not a defined operation: the normaliser would refuse the string
+  // the parser had just agreed to accept, and the two answers would come from
+  // options that look independent.  validate_utf8 is on by default, so this
+  // only reaches a caller who turned it off deliberately.
+  if (opt && opt->normalize_unicode && !opt->validate_utf8) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_INVALID,
-          .message = "normalize_unicode is not implemented",
+          .message = "normalize_unicode requires validate_utf8",
           .line = 1,
           .col = 1};
     }

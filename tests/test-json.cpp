@@ -70,7 +70,7 @@ TEST(ParseOptions, Default) {
     // Unicode / input handling
     EXPECT_EQ(opts.allow_leading_bom, 1);  // default on
     EXPECT_EQ(opts.validate_utf8, 1);      // default on
-    EXPECT_EQ(opts.normalize_unicode, 0);   // v2 feature, off by default
+    EXPECT_EQ(opts.normalize_unicode, 0);   // off by default; implemented
     EXPECT_EQ(opts.in_situ_mode, 0);        // off by default
 
     // Duplicate keys
@@ -9131,10 +9131,12 @@ TEST(StateValidation, IncompleteStructure) {
 /*
  * normalize_unicode was declared, documented as a v2 feature, and read by
  * nothing: setting it produced unnormalized output with no indication that the
- * request had been dropped.  Until NFC is implemented the option must fail
- * loudly instead.
+ * request had been dropped.  It used to fail the parse for that reason.  It is
+ * implemented now, so what these tests pin is the behaviour rather than the
+ * refusal - and in particular the two places where an implementation can
+ * appear to work while doing nothing.
  */
-TEST(JsonNormalizeUnicode, IsRefusedRatherThanIgnored) {
+TEST(JsonNormalizeUnicode, ComposesADecomposedScalar) {
 	const char *src = "{\"a\":\"e\\u0301\"}";
 
 	GTEXT_JSON_Error err;
@@ -9142,16 +9144,161 @@ TEST(JsonNormalizeUnicode, IsRefusedRatherThanIgnored) {
 	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 	EXPECT_FALSE(opts.normalize_unicode) << "must stay off by default";
 
+	/* Off: the two codepoints survive as written, three bytes of them. */
+	GTEXT_JSON_Value *plain = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(plain, nullptr) << (err.message ? err.message : "unknown");
+	const GTEXT_JSON_Value *pa = gtext_json_object_get(plain, "a", 1);
+	ASSERT_NE(pa, nullptr);
+	size_t plen = 0;
+	const char *pstr = nullptr;
+	ASSERT_EQ(gtext_json_get_string(pa, &pstr, &plen), GTEXT_JSON_OK);
+	EXPECT_EQ(plen, 3u);
+	EXPECT_EQ(std::string(pstr, plen), std::string("e\xcc\x81"));
+	gtext_json_free(plain);
+	gtext_json_error_free(&err);
+
+	/* On: one composed character, U+00E9, two bytes. */
+	memset(&err, 0, sizeof(err));
+	opts.normalize_unicode = true;
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(v, nullptr) << (err.message ? err.message : "unknown");
+	const GTEXT_JSON_Value *a = gtext_json_object_get(v, "a", 1);
+	ASSERT_NE(a, nullptr);
+	size_t len = 0;
+	const char *str = nullptr;
+	ASSERT_EQ(gtext_json_get_string(a, &str, &len), GTEXT_JSON_OK);
+	EXPECT_EQ(len, 2u);
+	EXPECT_EQ(std::string(str, len), std::string("\xc3\xa9"));
+	gtext_json_free(v);
+	gtext_json_error_free(&err);
+}
+
+/*
+ * The reason normalisation belongs in the lexer rather than in the DOM: an
+ * object name is a string, so normalising where strings are made means the
+ * parser compares names that are already normalised.  These two spellings are
+ * one name, and the default duplicate policy is ERROR, so the parse must fail
+ * with the option on and succeed with it off.  Getting this backwards - or
+ * normalising after the comparison - leaves a document whose two keys are
+ * byte-identical, which no caller can then tell apart.
+ */
+TEST(JsonNormalizeUnicode, NormalizesObjectNamesBeforeComparingThem) {
+	const char *src = "{\"\\u00e9\":1,\"e\\u0301\":2}";
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	ASSERT_EQ(opts.dupkeys, GTEXT_JSON_DUPKEY_ERROR);
+
+	/* Off: two distinct names, and the document has two members. */
+	GTEXT_JSON_Value *two = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(two, nullptr) << (err.message ? err.message : "unknown");
+	EXPECT_EQ(gtext_json_object_size(two), 2u);
+	gtext_json_free(two);
+	gtext_json_error_free(&err);
+
+	/* On: one name, written twice. */
+	memset(&err, 0, sizeof(err));
 	opts.normalize_unicode = true;
 	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
 	EXPECT_EQ(v, nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_DUPKEY);
+	if (v) {
+		gtext_json_free(v);
+	}
+	gtext_json_error_free(&err);
+}
+
+/*
+ * The case that makes in_situ_mode and normalisation mutually exclusive.
+ *
+ * in-situ points the DOM at the caller's buffer when the decoded string is the
+ * same length as the input, which is a proxy for "the same bytes".
+ * Normalisation breaks the proxy: canonical ordering sorts combining marks by
+ * combining class, and two marks can swap without changing how many bytes they
+ * take.  U+4E00 U+0301 U+0327 is seven bytes and normalises to U+4E00 U+0327
+ * U+0301, also seven bytes, because the cedilla's class (202) sorts before the
+ * acute's (230) and neither composes onto a Han character.  Verified against
+ * Python's unicodedata rather than worked out by hand.
+ *
+ * With the length test alone, in-situ would win and hand back the input
+ * unchanged - the option would read as implemented and do nothing.  The escape
+ * sequences matter too: this input is written as raw UTF-8 precisely so that
+ * in-situ is eligible, since an escape makes the decoded length differ and
+ * takes the copy path anyway.
+ */
+TEST(JsonNormalizeUnicode, IsNotDefeatedByInSituMode) {
+	/* Each \x escape is followed by a backslash, so none of them swallow the
+	   next digit. */
+	const char *src = "[\"\xe4\xb8\x80\xcc\x81\xcc\xa7\"]";
+	const std::string before = "\xe4\xb8\x80\xcc\x81\xcc\xa7";
+	const std::string after = "\xe4\xb8\x80\xcc\xa7\xcc\x81";
+	ASSERT_EQ(before.size(), after.size()) << "the point of the case";
+	ASSERT_NE(before, after);
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.in_situ_mode = true;
+
+	/* Control: in-situ alone does reference the input, unchanged. */
+	GTEXT_JSON_Value *raw = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(raw, nullptr) << (err.message ? err.message : "unknown");
+	const GTEXT_JSON_Value *r0 = gtext_json_array_get(raw, 0);
+	ASSERT_NE(r0, nullptr);
+	size_t rlen = 0;
+	const char *rstr = nullptr;
+	ASSERT_EQ(gtext_json_get_string(r0, &rstr, &rlen), GTEXT_JSON_OK);
+	EXPECT_EQ(std::string(rstr, rlen), before)
+	    << "without normalisation the bytes must be the input's";
+	gtext_json_free(raw);
+	gtext_json_error_free(&err);
+
+	/* With both asked for, normalisation wins. */
+	memset(&err, 0, sizeof(err));
+	opts.normalize_unicode = true;
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(v, nullptr) << (err.message ? err.message : "unknown");
+	const GTEXT_JSON_Value *e0 = gtext_json_array_get(v, 0);
+	ASSERT_NE(e0, nullptr);
+	size_t len = 0;
+	const char *str = nullptr;
+	ASSERT_EQ(gtext_json_get_string(e0, &str, &len), GTEXT_JSON_OK);
+	EXPECT_EQ(len, after.size());
+	EXPECT_EQ(std::string(str, len), after)
+	    << "in-situ returned the un-normalised input";
+	gtext_json_free(v);
+	gtext_json_error_free(&err);
+}
+
+/*
+ * Normalising bytes that have not been established as text is not defined, so
+ * the combination is refused rather than answered.  validate_utf8 is on by
+ * default, so only a caller who turned it off deliberately sees this.
+ */
+TEST(JsonNormalizeUnicode, RequiresValidateUtf8) {
+	const char *src = "{\"a\":\"e\\u0301\"}";
+
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	ASSERT_TRUE(opts.validate_utf8) << "on by default";
+	opts.normalize_unicode = true;
+	opts.validate_utf8 = false;
+
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	EXPECT_EQ(v, nullptr);
 	EXPECT_EQ(err.code, GTEXT_JSON_E_INVALID);
+	ASSERT_NE(err.message, nullptr);
+	EXPECT_NE(std::string(err.message).find("validate_utf8"),
+	    std::string::npos)
+	    << "the message must name the option that is missing: " << err.message;
 	if (v) {
 		gtext_json_free(v);
 	}
 	gtext_json_error_free(&err);
 
-	/* The streaming parser refuses it at construction for the same reason. */
+	/* The streaming parser refuses the same combination at construction. */
 	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
 	                             GTEXT_JSON_Error *) { return GTEXT_JSON_OK; };
 	GTEXT_JSON_Stream *st = gtext_json_stream_new(&opts, cb, nullptr);
@@ -9159,6 +9306,78 @@ TEST(JsonNormalizeUnicode, IsRefusedRatherThanIgnored) {
 	if (st) {
 		gtext_json_stream_free(st);
 	}
+
+	/* ...and accepts it once validation is back on, which is the control that
+	   says the refusal above is about the pairing and not about the option. */
+	opts.validate_utf8 = true;
+	GTEXT_JSON_Stream *ok = gtext_json_stream_new(&opts, cb, nullptr);
+	EXPECT_NE(ok, nullptr);
+	if (ok) {
+		gtext_json_stream_free(ok);
+	}
+}
+
+/* The streaming parser shares the lexer, so it normalises too.  Asserted
+   through the events rather than assumed from the shared code. */
+TEST(JsonNormalizeUnicode, StreamingParserNormalizesToo) {
+	struct Seen {
+		std::vector<std::string> strings;
+	} seen;
+
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.normalize_unicode = true;
+
+	GTEXT_JSON_Event_cb cb = [](void *user, const GTEXT_JSON_Event *ev,
+	                             GTEXT_JSON_Error *) {
+		Seen *s = (Seen *)user;
+		if (ev->type == GTEXT_JSON_EVT_STRING) {
+			s->strings.push_back(std::string(ev->as.str.s, ev->as.str.len));
+		}
+		return GTEXT_JSON_OK;
+	};
+
+	GTEXT_JSON_Stream *st = gtext_json_stream_new(&opts, cb, &seen);
+	ASSERT_NE(st, nullptr);
+	const char *src = "[\"e\\u0301\"]";
+	GTEXT_JSON_Error serr;
+	memset(&serr, 0, sizeof(serr));
+	EXPECT_EQ(gtext_json_stream_feed(st, src, strlen(src), &serr),
+	    GTEXT_JSON_OK)
+	    << (serr.message ? serr.message : "unknown");
+	EXPECT_EQ(gtext_json_stream_finish(st, &serr), GTEXT_JSON_OK)
+	    << (serr.message ? serr.message : "unknown");
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&serr);
+
+	ASSERT_EQ(seen.strings.size(), 1u);
+	EXPECT_EQ(seen.strings[0], std::string("\xc3\xa9"));
+}
+
+/* Already-NFC text comes back byte-identical.  The wrapper allocates a fresh
+   buffer either way, so this also exercises the path where normalisation
+   changes nothing and must not corrupt anything. */
+TEST(JsonNormalizeUnicode, AlreadyNormalizedIsUnchanged) {
+	const char *src = "[\"\xc3\xa9 caf\xc3\xa9\",\"\",\"plain ascii\"]";
+	GTEXT_JSON_Error err;
+	memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.normalize_unicode = true;
+
+	GTEXT_JSON_Value *v = gtext_json_parse(src, strlen(src), &opts, &err);
+	ASSERT_NE(v, nullptr) << (err.message ? err.message : "unknown");
+	ASSERT_EQ(gtext_json_array_size(v), 3u);
+
+	const char *expect[3] = {"\xc3\xa9 caf\xc3\xa9", "", "plain ascii"};
+	for (size_t i = 0; i < 3; i++) {
+		const GTEXT_JSON_Value *e = gtext_json_array_get(v, i);
+		ASSERT_NE(e, nullptr) << i;
+		size_t len = 0;
+		const char *str = nullptr;
+		ASSERT_EQ(gtext_json_get_string(e, &str, &len), GTEXT_JSON_OK) << i;
+		EXPECT_EQ(std::string(str, len), std::string(expect[i])) << i;
+	}
+	gtext_json_free(v);
+	gtext_json_error_free(&err);
 }
 
 TEST(JsonNormalizeUnicode, DefaultOptionsStillParse) {

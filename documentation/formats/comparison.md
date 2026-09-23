@@ -355,12 +355,10 @@ real advantages over cJSON and jansson.
   dependencies remain rather than three gaps - see the
   \ref format_json "JSON page".
 - A custom allocator.
-- NFC normalization. `normalize_unicode` fails loudly rather than silently
-  doing nothing, and the parse option is still not implemented - but the
-  normalizer itself is no longer missing. `src/idna/nfc.c` is a table-driven
-  NFC with an oracle gate of its own (`make check-nfc-oracle`), written for
-  IDNA. What is absent is the wiring between it and the JSON parse option, not
-  the algorithm.
+- ~~NFC normalization.~~ **Done.** `normalize_unicode` normalizes every string
+  the lexer decodes, object names included, so duplicate-name detection sees
+  normalized names. It requires `validate_utf8` and turns off in-situ for
+  strings, both deliberately - see the \ref format_json "JSON page".
 - JSON5 proper, as distinct from the JSONC subset that is supported.
 - Conversion to YAML. The reverse direction exists.
 - SIMD-accelerated scanning, which is what the throughput gap is really about.
