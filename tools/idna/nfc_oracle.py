@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Compare this library's NFC against Python's, over everything.
 
-The normalisation in src/idna/nfc.c is this repository's reading of UAX #15
-over tables gen_uts46.py derives from UnicodeData.txt. Both halves can be
-wrong in ways nothing else notices: a composition exclusion missed, the
-canonical ordering made unstable, the "not blocked from the starter" test
-written as a plain comparison - each of those produces a normaliser that is
-right about almost every string and wrong about a few.
+The normalisation is ghoti.io-unicode's, reached through the thin adapter in
+src/idna/nfc.c. It can be wrong in ways nothing else here notices: a
+composition exclusion missed, the canonical ordering made unstable, the "not
+blocked from the starter" test written as a plain comparison - each of those
+produces a normaliser that is right about almost every string and wrong about
+a few. unicode runs its own, larger oracle against CPython; this one asks the
+question through the call path that text actually uses, which is the part that
+a migration can break.
 
 Python's `unicodedata.normalize` is an independent implementation of the same
 annex, written by other people from the same data. It is compiled into
@@ -98,13 +100,37 @@ def build_driver(root, workdir):
     binary = os.path.join(workdir, "driver")
     generated = os.path.join(
         os.path.dirname(os.path.dirname(archive)), "generated")
+    # The archive's NFC is a call into ghoti.io-unicode now, so the driver
+    # needs that library on its link line. pkg-config is asked the same way
+    # the Makefile asks, along the same PKG_CONFIG_PATH: a driver linked
+    # against a different build of unicode than the archive was would answer
+    # for whichever one the loader picked.
+    branch = "-0"
+    unicode_flags = []
+    for kind in ("--cflags", "--libs"):
+        probe = subprocess.run(
+            ["pkg-config", kind, "ghoti.io-unicode" + branch],
+            capture_output=True, text=True)
+        if probe.returncode != 0:
+            sys.exit("pkg-config could not find ghoti.io-unicode" + branch
+                     + "; point PKG_CONFIG_PATH at its .pc file")
+        unicode_flags += probe.stdout.split()
+
+    # An rpath for every -L the linker was given, so the driver finds the
+    # shared library without the caller having exported LD_LIBRARY_PATH. A
+    # gate that only passes when the environment happens to be right is a gate
+    # that passes for the wrong reason.
+    for flag in list(unicode_flags):
+        if flag.startswith("-L") and len(flag) > 2:
+            unicode_flags.append("-Wl,-rpath," + flag[2:])
+
     command = [
         os.environ.get("CC", "cc"), "-O1", "-o", binary, source,
         "-I", os.path.join(root, "include"),
         "-I", generated,
         "-I", os.path.join(root, "src"),
-        archive, "-lm",
-    ]
+        archive,
+    ] + unicode_flags + ["-lm"]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         sys.exit("could not build the NFC driver:\n" + result.stderr)

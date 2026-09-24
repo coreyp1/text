@@ -318,6 +318,32 @@ endif
 INCLUDE += $(CHRON_CFLAGS)
 LDFLAGS += $(CHRON_LIBS)
 
+# ghoti.io-unicode, for the Unicode Character Database and the algorithms over
+# it.  This library used to generate its own tables: NFC's composition data
+# from UnicodeData.txt, and ID_Start/ID_Continue and General_Category=Zs for
+# JSON5's identifiers, from DerivedCoreProperties.txt.  regex generated the
+# same tables from the same files with a second generator, and font would have
+# been the third - three copies of one dataset with three version pins that
+# nothing compared.  unicode holds one copy, one pin and one generator, and
+# every property here is read from it.
+#
+# What did not move: IDNA2008's derived property and UTS #46's mapping, in
+# src/idna/tables/.  Those are Unicode standards about host names rather than
+# character data, and this is their only consumer (unicode's design.md §15
+# decision 4).
+#
+# The graph stays a DAG: cutil -> unicode -> text.
+UNICODE_PC ?= ghoti.io-unicode$(BRANCH)
+UNICODE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(UNICODE_PC) 2>/dev/null)
+UNICODE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(UNICODE_PC) 2>/dev/null)
+ifeq ($(strip $(UNICODE_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-unicode was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+endif
+endif
+INCLUDE += $(UNICODE_CFLAGS)
+LDFLAGS += $(UNICODE_LIBS)
+
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
 
@@ -1298,7 +1324,7 @@ clean: ## Remove all contents of the build directories.
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 
 # Dependencies a consumer of this library needs on its own include path.
-PC_REQUIRES := $(CUTIL_PC) $(CHRON_PC)
+PC_REQUIRES := $(CUTIL_PC) $(CHRON_PC) $(UNICODE_PC)
 
 # Where this project's own .pc file is installed. Defaults to the directory
 # pkg-config is already being told to search, but separate from it so a
