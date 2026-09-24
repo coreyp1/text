@@ -41,6 +41,7 @@ GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   opts.allow_ecma_escapes = false;
   opts.allow_line_continuations = false;
   opts.allow_ecma_whitespace = false;
+  opts.allow_unquoted_keys = false;
 
   // Unicode / input handling
   opts.allow_leading_bom = true;  // default on
@@ -99,5 +100,30 @@ GTEXT_API GTEXT_JSON_Write_Options gtext_json_write_options_default(void) {
       GTEXT_JSON_FLOAT_SHORTEST; // shortest representation by default
   opts.float_precision = 6; // default precision (used for FIXED/SCIENTIFIC)
 
+  return opts;
+}
+
+GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_json5(void) {
+  /* Built from the default rather than from {0}, so a field added later starts
+   * from the same place a strict parse would start from, and only the options
+   * JSON5 names are changed here. */
+  GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+
+  opts.allow_comments = true;
+  opts.allow_trailing_commas = true;
+  opts.allow_single_quotes = true;
+  opts.allow_nonfinite_numbers = true;
+  opts.allow_hex_numbers = true;
+  opts.allow_leading_plus = true;
+  opts.allow_bare_decimal_point = true;
+  opts.allow_ecma_escapes = true;
+  opts.allow_line_continuations = true;
+  opts.allow_ecma_whitespace = true;
+  opts.allow_unquoted_keys = true;
+
+  /* Deliberately not touched: allow_unescaped_controls, because JSON5 permits
+   * a raw control character in a string no more than JSON does; and
+   * normalize_unicode, because JSON5 says nothing about normalization. The
+   * limits and the duplicate-name policy are the default's. */
   return opts;
 }

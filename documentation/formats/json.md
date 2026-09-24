@@ -127,6 +127,28 @@ escape, so with `allow_ecma_escapes` alone it is an error rather than quietly
 meaning a newline. A *raw* newline inside a string is still a control character
 under both options; the continuation is the backslash's doing.
 
+**JSON5 unquoted object names.** `allow_unquoted_keys`, off by default, makes
+`{a: 1}` legal. The name is an ECMAScript `IdentifierName`, which is wider than
+`[A-Za-z_]`: any character with the Unicode property ID_Start may begin one, any
+with ID_Continue may continue it, `$` and `_` may do either, and `\uXXXX`
+escapes are allowed - `{\u0061: 1}` names `a`, and a surrogate pair reaches an
+astral character as it does in ECMAScript 5.1. `\u{1F600}`, the ECMAScript 2015
+spelling, is not accepted, because the JSON5 specification is written against
+5.1. The properties come from the same generated table as the whitespace, so a
+character that is merely non-ASCII is not a name: U+1F600 has neither property
+and is refused, and U+0301 has ID_Continue only, so it may continue a name but
+not start one.
+
+`IdentifierName` includes the reserved words, so `{true: 1}` is an object whose
+name is `true`, and so are `{null: 1}`, `{NaN: 1}` and `{Infinity: 1}` - the
+last two without `allow_nonfinite_numbers`, which is about values. Those words
+are still keywords wherever a value is expected, and `-Infinity` is not a name
+at all, because a name cannot begin with a sign.
+
+The name is decoded before it is compared, so `{a:1,"a":2}` and
+`{a:1,\u0061:2}` are duplicate names, and with `normalize_unicode` an unquoted
+name is normalized exactly as a quoted one is.
+
 **JSON5 whitespace.** `allow_ecma_whitespace`, off by default, widens the space
 *between* tokens from JSON's four characters - tab, LF, CR, space - to
 ECMAScript's set: vertical tab, form feed, U+FEFF, every character in
@@ -223,7 +245,19 @@ The last row is a wart rather than a design decision: a truncated number and a
 grammatically invalid one are both simply invalid at top level, and reporting
 one as "incomplete" invites a caller to wait for more input that will not
 help. It is documented here because the status code is part of the API and
-changing it would break callers.
+changing it would break callers. (With `allow_bare_decimal_point`, `5.` is a
+number and the row does not apply to it; `1e` is still incomplete.)
+
+**The streaming parser does not enforce the duplicate-name policy.** `dupkeys`
+defaults to `GTEXT_JSON_DUPKEY_ERROR` and `gtext_json_parse()` honors it, but
+`gtext_json_stream_feed()` emits both names and reports success. So the same
+document is refused by one parser and accepted by the other, which is not a
+JSON5 matter - it is equally true of two quoted names. It is pinned by a test
+(`Json5UnquotedKeys.TheStreamingParserDoesNotSeeDuplicateNames`) so that it
+shows up as a known gap rather than as a surprise. Closing it means holding
+every name of every open object in memory, bounded by `max_container_elems`
+and `max_string_bytes` but real, and that is a cost a streaming parser should
+be asked for rather than assumed to want.
 
 **Fixed: the schema engine no longer accepts schemas it cannot enforce.**
 

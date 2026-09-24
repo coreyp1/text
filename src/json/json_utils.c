@@ -305,3 +305,31 @@ void json_error_init_fields(GTEXT_JSON_Error * err, GTEXT_JSON_Status code,
 int json_check_string_length_overflow(size_t len) {
   return len > SIZE_MAX - 1;
 }
+
+/*
+ * The text a keyword token was written with, or NULL for a token that is not
+ * one of them.
+ *
+ * JSON5's unquoted object name is an ECMAScript IdentifierName, and that
+ * includes the reserved words: `{true: 1}` is an object whose name is the four
+ * letters. The lexer reads those words as keyword tokens, which is right
+ * everywhere a value is expected and carries no text for the one place it is
+ * not, so the name is recovered from the token type. -Infinity is absent
+ * because it is not an identifier: a name cannot start with a minus sign.
+ */
+GTEXT_INTERNAL_API const char * json_keyword_token_spelling(int token_type) {
+  switch (token_type) {
+  case JSON_TOKEN_NULL:
+    return "null";
+  case JSON_TOKEN_TRUE:
+    return "true";
+  case JSON_TOKEN_FALSE:
+    return "false";
+  case JSON_TOKEN_NAN:
+    return "NaN";
+  case JSON_TOKEN_INFINITY:
+    return "Infinity";
+  default:
+    return NULL;
+  }
+}

@@ -239,6 +239,33 @@ typedef struct {
    */
   bool allow_ecma_whitespace;
 
+  /**
+   * Allow an unquoted object name: `{a: 1}`. JSON5. Default: off.
+   *
+   * The name is an ECMAScript `IdentifierName`, which is more than
+   * `[A-Za-z_]`: any character with the Unicode property ID_Start may begin
+   * one and any with ID_Continue may continue it, `$` and `_` may do either,
+   * and `\uXXXX` escapes are allowed - `{\u0061: 1}` names `a`. The
+   * properties come from a generated table, held to the pinned UCD by
+   * `make check-json5-tables`.
+   *
+   * `IdentifierName` includes the reserved words, so `{true: 1}` is an object
+   * whose name is the three letters `true`, and `{null: 1}`, `{NaN: 1}` and
+   * `{Infinity: 1}` likewise. Those spellings are still keywords everywhere a
+   * *value* is expected.
+   *
+   * An escape is decoded before the name is compared, so `{"a":1,\u0061:2}`
+   * is one name written twice and the duplicate-name policy sees it as such.
+   * With normalize_unicode, a name arrives normalized whether it was quoted or
+   * not.
+   *
+   * `\u{1F600}`, ECMAScript 2015's other escape spelling, is not accepted: the
+   * JSON5 specification is written against ECMAScript 5.1, which has only the
+   * four-digit form. A surrogate pair of four-digit escapes does reach an
+   * astral character, as it does there.
+   */
+  bool allow_unquoted_keys;
+
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)
@@ -375,6 +402,30 @@ typedef struct {
  * @return Initialized parse options structure
  */
 GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void);
+
+/**
+ * @brief Initialize parse options for the JSON5 dialect
+ *
+ * The defaults above, with every option JSON5 requires turned on:
+ * comments, trailing commas, single-quoted strings, non-finite numbers,
+ * hexadecimal integers, a leading plus, a decimal point at an edge,
+ * ECMAScript's string escapes, line continuations, ECMAScript's whitespace,
+ * and unquoted object names.
+ *
+ * The individual options remain the interface. This is the dialect as
+ * [json5.org](https://json5.org/) version 1.0.0 defines it, for a caller who
+ * wants all of it rather than a chosen subset; it is a starting point like the
+ * default, so a caller may still change any field afterwards - the limits and
+ * the duplicate-name policy are left exactly as the default has them.
+ *
+ * What it does *not* turn on is anything JSON5 does not ask for.
+ * `allow_unescaped_controls` stays off, because JSON5 no more permits a raw
+ * control character in a string than JSON does, and `normalize_unicode` stays
+ * off because JSON5 says nothing about normalization.
+ *
+ * @return Initialized parse options structure
+ */
+GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_json5(void);
 
 /**
  * @brief Initialize write options with compact output defaults

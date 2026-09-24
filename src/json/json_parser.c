@@ -784,8 +784,18 @@ static GTEXT_JSON_Status json_parse_object(
       // key)
     }
 
-    // Key must be a string
-    if (token.type != JSON_TOKEN_STRING) {
+    /* The name. A string always; an unquoted IdentifierName where JSON5 was
+     * asked for, and then also one of the words the lexer reads as a keyword
+     * everywhere else - `{true: 1}` is an object whose name is "true",
+     * because IdentifierName includes the reserved words. Those tokens carry
+     * no text of their own, so the spelling comes from the type. */
+    const char * keyword_name = NULL;
+    if (token.type != JSON_TOKEN_STRING && token.type != JSON_TOKEN_IDENT &&
+        parser->opts && parser->opts->allow_unquoted_keys) {
+      keyword_name = json_keyword_token_spelling(token.type);
+    }
+    if (token.type != JSON_TOKEN_STRING && token.type != JSON_TOKEN_IDENT &&
+        !keyword_name) {
       result = json_parser_set_error(parser, GTEXT_JSON_E_BAD_TOKEN,
           "Object key must be a string", token.pos);
       json_token_cleanup(&token);
@@ -793,7 +803,8 @@ static GTEXT_JSON_Status json_parse_object(
     }
 
     // Check string size limit
-    status = json_parser_check_string_size(parser, token.data.string.value_len);
+    status = json_parser_check_string_size(
+        parser, keyword_name ? strlen(keyword_name) : token.data.string.value_len);
     if (status != GTEXT_JSON_OK) {
       result = status;
       json_token_cleanup(&token);
@@ -802,8 +813,10 @@ static GTEXT_JSON_Status json_parse_object(
 
     // Store key and length (must save before cleanup since
     // token.data.string.value is freed)
-    const char * key = token.data.string.value;
-    size_t key_len = token.data.string.value_len;
+    const char * key =
+        keyword_name ? keyword_name : token.data.string.value;
+    size_t key_len =
+        keyword_name ? strlen(keyword_name) : token.data.string.value_len;
     json_position key_pos = token.pos; // Save position for error reporting
 
     // Allocate temporary copy of key to avoid use-after-free

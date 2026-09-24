@@ -884,3 +884,443 @@ TEST(Json5Whitespace, BothParsersAgreeAcrossChunkBoundaries) {
 		expect_both(c.src, &opts, c.valid);
 	}
 }
+
+// ===========================================================================
+// Unquoted object names
+// ===========================================================================
+
+namespace {
+
+GTEXT_JSON_Parse_Options key_opts(void) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_unquoted_keys = true;
+	return opts;
+}
+
+// The names of a parsed object, in order.
+std::vector<std::string> names_of(
+    const std::string & src, const GTEXT_JSON_Parse_Options * opts, bool * ok) {
+	std::vector<std::string> out;
+	*ok = false;
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * doc = gtext_json_parse(src.data(), src.size(), opts, &err);
+	if (doc) {
+		*ok = true;
+		size_t n = gtext_json_object_size(doc);
+		for (size_t i = 0; i < n; i++) {
+			size_t len = 0;
+			const char * k = gtext_json_object_key(doc, i, &len);
+			out.push_back(std::string(k ? k : "", len));
+		}
+		gtext_json_free(doc);
+	}
+	gtext_json_error_free(&err);
+	return out;
+}
+
+// The KEY events the streaming parser emits, in order.
+std::vector<std::string> stream_names(const std::string & src,
+    const GTEXT_JSON_Parse_Options * opts, size_t chunk, bool * ok) {
+	static std::vector<std::string> collected;
+	collected.clear();
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event * ev,
+	                             GTEXT_JSON_Error *) {
+		if (ev->type == GTEXT_JSON_EVT_KEY) {
+			collected.push_back(std::string(ev->as.str.s, ev->as.str.len));
+		}
+		return GTEXT_JSON_OK;
+	};
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(opts, cb, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Status status = GTEXT_JSON_OK;
+	for (size_t i = 0; i < src.size(); i += chunk) {
+		size_t n = std::min(chunk, src.size() - i);
+		status = gtext_json_stream_feed(st, src.data() + i, n, &err);
+		if (status != GTEXT_JSON_OK) {
+			break;
+		}
+	}
+	if (status == GTEXT_JSON_OK) {
+		status = gtext_json_stream_finish(st, &err);
+	}
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+	*ok = status == GTEXT_JSON_OK;
+	return collected;
+}
+
+} // namespace
+
+TEST(Json5UnquotedKeys, WhatMayBeAName) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	struct Case {
+		const char * src;
+		const char * name;
+	};
+	const Case cases[] = {
+	    {"{a:1}", "a"},
+	    {"{abc:1}", "abc"},
+	    {"{a1:1}", "a1"},
+	    {"{$:1}", "$"},          // ECMAScript's own addition
+	    {"{_:1}", "_"},          // Pc, so ID_Continue but not ID_Start
+	    {"{$x_1:1}", "$x_1"},
+	    {"{ a : 1 }", "a"},
+	    // ID_Start is not ASCII: U+00E9, and a Greek letter.
+	    {"{\xC3\xA9:1}", "\xC3\xA9"},
+	    {"{caf\xC3\xA9:1}", "caf\xC3\xA9"},
+	    {"{\xCE\xB1:1}", "\xCE\xB1"},
+	    // An astral ID_Start: U+10400 DESERET CAPITAL LETTER LONG I.
+	    {"{\xF0\x90\x90\x80:1}", "\xF0\x90\x90\x80"},
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::vector<std::string> names = names_of(c.src, &opts, &ok);
+		ASSERT_TRUE(ok) << c.src;
+		ASSERT_EQ(names.size(), 1u) << c.src;
+		EXPECT_EQ(names[0], std::string(c.name)) << c.src;
+	}
+}
+
+/* A \uXXXX escape is a spelling of a character, so it may appear in a name and
+   is decoded before the name is used. A surrogate pair reaches an astral
+   character, as it does in ECMAScript 5.1. */
+TEST(Json5UnquotedKeys, EscapesInNames) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	struct Case {
+		const char * src;
+		const char * name;
+	};
+	const Case cases[] = {
+	    {"{\\u0061:1}", "a"},
+	    {"{\\u0061bc:1}", "abc"},
+	    {"{a\\u0062c:1}", "abc"},
+	    {"{\\u00e9:1}", "\xC3\xA9"},
+	    {"{\\uD801\\uDC00:1}", "\xF0\x90\x90\x80"}, // U+10400
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::vector<std::string> names = names_of(c.src, &opts, &ok);
+		ASSERT_TRUE(ok) << c.src;
+		ASSERT_EQ(names.size(), 1u) << c.src;
+		EXPECT_EQ(names[0], std::string(c.name)) << c.src;
+	}
+}
+
+/* An escape naming a character that may not be in a name is not a name, and
+   neither is half a surrogate pair. \u{1F600} is ECMAScript 2015's spelling and
+   the JSON5 specification is written against 5.1. */
+TEST(Json5UnquotedKeys, RefusedEscapes) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	for (const char * src : {
+	         "{\\u0020:1}",          // space
+	         "{\\u002D:1}",          // hyphen-minus
+	         "{a\\u0020b:1}",        // space in the middle
+	         "{\\uD801:1}",          // lone high surrogate
+	         "{\\uDC00:1}",          // lone low surrogate
+	         "{\\uD801\\u0061:1}",   // high surrogate, then not a low one
+	         "{\\u{1F600}:1}",       // ES2015 spelling
+	         "{\\u00g1:1}",          // not hex
+	         "{\\x41:1}",            // not a unicode escape
+	         "{\\u006:1}",           // too few digits
+	     }) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* An emoji is not an identifier: U+1F600 has neither ID_Start nor
+   ID_Continue, so the table refuses it where it refuses a space. This is the
+   case that separates "any character above ASCII" from the real rule. */
+TEST(Json5UnquotedKeys, NotEveryNonAsciiCharacterIsAName) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	for (const char * src : {
+	         "{\xF0\x9F\x98\x80:1}",     // U+1F600 GRINNING FACE
+	         "{\\uD83D\\uDE00:1}",       // the same, escaped
+	         "{\xE2\x82\xAC:1}",         // U+20AC EURO SIGN (Sc, like $, but
+	                                     // ECMAScript names only $)
+	         "{\xC2\xB1:1}",             // U+00B1 PLUS-MINUS SIGN (Sm)
+	     }) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+	// A combining mark may continue a name but not start one: U+0301 is Mn,
+	// so ID_Continue without ID_Start.
+	EXPECT_EQ(dom_status("{a\xCC\x81:1}", &opts), GTEXT_JSON_OK);
+	EXPECT_NE(dom_status("{\xCC\x81:1}", &opts), GTEXT_JSON_OK);
+}
+
+/* IdentifierName includes the reserved words, so these are names and not
+   values. The lexer reads them as keyword tokens, which carry no text, so the
+   parsers recover the spelling from the token type. */
+TEST(Json5UnquotedKeys, AKeywordIsAName) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	struct Case {
+		const char * src;
+		const char * name;
+	};
+	const Case cases[] = {
+	    {"{true:1}", "true"},
+	    {"{false:1}", "false"},
+	    {"{null:1}", "null"},
+	    {"{NaN:1}", "NaN"},
+	    {"{Infinity:1}", "Infinity"},
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::vector<std::string> names = names_of(c.src, &opts, &ok);
+		ASSERT_TRUE(ok) << c.src;
+		ASSERT_EQ(names.size(), 1u) << c.src;
+		EXPECT_EQ(names[0], std::string(c.name)) << c.src;
+	}
+	// And they are still values where a value belongs.
+	EXPECT_EQ(dom_status("[true,false,null]", &opts), GTEXT_JSON_OK);
+	// NaN and Infinity as names do not need allow_nonfinite_numbers, which is
+	// about values. As values they still do.
+	EXPECT_EQ(opts.allow_nonfinite_numbers, false);
+	EXPECT_NE(dom_status("[NaN]", &opts), GTEXT_JSON_OK);
+	// -Infinity is not an identifier: a name cannot start with a sign.
+	EXPECT_NE(dom_status("{-Infinity:1}", &opts), GTEXT_JSON_OK);
+}
+
+TEST(Json5UnquotedKeys, RefusedWhenTheOptionIsOff) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_EQ(opts.allow_unquoted_keys, false);
+	for (const char * src : {"{a:1}", "{true:1}", "{$:1}", "{\\u0061:1}"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+	// Quoted names are unaffected.
+	EXPECT_EQ(dom_status("{\"a\":1}", &opts), GTEXT_JSON_OK);
+}
+
+/* A name is an object name and nothing else: an identifier where a value
+   belongs is still an error. */
+TEST(Json5UnquotedKeys, NotAValue) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	for (const char * src : {"[a]", "{a:b}", "a", "[1,abc]", "{a:1,b:c}"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* The name is decoded before it is compared, so a quoted and an unquoted
+   spelling of one name are one name. */
+TEST(Json5UnquotedKeys, DuplicateDetectionComparesDecodedNames) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	EXPECT_NE(dom_status("{a:1,\"a\":2}", &opts), GTEXT_JSON_OK);
+	EXPECT_NE(dom_status("{a:1,\\u0061:2}", &opts), GTEXT_JSON_OK);
+	EXPECT_NE(dom_status("{\"true\":1,true:2}", &opts), GTEXT_JSON_OK);
+	// Different names are still different.
+	EXPECT_EQ(dom_status("{a:1,b:2}", &opts), GTEXT_JSON_OK);
+}
+
+/* With normalize_unicode a name arrives normalized however it was written, or
+   the two spellings of one name would be two names when one of them is
+   unquoted. */
+TEST(Json5UnquotedKeys, NormalizationAppliesToUnquotedNames) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	opts.normalize_unicode = true;
+
+	// "cafe" + U+0301 unquoted, against the composed form quoted.
+	bool ok = false;
+	std::vector<std::string> names =
+	    names_of("{cafe\xCC\x81:1}", &opts, &ok);
+	ASSERT_TRUE(ok);
+	ASSERT_EQ(names.size(), 1u);
+	EXPECT_EQ(names[0], std::string("caf\xC3\xA9")) << "should be composed";
+
+	// And so the two spellings collide, as they do when both are quoted.
+	EXPECT_NE(dom_status("{\"caf\xC3\xA9\":1,cafe\xCC\x81:2}", &opts),
+	    GTEXT_JSON_OK);
+}
+
+TEST(Json5UnquotedKeys, TheStreamingParserEmitsTheSameNames) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	const char * sources[] = {
+	    "{alpha:1,beta:2}",
+	    "{\\u0061bc:1}",
+	    "{true:1,null:2}",
+	    "{caf\xC3\xA9:1}",
+	    "{a:{b:{c:1}}}",
+	};
+	for (const char * src : sources) {
+		bool dom_ok = false;
+		std::vector<std::string> expected = names_of(src, &opts, &dom_ok);
+		ASSERT_TRUE(dom_ok) << src;
+		// Every chunk size, because a name that reaches the end of a chunk is
+		// unfinished rather than complete and the lexer has to say so.
+		for (size_t chunk = 1; chunk <= std::strlen(src); chunk++) {
+			bool ok = false;
+			std::vector<std::string> got = stream_names(src, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << src << " at chunk " << chunk;
+			// The DOM names are only the top level; compare the first.
+			ASSERT_FALSE(got.empty()) << src << " at chunk " << chunk;
+			EXPECT_EQ(got[0], expected[0]) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* The streaming parser does not enforce the duplicate-name policy at all -
+   not for unquoted names, and not for quoted ones either, so this is older
+   than JSON5 and wider than it. Pinned here rather than left as a surprise:
+   dupkeys defaults to GTEXT_JSON_DUPKEY_ERROR, so the same document is refused
+   by gtext_json_parse() and accepted by the streaming parser. Enforcing it
+   there means remembering every name in each open object, which is a memory
+   cost a streaming parser should be asked for rather than assumed to want. */
+TEST(Json5UnquotedKeys, TheStreamingParserDoesNotSeeDuplicateNames) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	EXPECT_EQ(opts.dupkeys, GTEXT_JSON_DUPKEY_ERROR);
+	for (const char * src : {"{\"a\":1,\"a\":2}", "{a:1,\"a\":2}",
+	         "{a:1,a:2}"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK)
+		    << "the DOM parser refuses " << src;
+		EXPECT_TRUE(stream_accepts(src, &opts, std::strlen(src)))
+		    << "the streaming parser accepts " << src;
+	}
+}
+
+TEST(Json5UnquotedKeys, BothParsersAgreeAcrossChunkBoundaries) {
+	GTEXT_JSON_Parse_Options opts = key_opts();
+	struct Case {
+		const char * src;
+		bool valid;
+	};
+	const Case cases[] = {
+	    {"{a:1}", true},
+	    {"{a:1,b:[2,{c:3}]}", true},
+	    {"{true:1}", true},
+	    {"{\\u0061:1}", true},
+	    {"{1a:1}", false},
+	    {"{a b:1}", false},
+	    {"[a]", false},
+	};
+	for (const Case & c : cases) {
+		expect_both(c.src, &opts, c.valid);
+	}
+}
+
+// ===========================================================================
+// The dialect as a whole
+// ===========================================================================
+
+/* The preset turns on exactly the options JSON5 names, and nothing else. Field
+   by field, because "it works on a sample document" would pass just as well
+   with one of them missing - or with allow_unescaped_controls quietly added. */
+TEST(Json5Preset, TurnsOnTheDialectAndNothingElse) {
+	GTEXT_JSON_Parse_Options json5 = gtext_json_parse_options_json5();
+	GTEXT_JSON_Parse_Options strict = gtext_json_parse_options_default();
+
+	EXPECT_TRUE(json5.allow_comments);
+	EXPECT_TRUE(json5.allow_trailing_commas);
+	EXPECT_TRUE(json5.allow_single_quotes);
+	EXPECT_TRUE(json5.allow_nonfinite_numbers);
+	EXPECT_TRUE(json5.allow_hex_numbers);
+	EXPECT_TRUE(json5.allow_leading_plus);
+	EXPECT_TRUE(json5.allow_bare_decimal_point);
+	EXPECT_TRUE(json5.allow_ecma_escapes);
+	EXPECT_TRUE(json5.allow_line_continuations);
+	EXPECT_TRUE(json5.allow_ecma_whitespace);
+	EXPECT_TRUE(json5.allow_unquoted_keys);
+
+	// JSON5 permits a raw control character in a string no more than JSON does,
+	// and says nothing about normalization.
+	EXPECT_FALSE(json5.allow_unescaped_controls);
+	EXPECT_FALSE(json5.normalize_unicode);
+
+	// And the rest is the default's, not a second set of choices.
+	EXPECT_EQ(json5.validate_utf8, strict.validate_utf8);
+	EXPECT_EQ(json5.allow_leading_bom, strict.allow_leading_bom);
+	EXPECT_EQ(json5.dupkeys, strict.dupkeys);
+	EXPECT_EQ(json5.max_depth, strict.max_depth);
+	EXPECT_EQ(json5.max_string_bytes, strict.max_string_bytes);
+	EXPECT_EQ(json5.max_container_elems, strict.max_container_elems);
+	EXPECT_EQ(json5.max_total_bytes, strict.max_total_bytes);
+	EXPECT_EQ(json5.preserve_number_lexeme, strict.preserve_number_lexeme);
+	EXPECT_EQ(json5.parse_int64, strict.parse_int64);
+	EXPECT_EQ(json5.parse_uint64, strict.parse_uint64);
+	EXPECT_EQ(json5.parse_double, strict.parse_double);
+	EXPECT_EQ(json5.in_situ_mode, strict.in_situ_mode);
+	EXPECT_EQ(json5.allocator, strict.allocator);
+}
+
+/* The example from json5.org's front page, which uses nearly every difference
+   at once. Both parsers, and the streaming one at every chunk size, because
+   this is where the features meet each other. */
+TEST(Json5Preset, TheDocumentFromTheSpecification) {
+	const std::string src =
+	    "{\n"
+	    "  // comments\n"
+	    "  unquoted: 'and you can quote me on that',\n"
+	    "  singleQuotes: 'I can use \"double quotes\" here',\n"
+	    "  lineBreaks: \"Look, Mom! \\\n"
+	    "No \\\\n's!\",\n"
+	    "  hexadecimal: 0xdecaf,\n"
+	    "  leadingDecimalPoint: .8675309, andTrailing: 8675309.,\n"
+	    "  positiveSign: +1,\n"
+	    "  trailingComma: 'in objects', andIn: ['arrays',],\n"
+	    "  \"backwardsCompatible\": \"with JSON\",\n"
+	    "}";
+
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_json5();
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * doc =
+	    gtext_json_parse(src.data(), src.size(), &opts, &err);
+	ASSERT_NE(doc, nullptr) << (err.message ? err.message : "no message");
+	gtext_json_error_free(&err);
+
+	EXPECT_EQ(gtext_json_object_size(doc), 10u);
+
+	const GTEXT_JSON_Value * hex = gtext_json_object_get(doc, "hexadecimal", 11);
+	ASSERT_NE(hex, nullptr);
+	int64_t i64 = 0;
+	ASSERT_EQ(gtext_json_get_i64(hex, &i64), GTEXT_JSON_OK);
+	EXPECT_EQ(i64, 0xdecaf);
+
+	const GTEXT_JSON_Value * lead =
+	    gtext_json_object_get(doc, "leadingDecimalPoint", 19);
+	ASSERT_NE(lead, nullptr);
+	double d = 0.0;
+	ASSERT_EQ(gtext_json_get_double(lead, &d), GTEXT_JSON_OK);
+	EXPECT_DOUBLE_EQ(d, .8675309);
+
+	const GTEXT_JSON_Value * breaks = gtext_json_object_get(doc, "lineBreaks", 10);
+	ASSERT_NE(breaks, nullptr);
+	const char * s = nullptr;
+	size_t len = 0;
+	ASSERT_EQ(gtext_json_get_string(breaks, &s, &len), GTEXT_JSON_OK);
+	// The continuation contributes nothing, and the \\n stays two characters.
+	EXPECT_EQ(std::string(s, len), "Look, Mom! No \\n's!");
+
+	gtext_json_free(doc);
+
+	// And strict JSON refuses it, which is what says the preset is doing the
+	// work rather than the parser having quietly relaxed.
+	GTEXT_JSON_Parse_Options strict = gtext_json_parse_options_default();
+	EXPECT_NE(dom_status(src, &strict), GTEXT_JSON_OK);
+
+	// The streaming parser gets this document in the commit that repairs
+	// comments across chunk boundaries; in one feed it already agrees.
+	EXPECT_TRUE(stream_accepts(src, &opts, src.size()));
+}
+
+/* Valid JSON is valid JSON5, so the preset must accept everything the default
+   does. A handful of documents that exercise each value type. */
+TEST(Json5Preset, EveryJsonDocumentIsAJson5Document) {
+	GTEXT_JSON_Parse_Options json5 = gtext_json_parse_options_json5();
+	GTEXT_JSON_Parse_Options strict = gtext_json_parse_options_default();
+	const char * documents[] = {
+	    "{}",
+	    "[]",
+	    "null",
+	    "true",
+	    "0",
+	    "-1.5e10",
+	    "\"a string\"",
+	    "{\"a\":[1,2,{\"b\":null}],\"c\":true}",
+	    "[\"\\u00e9\",\"\\ud83d\\ude00\",\"\\t\"]",
+	    "{\"nested\":{\"deeply\":{\"enough\":[[[]]]}}}",
+	};
+	for (const char * src : documents) {
+		EXPECT_EQ(dom_status(src, &strict), GTEXT_JSON_OK) << "strict: " << src;
+		EXPECT_EQ(dom_status(src, &json5), GTEXT_JSON_OK) << "json5: " << src;
+	}
+}

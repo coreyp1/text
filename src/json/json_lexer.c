@@ -123,6 +123,57 @@ static size_t json_utf8_decode(
   return len;
 }
 
+/* One hex digit's value, or -1. json_string.c has its own copy of this for
+ * the escape decoder; a shared one would mean a header for four lines. */
+static int json_hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return c - 'a' + 10;
+  }
+  if (c >= 'A' && c <= 'F') {
+    return c - 'A' + 10;
+  }
+  return -1;
+}
+
+/* Where in an ECMAScript IdentifierName this codepoint may appear, or 0 if
+ * nowhere. The ranges are sorted and disjoint, so this is a binary search. */
+static uint32_t json5_ident_class(uint32_t cp) {
+  size_t lo = 0;
+  size_t hi = gtext_json5_ident_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (cp < gtext_json5_ident[mid].lo) {
+      hi = mid;
+    }
+    else if (cp > gtext_json5_ident[mid].hi) {
+      lo = mid + 1;
+    }
+    else {
+      return gtext_json5_ident[mid].value;
+    }
+  }
+  return 0;
+}
+
+/* May this codepoint start an IdentifierName, or continue one?
+ *
+ * ID_Start and ID_Continue answer most of it; `$` and `_` are ECMAScript's own
+ * additions, and `_` needs naming only as a *start* because the UCD has it as
+ * Pc and therefore already as a continuation. ZWNJ and ZWJ need no naming at
+ * all: they carry ID_Continue in this UCD, so the table admits them exactly
+ * where ECMAScript does. */
+static int json5_ident_start(uint32_t cp) {
+  return cp == '$' || cp == '_' ||
+      json5_ident_class(cp) == GTEXT_JSON5_IDENT_START;
+}
+
+static int json5_ident_continue(uint32_t cp) {
+  return cp == '$' || json5_ident_class(cp) != 0;
+}
+
 /* The whitespace at `p`, in bytes, or 0 if there is none. `*ends_line` says
  * whether it ends a line, which is what the position counter needs.
  *
@@ -743,6 +794,228 @@ static int json_lexer_match_signed_nonfinite(
   }
   json_position_update_column(&lexer->pos, length);
   return allowed ? 1 : GTEXT_JSON_E_NONFINITE;
+}
+
+/* One character of an IdentifierName at `p`: its codepoint, and how many bytes
+ * of input it occupies. A `\uXXXX` escape is one character six bytes long, and
+ * a surrogate pair is one character twelve bytes long - ECMAScript 5.1 writes
+ * an astral character that way, and JSON5 is written against 5.1.
+ *
+ * Returns JSON5_IDENT_CHAR_OK, JSON5_IDENT_CHAR_NONE when the bytes are not
+ * part of a name at all, or JSON5_IDENT_CHAR_TRUNCATED when the input ends in
+ * the middle of an escape - which is a different answer because more input can
+ * still change it. */
+typedef enum {
+  JSON5_IDENT_CHAR_OK = 0,
+  JSON5_IDENT_CHAR_NONE = 1,
+  JSON5_IDENT_CHAR_TRUNCATED = 2
+} json5_ident_char_status;
+
+static json5_ident_char_status json5_ident_char(
+    const char * p, size_t available, uint32_t * out_cp, size_t * out_len) {
+  if (available == 0) {
+    return JSON5_IDENT_CHAR_NONE;
+  }
+  if (p[0] != '\\') {
+    const size_t len = json_utf8_decode(p, available, out_cp);
+    if (len == 0) {
+      /* A truncated character is not the same as a character that cannot be in
+       * a name: the lead byte says how many bytes it wanted. */
+      const size_t want = json_utf8_lead_length((unsigned char)p[0]);
+      if (want > available) {
+        return JSON5_IDENT_CHAR_TRUNCATED;
+      }
+      return JSON5_IDENT_CHAR_NONE;
+    }
+    *out_len = len;
+    return JSON5_IDENT_CHAR_OK;
+  }
+
+  /* An escape. Only \uXXXX: \u{...} is ECMAScript 2015's and the JSON5
+   * specification is written against 5.1. */
+  if (available < 2) {
+    return JSON5_IDENT_CHAR_TRUNCATED;
+  }
+  if (p[1] != 'u') {
+    return JSON5_IDENT_CHAR_NONE;
+  }
+  if (available < 6) {
+    return JSON5_IDENT_CHAR_TRUNCATED;
+  }
+  uint32_t cp = 0;
+  for (size_t i = 2; i < 6; i++) {
+    const int digit = json_hex_value(p[i]);
+    if (digit < 0) {
+      return JSON5_IDENT_CHAR_NONE;
+    }
+    cp = (cp << 4) | (uint32_t)digit;
+  }
+  if (cp >= 0xD800 && cp <= 0xDBFF) {
+    /* A high surrogate names half a character. The other half has to be a
+     * second escape, as it does in ECMAScript. */
+    if (available < 8) {
+      return JSON5_IDENT_CHAR_TRUNCATED;
+    }
+    if (p[6] != '\\' || p[7] != 'u') {
+      return JSON5_IDENT_CHAR_NONE;
+    }
+    if (available < 12) {
+      return JSON5_IDENT_CHAR_TRUNCATED;
+    }
+    uint32_t low = 0;
+    for (size_t i = 8; i < 12; i++) {
+      const int digit = json_hex_value(p[i]);
+      if (digit < 0) {
+        return JSON5_IDENT_CHAR_NONE;
+      }
+      low = (low << 4) | (uint32_t)digit;
+    }
+    if (low < 0xDC00 || low > 0xDFFF) {
+      return JSON5_IDENT_CHAR_NONE;
+    }
+    *out_cp = 0x10000u + ((cp - 0xD800u) << 10) + (low - 0xDC00u);
+    *out_len = 12;
+    return JSON5_IDENT_CHAR_OK;
+  }
+  if (cp >= 0xDC00 && cp <= 0xDFFF) {
+    return JSON5_IDENT_CHAR_NONE; // A low surrogate on its own.
+  }
+  *out_cp = cp;
+  *out_len = 6;
+  return JSON5_IDENT_CHAR_OK;
+}
+
+/* Write `cp` as UTF-8 at `out`, returning the number of bytes. */
+static size_t json5_utf8_encode(uint32_t cp, char * out) {
+  if (cp < 0x80) {
+    out[0] = (char)cp;
+    return 1;
+  }
+  if (cp < 0x800) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+/* An unquoted object name: JSON5's JSON5Identifier, which is ECMAScript's
+ * IdentifierName.
+ *
+ * Returns 1 for a name, 0 if the input does not begin one - the caller then
+ * reports whatever it would have reported anyway - and a status otherwise.
+ * Two passes: the first measures the run, so the buffer for the decoded name
+ * can be the run's length rather than the rest of the document. Escapes only
+ * ever shrink, six bytes to at most four.
+ *
+ * In streaming mode a run that reaches the end of the buffer is unfinished
+ * rather than complete, and nothing is consumed - the same arrangement the
+ * keyword path uses, and it works for the same reason: the caller keeps the
+ * bytes and lexes them again when more arrive. gtext_json_stream_finish()
+ * clears streaming_mode, so the last name in a document is not left waiting.
+ */
+static int json_lexer_parse_identifier(
+    json_lexer * lexer, json_token * token, GTEXT_JSON_Status * out_status) {
+  const size_t start = lexer->current_offset;
+  size_t at = start;
+  size_t characters = 0;
+
+  while (at < lexer->input_len) {
+    uint32_t cp = 0;
+    size_t len = 0;
+    const json5_ident_char_status got = json5_ident_char(
+        lexer->input + at, lexer->input_len - at, &cp, &len);
+    if (got == JSON5_IDENT_CHAR_TRUNCATED) {
+      if (lexer->streaming_mode) {
+        *out_status = GTEXT_JSON_E_INCOMPLETE;
+        return 1;
+      }
+      break;
+    }
+    if (got == JSON5_IDENT_CHAR_NONE) {
+      break;
+    }
+    if (!(characters == 0 ? json5_ident_start(cp) : json5_ident_continue(cp))) {
+      break;
+    }
+    at += len;
+    characters++;
+  }
+
+  if (characters == 0) {
+    return 0; // Not a name.
+  }
+  if (lexer->streaming_mode && at >= lexer->input_len) {
+    /* The run reached the end of what has arrived, so the next chunk may
+     * continue it. Nothing is consumed. */
+    *out_status = GTEXT_JSON_E_INCOMPLETE;
+    return 1;
+  }
+
+  const size_t run_len = at - start;
+  char * decoded = (char *)gtext_allocator_malloc(
+      lexer->opts ? lexer->opts->allocator : NULL, run_len + 1);
+  if (!decoded) {
+    *out_status = GTEXT_JSON_E_OOM;
+    return 1;
+  }
+
+  size_t out_len = 0;
+  size_t scan = start;
+  while (scan < at) {
+    uint32_t cp = 0;
+    size_t len = 0;
+    if (json5_ident_char(lexer->input + scan, at - scan, &cp, &len) !=
+        JSON5_IDENT_CHAR_OK) {
+      break; // Cannot happen: the first pass accepted these bytes.
+    }
+    out_len += json5_utf8_encode(cp, decoded + out_len);
+    scan += len;
+  }
+  decoded[out_len] = '\0';
+
+  /* NFC, if it was asked for. A name is a name however it was written, so an
+   * unquoted one is normalised exactly as a quoted one is - otherwise
+   * duplicate-name detection would answer differently for `{"caf\u00e9":1,
+   * cafe\u0301:2}` than for the same pair both quoted. */
+  if (lexer->opts && lexer->opts->normalize_unicode) {
+    char * normalized = NULL;
+    size_t normalized_len = 0;
+    const int nfc = gtext_nfc_utf8(
+        lexer->opts->allocator, decoded, out_len, &normalized, &normalized_len);
+    gtext_allocator_free(lexer->opts->allocator, decoded);
+    if (nfc != 1) {
+      *out_status = nfc == 0 ? GTEXT_JSON_E_BAD_UNICODE : GTEXT_JSON_E_OOM;
+      return 1;
+    }
+    decoded = normalized;
+    out_len = normalized_len;
+  }
+
+  token->type = JSON_TOKEN_IDENT;
+  token->pos = lexer->pos;
+  token->length = run_len;
+  token->data.string.alloc = lexer->opts ? lexer->opts->allocator : NULL;
+  token->data.string.value = decoded;
+  token->data.string.value_len = out_len;
+  token->data.string.original_start = start;
+  token->data.string.original_len = run_len;
+
+  lexer->current_offset = at;
+  lexer->pos.offset = at;
+  json_position_update_column(&lexer->pos, characters);
+  *out_status = GTEXT_JSON_OK;
+  return 1;
 }
 
 // Parse a string token
@@ -1882,13 +2155,39 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_next(
     return json_lexer_parse_number(lexer, token);
   }
 
+  const int allow_unquoted =
+      lexer->opts && lexer->opts->allow_unquoted_keys;
+
   // Keyword tokens (true, false, null, NaN, Infinity)
+  const json_position keyword_pos = lexer->pos;
   int keyword_result = json_lexer_match_keyword(lexer, token);
   if (keyword_result == 1) {
     return GTEXT_JSON_OK;
   }
   else if (keyword_result == GTEXT_JSON_E_NONFINITE) {
-    return GTEXT_JSON_E_NONFINITE;
+    /* "NaN" or "Infinity" where nonfinite numbers were not asked for. Where
+     * unquoted names are allowed, those words are also ordinary names - JSON5
+     * takes IdentifierName, which includes the reserved words - so the
+     * identifier scan gets a look before this becomes an error. The refusal
+     * advanced the lexer, so put it back first. */
+    if (!allow_unquoted) {
+      return GTEXT_JSON_E_NONFINITE;
+    }
+    lexer->current_offset = start;
+    lexer->pos = keyword_pos;
+    memset(token, 0, sizeof(*token));
+    token->type = JSON_TOKEN_ERROR;
+  }
+
+  /* An unquoted object name. This sits after the keyword path so that `true`
+   * in a value position is still the boolean; a name that happens to spell a
+   * keyword is handled by the parsers, which know they are looking at a name.
+   * A backslash can start one, because \uXXXX is a spelling of a character. */
+  if (allow_unquoted) {
+    GTEXT_JSON_Status ident_status = GTEXT_JSON_OK;
+    if (json_lexer_parse_identifier(lexer, token, &ident_status)) {
+      return ident_status;
+    }
   }
 
   // In streaming mode, check if we have a partial keyword prefix
@@ -1943,6 +2242,7 @@ GTEXT_INTERNAL_API void json_token_cleanup(json_token * token) {
   }
 
   switch (token->type) {
+  case JSON_TOKEN_IDENT:
   case JSON_TOKEN_STRING:
     if (token->data.string.value) {
       gtext_allocator_free(

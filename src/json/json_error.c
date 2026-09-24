@@ -163,6 +163,8 @@ const char * json_token_type_description(int token_type) {
     return "string";
   case JSON_TOKEN_NUMBER:
     return "number";
+  case JSON_TOKEN_IDENT:
+    return "unquoted name";
   case JSON_TOKEN_NAN:
     return "NaN";
   case JSON_TOKEN_INFINITY:

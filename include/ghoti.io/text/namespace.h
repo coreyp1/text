@@ -220,6 +220,7 @@
 #define gtext_json_write_file GHOTIIO_TEXT(gtext_json_write_file)
 #define gtext_json_parse_multiple GHOTIIO_TEXT(gtext_json_parse_multiple)
 #define gtext_json_parse_options_default GHOTIIO_TEXT(gtext_json_parse_options_default)
+#define gtext_json_parse_options_json5 GHOTIIO_TEXT(gtext_json_parse_options_json5)
 #define gtext_json_patch_apply GHOTIIO_TEXT(gtext_json_patch_apply)
 #define gtext_json_pointer_get GHOTIIO_TEXT(gtext_json_pointer_get)
 #define gtext_json_pointer_get_mut GHOTIIO_TEXT(gtext_json_pointer_get_mut)

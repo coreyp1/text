@@ -342,6 +342,8 @@ typedef enum {
   JSON_TOKEN_FALSE,       ///< false keyword
   JSON_TOKEN_STRING,      ///< String value
   JSON_TOKEN_NUMBER,      ///< Number value
+  JSON_TOKEN_IDENT,       ///< Unquoted object name (JSON5), value in
+                          ///< data.string like a string token
   JSON_TOKEN_NAN,         ///< NaN (extension)
   JSON_TOKEN_INFINITY,    ///< Infinity (extension)
   JSON_TOKEN_NEG_INFINITY ///< -Infinity (extension)
@@ -673,6 +675,18 @@ GTEXT_JSON_Status json_error_generate_context_snippet(const char * input,
  * @return Static string describing the token, or "unknown token" if invalid
  */
 const char * json_token_type_description(int token_type);
+
+/**
+ * @brief The text a keyword token was written with, or NULL if it is not one
+ *
+ * For the one place a keyword is a name rather than a value: JSON5's unquoted
+ * object names are ECMAScript IdentifierNames, which include the reserved
+ * words.
+ *
+ * @param token_type Token type from json_token_type enum
+ * @return A static string, or NULL
+ */
+GTEXT_INTERNAL_API const char * json_keyword_token_spelling(int token_type);
 
 /**
  * @brief Get effective limit value (use default if configured is 0)

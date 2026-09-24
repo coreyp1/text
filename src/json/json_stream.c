@@ -697,8 +697,18 @@ static GTEXT_JSON_Status json_stream_handle_token(
     if (token->type == JSON_TOKEN_RBRACE) {
       return json_stream_close_object(st, token, err);
     }
-    // Expecting object key
-    if (token->type != JSON_TOKEN_STRING) {
+    /* Expecting a name: a string always, an unquoted IdentifierName where
+     * JSON5 was asked for, and then also one of the words the lexer reads as a
+     * keyword everywhere else, because IdentifierName includes the reserved
+     * words. A keyword token carries no text, so the spelling comes from the
+     * type - the same rule the DOM parser applies, from the same function. */
+    const char * keyword_name = NULL;
+    if (token->type != JSON_TOKEN_STRING && token->type != JSON_TOKEN_IDENT &&
+        st->opts.allow_unquoted_keys) {
+      keyword_name = json_keyword_token_spelling(token->type);
+    }
+    if (token->type != JSON_TOKEN_STRING && token->type != JSON_TOKEN_IDENT &&
+        !keyword_name) {
       json_position pos = {
           .offset = st->buffer_start_offset + token->pos.offset,
           .line = token->pos.line,
@@ -711,8 +721,10 @@ static GTEXT_JSON_Status json_stream_handle_token(
     {
       GTEXT_JSON_Event evt;
       evt.type = GTEXT_JSON_EVT_KEY;
-      evt.as.str.s = token->data.string.value;
-      evt.as.str.len = token->data.string.value_len;
+      evt.as.str.s =
+          keyword_name ? keyword_name : token->data.string.value;
+      evt.as.str.len =
+          keyword_name ? strlen(keyword_name) : token->data.string.value_len;
       status = json_stream_emit_event(st, GTEXT_JSON_EVT_KEY, &evt);
       if (status != GTEXT_JSON_OK) {
         return status;
