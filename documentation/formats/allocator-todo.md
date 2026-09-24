@@ -23,6 +23,13 @@ So the rule is the one `make check-allocators` enforces: a file is added to
 allocator, and the public option is only documented as covering what that list
 covers.
 
+The list is the gate's whole field of view, so a file that is clean and *not*
+on it is the bad case: correct today, with nothing holding it there. Three were
+found in exactly that state - `src/allocator.c`, `src/idna/nfc_utf8.c` and
+`src/yaml/json_to_yaml.c`, all three already allocator-clean and none of them
+watched. Adding a converted file to the list belongs in the commit that
+converts it.
+
 ## CSV: done
 
 `GTEXT_CSV_Parse_Options::allocator` covers the parse and everything the table

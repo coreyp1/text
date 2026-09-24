@@ -804,6 +804,9 @@ ALLOCATOR_CLEAN_SOURCES := \
 	src/csv/csv_stream_buffer.c \
 	src/csv/csv_table.c \
 	src/json/json_pull_reader.c \
+	src/allocator.c \
+	src/idna/nfc_utf8.c \
+	src/yaml/json_to_yaml.c \
 	src/yaml/reader.c \
 	src/yaml/scanner.c \
 	src/yaml/stream.c \
