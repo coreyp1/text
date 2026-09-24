@@ -409,7 +409,7 @@ typedef struct {
  */
 GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_init(json_lexer * lexer,
     const char * input, size_t input_len, const GTEXT_JSON_Parse_Options * opts,
-    int streaming_mode);
+    int streaming_mode, int at_input_start);
 
 /**
  * @brief Get the next token from the lexer

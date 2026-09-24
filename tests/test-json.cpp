@@ -940,7 +940,7 @@ TEST(Lexer, TokenTypes) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "{}[]:,";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Test LBRACE
@@ -995,7 +995,7 @@ TEST(Lexer, Keywords) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "null true false";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Test null
@@ -1026,7 +1026,7 @@ TEST(Lexer, StringTokenization) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "\"hello\\nworld\"";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1046,7 +1046,7 @@ TEST(Lexer, NumberTokenization) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "123 -456 789.012";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Test integer
@@ -1084,7 +1084,7 @@ TEST(Lexer, Comments) {
     opts.allow_comments = true;
 
     const char * input = "// comment\n123 /* multi\nline */ 456";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should skip comment and get first number
@@ -1112,7 +1112,7 @@ TEST(Lexer, CommentsRejected) {
     opts.allow_comments = false;
 
     const char * input = "// comment\n123";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should treat // as invalid token
@@ -1131,7 +1131,7 @@ TEST(Lexer, PositionTracking) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "{\n  \"key\": 123\n}";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // LBRACE at line 1, col 1
@@ -1181,7 +1181,7 @@ TEST(Lexer, ExtensionTokens) {
     opts.allow_nonfinite_numbers = true;
 
     const char * input = "NaN Infinity -Infinity";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Test NaN
@@ -1213,7 +1213,7 @@ TEST(Lexer, ExtensionTokensRejected) {
     opts.allow_nonfinite_numbers = false;
 
     const char * input = "NaN";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should treat NaN as invalid token (not a keyword)
@@ -1232,7 +1232,7 @@ TEST(Lexer, WhitespaceHandling) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "  {  }  [  ]  ";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should skip leading whitespace
@@ -1267,7 +1267,7 @@ TEST(Lexer, ErrorReporting) {
     GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
 
     const char * input = "123 @ invalid";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should successfully parse number
@@ -1296,7 +1296,7 @@ TEST(Lexer, SingleQuoteStrings) {
     opts.allow_single_quotes = true;
 
     const char * input = "'hello world'";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1317,7 +1317,7 @@ TEST(Lexer, SingleQuoteStringsRejected) {
     opts.allow_single_quotes = false;
 
     const char * input = "'hello'";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1337,7 +1337,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with tab character (0x09) - should be rejected
     const char * input = "\"hello\tworld\"";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1347,7 +1347,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with newline (0x0A) - should be rejected
     const char * input2 = "\"hello\nworld\"";
-    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0);
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1357,7 +1357,7 @@ TEST(Lexer, UnescapedControlsRejected) {
 
     // Test with null byte (0x00) - should be rejected
     const char input3[] = "\"hello\0world\"";
-    status = json_lexer_init(&lexer, input3, sizeof(input3) - 1, &opts, 0);
+    status = json_lexer_init(&lexer, input3, sizeof(input3) - 1, &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1377,7 +1377,7 @@ TEST(Lexer, UnescapedControlsAllowed) {
 
     // Test with tab character (0x09) - should be allowed
     const char * input = "\"hello\tworld\"";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1389,7 +1389,7 @@ TEST(Lexer, UnescapedControlsAllowed) {
 
     // Test with newline (0x0A) - should be allowed
     const char * input2 = "\"hello\nworld\"";
-    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0);
+    status = json_lexer_init(&lexer, input2, strlen(input2), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     status = json_lexer_next(&lexer, &token);
@@ -1414,7 +1414,7 @@ TEST(Lexer, AllExtensionsCombined) {
 
     // Input with comments, single quotes, nonfinite numbers, and unescaped controls
     const char * input = "// comment\n'hello\tworld' Infinity NaN";
-    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0);
+    GTEXT_JSON_Status status = json_lexer_init(&lexer, input, strlen(input), &opts, 0, 1);
     EXPECT_EQ(status, GTEXT_JSON_OK);
 
     // Should skip comment and get single-quoted string with tab
@@ -13504,5 +13504,121 @@ TEST(JsonStreamNonfinite, AnUnfinishedWordIsStillRefused) {
 			stream_event_trace(whole, &opts, chunk, &ok);
 			EXPECT_FALSE(ok) << src << " at chunk " << chunk;
 		}
+	}
+}
+
+/*
+ * A stream with no value in it.
+ *
+ * `gtext_json_parse()` refuses an input holding nothing but white space, or
+ * nothing but a comment, because a JSON text is a value. The streaming parser
+ * accepted both, emitting no events and returning OK from finish(), because it
+ * treated "bytes arrived" as evidence that a value had. A caller could not
+ * tell an empty configuration file from a valid one.
+ *
+ * Found by the JSON fuzzer's DOM-against-stream differential.
+ */
+TEST(JsonStreamEmpty, AStreamWithNoValueIsRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_comments = true;
+
+	for (const char * src : {"", " ", "\n", "\t\r\n ", "// just a comment",
+	         "// a comment\n", "/* a comment */", "  /* two */ /* comments */ ",
+	         "\xEF\xBB\xBF"}) {
+		const std::string whole = src;
+		EXPECT_EQ(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser accepts [" << src << "]";
+		for (size_t chunk = 1; chunk <= (whole.empty() ? 1 : whole.size());
+		     chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_FALSE(ok) << "[" << src << "] at chunk " << chunk;
+		}
+	}
+}
+
+/* And a document that does have a value is still accepted, with the same
+   leading white space and comments in front of it. */
+TEST(JsonStreamEmpty, AValueAfterAllThatIsStillAccepted) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_comments = true;
+	for (const char * src : {"1", " 1 ", "// c\n1", "/* c */ 1",
+	         "\xEF\xBB\xBF" "1", "\n\n[]\n"}) {
+		const std::string whole = src;
+		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser refuses [" << src << "]";
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << "[" << src << "] at chunk " << chunk;
+		}
+	}
+}
+
+/*
+ * A byte-order mark, and where it may be.
+ *
+ * allow_leading_bom skips a UTF-8 BOM at the start of the input. Two things
+ * about that were chunk-dependent in the streaming parser, and the fuzzer's
+ * differential named both: the mark could not arrive in pieces, because a
+ * truncated multi-byte sequence between tokens was read as a bad token instead
+ * of an unfinished one; and it was skipped wherever a compacted buffer happened
+ * to begin, so a BOM in the middle of a document was silently ignored when a
+ * chunk boundary left it at the front.
+ */
+TEST(JsonStreamBom, TheMarkMayArriveInPieces) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_TRUE(opts.allow_leading_bom);
+	for (const char * src : {"\xEF\xBB\xBF" "1", "\xEF\xBB\xBF" "[1,2]",
+	         "\xEF\xBB\xBF" "{\"a\":1}"}) {
+		const std::string whole = src;
+		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser refuses " << src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+TEST(JsonStreamBom, AMarkInTheMiddleIsNotALeadingOne) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	for (const char * src : {"[1,\xEF\xBB\xBF" "2]", "{\xEF\xBB\xBF\"a\":1}",
+	         "[1]\xEF\xBB\xBF"}) {
+		const std::string whole = src;
+		EXPECT_EQ(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser accepts " << src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_FALSE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* U+FEFF inside a string is an ordinary character - RFC 8259 excludes only the
+   quote, the backslash and the control characters - so the mark that is skipped
+   before the document is content once a string has started. */
+TEST(JsonStreamBom, InsideAStringItIsJustACharacter) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	const std::string src = "[\"\xEF\xBB\xBF\"]";
+	GTEXT_JSON_Value * doc =
+	    gtext_json_parse(src.data(), src.size(), &opts, nullptr);
+	ASSERT_NE(doc, nullptr);
+	const char * s = nullptr;
+	size_t len = 0;
+	ASSERT_EQ(gtext_json_get_string(gtext_json_array_get(doc, 0), &s, &len),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(std::string(s, len), "\xEF\xBB\xBF");
+	gtext_json_free(doc);
+	for (size_t chunk = 1; chunk <= src.size(); chunk++) {
+		bool ok = false;
+		stream_event_trace(src, &opts, chunk, &ok);
+		EXPECT_TRUE(ok) << "at chunk " << chunk;
 	}
 }

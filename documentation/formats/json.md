@@ -291,6 +291,22 @@ reporter rather than the failing token's, and that status is
 whose code said OK beside the message "Tokenization error", and the next feed
 returned `GTEXT_JSON_E_STATE` - one call too late to say what was wrong.
 
+**Fixed: a stream holding no value was accepted.** `gtext_json_parse()`
+refuses an input that is only white space, or only a comment, because a JSON
+text is a value. `gtext_json_stream_finish()` accepted both, emitting no events
+and returning OK, because it treated "bytes arrived" as evidence that a value
+had - so a caller could not tell an empty configuration file from a valid one.
+
+**Fixed: a byte-order mark had to arrive whole, and was skipped in the middle
+of a document.** `allow_leading_bom` skips a BOM at the start of the input.
+In the streaming parser a truncated multi-byte sequence between tokens was read
+as a bad token rather than an unfinished one, so `<BOM>1` fed a byte at a time
+was refused; and because the parser re-initialises its lexer on each feed with a
+compacted buffer, the mark was skipped wherever that buffer began - `[1,<BOM>2]`
+was refused by `gtext_json_parse()` and accepted by the stream at a chunk size
+of 3. The BOM is now skipped only where the input really begins. U+FEFF inside a
+string was never affected: it is an ordinary character there.
+
 **The streaming parser does not enforce the duplicate-name policy.** `dupkeys`
 defaults to `GTEXT_JSON_DUPKEY_ERROR` and `gtext_json_parse()` honors it, but
 `gtext_json_stream_feed()` emits both names and reports success. So the same

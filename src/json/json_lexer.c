@@ -1979,7 +1979,7 @@ static GTEXT_JSON_Status json_lexer_parse_number(
 
 GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_init(json_lexer * lexer,
     const char * input, size_t input_len, const GTEXT_JSON_Parse_Options * opts,
-    int streaming_mode) {
+    int streaming_mode, int at_input_start) {
   // Defensive NULL pointer checks
   if (!lexer) {
     return GTEXT_JSON_E_INVALID;
@@ -1998,8 +1998,13 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_init(json_lexer * lexer,
   lexer->streaming_mode = streaming_mode ? 1 : 0;
   lexer->token_buffer = NULL; // Set by caller if needed
 
-  // Skip leading BOM if enabled
-  if (opts && opts->allow_leading_bom && input_len >= 3 &&
+  /* Skip leading BOM if enabled - and only where the input really begins.
+   * The streaming parser re-initialises the lexer on every feed with whatever
+   * is unprocessed, and the buffer is compacted, so without at_input_start a
+   * mid-document BOM was skipped as a leading one whenever a chunk boundary
+   * left it at the front of the buffer: `[1,<BOM>2]` was refused by
+   * gtext_json_parse() and accepted by the stream at a chunk size of 3. */
+  if (at_input_start && opts && opts->allow_leading_bom && input_len >= 3 &&
       (unsigned char)input[0] == 0xEF && (unsigned char)input[1] == 0xBB &&
       (unsigned char)input[2] == 0xBF) {
     lexer->current_offset = 3;
@@ -2067,13 +2072,17 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_next(
   }
   char c = lexer->input[start];
 
-  /* A multi-byte whitespace character cut in half by a chunk boundary. The
-   * skipper above cannot tell "this is not whitespace" from "not all of it has
-   * arrived", and between tokens nothing else may start with a byte above
-   * 0x7F, so more input is the only thing that can decide. A byte that cannot
-   * start a character at all is a real error and falls through to one. */
-  if (lexer->streaming_mode && lexer->opts &&
-      lexer->opts->allow_ecma_whitespace && (unsigned char)c >= 0x80) {
+  /* A multi-byte character cut in half by a chunk boundary. Between tokens
+   * nothing may start with a byte above 0x7F except a byte-order mark and, with
+   * allow_ecma_whitespace, one of Unicode's spaces - and the skippers above
+   * cannot tell "this is not one of those" from "not all of it has arrived", so
+   * more input is the only thing that can decide. A byte that cannot start a
+   * character at all is a real error and falls through to one.
+   *
+   * This used to ask for allow_ecma_whitespace, which left strict JSON unable
+   * to take a BOM that arrived in pieces: with the bytes fed one at a time,
+   * `<BOM>1` was accepted by gtext_json_parse() and refused by the stream. */
+  if (lexer->streaming_mode && (unsigned char)c >= 0x80) {
     const size_t need = json_utf8_lead_length((unsigned char)c);
     if (need > 1 && lexer->input_len - start < need) {
       return GTEXT_JSON_E_INCOMPLETE;

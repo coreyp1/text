@@ -302,10 +302,13 @@ static GTEXT_JSON_Status json_stream_process_tokens(
 
   // Initialize or reinitialize lexer with current buffer
   // We reinitialize after compacting to ensure the input pointer is valid
-  GTEXT_JSON_Status status = json_lexer_init(
-      &st->lexer, st->input_buffer, st->input_buffer_used, &st->opts,
-      1 // streaming mode
-  );
+  GTEXT_JSON_Status status = json_lexer_init(&st->lexer, st->input_buffer,
+      st->input_buffer_used, &st->opts,
+      1, // streaming mode
+      /* The buffer is compacted, so it begins where the input does only while
+       * nothing has been consumed - which is what decides whether a BOM here
+       * is a leading one. */
+      st->buffer_start_offset == 0);
   if (status != GTEXT_JSON_OK) {
     json_position pos = {
         .offset = st->buffer_start_offset, .line = 1, .col = 1};
@@ -1203,10 +1206,10 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_finish(
 
     // Reinitialize lexer - if there's unprocessed input, use it; otherwise use
     // empty buffer
-    status = json_lexer_init(
-        &st->lexer, st->input_buffer, unprocessed_len, &st->opts,
-        0 // force complete mode (not streaming)
-    );
+    status = json_lexer_init(&st->lexer, st->input_buffer, unprocessed_len,
+        &st->opts,
+        0, // force complete mode (not streaming)
+        st->buffer_start_offset == 0);
     if (status != GTEXT_JSON_OK) {
       st->lexer.streaming_mode = old_streaming_mode; // Restore
       json_position pos = {
@@ -1351,10 +1354,10 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_finish(
       // So we use st->input_buffer directly (not st->input_buffer +
       // st->input_buffer_processed) Safe: unprocessed_len <=
       // st->input_buffer_size, so st->input_buffer + unprocessed_len is valid
-      status = json_lexer_init(
-          &st->lexer, st->input_buffer, unprocessed_len, &st->opts,
-          0 // force complete mode (not streaming)
-      );
+      status = json_lexer_init(&st->lexer, st->input_buffer, unprocessed_len,
+          &st->opts,
+          0, // force complete mode (not streaming)
+          st->buffer_start_offset == 0);
       if (status != GTEXT_JSON_OK) {
         st->lexer.streaming_mode = old_streaming_mode; // Restore
         json_position pos = {
@@ -1474,11 +1477,15 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_finish(
         st, GTEXT_JSON_E_INCOMPLETE, "Incomplete JSON structure", pos, err);
   }
 
-  // Validate final state
-  // After force-completion, state should be DONE if we successfully processed a
-  // value Only report INIT as error if we truly have no input (buffer is empty)
-  if (st->state == JSON_STREAM_STATE_INIT && st->input_buffer_used == 0) {
-    // No input was provided
+  /* Validate final state. INIT means no value was ever started - handling one
+   * moves the state to VALUE, DONE, ARRAY or OBJECT_KEY - so a document has to
+   * be refused here whether or not bytes arrived. This used to require an
+   * empty buffer as well, on the reasoning that bytes having arrived meant a
+   * value had, and the effect was that an input holding nothing but white
+   * space, or nothing but a comment, was *accepted* with no events emitted.
+   * gtext_json_parse() refuses all three; the JSON fuzzer's differential found
+   * the pair. */
+  if (st->state == JSON_STREAM_STATE_INIT) {
     json_position pos = {.offset = 0, .line = 1, .col = 1};
     return json_stream_set_error(
         st, GTEXT_JSON_E_INCOMPLETE, "No JSON value provided", pos, err);

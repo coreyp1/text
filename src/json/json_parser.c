@@ -1703,7 +1703,7 @@ static GTEXT_JSON_Value * json_parse_internal(const char * bytes, size_t len,
 
   // Initialize lexer
   GTEXT_JSON_Status status =
-      json_lexer_init(&parser.lexer, bytes, len, opt, 0); // not streaming mode
+      json_lexer_init(&parser.lexer, bytes, len, opt, 0, /* at start */ 1);
   if (status != GTEXT_JSON_OK) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = status,
