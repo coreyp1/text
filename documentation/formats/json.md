@@ -159,6 +159,27 @@ U+180E was Zs until Unicode 6.3 reclassified it as Cf. A character that only
 looks space-like is not whitespace - U+200B ZERO WIDTH SPACE is Cf and stays a
 syntax error.
 
+**JSONPath (RFC 9535), without the filter selector.**
+`gtext_json_path_compile()` and `gtext_json_path_select()`, with
+`gtext_json_path_query()` for a one-shot. The root identifier, child and
+descendant segments, and the name, wildcard, index and slice selectors,
+including several selectors in one bracket. A result is a node list in the order
+the specification gives, and it may hold the same node twice - `$[0,0]` selects
+the first element twice, and §2.3.1.2 says so.
+
+The **filter selector** (`$[?@.price < 10]`) is refused at compile time with
+`GTEXT_JSON_E_PATH_UNSUPPORTED`, and so is any query containing one. It needs an
+expression evaluator, and `match()` and `search()` need an I-Regexp engine,
+which this library does not have. Refusing is the point: a query whose filter
+was quietly dropped selects *every* element of the array rather than the ones
+asked for, so ignoring it would turn a missing feature into a wrong answer. A
+query that is not well-formed is `GTEXT_JSON_E_PATH`, which is a different
+status because it asks the caller for something different.
+
+The examples in RFC 9535 §1.5 and the slice examples in §2.3.4 are in the suite,
+in `tests/test-json-path.cpp`, written from the RFC rather than from this
+implementation.
+
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,
 `move`, `copy` and `test`, applied atomically so that a failing operation

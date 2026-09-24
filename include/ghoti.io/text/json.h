@@ -40,6 +40,7 @@
 // Include all JSON module headers
 #include <ghoti.io/text/json/json_dom.h>
 #include <ghoti.io/text/json/json_patch.h>
+#include <ghoti.io/text/json/json_path.h>
 #include <ghoti.io/text/json/json_pointer.h>
 #include <ghoti.io/text/json/json_schema.h>
 #include <ghoti.io/text/json/json_stream.h>

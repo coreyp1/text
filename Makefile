@@ -803,6 +803,7 @@ ALLOCATOR_CLEAN_SOURCES := \
 	src/csv/csv_stream.c \
 	src/csv/csv_stream_buffer.c \
 	src/csv/csv_table.c \
+	src/json/json_path.c \
 	src/json/json_pull_reader.c \
 	src/allocator.c \
 	src/idna/nfc_utf8.c \

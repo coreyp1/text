@@ -75,7 +75,15 @@ typedef enum {
   /// Schema uses a standard keyword this implementation does not enforce.
   /// Appended rather than grouped with GTEXT_JSON_E_SCHEMA so that the
   /// numeric value of every pre-existing constant is unchanged.
-  GTEXT_JSON_E_SCHEMA_UNSUPPORTED
+  GTEXT_JSON_E_SCHEMA_UNSUPPORTED,
+
+  /// JSONPath query is not well-formed (RFC 9535).
+  GTEXT_JSON_E_PATH,
+
+  /// JSONPath query is well-formed and uses a construct this implementation
+  /// does not evaluate. Separate from GTEXT_JSON_E_PATH because the two ask a
+  /// caller for different things: one is a typo, the other is a feature.
+  GTEXT_JSON_E_PATH_UNSUPPORTED
 } GTEXT_JSON_Status;
 
 /**
