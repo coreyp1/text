@@ -127,6 +127,16 @@ escape, so with `allow_ecma_escapes` alone it is an error rather than quietly
 meaning a newline. A *raw* newline inside a string is still a control character
 under both options; the continuation is the backslash's doing.
 
+**JSON5 whitespace.** `allow_ecma_whitespace`, off by default, widens the space
+*between* tokens from JSON's four characters - tab, LF, CR, space - to
+ECMAScript's set: vertical tab, form feed, U+FEFF, every character in
+General_Category Zs (U+00A0 and U+3000 among them), and the line terminators
+U+2028 and U+2029. Zs comes from a generated table checked against the pinned
+UCD by `make check-json5-tables`, because that category has moved before:
+U+180E was Zs until Unicode 6.3 reclassified it as Cf. A character that only
+looks space-like is not whitespace - U+200B ZERO WIDTH SPACE is Cf and stays a
+syntax error.
+
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,
 `move`, `copy` and `test`, applied atomically so that a failing operation

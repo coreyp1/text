@@ -1544,23 +1544,26 @@ check-json5-tables: ## Fail if the committed JSON5 identifier table is not what 
 	fi; \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	if ! python3 tools/json5/gen_ident_tables.py --out "$$tmp" >/dev/null 2>"$$tmp/err"; then \
+	mkdir -p "$$tmp/out"; \
+	if ! python3 tools/json5/gen_ident_tables.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
 		printf "\033[0;31m\n### The JSON5 identifier generator failed ###\033[0m\n" >&2; \
 		cat "$$tmp/err" >&2; \
 		exit 1; \
 	fi; \
-	if ! diff -u $(JSON5_TABLES)/json5_ident_tables.c "$$tmp/json5_ident_tables.c" >"$$tmp/diff" 2>&1; then \
-		printf "\033[0;31m\n### The committed JSON5 identifier table is stale ###\033[0m\n" >&2; \
+	cp $(JSON5_TABLES)/json5_tables_internal.h "$$tmp/out/"; \
+	if ! diff -ru $(JSON5_TABLES) "$$tmp/out" >"$$tmp/diff" 2>&1; then \
+		printf "\033[0;31m\n### The committed JSON5 tables are stale ###\033[0m\n" >&2; \
 		head -40 "$$tmp/diff" >&2; \
-		printf "\nAn unquoted JSON5 name is an ECMAScript IdentifierName, which is\n" >&2; \
-		printf "defined over the Unicode properties ID_Start and ID_Continue. The\n" >&2; \
-		printf "table is committed so that a build needs neither the network nor\n" >&2; \
+		printf "\nAn unquoted JSON5 name is an ECMAScript IdentifierName, defined over\n" >&2; \
+		printf "the Unicode properties ID_Start and ID_Continue, and its whitespace is\n" >&2; \
+		printf "ECMAScript's, which includes General_Category Zs. Both tables are\n" >&2; \
+		printf "committed so that a build needs neither the network nor\n" >&2; \
 		printf "Python, which means it can drift from the generator that is supposed\n" >&2; \
 		printf "to produce it. Regenerate with:\n" >&2; \
 		printf "  tools/json5/gen_ident_tables.py\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mThe JSON5 identifier table is byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
+	printf "\033[0;32mThe JSON5 tables are byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \

@@ -781,3 +781,106 @@ TEST(Json5Escapes, BothParsersAgreeAcrossChunkBoundaries) {
 		expect_both(c.src, &opts, c.valid);
 	}
 }
+
+// ===========================================================================
+// ECMAScript whitespace between tokens
+// ===========================================================================
+
+TEST(Json5Whitespace, EveryCharacterEcmaScriptCallsWhitespace) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_ecma_whitespace = true;
+
+	// Each of these sits between the tokens of [1,2]. The Zs members come from
+	// the generated table; the rest are named by ECMAScript itself.
+	const char * spaces[] = {
+	    "\x0B",             // VT
+	    "\x0C",             // FF
+	    "\xC2\xA0",         // U+00A0 NO-BREAK SPACE (Zs)
+	    "\xE1\x9A\x80",     // U+1680 OGHAM SPACE MARK (Zs)
+	    "\xE2\x80\x80",     // U+2000 EN QUAD (Zs)
+	    "\xE2\x80\x8A",     // U+200A HAIR SPACE (Zs)
+	    "\xE2\x80\xAF",     // U+202F NARROW NO-BREAK SPACE (Zs)
+	    "\xE2\x81\x9F",     // U+205F MEDIUM MATHEMATICAL SPACE (Zs)
+	    "\xE3\x80\x80",     // U+3000 IDEOGRAPHIC SPACE (Zs)
+	    "\xE2\x80\xA8",     // U+2028 LINE SEPARATOR
+	    "\xE2\x80\xA9",     // U+2029 PARAGRAPH SEPARATOR
+	    "\xEF\xBB\xBF",     // U+FEFF ZERO WIDTH NO-BREAK SPACE
+	};
+	for (const char * space : spaces) {
+		std::string src = std::string("[1,") + space + "2]";
+		EXPECT_EQ(dom_status(src, &opts), GTEXT_JSON_OK)
+		    << "between elements: " << src;
+		std::string around = std::string(space) + "[1,2]" + space;
+		EXPECT_EQ(dom_status(around, &opts), GTEXT_JSON_OK)
+		    << "around the document";
+		std::string in_object =
+		    std::string("{\"a\"") + space + ":" + space + "1}";
+		EXPECT_EQ(dom_status(in_object, &opts), GTEXT_JSON_OK)
+		    << "around a colon";
+	}
+}
+
+TEST(Json5Whitespace, RefusedWhenTheOptionIsOff) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_EQ(opts.allow_ecma_whitespace, false);
+	const char * spaces[] = {"\x0B", "\x0C", "\xC2\xA0", "\xE3\x80\x80",
+	    "\xE2\x80\xA8"};
+	for (const char * space : spaces) {
+		std::string src = std::string("[1,") + space + "2]";
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+	// JSON's own four are unaffected either way.
+	for (const char * space : {" ", "\t", "\r", "\n"}) {
+		std::string src = std::string("[1,") + space + "2]";
+		EXPECT_EQ(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* A character the table does not name is not whitespace, however space-like it
+   looks. U+200B ZERO WIDTH SPACE is Cf, not Zs, and ECMAScript does not name
+   it; U+180E was Zs until Unicode 6.3 moved it to Cf. */
+TEST(Json5Whitespace, NotEverySpaceLikeCharacterCounts) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_ecma_whitespace = true;
+	const char * not_spaces[] = {
+	    "\xE2\x80\x8B", // U+200B ZERO WIDTH SPACE (Cf)
+	    "\xE1\xA0\x8E", // U+180E MONGOLIAN VOWEL SEPARATOR (Cf since 6.3)
+	    "\xC2\xAD",     // U+00AD SOFT HYPHEN (Cf)
+	};
+	for (const char * c : not_spaces) {
+		std::string src = std::string("[1,") + c + "2]";
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* A three-byte space split between feeds. The skipper sees a truncated
+   sequence, which is indistinguishable from "not whitespace" without more
+   input, so the streaming parser has to wait rather than refuse. */
+TEST(Json5Whitespace, MultiByteSpaceSplitBetweenFeeds) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_ecma_whitespace = true;
+	const std::string src = "[1,\xE3\x80\x80" "2]"; // U+3000 between tokens
+	for (size_t chunk = 1; chunk <= src.size(); chunk++) {
+		EXPECT_TRUE(stream_accepts(src, &opts, chunk))
+		    << "chunk size " << chunk;
+	}
+}
+
+TEST(Json5Whitespace, BothParsersAgreeAcrossChunkBoundaries) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_ecma_whitespace = true;
+	struct Case {
+		const char * src;
+		bool valid;
+	};
+	const Case cases[] = {
+	    {"[1,\xC2\xA0" "2]", true},
+	    {"\xEF\xBB\xBF" "[1,2]", true},
+	    {"{\"a\"\xE2\x80\xA8:1}", true},
+	    {"[1,\xE2\x80\x8B" "2]", false},
+	    {"[1,\xC2" "2]", false}, // A truncated sequence is not whitespace.
+	};
+	for (const Case & c : cases) {
+		expect_both(c.src, &opts, c.valid);
+	}
+}

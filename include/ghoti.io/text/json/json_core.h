@@ -219,6 +219,26 @@ typedef struct {
    */
   bool allow_line_continuations;
 
+  /**
+   * Treat ECMAScript's whitespace as whitespace between tokens. JSON5.
+   * Default: off.
+   *
+   * JSON allows four characters between tokens: tab, LF, CR and space.
+   * ECMAScript - and so JSON5 - also allows vertical tab, form feed, the
+   * zero-width no-break space U+FEFF, every character in General_Category Zs
+   * (which includes the no-break space U+00A0 and the ideographic space
+   * U+3000), and the line terminators U+2028 and U+2029.
+   *
+   * Zs comes from a generated table rather than a list written out here,
+   * because that category has changed: U+180E was Zs until Unicode 6.3 moved
+   * it to Cf. `make check-json5-tables` holds the table to the pinned UCD.
+   *
+   * This is about the space *between* tokens. It says nothing about what may
+   * appear inside a string, where JSON already allows every one of these
+   * except a raw CR or LF.
+   */
+  bool allow_ecma_whitespace;
+
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)

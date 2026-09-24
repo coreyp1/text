@@ -38,8 +38,138 @@
 #include "../idna/nfc_utf8_internal.h"
 #include "json_internal.h"
 #include "json_stream_internal.h"
+#include "tables/json5_tables_internal.h"
 
 #include <ghoti.io/text/json/json_core.h>
+
+/* The ranges are sorted and disjoint, so this is a binary search. */
+static int json5_space_table_has(uint32_t cp) {
+  size_t lo = 0;
+  size_t hi = gtext_json5_space_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (cp < gtext_json5_space[mid].lo) {
+      hi = mid;
+    }
+    else if (cp > gtext_json5_space[mid].hi) {
+      lo = mid + 1;
+    }
+    else {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* How many bytes the UTF-8 character starting with `lead` occupies, or 0 if
+ * that byte cannot start one. */
+static size_t json_utf8_lead_length(unsigned char lead) {
+  if (lead < 0x80) {
+    return 1;
+  }
+  if ((lead & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((lead & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((lead & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 0;
+}
+
+/* Decode one UTF-8 character. Returns its length in bytes and writes the
+ * codepoint, or 0 if the bytes are not a well-formed character - which here
+ * means "not whitespace" rather than an error, because a malformed sequence
+ * between tokens is for the token that follows to complain about. */
+static size_t json_utf8_decode(
+    const char * p, size_t available, uint32_t * out_cp) {
+  const unsigned char * u = (const unsigned char *)p;
+  if (available == 0) {
+    return 0;
+  }
+  if (u[0] < 0x80) {
+    *out_cp = u[0];
+    return 1;
+  }
+  size_t len;
+  uint32_t cp;
+  if ((u[0] & 0xE0) == 0xC0) {
+    len = 2;
+    cp = u[0] & 0x1Fu;
+  }
+  else if ((u[0] & 0xF0) == 0xE0) {
+    len = 3;
+    cp = u[0] & 0x0Fu;
+  }
+  else if ((u[0] & 0xF8) == 0xF0) {
+    len = 4;
+    cp = u[0] & 0x07u;
+  }
+  else {
+    return 0;
+  }
+  if (available < len) {
+    return 0;
+  }
+  for (size_t i = 1; i < len; i++) {
+    if ((u[i] & 0xC0) != 0x80) {
+      return 0;
+    }
+    cp = (cp << 6) | (u[i] & 0x3Fu);
+  }
+  *out_cp = cp;
+  return len;
+}
+
+/* The whitespace at `p`, in bytes, or 0 if there is none. `*ends_line` says
+ * whether it ends a line, which is what the position counter needs.
+ *
+ * JSON allows four characters here. ECMAScript's WhiteSpace and
+ * LineTerminator productions, which JSON5 takes, add vertical tab, form feed,
+ * U+FEFF, every Zs, and U+2028 and U+2029. Zs comes from the generated table;
+ * the others are named by ECMAScript rather than by a Unicode property, so
+ * they are written out. */
+static size_t json_lexer_whitespace_length(
+    const json_lexer * lexer, const char * p, size_t available,
+    int * ends_line) {
+  *ends_line = 0;
+  if (available == 0) {
+    return 0;
+  }
+  const unsigned char c = (unsigned char)p[0];
+  if (c == '\n') {
+    *ends_line = 1;
+    return 1;
+  }
+  if (c == ' ' || c == '\t' || c == '\r') {
+    return 1;
+  }
+  if (!(lexer->opts && lexer->opts->allow_ecma_whitespace)) {
+    return 0;
+  }
+  if (c == 0x0B || c == 0x0C) { // Vertical tab, form feed
+    return 1;
+  }
+  if (c < 0x80) {
+    return 0;
+  }
+  uint32_t cp;
+  const size_t len = json_utf8_decode(p, available, &cp);
+  if (len == 0) {
+    return 0;
+  }
+  if (cp == 0x2028 || cp == 0x2029) { // LINE and PARAGRAPH SEPARATOR
+    *ends_line = 1;
+    return len;
+  }
+  if (cp == 0xFEFF) { // ZERO WIDTH NO-BREAK SPACE
+    return len;
+  }
+  return json5_space_table_has(cp) ? len : 0;
+}
+
 // Skip whitespace characters
 static void json_lexer_skip_whitespace(json_lexer * lexer) {
   while (lexer->current_offset < lexer->input_len) {
@@ -47,28 +177,29 @@ static void json_lexer_skip_whitespace(json_lexer * lexer) {
     if (!json_check_bounds_offset(lexer->current_offset, lexer->input_len)) {
       break;
     }
-    char c = lexer->input[lexer->current_offset];
-    if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-      if (c == '\n') {
-        json_position_increment_line(&lexer->pos);
-        lexer->pos.col = 1;
-      }
-      else {
-        json_position_update_column(&lexer->pos, 1);
-      }
-      // Check for overflow before incrementing
-      if (json_check_add_overflow(lexer->current_offset, 1)) {
-        // Overflow - saturate at SIZE_MAX
-        lexer->current_offset = SIZE_MAX;
-        json_position_update_offset(&lexer->pos, 1);
-        break;
-      }
-      lexer->current_offset++;
-      json_position_update_offset(&lexer->pos, 1);
-    }
-    else {
+    int ends_line = 0;
+    const size_t len = json_lexer_whitespace_length(lexer,
+        lexer->input + lexer->current_offset,
+        lexer->input_len - lexer->current_offset, &ends_line);
+    if (len == 0) {
       break;
     }
+    if (ends_line) {
+      json_position_increment_line(&lexer->pos);
+      lexer->pos.col = 1;
+    }
+    else {
+      json_position_update_column(&lexer->pos, 1);
+    }
+    // Check for overflow before incrementing
+    if (json_check_add_overflow(lexer->current_offset, len)) {
+      // Overflow - saturate at SIZE_MAX
+      lexer->current_offset = SIZE_MAX;
+      json_position_update_offset(&lexer->pos, len);
+      break;
+    }
+    lexer->current_offset += len;
+    json_position_update_offset(&lexer->pos, len);
   }
 }
 
@@ -1614,6 +1745,19 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_next(
     return GTEXT_JSON_E_INVALID;
   }
   char c = lexer->input[start];
+
+  /* A multi-byte whitespace character cut in half by a chunk boundary. The
+   * skipper above cannot tell "this is not whitespace" from "not all of it has
+   * arrived", and between tokens nothing else may start with a byte above
+   * 0x7F, so more input is the only thing that can decide. A byte that cannot
+   * start a character at all is a real error and falls through to one. */
+  if (lexer->streaming_mode && lexer->opts &&
+      lexer->opts->allow_ecma_whitespace && (unsigned char)c >= 0x80) {
+    const size_t need = json_utf8_lead_length((unsigned char)c);
+    if (need > 1 && lexer->input_len - start < need) {
+      return GTEXT_JSON_E_INCOMPLETE;
+    }
+  }
 
   // Punctuation tokens
   switch (c) {

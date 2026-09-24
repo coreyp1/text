@@ -66,6 +66,25 @@ typedef struct {
 extern const GTEXT_JSON5_Ident_Range gtext_json5_ident[];
 extern const size_t gtext_json5_ident_count;
 
+/**
+ * @brief One run of codepoints in General_Category Zs
+ *
+ * ECMAScript's WhiteSpace production includes <USP>, which is Zs, and JSON5
+ * takes its whitespace from ECMAScript. No value field: membership is the
+ * whole answer.
+ *
+ * The rest of that production - TAB, VT, FF and ZWNBSP - and the
+ * LineTerminators are named by ECMAScript rather than derived from a Unicode
+ * property, so they are in the lexer instead.
+ */
+typedef struct {
+  uint32_t lo;
+  uint32_t hi;
+} GTEXT_JSON5_Space_Range;
+
+extern const GTEXT_JSON5_Space_Range gtext_json5_space[];
+extern const size_t gtext_json5_space_count;
+
 #ifdef __cplusplus
 }
 #endif
