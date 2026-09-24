@@ -435,7 +435,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
+TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -710,7 +710,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1530,6 +1530,37 @@ IDNA_MAPPING_VERSION := $(shell cat tools/idna/IDNA_MAPPING_VERSION 2>/dev/null)
 IDNA_MAPPING_DIR := third_party/idna/$(IDNA_MAPPING_VERSION)
 METASCHEMA_DIR := third_party/json-schema
 METASCHEMA_SRC := src/json/metaschema
+
+JSON5_TABLES := src/json/tables
+
+check-json5-tables: ## Fail if the committed JSON5 identifier table is not what the generator produces
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		printf "check-json5-tables: skipped (no python3)\n"; \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(UCD_DIR)" ]; then \
+		printf "check-json5-tables: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
+		exit 0; \
+	fi; \
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	if ! python3 tools/json5/gen_ident_tables.py --out "$$tmp" >/dev/null 2>"$$tmp/err"; then \
+		printf "\033[0;31m\n### The JSON5 identifier generator failed ###\033[0m\n" >&2; \
+		cat "$$tmp/err" >&2; \
+		exit 1; \
+	fi; \
+	if ! diff -u $(JSON5_TABLES)/json5_ident_tables.c "$$tmp/json5_ident_tables.c" >"$$tmp/diff" 2>&1; then \
+		printf "\033[0;31m\n### The committed JSON5 identifier table is stale ###\033[0m\n" >&2; \
+		head -40 "$$tmp/diff" >&2; \
+		printf "\nAn unquoted JSON5 name is an ECMAScript IdentifierName, which is\n" >&2; \
+		printf "defined over the Unicode properties ID_Start and ID_Continue. The\n" >&2; \
+		printf "table is committed so that a build needs neither the network nor\n" >&2; \
+		printf "Python, which means it can drift from the generator that is supposed\n" >&2; \
+		printf "to produce it. Regenerate with:\n" >&2; \
+		printf "  tools/json5/gen_ident_tables.py\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mThe JSON5 identifier table is byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \
