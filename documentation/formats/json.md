@@ -260,6 +260,37 @@ the bytes: `JsonStreamComments` feeds nine documents at every chunk size from
 one byte up and compares the events against the same document in one feed. A
 genuinely unclosed comment is still an error at `finish()`.
 
+**Fixed: white space after the document could not arrive in its own feed.**
+JSON allows white space after a top-level value and `gtext_json_parse()`
+accepts it, but `gtext_json_stream_feed()` refused any feed once the document
+was complete - so `"a"\n` was valid delivered in one feed and
+`GTEXT_JSON_E_STATE` delivered in two, and a caller reading a file in
+fixed-size blocks could not control which it got. Feeding in that state is now
+allowed; content rather than white space is still
+`GTEXT_JSON_E_TRAILING_GARBAGE`, whichever feed it arrives in, and feeding
+after `gtext_json_stream_finish()` is still `GTEXT_JSON_E_STATE`. Found by the
+JSON fuzzer's new DOM-against-stream differential, on a seed corpus entry, the
+first time that property was asserted.
+
+**Fixed: a signed `Infinity` or `NaN` could not be streamed.** `-Infinity`
+reaches the lexer through the number path, because a sign starts a number, and
+that path buffers a token that has not finished arriving. Two defects in the
+buffering meant the value parsed in one feed and one byte at a time and almost
+nowhere in between: the first feed to hold a sign *and* a letter appended those
+bytes to the buffer twice, and the count of how much of the token had been seen
+added this chunk's bytes to a buffer that already held them - which pushed it
+past the nine characters of `-Infinity`, so the check for an unfinished word was
+skipped and a prefix went to the number parser as though it were the whole
+thing. Both predate the JSON5 work; the same failures reproduce on the commit
+before it.
+
+**Fixed: a tokenization error was reported as success.** The streaming
+parser's error path passed the *lexer initialisation's* status to the error
+reporter rather than the failing token's, and that status is
+`GTEXT_JSON_OK` by then. So a feed that failed returned OK with an error struct
+whose code said OK beside the message "Tokenization error", and the next feed
+returned `GTEXT_JSON_E_STATE` - one call too late to say what was wrong.
+
 **The streaming parser does not enforce the duplicate-name policy.** `dupkeys`
 defaults to `GTEXT_JSON_DUPKEY_ERROR` and `gtext_json_parse()` honors it, but
 `gtext_json_stream_feed()` emits both names and reports success. So the same

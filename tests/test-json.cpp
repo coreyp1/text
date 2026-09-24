@@ -13393,3 +13393,116 @@ TEST(JsonStreamComments, ASlashAtTheEndOfAFeedWaits) {
 	gtext_json_stream_free(st2);
 	gtext_json_error_free(&err2);
 }
+
+/*
+ * Bytes after the document.
+ *
+ * JSON allows white space after a top-level value and gtext_json_parse()
+ * accepts it, so the streaming parser has to as well - a caller feeding a file
+ * in fixed-size blocks cannot control whether the newline that ends it lands in
+ * the same block as the `}`. Feeding in the DONE state used to be refused
+ * outright, which made `"a"\n` valid in one feed and invalid in two.
+ *
+ * Found by the JSON fuzzer's DOM-against-stream differential, on a seed corpus
+ * entry, the first time that property was asserted.
+ */
+TEST(JsonStreamTrailing, WhiteSpaceAfterTheDocumentMayArriveLate) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	for (const char * src : {"\"a\"\n", "{\"a\":1}\n", "[1,2]\n  \n",
+	         "null\t", "1 "}) {
+		const std::string whole = src;
+		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser refuses " << src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* Content after the document is refused, and refused the same way whichever
+   feed it arrives in - which is the half of this that was already true. */
+TEST(JsonStreamTrailing, ContentAfterTheDocumentIsStillRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	for (const char * src : {"\"a\" 1", "{\"a\":1} {}", "[1] null", "1 2"}) {
+		const std::string whole = src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_FALSE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* And finish() does close the stream: what it refuses is a further feed, which
+   is a different question from whether bytes may follow the document. */
+TEST(JsonStreamTrailing, FeedingAfterFinishIsRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+	                             GTEXT_JSON_Error *) { return GTEXT_JSON_OK; };
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+	ASSERT_NE(st, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_stream_feed(st, "[1]", 3, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_finish(st, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_feed(st, " ", 1, &err), GTEXT_JSON_E_STATE);
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+}
+
+/*
+ * A nonfinite value with a sign, split across feeds.
+ *
+ * `-Infinity` reaches the lexer through the number path rather than the
+ * keyword path, because a sign starts a number, and that path buffers a token
+ * that has not finished arriving. Two defects in that buffering meant the
+ * value could not be streamed at most chunk sizes at all - it worked in one
+ * feed, and one byte at a time, and almost nowhere in between.
+ *
+ * Found by the JSON fuzzer's DOM-against-stream differential. Both defects
+ * predate the JSON5 work: the same failures reproduce on the commit before it.
+ */
+TEST(JsonStreamNonfinite, ASignedWordSurvivesEveryChunkBoundary) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_nonfinite_numbers = true;
+	opts.allow_leading_plus = true;
+
+	for (const char * src : {"-Infinity", "+Infinity", "-NaN", "+NaN",
+	         "Infinity", "NaN", "[-Infinity]", "[1,-Infinity,2]",
+	         "{\"a\":-Infinity}", "[-Infinity,-Infinity]"}) {
+		const std::string whole = src;
+		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser refuses " << src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* And a word that only starts like one is still refused, at every chunk size:
+   the fix must not make the lexer accept a prefix as though it were the whole
+   thing, which is exactly how the second defect failed. */
+TEST(JsonStreamNonfinite, AnUnfinishedWordIsStillRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_nonfinite_numbers = true;
+	opts.allow_leading_plus = true;
+
+	for (const char * src : {"-Infinit", "-Infinityy", "-Inf", "-NaNN", "-N",
+	         "[-Infinit]", "-I"}) {
+		const std::string whole = src;
+		EXPECT_EQ(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
+		    nullptr)
+		    << "the DOM parser accepts " << src;
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_FALSE(ok) << src << " at chunk " << chunk;
+		}
+	}
+}

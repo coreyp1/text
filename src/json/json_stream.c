@@ -398,12 +398,19 @@ static GTEXT_JSON_Status json_stream_process_tokens(
         }
       }
 
-      // Real error
+      /* Real error. token_status, not status: `status` is the result of the
+       * lexer *initialisation* above and is GTEXT_JSON_OK by now, so passing it
+       * here set the stream's state to ERROR and then returned success. A
+       * caller saw OK from the feed that failed, an error struct whose code
+       * said OK beside a message saying "Tokenization error", and
+       * GTEXT_JSON_E_STATE from the next feed - which is where the defect
+       * usually got noticed, one call too late to say what was wrong. */
       json_position pos = {.offset = st->buffer_start_offset + token.pos.offset,
           .line = token.pos.line,
           .col = token.pos.col};
       json_token_cleanup(&token);
-      return json_stream_set_error(st, status, "Tokenization error", pos, err);
+      return json_stream_set_error(
+          st, token_status, "Tokenization error", pos, err);
     }
 
     // Update processed offset
@@ -473,8 +480,8 @@ static GTEXT_JSON_Status json_stream_validate_state(
     // Already in error state - don't process further
     return GTEXT_JSON_E_STATE;
   }
-  if (st->state == JSON_STREAM_STATE_DONE) {
-    // Already done - don't process further
+  if (st->finished) {
+    // finish() has been called; nothing more may be fed.
     return GTEXT_JSON_E_STATE;
   }
   // Validate state is one of the expected active states
@@ -483,7 +490,8 @@ static GTEXT_JSON_Status json_stream_validate_state(
       st->state != JSON_STREAM_STATE_ARRAY &&
       st->state != JSON_STREAM_STATE_OBJECT_KEY &&
       st->state != JSON_STREAM_STATE_OBJECT_VALUE &&
-      st->state != JSON_STREAM_STATE_EXPECT_VALUE) {
+      st->state != JSON_STREAM_STATE_EXPECT_VALUE &&
+      st->state != JSON_STREAM_STATE_DONE) {
     // Invalid state - this should not happen
     json_position pos = {
         .offset = st->total_bytes_consumed, .line = 1, .col = 1};
@@ -1029,8 +1037,18 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_feed(GTEXT_JSON_Stream * st,
     return GTEXT_JSON_E_INVALID;
   }
 
-  if (st->state == JSON_STREAM_STATE_ERROR ||
-      st->state == JSON_STREAM_STATE_DONE) {
+  /* The DONE state is not closed for business: JSON allows white space after a
+   * document and this parser's DOM entry point accepts it, so a caller feeding
+   * a file in fixed-size blocks must be able to hand over the newline that
+   * ended it. What is refused is feeding after finish(), and content rather
+   * than white space - the token loop answers that with
+   * GTEXT_JSON_E_TRAILING_GARBAGE, whichever feed the content arrives in.
+   *
+   * Refusing the whole feed here made the answer depend on where the caller's
+   * chunk boundaries fell: `"a"\n` was accepted in one feed and refused in
+   * two. The JSON fuzzer's differential found that the moment it was asked
+   * whether the two parsers agree. */
+  if (st->state == JSON_STREAM_STATE_ERROR || st->finished) {
     if (err) {
       *err = (GTEXT_JSON_Error){.code = GTEXT_JSON_E_STATE,
           .message = "Stream is in invalid state for feeding",
@@ -1467,5 +1485,6 @@ GTEXT_API GTEXT_JSON_Status gtext_json_stream_finish(
   }
 
   st->state = JSON_STREAM_STATE_DONE;
+  st->finished = 1;
   return GTEXT_JSON_OK;
 }

@@ -1833,9 +1833,15 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     // At EOF but number looks complete - parse it
   }
 
-  // Check if number is valid (only for complete numbers)
-  size_t total_len =
-      resuming && tb ? (tb->buffer_used + (end - start)) : (end - start);
+  /* How much of the token has been seen. When resuming, the buffer holds all
+   * of it - every branch of the scan loop appends what it consumes - so adding
+   * (end - start) counted this chunk's bytes twice. The EOF block above had it
+   * right and this had it wrong, and the disagreement is what kept
+   * "-Infinity" from streaming at an even chunk size: with the buffer at
+   * "-Infinit" the doubled figure passed 9, the signed-nonfinite prefix check
+   * below was skipped as too long to be one, and an unfinished word went to
+   * json_parse_number() as though it were finished. */
+  size_t total_len = resuming && tb ? tb->buffer_used : (end - start);
 
   // Before validating, check if this might be -Infinity (complete or prefix)
   // This handles the case where -Infinity wasn't caught by
@@ -1872,20 +1878,14 @@ static GTEXT_JSON_Status json_lexer_parse_number(
             tb->type = JSON_TOKEN_BUFFER_NUMBER;
             tb->start_offset = start;
           }
-          // If not resuming, buffer the characters we've read
-          if (!resuming && content_len > 0) {
-            for (size_t i = 0; i < content_len; i++) {
-              if (start + i >= lexer->input_len)
-                break;
-              GTEXT_JSON_Status buf_status =
-                  json_token_buffer_append(tb, &lexer->input[start + i], 1);
-              if (buf_status != GTEXT_JSON_OK) {
-                json_token_buffer_clear(tb);
-                return buf_status;
-              }
-            }
-            tb->is_buffered = 1;
-          }
+          /* The characters are already in the buffer: every branch of the scan
+           * loop appends what it consumes, and json_token_buffer_append() sets
+           * is_buffered itself. This used to append them a second time, so a
+           * first feed holding a sign and at least one letter of a nonfinite
+           * word left "-I-I" in the buffer and the next feed lexed that - which
+           * is why "-Infinity" could not be streamed at any chunk size between
+           * 2 and 8. At chunk size 1 the first feed is the sign alone, which
+           * returns through a different path and was never doubled. */
           tb->parse_state.number_state.has_dot = has_dot;
           tb->parse_state.number_state.has_exp = has_exp;
           tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;

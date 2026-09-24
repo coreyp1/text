@@ -260,6 +260,15 @@ struct GTEXT_JSON_Stream {
   // Limits tracking
   size_t total_bytes_consumed; ///< Total bytes processed
   size_t container_elem_count; ///< Current container element count
+
+  /* Whether gtext_json_stream_finish() has been called. The DONE state cannot
+   * answer that: it is also where a complete top-level value leaves the
+   * parser, and bytes may legitimately follow one - JSON allows white space
+   * after a document, and so does this parser's DOM entry point. So feeding is
+   * refused after finish and allowed after DONE, and the token loop refuses
+   * anything that is not white space or a comment with
+   * GTEXT_JSON_E_TRAILING_GARBAGE. */
+  int finished;
 };
 
 #ifdef __cplusplus
