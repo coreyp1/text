@@ -110,8 +110,8 @@ int json_matches(const char * input, size_t len, const char * keyword);
  */
 GTEXT_INTERNAL_API GTEXT_JSON_Status json_decode_string(const char * input,
     size_t input_len, char * output, size_t output_capacity,
-    size_t * output_len, json_position * pos, int validate_utf8,
-    json_utf8_mode utf8_mode, int allow_unescaped_controls);
+    size_t * output_len, json_position * pos, json_utf8_mode utf8_mode,
+    const GTEXT_JSON_Parse_Options * opts);
 
 /**
  * @brief Number representation flags

@@ -571,3 +571,213 @@ TEST(Json5Numbers, PlusAndHexCompose) {
 	hex_only.allow_hex_numbers = true;
 	EXPECT_NE(dom_status("[+0x10]", &hex_only), GTEXT_JSON_OK);
 }
+
+// ===========================================================================
+// ECMAScript string escapes
+// ===========================================================================
+
+namespace {
+
+// The decoded bytes of the one string in a single-element array.
+std::string only_string(const std::string & src,
+    const GTEXT_JSON_Parse_Options * opts, bool * ok) {
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Value * doc = gtext_json_parse(src.data(), src.size(), opts, &err);
+	std::string out;
+	*ok = false;
+	if (doc) {
+		const GTEXT_JSON_Value * v = gtext_json_array_get(doc, 0);
+		const char * s = nullptr;
+		size_t len = 0;
+		if (v && gtext_json_get_string(v, &s, &len) == GTEXT_JSON_OK) {
+			out.assign(s, len);
+			*ok = true;
+		}
+		gtext_json_free(doc);
+	}
+	gtext_json_error_free(&err);
+	return out;
+}
+
+GTEXT_JSON_Parse_Options escape_opts(void) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_ecma_escapes = true;
+	return opts;
+}
+
+} // namespace
+
+TEST(Json5Escapes, HexEscapeIsACodepointNotAByte) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	struct Case {
+		const char * src;
+		const char * expect;
+		size_t expect_len;
+	};
+	// \xe9 is U+00E9, whose UTF-8 is two bytes. A decoder that wrote the byte
+	// 0xE9 would produce a string that is not UTF-8 at all, and the validator
+	// would then reject a document JSON5 says is valid.
+	const Case cases[] = {
+	    {"[\"\\x41\"]", "A", 1},
+	    {"[\"\\x7F\"]", "\x7F", 1},
+	    {"[\"\\xe9\"]", "\xC3\xA9", 2},
+	    {"[\"\\xE9\"]", "\xC3\xA9", 2},
+	    {"[\"\\xff\"]", "\xC3\xBF", 2},
+	    // The length is given rather than measured: this one decodes to a NUL,
+	    // which strlen() would read as an empty string.
+	    {"[\"\\x00\"]", "\0", 1},
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::string got = only_string(c.src, &opts, &ok);
+		EXPECT_TRUE(ok) << c.src;
+		EXPECT_EQ(got, std::string(c.expect, c.expect_len)) << c.src;
+	}
+}
+
+TEST(Json5Escapes, HexEscapeNeedsTwoDigits) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	for (const char * src : {"[\"\\x\"]", "[\"\\x4\"]", "[\"\\xg0\"]",
+	         "[\"\\x4g\"]"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+TEST(Json5Escapes, VerticalTabAndNul) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	bool ok = false;
+	EXPECT_EQ(only_string("[\"a\\vb\"]", &opts, &ok), std::string("a\vb"));
+	EXPECT_TRUE(ok);
+	EXPECT_EQ(only_string("[\"a\\0b\"]", &opts, &ok),
+	    std::string("a\0b", 3));
+	EXPECT_TRUE(ok);
+	// The length is what says the NUL is in there, not the terminator.
+	EXPECT_EQ(only_string("[\"\\0\"]", &opts, &ok).size(), 1u);
+}
+
+/* \0 is a character; \01 would be an octal escape in a language that no longer
+   has them, and \1 through \9 never were anything else. */
+TEST(Json5Escapes, OctalIsRefused) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	for (const char * src : {"[\"\\01\"]", "[\"\\09\"]", "[\"\\1\"]",
+	         "[\"\\7\"]", "[\"\\9\"]", "[\"\\12\"]"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+TEST(Json5Escapes, AnyOtherCharacterEscapesAsItself) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	struct Case {
+		const char * src;
+		const char * expect;
+	};
+	const Case cases[] = {
+	    {"[\"\\a\"]", "a"},
+	    {"[\"\\A\"]", "A"},
+	    {"[\"\\'\"]", "'"},
+	    {"[\"\\ \"]", " "},
+	    {"[\"\\%\"]", "%"},
+	    // A multi-byte character escapes as itself in full: U+00E9 here.
+	    {"[\"\\\xC3\xA9\"]", "\xC3\xA9"},
+	    // And the escapes JSON already had keep their meanings.
+	    {"[\"\\n\"]", "\n"},
+	    {"[\"\\t\"]", "\t"},
+	    {"[\"\\\\\"]", "\\"},
+	    {"[\"\\/\"]", "/"},
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::string got = only_string(c.src, &opts, &ok);
+		EXPECT_TRUE(ok) << c.src;
+		EXPECT_EQ(got, std::string(c.expect)) << c.src;
+	}
+}
+
+TEST(Json5Escapes, RefusedWhenTheOptionIsOff) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_EQ(opts.allow_ecma_escapes, false);
+	for (const char * src : {"[\"\\x41\"]", "[\"\\v\"]", "[\"\\0\"]",
+	         "[\"\\a\"]", "[\"\\'\"]"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* A backslash before a line terminator is a continuation, which is a separate
+   option. Without it, the escape is an error rather than quietly meaning a
+   newline - which is what the "any other character" rule would have said. */
+TEST(Json5Escapes, ALineTerminatorIsNotAnIdentityEscape) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	EXPECT_EQ(opts.allow_line_continuations, false);
+	for (const char * src : {"[\"a\\\nb\"]", "[\"a\\\rb\"]"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+// ===========================================================================
+// Line continuations
+// ===========================================================================
+
+TEST(Json5LineContinuation, EveryTerminatorSequence) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_line_continuations = true;
+
+	struct Case {
+		const char * src;
+		const char * expect;
+	};
+	const Case cases[] = {
+	    {"[\"a\\\nb\"]", "ab"},
+	    {"[\"a\\\rb\"]", "ab"},
+	    // CRLF is one terminator: if only the CR were swallowed, the LF would
+	    // be left as an unescaped control character and the parse would fail.
+	    {"[\"a\\\r\nb\"]", "ab"},
+	    {"[\"a\\\xE2\x80\xA8" "b\"]", "ab"}, // U+2028
+	    {"[\"a\\\xE2\x80\xA9" "b\"]", "ab"}, // U+2029
+	    {"[\"a\\\n\\\nb\"]", "ab"},
+	    {"[\"\\\n\"]", ""},
+	};
+	for (const Case & c : cases) {
+		bool ok = false;
+		std::string got = only_string(c.src, &opts, &ok);
+		EXPECT_TRUE(ok) << c.src << ": parse failed";
+		EXPECT_EQ(got, std::string(c.expect)) << c.src;
+	}
+}
+
+TEST(Json5LineContinuation, RefusedWhenTheOptionIsOff) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	for (const char * src : {"[\"a\\\nb\"]", "[\"a\\\r\nb\"]"}) {
+		EXPECT_NE(dom_status(src, &opts), GTEXT_JSON_OK) << src;
+	}
+}
+
+/* A raw newline inside a string is still a control character. The continuation
+   is the backslash's doing, not the newline's. */
+TEST(Json5LineContinuation, ARawNewlineIsStillRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_line_continuations = true;
+	EXPECT_NE(dom_status("[\"a\nb\"]", &opts), GTEXT_JSON_OK);
+	EXPECT_NE(dom_status("[\"a\rb\"]", &opts), GTEXT_JSON_OK);
+}
+
+TEST(Json5Escapes, BothParsersAgreeAcrossChunkBoundaries) {
+	GTEXT_JSON_Parse_Options opts = escape_opts();
+	opts.allow_line_continuations = true;
+	struct Case {
+		const char * src;
+		bool valid;
+	};
+	const Case cases[] = {
+	    {"[\"\\x41\"]", true},
+	    {"[\"a\\vb\"]", true},
+	    {"[\"a\\\r\nb\"]", true},
+	    {"[\"\\a\"]", true},
+	    {"{\"k\":\"\\x41\"}", true},
+	    {"[\"\\x4\"]", false},
+	    {"[\"\\1\"]", false},
+	};
+	for (const Case & c : cases) {
+		expect_both(c.src, &opts, c.valid);
+	}
+}

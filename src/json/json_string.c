@@ -56,6 +56,49 @@ static int json_decode_escape(char c) {
   }
 }
 
+/* The length in bytes of the line terminator sequence at `p`, or 0 if there
+ * is none. ECMAScript names five: LF, CR, CRLF, U+2028 and U+2029 - and CRLF
+ * is one terminator rather than two, which is what makes the difference
+ * between a line continuation swallowing both bytes and leaving the LF behind.
+ */
+static size_t json_line_terminator_length(const char * p, size_t available) {
+  if (available == 0) {
+    return 0;
+  }
+  if (p[0] == '\n') {
+    return 1;
+  }
+  if (p[0] == '\r') {
+    return (available >= 2 && p[1] == '\n') ? 2 : 1;
+  }
+  /* U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, in UTF-8. */
+  if (available >= 3 && (unsigned char)p[0] == 0xE2 &&
+      (unsigned char)p[1] == 0x80 &&
+      ((unsigned char)p[2] == 0xA8 || (unsigned char)p[2] == 0xA9)) {
+    return 3;
+  }
+  return 0;
+}
+
+/* How many bytes the UTF-8 character starting with `lead` occupies, or 0 if
+ * that byte cannot start one. Used where an escape means "the character that
+ * follows" and the character may be more than one byte. */
+static size_t json_utf8_sequence_length(unsigned char lead) {
+  if (lead < 0x80) {
+    return 1;
+  }
+  if ((lead & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((lead & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((lead & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 0; // A continuation byte, or 0xFE/0xFF.
+}
+
 static int json_hex_digit(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -210,14 +253,22 @@ static int json_validate_utf8(const unsigned char * bytes, size_t len) {
 
 GTEXT_INTERNAL_API GTEXT_JSON_Status json_decode_string(const char * input,
     size_t input_len, char * output, size_t output_capacity,
-    size_t * output_len, json_position * pos, int validate_utf8,
-    json_utf8_mode utf8_mode, int allow_unescaped_controls) {
+    size_t * output_len, json_position * pos, json_utf8_mode utf8_mode,
+    const GTEXT_JSON_Parse_Options * opts) {
   size_t out_idx = 0;
   size_t in_idx = 0;
 
   if (!output || !output_len || output_capacity == 0) {
     return GTEXT_JSON_E_INVALID;
   }
+
+  /* NULL options means the documented defaults, and the default for UTF-8 is
+   * to validate. */
+  const int validate_utf8 = opts ? opts->validate_utf8 : 1;
+  const int allow_unescaped_controls =
+      opts && opts->allow_unescaped_controls;
+  const int allow_ecma_escapes = opts && opts->allow_ecma_escapes;
+  const int allow_line_continuations = opts && opts->allow_line_continuations;
 
   while (in_idx < input_len) {
     if (input[in_idx] == '\\') {
@@ -292,17 +343,95 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_decode_string(const char * input,
         }
         in_idx += 6; // \uXXXX
       }
-      else {
-        // Standard escape
-        int decoded = json_decode_escape(esc_char);
-        if (decoded == 0) {
+      else if (allow_line_continuations &&
+          json_line_terminator_length(input + in_idx + 1,
+              input_len - in_idx - 1) > 0) {
+        /* A line continuation contributes nothing at all, not even a newline.
+         * CRLF is one terminator, so its LF is not left behind to be read as
+         * an unescaped control character. */
+        in_idx += 1 +
+            json_line_terminator_length(
+                input + in_idx + 1, input_len - in_idx - 1);
+      }
+      else if (allow_ecma_escapes && esc_char == 'x') {
+        /* Two hex digits name a codepoint, not a byte: \xe9 is U+00E9 and
+         * comes out as the two bytes UTF-8 spells it with. */
+        if (in_idx + 3 >= input_len) {
+          return GTEXT_JSON_E_BAD_ESCAPE;
+        }
+        int hi = json_hex_digit(input[in_idx + 2]);
+        int lo = json_hex_digit(input[in_idx + 3]);
+        if (hi < 0 || lo < 0) {
+          return GTEXT_JSON_E_BAD_ESCAPE;
+        }
+        unsigned char utf8_bytes[4];
+        size_t utf8_len =
+            json_encode_utf8((uint32_t)(hi * 16 + lo), utf8_bytes);
+        if (utf8_len == 0) {
+          return GTEXT_JSON_E_BAD_UNICODE;
+        }
+        if (out_idx + utf8_len > output_capacity) {
+          return GTEXT_JSON_E_LIMIT;
+        }
+        for (size_t i = 0; i < utf8_len; ++i) {
+          output[out_idx++] = utf8_bytes[i];
+        }
+        in_idx += 4; // \xHH
+      }
+      else if (allow_ecma_escapes && esc_char >= '0' && esc_char <= '9') {
+        /* Only \0 is a character, and only where no digit follows it: \01
+         * would be an octal escape in a language that no longer has them, and
+         * \1 through \9 were never anything else. */
+        if (esc_char != '0' ||
+            (in_idx + 2 < input_len && input[in_idx + 2] >= '0' &&
+                input[in_idx + 2] <= '9')) {
           return GTEXT_JSON_E_BAD_ESCAPE;
         }
         if (out_idx >= output_capacity) {
           return GTEXT_JSON_E_LIMIT;
         }
-        output[out_idx++] = decoded;
-        in_idx += 2; // \X
+        output[out_idx++] = '\0';
+        in_idx += 2; // \0
+      }
+      else {
+        // Standard escape
+        int decoded = json_decode_escape(esc_char);
+        if (decoded == 0 && allow_ecma_escapes && esc_char == 'v') {
+          decoded = '\v'; // The one C escape JSON left out.
+        }
+        if (decoded == 0) {
+          if (!allow_ecma_escapes) {
+            return GTEXT_JSON_E_BAD_ESCAPE;
+          }
+          /* ECMAScript's NonEscapeCharacter: anything else after a backslash
+           * is itself. A line terminator is not "anything else" - a backslash
+           * before one is a continuation, which is a separate option, so
+           * without it this is an error rather than a newline in the string.
+           * The escaped character is a character and not a byte, so a
+           * multi-byte one is copied whole. */
+          if (json_line_terminator_length(
+                  input + in_idx + 1, input_len - in_idx - 1) > 0) {
+            return GTEXT_JSON_E_BAD_ESCAPE;
+          }
+          size_t char_len = json_utf8_sequence_length((unsigned char)esc_char);
+          if (char_len == 0 || in_idx + 1 + char_len > input_len) {
+            return GTEXT_JSON_E_BAD_ESCAPE;
+          }
+          if (out_idx + char_len > output_capacity) {
+            return GTEXT_JSON_E_LIMIT;
+          }
+          for (size_t i = 0; i < char_len; ++i) {
+            output[out_idx++] = input[in_idx + 1 + i];
+          }
+          in_idx += 1 + char_len;
+        }
+        else {
+          if (out_idx >= output_capacity) {
+            return GTEXT_JSON_E_LIMIT;
+          }
+          output[out_idx++] = decoded;
+          in_idx += 2; // \X
+        }
       }
     }
     else {

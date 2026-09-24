@@ -145,6 +145,10 @@ TEST(StringHandling, EscapeSequences) {
         pos.col = 1;
         output_len = 0;
 
+        /* These inputs are escape sequences rather than whole documents, and
+           several are deliberately not well-formed UTF-8. */
+        GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+        decode_opts.validate_utf8 = false;
         GTEXT_JSON_Status status = json_decode_string(
             tests[i].input,
             strlen(tests[i].input),
@@ -152,9 +156,8 @@ TEST(StringHandling, EscapeSequences) {
             sizeof(output),
             &output_len,
             &pos,
-            0,  // don't validate UTF-8 for these tests
             JSON_UTF8_REJECT,
-            0   // don't allow unescaped controls
+            &decode_opts
         );
 
         EXPECT_EQ(status, GTEXT_JSON_OK) << "Failed for input: " << tests[i].input;
@@ -189,6 +192,10 @@ TEST(StringHandling, UnicodeEscapes) {
         pos.col = 1;
         output_len = 0;
 
+        /* These inputs are escape sequences rather than whole documents, and
+           several are deliberately not well-formed UTF-8. */
+        GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+        decode_opts.validate_utf8 = false;
         GTEXT_JSON_Status status = json_decode_string(
             tests[i].input,
             strlen(tests[i].input),
@@ -196,9 +203,8 @@ TEST(StringHandling, UnicodeEscapes) {
             sizeof(output),
             &output_len,
             &pos,
-            0,
             JSON_UTF8_REJECT,
-            0   // don't allow unescaped controls
+            &decode_opts
         );
 
         EXPECT_EQ(status, GTEXT_JSON_OK) << "Failed for input: " << tests[i].input;
@@ -222,6 +228,10 @@ TEST(StringHandling, SurrogatePairs) {
     const char * expected = "\xF0\x9F\x98\x80";  // UTF-8 for U+1F600
     size_t expected_len = 4;
 
+    /* These inputs are escape sequences rather than whole documents, and
+       several are deliberately not well-formed UTF-8. */
+    GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+    decode_opts.validate_utf8 = false;
     GTEXT_JSON_Status status = json_decode_string(
         input,
         strlen(input),
@@ -229,9 +239,8 @@ TEST(StringHandling, SurrogatePairs) {
         sizeof(output),
         &output_len,
         &pos,
-        0,
         JSON_UTF8_REJECT,
-        0   // don't allow unescaped controls
+        &decode_opts
     );
 
     EXPECT_EQ(status, GTEXT_JSON_OK);
@@ -263,6 +272,10 @@ TEST(StringHandling, InvalidEscapes) {
         pos.col = 1;
         output_len = 0;
 
+        /* These inputs are escape sequences rather than whole documents, and
+           several are deliberately not well-formed UTF-8. */
+        GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+        decode_opts.validate_utf8 = false;
         GTEXT_JSON_Status status = json_decode_string(
             invalid_escapes[i],
             strlen(invalid_escapes[i]),
@@ -270,9 +283,8 @@ TEST(StringHandling, InvalidEscapes) {
             sizeof(output),
             &output_len,
             &pos,
-            0,
             JSON_UTF8_REJECT,
-            0   // don't allow unescaped controls
+            &decode_opts
         );
 
         EXPECT_NE(status, GTEXT_JSON_OK) << "Should reject: " << invalid_escapes[i];
@@ -288,6 +300,10 @@ TEST(StringHandling, PositionTracking) {
     json_position pos = {0, 1, 1};
 
     const char * input = "hello\\nworld";
+    /* These inputs are escape sequences rather than whole documents, and
+       several are deliberately not well-formed UTF-8. */
+    GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+    decode_opts.validate_utf8 = false;
     GTEXT_JSON_Status status = json_decode_string(
         input,
         strlen(input),
@@ -295,9 +311,8 @@ TEST(StringHandling, PositionTracking) {
         sizeof(output),
         &output_len,
         &pos,
-        0,
         JSON_UTF8_REJECT,
-        0   // don't allow unescaped controls
+        &decode_opts
     );
 
     EXPECT_EQ(status, GTEXT_JSON_OK);
@@ -315,6 +330,10 @@ TEST(StringHandling, BufferOverflowProtection) {
 
     // Try to decode a string that would overflow the buffer
     const char * input = "hello world";  // 11 characters > 5 buffer size
+    /* These inputs are escape sequences rather than whole documents, and
+       several are deliberately not well-formed UTF-8. */
+    GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+    decode_opts.validate_utf8 = false;
     GTEXT_JSON_Status status = json_decode_string(
         input,
         strlen(input),
@@ -322,9 +341,8 @@ TEST(StringHandling, BufferOverflowProtection) {
         sizeof(output),
         &output_len,
         &pos,
-        0,
         JSON_UTF8_REJECT,
-        0   // don't allow unescaped controls
+        &decode_opts
     );
 
     EXPECT_EQ(status, GTEXT_JSON_E_LIMIT);
@@ -340,6 +358,10 @@ TEST(StringHandling, BufferOverflowUnicode) {
 
     // Unicode escape produces 3 bytes (Euro sign), but buffer is only 2
     const char * input = "\\u20AC";
+    /* These inputs are escape sequences rather than whole documents, and
+       several are deliberately not well-formed UTF-8. */
+    GTEXT_JSON_Parse_Options decode_opts = gtext_json_parse_options_default();
+    decode_opts.validate_utf8 = false;
     GTEXT_JSON_Status status = json_decode_string(
         input,
         strlen(input),
@@ -347,9 +369,8 @@ TEST(StringHandling, BufferOverflowUnicode) {
         sizeof(output),
         &output_len,
         &pos,
-        0,
         JSON_UTF8_REJECT,
-        0   // don't allow unescaped controls
+        &decode_opts
     );
 
     EXPECT_EQ(status, GTEXT_JSON_E_LIMIT);

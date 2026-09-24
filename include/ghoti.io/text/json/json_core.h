@@ -183,6 +183,42 @@ typedef struct {
    */
   bool allow_bare_decimal_point;
 
+  /**
+   * Allow ECMAScript's string escapes, which is the set JSON5 uses. JSON5.
+   * Default: off.
+   *
+   * Three things JSON has no spelling for, and one rule that turns an error
+   * into a character:
+   *
+   * - `\xHH` - a codepoint written with two hex digits, so `\xe9` is U+00E9
+   *   and comes out as its two UTF-8 bytes rather than as the byte 0xE9.
+   * - `\v` - U+000B, the one C escape JSON left out.
+   * - `\0` - U+0000, and an error when a digit follows it, because `\01`
+   *   would be an octal escape in a language that no longer has them. `\1`
+   *   through `\9` are errors for the same reason.
+   * - Any other character after a backslash is that character: `\a` is `a`
+   *   and `\'` is an apostrophe. A multi-byte character escapes as itself in
+   *   full.
+   *
+   * Line terminators are not in that last rule - a backslash before one is a
+   * line continuation, which is allow_line_continuations' question.
+   */
+  bool allow_ecma_escapes;
+
+  /**
+   * Allow a backslash at the end of a line inside a string to continue it on
+   * the next line, contributing nothing. JSON5. Default: off.
+   *
+   * All five line terminator sequences ECMAScript names: LF, CR, CRLF, U+2028
+   * and U+2029. CRLF counts as one, so the LF is not left behind to be read as
+   * an unescaped control character.
+   *
+   * Separate from allow_ecma_escapes because it answers a different question -
+   * whether a string may span lines at all - and because a caller who wants
+   * multi-line strings does not necessarily want `\a` to mean `a`.
+   */
+  bool allow_line_continuations;
+
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)

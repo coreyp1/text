@@ -108,6 +108,25 @@ valid JSON5 and need `allow_leading_plus` *and* `allow_nonfinite_numbers`.
 `-NaN` needs only the latter, for the same reason `-Infinity` always has.
 NaN's sign is not observable, so both signed spellings give NaN.
 
+**JSON5 string escapes**, also off by default and also two separate questions:
+
+- `allow_ecma_escapes` - `\xHH`, `\v`, `\0`, and ECMAScript's rule that any
+  other character after a backslash is that character (`\a` is `a`, `\'` is an
+  apostrophe). `\xHH` names a *codepoint*, so `\xe9` decodes to the two UTF-8
+  bytes of U+00E9 rather than to the byte 0xE9, which would not be UTF-8 at
+  all. `\0` is U+0000 and is an error where a digit follows it; `\1` through
+  `\9` are always errors, because those were octal escapes in a language that
+  no longer has them.
+- `allow_line_continuations` - a backslash before a line terminator contributes
+  nothing, which is how JSON5 writes a string over several lines. All five
+  terminator sequences: LF, CR, CRLF, U+2028 and U+2029. CRLF counts as one, so
+  the LF is not left behind to be read as an unescaped control character.
+
+A backslash before a line terminator is a continuation and not an identity
+escape, so with `allow_ecma_escapes` alone it is an error rather than quietly
+meaning a newline. A *raw* newline inside a string is still a control character
+under both options; the continuation is the backslash's doing.
+
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,
 `move`, `copy` and `test`, applied atomically so that a failing operation

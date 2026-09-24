@@ -895,9 +895,8 @@ static GTEXT_JSON_Status json_lexer_parse_string(
   size_t decoded_len;
   GTEXT_JSON_Status status =
       json_decode_string(string_content, string_content_actual_len, decoded,
-          decode_capacity, &decoded_len, &decode_pos,
-          lexer->opts ? lexer->opts->validate_utf8 : 1, JSON_UTF8_REJECT,
-          lexer->opts ? lexer->opts->allow_unescaped_controls : 0);
+          decode_capacity, &decoded_len, &decode_pos, JSON_UTF8_REJECT,
+          lexer->opts);
 
   if (status != GTEXT_JSON_OK) {
     gtext_allocator_free(

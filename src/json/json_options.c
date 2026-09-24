@@ -38,6 +38,8 @@ GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   opts.allow_hex_numbers = false;
   opts.allow_leading_plus = false;
   opts.allow_bare_decimal_point = false;
+  opts.allow_ecma_escapes = false;
+  opts.allow_line_continuations = false;
 
   // Unicode / input handling
   opts.allow_leading_bom = true;  // default on
