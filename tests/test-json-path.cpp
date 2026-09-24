@@ -328,7 +328,14 @@ TEST(JsonPath, TheRootOnItsOwn) {
 	// Blank space is allowed between segments and inside brackets (2.1).
 	EXPECT_EQ(select(p.doc, "$ .a"), "1");
 	EXPECT_EQ(select(p.doc, "$[ 'a' ]"), "1");
-	EXPECT_EQ(select(p.doc, "$ [ 'a' ] "), "1");
+	EXPECT_EQ(select(p.doc, "$ [ 'a' ]"), "1");
+	/* But `segments = *(S segment)` puts the space *before* a segment, so a
+	   query does not end with one - the compliance suite has `$ ` as an invalid
+	   selector, and this test asserted the opposite until it was run against
+	   the suite. */
+	EXPECT_EQ(select(p.doc, "$ "), "!17");
+	EXPECT_EQ(select(p.doc, "$.a "), "!17");
+	EXPECT_EQ(select(p.doc, "$[ 'a' ] "), "!17");
 }
 
 // ===========================================================================

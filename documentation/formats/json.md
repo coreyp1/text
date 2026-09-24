@@ -178,7 +178,15 @@ status because it asks the caller for something different.
 
 The examples in RFC 9535 §1.5 and the slice examples in §2.3.4 are in the suite,
 in `tests/test-json-path.cpp`, written from the RFC rather than from this
-implementation.
+implementation. `make conformance-jsonpath` scores it against the
+[JSONPath Compliance Test Suite](https://github.com/jsonpath-standard/jsonpath-compliance-test-suite):
+**324 of the 324 cases it attempts**, out of the 706 the suite ships. The other
+382 use the filter selector and are refused as unsupported rather than counted
+as passes or failures - a percentage over a subset means nothing without that
+number beside it. Writing that runner found one defect the hand-written tests
+had agreed with: `$ ` is not a well-formed query, because `segments = *(S
+segment)` puts the blank space *before* a segment, and this parser accepted a
+query that ended with one.
 
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,

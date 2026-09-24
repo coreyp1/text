@@ -710,7 +710,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1520,6 +1520,10 @@ conformance-csv: ## Score the CSV parser against csv-spectrum (clones it on firs
 conformance-csv:
 	@PREFIX="$(PREFIX)" tools/conformance/run-csv.sh
 
+conformance-jsonpath: ## Score JSONPath against the compliance test suite (clones it on first use)
+conformance-jsonpath:
+	@PREFIX="$(PREFIX)" tools/conformance/run-jsonpath.sh
+
 UCD_VERSION := $(shell cat tools/idna/UCD_VERSION 2>/dev/null)
 UCD_DIR := third_party/ucd/$(UCD_VERSION)
 IDNA_TABLES := src/idna/tables
@@ -1675,7 +1679,7 @@ conformance-json-schema:
 	@PREFIX="$(PREFIX)" tools/conformance/run-json-schema.sh
 
 conformance-all: ## Score every parser against its external corpus
-conformance-all: conformance conformance-fastpath conformance-json conformance-csv conformance-json-schema
+conformance-all: conformance conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath
 
 coverage: ## Build instrumented, run the tests, and report line coverage
 # Cleans first because the object files would otherwise be reused without the

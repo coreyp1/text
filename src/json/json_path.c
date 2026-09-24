@@ -571,8 +571,18 @@ GTEXT_API GTEXT_JSON_Path * gtext_json_path_compile(const char * query,
   p.at++;
 
   for (;;) {
+    /* `segments = *(S segment)` (2.1): blank space comes *before* a segment,
+     * so space at the end of a query is not part of one and the query is not
+     * well-formed. The suite has `$ ` as an invalid selector for exactly this,
+     * and skipping to the end and stopping accepted it. */
+    const size_t before_space = p.at;
     json_path_skip_space(&p);
     if (json_path_at_end(&p)) {
+      if (p.at != before_space) {
+        json_path_fail(
+            &p, GTEXT_JSON_E_PATH, "a query does not end with blank space");
+        goto failed;
+      }
       break;
     }
     const char c = json_path_peek(&p);
