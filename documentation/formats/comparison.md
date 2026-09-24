@@ -403,7 +403,15 @@ real advantages over cJSON and jansson.
   the lexer decodes, object names included, so duplicate-name detection sees
   normalized names. It requires `validate_utf8` and turns off in-situ for
   strings, both deliberately - see the \ref format_json "JSON page".
-- JSON5 proper, as distinct from the JSONC subset that is supported.
+- ~~JSON5 proper, as distinct from the JSONC subset.~~ **Done.** Six more
+  options - hexadecimal integers, a leading plus, a decimal point at an edge,
+  ECMAScript's string escapes, line continuations, ECMAScript's whitespace and
+  unquoted object names - and `gtext_json_parse_options_json5()` to turn on all
+  eleven the dialect asks for. One option per difference rather than one dialect
+  flag, and each tested as refused with its option clear as well as accepted
+  with it set. An unquoted name is an ECMAScript IdentifierName, so ID_Start and
+  ID_Continue come from a table generated from the UCD: `{café: 1}` is a name and
+  `{😀: 1}` is not.
 - ~~Conversion to YAML.~~ **Added**: `gtext_json_to_yaml()`. Types are preserved
   rather than re-resolved, which is the whole difficulty - a JSON string reading
   `true` or `42` must not become a boolean or an integer.

@@ -19,7 +19,8 @@ The JSON module provides comprehensive JSON processing capabilities with support
 ### Core Capabilities
 
 - **Strict JSON parsing** per RFC 8259 / ECMA‑404 with full grammar correctness
-- **Extended JSON modes** (JSONC, trailing commas, non-finite numbers, relaxed strings)
+- **Extended JSON modes** (JSONC, trailing commas, non-finite numbers, relaxed
+  strings, and the JSON5 dialect in full)
 - **Two parsing models**: DOM/tree and streaming/SAX
 - **Two writing models**: DOM serialization and streaming writer
 - **High-quality error diagnostics** with position information and context snippets
@@ -92,6 +93,28 @@ The library provides extensive configuration options for parsing behavior:
 - **`allow_nonfinite_numbers`**: Allow `NaN`, `Infinity`, and `-Infinity` as number values — **Default: `false`**
 - **`allow_single_quotes`**: Allow single-quoted strings (relaxed mode) — **Default: `false`**
 - **`allow_unescaped_controls`**: Allow unescaped control characters in strings (relaxed mode) — **Default: `false`**
+- **`allow_hex_numbers`**: Allow a hexadecimal integer, `0x1F` (JSON5). `e` is
+  one of its digits, so `0x1e2` is 482 — **Default: `false`**
+- **`allow_leading_plus`**: Allow a leading `+` on a number (JSON5). With
+  `allow_nonfinite_numbers`, also `+Infinity` and `+NaN` — **Default: `false`**
+- **`allow_bare_decimal_point`**: Allow `.5` and `5.` (JSON5) — **Default:
+  `false`**
+- **`allow_ecma_escapes`**: Allow ECMAScript's string escapes (JSON5): `\xHH`,
+  `\v`, `\0`, and any other character after a backslash meaning itself —
+  **Default: `false`**
+- **`allow_line_continuations`**: Allow a backslash before a line terminator
+  inside a string to continue it (JSON5) — **Default: `false`**
+- **`allow_ecma_whitespace`**: Allow ECMAScript's whitespace between tokens
+  (JSON5): vertical tab, form feed, U+FEFF, General_Category Zs, U+2028 and
+  U+2029 — **Default: `false`**
+- **`allow_unquoted_keys`**: Allow an unquoted object name, `{a: 1}` (JSON5).
+  The name is an ECMAScript IdentifierName, so ID_Start and ID_Continue decide
+  it, `\uXXXX` escapes are allowed, and a reserved word is a name —
+  **Default: `false`**
+
+`gtext_json_parse_options_json5()` returns options with all eleven of the JSON5
+options above set, and everything else as the default has it. See the
+\ref format_json "JSON page" for what each one accepts and refuses.
 
 ### 4.2 Unicode / Input Handling
 
