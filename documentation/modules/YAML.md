@@ -2,7 +2,7 @@
 
 # YAML Module Documentation (ghoti.io)
 
-This document describes the **YAML parsing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross-platform**, **dependency-free** (libc only), and prioritizes **correctness** and **memory safety** over simplicity.
+This document describes the **YAML parsing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross-platform** and prioritizes **correctness** and **memory safety** over simplicity. It is not dependency-free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) for `GCU_Allocator` and [ghoti.io-chron](https://github.com/Ghoti-io/chron) for `!!timestamp`, and both appear in *public* headers - `GCHRON_YamlValue` is what a timestamp node holds. See the [Dependencies](../../README.md) section of the README.
 
 ---
 

@@ -12,7 +12,8 @@ The Core module consists of:
 
 - **Cross-compiler macros** (`macros.h`) - Platform-independent utilities for common C programming patterns
 - **Version API** (`text.h`) - Runtime access to library version information
-- **Platform compatibility** - Support for GCC, Clang, MSVC, and other compilers
+- **Platform compatibility** - Compiler arms for GCC, Clang and MSVC; section
+  4 below says which of those are exercised and which are only written
 
 This module is automatically included when you use any part of the text library, as it provides the base macros and utilities used throughout the library.
 
@@ -74,6 +75,16 @@ Marks functions for export from shared libraries. Automatically handles:
 **Usage:**
 - When building the library (`GTEXT_BUILD` defined): Functions are exported
 - When using the library: Functions are imported (Windows) or visible (Unix)
+- When using the library's **static archive on Windows** (`GTEXT_STATIC`
+  defined): neither, just `extern "C"`
+
+That third state is not optional. `__declspec(dllimport)` makes the compiler
+reference `__imp_<symbol>` thunks, which only a DLL's import library provides;
+an archive has none, so a consumer that links `libghoti.io-text-0.a` on
+Windows without `-DGTEXT_STATIC` fails at link time with undefined `__imp_`
+symbols. The test suite links the archive, which is why the Makefile defines
+it for everything it builds but the library itself. `GTEXT_API_DATA` takes the
+same three states.
 
 **Example:**
 ```c
@@ -195,20 +206,49 @@ int main(void) {
 
 ## 4. Cross-Platform Considerations
 
-The Core module is designed to work across multiple platforms and compilers:
+This section separates what is **built and tested** from what the source
+merely has an arm for. A `#if defined(_MSC_VER)` branch is not evidence that
+the compiler it names can build this library: the arms you do not take are
+never parsed.
 
-### 4.1 Supported Compilers
+### 4.1 Compilers
 
-- **GCC** (GNU Compiler Collection)
-- **Clang** (LLVM Compiler)
-- **MSVC** (Microsoft Visual C++)
-- **Other C99-compliant compilers** (with limited macro support)
+**Exercised**, every commit or every fuzz run:
 
-### 4.2 Platform Support
+- **GCC** - the build every target uses, at `-O2` with `-Werror` and the full
+  warning set, on Linux and on Windows through MinGW-w64.
+- **Clang** - builds the library sources for the fuzz harnesses and for the
+  coverage target.
 
-- **Unix-like systems** (Linux, macOS, BSD, etc.)
-- **Windows** (with MinGW, MSVC, or Cygwin)
-- **Embedded systems** (with appropriate C standard library)
+**Written but not exercised:**
+
+- **MSVC** - `macros.h` has `_MSC_VER` arms for `GTEXT_MAYBE_UNUSED` and
+  `GTEXT_DEPRECATED`, and `GTEXT_API` uses `__declspec`, which MSVC
+  understands. Nothing here compiles the library with it and there is no
+  MSVC project or CMake file, so treat it as unmeasured rather than
+  supported. The [YAML page](@ref format_yaml) says the same thing under
+  "Not implemented".
+- **Other C99 compilers** - the macros degrade to portable spellings, and the
+  library itself is C17.
+
+### 4.2 Platforms
+
+**Exercised:**
+
+- **Linux** - the primary target; every test, sanitizer and conformance run.
+- **Windows** - MinGW-w64 under MSYS2, natively: as of 2026-09-23 the whole
+  suite builds and passes there. Windows is a third build in the Makefile, not a variation on
+  the Linux one - it links the tests against the static archive, fixes the
+  executable stack at 8 MiB, and puts the prefix's `bin/` on `PATH` because
+  Windows has no rpath.
+
+**Expected to work, not verified here:**
+
+- **macOS and the BSDs** - the Makefile has a Darwin block and the code has
+  no Linux-only syscalls, but no run is made on either.
+- **Cygwin** - `macros.h` tests `__CYGWIN__` alongside `_WIN32`; untested.
+- **Embedded targets** - the library needs a hosted C library: it opens,
+  reads and renames files through ghoti.io-cutil.
 
 ### 4.3 C++ Compatibility
 

@@ -2,7 +2,7 @@
 
 # JSON Module Documentation (ghoti.io)
 
-This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform**, **dependency‑free** (libc only), and prioritizes **correctness** and **spec compliance** over simplicity.
+This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) and [ghoti.io-chron](https://github.com/Ghoti-io/chron), and both appear in *public* headers, so a consumer needs their headers to compile against this one. See the [Dependencies](../../README.md) section of the README.
 
 ---
 

@@ -40,7 +40,12 @@ int main(void) {
 Two, both inside the suite and both resolved through pkg-config:
 
 - [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
-  vtable the suite shares.
+  vtable the suite shares. All three formats route a whole parse - and
+  everything the resulting document owns - through a caller-supplied
+  allocator, enforced by a gate that refuses a direct `malloc` or `strdup` in
+  any converted source. The writers and the error snippets stay on the C
+  library deliberately, because they are freed by functions that are handed no
+  allocator; see [the allocator page](@ref format_allocator_todo).
 - [ghoti.io-chron](https://github.com/Ghoti-io/chron), for YAML's
   `!!timestamp`. The type YAML 1.1 defines is a calendar date, a wall-clock
   reading and an offset, and this library used to read it with a parser of its
@@ -81,8 +86,9 @@ Each format lives behind one header - `ghoti.io/text/json.h`,
 `gtext_csv_parse_table()`, `gtext_yaml_parse()`) take a buffer and return an
 owned tree, freed by the format's free function. The streaming parsers take
 input in chunks of any size and deliver events through callbacks, for inputs
-too large to hold or arriving from a socket. YAML additionally offers a
-pull-model reader.
+too large to hold or arriving from a socket. All three formats also offer a
+pull-model reader, which inverts that control: the caller asks for the next
+event instead of being called back.
 
 **Options** are plain structs obtained from a `*_options_default()` function
 and modified before use, never global state. They carry the dialect or
@@ -209,7 +215,9 @@ refuses by default where the suite expects acceptance; with
 `dupkeys = LAST_WINS` it is 283 of 283. See [the JSON page](@ref format_json).
 
 **CSV — stable.** RFC 4180 by default, with configurable dialects and
-support for ragged rows. The streaming parser gives the same answer whatever
+support for ragged rows. The dialect can be guessed from a sample rather than
+declared, and the writer names four quoting policies. A field that unquoted
+bytes cannot carry is refused rather than written out corrupt. The streaming parser gives the same answer whatever
 chunk sizes it is fed, and the fuzzer checks it against the table parser on
 every input, every dialect option included. `validate_utf8` is honored by both
 parsers, incrementally in the streaming one so that a sequence split across
@@ -218,8 +226,8 @@ See [the CSV page](@ref format_csv).
 
 **YAML — alpha.** Block and flow collections, all five scalar styles,
 anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
-input, a DOM with mutation and cloning, a writer, and YAML-to-JSON
-conversion. The API may change before 1.0. `make conformance` scores it
+input, a DOM with mutation and cloning, a writer, and conversion in both
+directions between YAML and JSON. The API may change before 1.0. `make conformance` scores it
 against yaml-test-suite: **395 of the 395 checkable cases**, out of the 406
 the suite ships. Passing all of a corpus is not the same as conforming to the
 specification, and `tests/data/yaml/spec-1.2.2.corpus` holds the cases that
