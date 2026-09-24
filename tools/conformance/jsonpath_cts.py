@@ -20,11 +20,11 @@ Environment:
     JPC_MIN         floor on the pass rate over attempted cases (default 100)
     JPC_VERBOSE     print every failing case
 
-What is compared is the node list - the suite's `result` or `results` field.
-Every valid case also carries `result_paths`, the normalized path of each result
-(section 2.7), and this library does not produce those, so they are not checked.
-The score is therefore about which nodes are selected and in what order, which
-is what `result` asserts; a claim about paths would need the feature first.
+What is compared is both the node list - the suite's `result` or `results` - and
+the normalized path of each result, its `result_paths`. Comparing only the values
+would pass a query that selected the right nodes by the wrong route, and the
+paths are what say which route: `$['a'][0]` is not `$['a'][1]` even where the two
+hold equal values.
 """
 
 import json
@@ -61,7 +61,9 @@ def main():
             failures.append((case["name"], "timed out"))
             continue
 
-        line = out.split("\n", 1)[0]
+        lines = out.split("\n")
+        line = lines[0]
+        path_line = next((l for l in lines[1:] if l.startswith("PATHS ")), None)
         if line.startswith("UNSUPPORTED"):
             unsupported += 1
             continue
@@ -84,17 +86,39 @@ def main():
             failures.append((case["name"], "unreadable output (%s): %s" % (exc, line[:80])))
             continue
 
+        # The normalized paths, where the runner printed them and the case says
+        # what they should be. A result that holds the right values by the wrong
+        # route is still wrong.
+        got_paths = None
+        if path_line is not None:
+            try:
+                got_paths = json.loads(path_line[len("PATHS "):])
+            except json.JSONDecodeError as exc:
+                failures.append((case["name"], "unreadable paths (%s)" % exc))
+                continue
+
         if "results" in case:
-            if any(got == alternative for alternative in case["results"]):
-                passed += 1
-            else:
+            index = next((i for i, alternative in enumerate(case["results"])
+                          if got == alternative), None)
+            if index is None:
                 failures.append((case["name"], "got %s, none of the %d accepted orders"
                                  % (json.dumps(got)[:60], len(case["results"]))))
-        elif got == case["result"]:
-            passed += 1
-        else:
+            elif (got_paths is not None and "results_paths" in case
+                  and got_paths != case["results_paths"][index]):
+                failures.append((case["name"], "values match order %d, paths do not: %s"
+                                 % (index, json.dumps(got_paths)[:60])))
+            else:
+                passed += 1
+        elif got != case["result"]:
             failures.append((case["name"], "got %s want %s"
                              % (json.dumps(got)[:60], json.dumps(case["result"])[:60])))
+        elif (got_paths is not None and "result_paths" in case
+              and got_paths != case["result_paths"]):
+            failures.append((case["name"], "paths: got %s want %s"
+                             % (json.dumps(got_paths)[:60],
+                                json.dumps(case["result_paths"])[:60])))
+        else:
+            passed += 1
 
     total = len(cases)
     rate = 100.0 * passed / attempted if attempted else 0.0
@@ -114,9 +138,8 @@ def main():
     print("  not attempted         %5d  (match() and search(), refused as unsupported)"
           % unsupported)
     print("A percentage over attempted cases means nothing without that last count.")
-    print("Values only: every valid case also carries result_paths, the normalized")
-    print("path of each result (RFC 9535 section 2.7), which this library does not")
-    print("produce and this scorer therefore does not check.")
+    print("Both the node list and the normalized path of each result are compared:")
+    print("a result that holds the right values by the wrong route is a failure.")
 
     floor = float(os.environ.get("JPC_MIN", "100"))
     if rate + 1e-9 < floor:

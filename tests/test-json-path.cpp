@@ -699,3 +699,137 @@ TEST(JsonPathFilter, LogicalOperators) {
 	EXPECT_EQ(count(p.doc, "$[?@.a && (@.b || !@.a)]"), 1u);
 	EXPECT_EQ(count(p.doc, "$[?!(@.a || @.b)]"), 1u);
 }
+
+// ===========================================================================
+// Normalized paths
+// ===========================================================================
+
+namespace {
+
+// The normalized paths of a query's results, joined with "|".
+std::string paths_of(const GTEXT_JSON_Value * root, const char * query) {
+	GTEXT_JSON_Path_Result result;
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	if (gtext_json_path_query_paths(root, query, SIZE_MAX, nullptr, &result,
+	        &err)
+	    != GTEXT_JSON_OK) {
+		return "!" + std::to_string((int)err.code);
+	}
+	std::string out;
+	for (size_t i = 0; i < result.count; i++) {
+		if (i) {
+			out += "|";
+		}
+		out += result.paths[i] ? result.paths[i] : "<null>";
+	}
+	gtext_json_path_result_free(&result);
+	return out;
+}
+
+} // namespace
+
+/* A normalized path (§2.7) names exactly one node, and is itself a query. The
+   spelling is fixed: `$`, then a bracketed index or a single-quoted name per
+   step - never the shorthand, never a negative index, never a slice. */
+TEST(JsonPathPaths, TheSpellingIsTheSpecifications) {
+	Parsed p;
+	p.doc = parse(R"({"store":{"book":[{"a":1},{"a":2}],"b c":true}})");
+	ASSERT_NE(p.doc, nullptr);
+
+	EXPECT_EQ(paths_of(p.doc, "$"), "$");
+	EXPECT_EQ(paths_of(p.doc, "$.store"), "$['store']");
+	EXPECT_EQ(paths_of(p.doc, "$['store']"), "$['store']");
+	EXPECT_EQ(paths_of(p.doc, "$..a"),
+	    "$['store']['book'][0]['a']|$['store']['book'][1]['a']");
+	// A negative index is resolved: a normalized path has no negative index.
+	EXPECT_EQ(paths_of(p.doc, "$.store.book[-1]"), "$['store']['book'][1]");
+	// A slice's results are named by their own indices.
+	EXPECT_EQ(paths_of(p.doc, "$.store.book[::-1]"),
+	    "$['store']['book'][1]|$['store']['book'][0]");
+	// A name that needs no quoting in the query still gets them in the path.
+	EXPECT_EQ(paths_of(p.doc, "$['store']['b c']"), "$['store']['b c']");
+}
+
+/* §2.7's escapes: single quote, backslash, and the five short control escapes,
+   with \uXXXX in lowercase hex for the rest. */
+TEST(JsonPathPaths, NamesAreEscapedAsTheSpecificationSays) {
+	Parsed p;
+	p.doc = parse("{\"it's\":1,\"back\\\\slash\":2,\"tab\\there\":3,"
+	              "\"nl\\nhere\":4,\"bell\\u0007\":5,\"del\\u007f\":6}");
+	ASSERT_NE(p.doc, nullptr);
+
+	EXPECT_EQ(paths_of(p.doc, "$[\"it's\"]"), "$['it\\'s']");
+	EXPECT_EQ(paths_of(p.doc, "$['back\\\\slash']"), "$['back\\\\slash']");
+	EXPECT_EQ(paths_of(p.doc, "$['tab\\there']"), "$['tab\\there']");
+	EXPECT_EQ(paths_of(p.doc, "$['nl\\nhere']"), "$['nl\\nhere']");
+	// A control character with no short escape gets \uXXXX, lowercase.
+	EXPECT_EQ(paths_of(p.doc, "$['bell\\u0007']"), "$['bell\\u0007']");
+	// DEL is not a control character in §2.7's grammar: it goes through raw.
+	EXPECT_EQ(paths_of(p.doc, "$['del\\u007f']"), "$['del\x7f']");
+}
+
+/* The point of a path: hand it back and reach the same node. */
+TEST(JsonPathPaths, APathIsAQueryForTheSameNode) {
+	Parsed p;
+	p.doc = parse(R"({"a":[{"b":1},{"b":2}],"c":{"d":[3,4]},"e f":{"'g'":5}})");
+	ASSERT_NE(p.doc, nullptr);
+
+	GTEXT_JSON_Path_Result all;
+	ASSERT_EQ(
+	    gtext_json_path_query_paths(p.doc, "$..*", SIZE_MAX, nullptr, &all,
+	        nullptr),
+	    GTEXT_JSON_OK);
+	ASSERT_GT(all.count, 5u);
+
+	for (size_t i = 0; i < all.count; i++) {
+		GTEXT_JSON_Path_Result one;
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		ASSERT_EQ(gtext_json_path_query(p.doc, all.paths[i], SIZE_MAX, nullptr,
+		              &one, &err),
+		    GTEXT_JSON_OK)
+		    << all.paths[i] << ": " << (err.message ? err.message : "");
+		ASSERT_EQ(one.count, 1u) << all.paths[i];
+		EXPECT_EQ(one.nodes[0], all.nodes[i]) << all.paths[i];
+		gtext_json_path_result_free(&one);
+	}
+	gtext_json_path_result_free(&all);
+}
+
+/* Paths are opt-in: the plain entry points leave the array NULL, so a caller
+   who wants only values pays for nothing. */
+TEST(JsonPathPaths, TheyAreOptIn) {
+	Parsed p;
+	p.doc = parse(R"([1,2,3])");
+	ASSERT_NE(p.doc, nullptr);
+
+	GTEXT_JSON_Path_Result without;
+	ASSERT_EQ(gtext_json_path_query(p.doc, "$[*]", SIZE_MAX, nullptr, &without,
+	              nullptr),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(without.count, 3u);
+	EXPECT_EQ(without.paths, nullptr);
+	gtext_json_path_result_free(&without);
+
+	GTEXT_JSON_Path_Result with;
+	ASSERT_EQ(gtext_json_path_query_paths(p.doc, "$[*]", SIZE_MAX, nullptr,
+	              &with, nullptr),
+	    GTEXT_JSON_OK);
+	EXPECT_EQ(with.count, 3u);
+	ASSERT_NE(with.paths, nullptr);
+	EXPECT_STREQ(with.paths[0], "$[0]");
+	gtext_json_path_result_free(&with);
+	// And freeing twice is still safe with paths in play.
+	gtext_json_path_result_free(&with);
+}
+
+/* A filter's results carry paths too, and a filter inside a descendant segment
+   is where the path has to be carried furthest. */
+TEST(JsonPathPaths, FiltersAndDescendantsCarryThem) {
+	Parsed p;
+	p.doc = parse(R"({"a":[1,5,9],"b":{"c":[2,7]}})");
+	ASSERT_NE(p.doc, nullptr);
+	EXPECT_EQ(paths_of(p.doc, "$.a[?@>4]"), "$['a'][1]|$['a'][2]");
+	EXPECT_EQ(paths_of(p.doc, "$..[?@>4]"), "$['a'][1]|$['a'][2]|$['b']['c'][1]");
+}

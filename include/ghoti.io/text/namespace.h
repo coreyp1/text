@@ -225,6 +225,8 @@
 #define gtext_json_path_compile GHOTIIO_TEXT(gtext_json_path_compile)
 #define gtext_json_path_free GHOTIIO_TEXT(gtext_json_path_free)
 #define gtext_json_path_select GHOTIIO_TEXT(gtext_json_path_select)
+#define gtext_json_path_select_paths GHOTIIO_TEXT(gtext_json_path_select_paths)
+#define gtext_json_path_query_paths GHOTIIO_TEXT(gtext_json_path_query_paths)
 #define gtext_json_path_query GHOTIIO_TEXT(gtext_json_path_query)
 #define gtext_json_path_result_free GHOTIIO_TEXT(gtext_json_path_result_free)
 #define GTEXT_JSON_Path GHOTIIO_TEXT(GTEXT_JSON_Path)

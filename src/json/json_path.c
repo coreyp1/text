@@ -1358,35 +1358,198 @@ GTEXT_API void gtext_json_path_free(GTEXT_JSON_Path * path) {
  * Evaluation
  * ====================================================================== */
 
+/*
+ * A node list, optionally carrying the normalized path of each node (2.7).
+ *
+ * The paths are opt-in because they cost an allocation and a copy per selected
+ * node, and a caller who only wants the values should not pay for them. A
+ * filter's sub-queries never ask for them: they are evaluated for a truth value
+ * or a single value, and nothing asks where that came from.
+ */
 typedef struct {
   const GTEXT_JSON_Value ** items;
+  char ** paths; /* NULL unless want_paths; each entry owned by the list */
   size_t count;
   size_t capacity;
+  bool want_paths;
   const GTEXT_Allocator * alloc;
 } json_path_list;
 
-static bool json_path_list_push(
-    json_path_list * list, const GTEXT_JSON_Value * node) {
+/* Push a node and, where the list wants paths, the path that reached it - which
+ * the list takes ownership of, including when the push fails. */
+static bool json_path_list_push_path(
+    json_path_list * list, const GTEXT_JSON_Value * node, char * path) {
   if (list->count == list->capacity) {
     const size_t capacity = list->capacity ? list->capacity * 2 : 8;
     const GTEXT_JSON_Value ** grown =
         (const GTEXT_JSON_Value **)gtext_allocator_realloc(list->alloc,
             (void *)list->items, capacity * sizeof(const GTEXT_JSON_Value *));
     if (!grown) {
+      gtext_allocator_free(list->alloc, path);
       return false;
     }
     list->items = grown;
+    if (list->want_paths) {
+      char ** grown_paths = (char **)gtext_allocator_realloc(
+          list->alloc, list->paths, capacity * sizeof(char *));
+      if (!grown_paths) {
+        gtext_allocator_free(list->alloc, path);
+        return false;
+      }
+      list->paths = grown_paths;
+    }
     list->capacity = capacity;
+  }
+  if (list->want_paths) {
+    if (!path) {
+      return false; /* the caller could not build it: out of memory */
+    }
+    list->paths[list->count] = path;
+  }
+  else {
+    gtext_allocator_free(list->alloc, path);
   }
   list->items[list->count++] = node;
   return true;
 }
 
 static void json_path_list_free(json_path_list * list) {
+  if (list->paths) {
+    for (size_t i = 0; i < list->count; i++) {
+      gtext_allocator_free(list->alloc, list->paths[i]);
+    }
+    gtext_allocator_free(list->alloc, list->paths);
+    list->paths = NULL;
+  }
   gtext_allocator_free(list->alloc, (void *)list->items);
   list->items = NULL;
   list->count = 0;
   list->capacity = 0;
+}
+
+/* ---------------------------------------------------------------------- *
+ * Normalized paths (2.7)
+ *
+ * A normalized path names one node: "$" then a bracketed index or
+ * single-quoted name per step, so `$['a'][0]['b c']`. It is itself a valid
+ * JSONPath query, and it is the only spelling of a path the specification
+ * blesses - which is what makes it useful as an identity for a result.
+ * ---------------------------------------------------------------------- */
+
+static char * json_path_path_root(const GTEXT_Allocator * alloc) {
+  char * out = (char *)gtext_allocator_malloc(alloc, 2);
+  if (!out) {
+    return NULL;
+  }
+  out[0] = '$';
+  out[1] = '\0';
+  return out;
+}
+
+static char * json_path_path_dup(
+    const GTEXT_Allocator * alloc, const char * path) {
+  if (!path) {
+    return NULL;
+  }
+  const size_t len = strlen(path);
+  char * out = (char *)gtext_allocator_malloc(alloc, len + 1);
+  if (!out) {
+    return NULL;
+  }
+  memcpy(out, path, len + 1);
+  return out;
+}
+
+static char * json_path_path_index(
+    const GTEXT_Allocator * alloc, const char * parent, size_t index) {
+  if (!parent) {
+    return NULL;
+  }
+  char digits[24];
+  const int written = snprintf(digits, sizeof(digits), "[%zu]", index);
+  if (written < 0) {
+    return NULL;
+  }
+  const size_t parent_len = strlen(parent);
+  char * out =
+      (char *)gtext_allocator_malloc(alloc, parent_len + (size_t)written + 1);
+  if (!out) {
+    return NULL;
+  }
+  memcpy(out, parent, parent_len);
+  memcpy(out + parent_len, digits, (size_t)written + 1);
+  return out;
+}
+
+/* normal-name-selector: single-quoted, with 2.7's escapes and \uXXXX in
+ * lowercase hex for the control characters that have no shorter spelling. */
+static char * json_path_path_name(const GTEXT_Allocator * alloc,
+    const char * parent, const char * name, size_t name_len) {
+  if (!parent) {
+    return NULL;
+  }
+  const size_t parent_len = strlen(parent);
+  /* Worst case per byte is six, for \uXXXX, plus the two quotes, the two
+   * brackets and the terminator. */
+  char * out = (char *)gtext_allocator_malloc(
+      alloc, parent_len + name_len * 6 + 5);
+  if (!out) {
+    return NULL;
+  }
+  memcpy(out, parent, parent_len);
+  size_t at = parent_len;
+  out[at++] = '[';
+  out[at++] = '\'';
+  for (size_t i = 0; i < name_len; i++) {
+    const unsigned char c = (unsigned char)name[i];
+    switch (c) {
+    case '\'':
+      out[at++] = '\\';
+      out[at++] = '\'';
+      continue;
+    case '\\':
+      out[at++] = '\\';
+      out[at++] = '\\';
+      continue;
+    case '\b':
+      out[at++] = '\\';
+      out[at++] = 'b';
+      continue;
+    case '\f':
+      out[at++] = '\\';
+      out[at++] = 'f';
+      continue;
+    case '\n':
+      out[at++] = '\\';
+      out[at++] = 'n';
+      continue;
+    case '\r':
+      out[at++] = '\\';
+      out[at++] = 'r';
+      continue;
+    case '\t':
+      out[at++] = '\\';
+      out[at++] = 't';
+      continue;
+    default:
+      break;
+    }
+    if (c < 0x20) {
+      static const char hex[] = "0123456789abcdef";
+      out[at++] = '\\';
+      out[at++] = 'u';
+      out[at++] = '0';
+      out[at++] = '0';
+      out[at++] = hex[(c >> 4) & 0xF];
+      out[at++] = hex[c & 0xF];
+      continue;
+    }
+    out[at++] = (char)c;
+  }
+  out[at++] = '\'';
+  out[at++] = ']';
+  out[at] = '\0';
+  return out;
 }
 
 /*
@@ -1978,8 +2141,12 @@ static bool json_path_eval_expr(json_path_eval * ev,
 /* Apply one selector to one node, appending what it selects. */
 static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
     const json_path_selector * sel, const GTEXT_JSON_Value * node,
-    json_path_list * out) {
+    const char * node_path, json_path_list * out) {
   const GTEXT_JSON_Type type = gtext_json_typeof(node);
+  const GTEXT_Allocator * alloc = ev->alloc;
+  /* Building a path is skipped entirely where the list does not want one, so
+   * the common case pays nothing. */
+  const bool paths = out->want_paths;
 
   switch (sel->kind) {
   case JSON_PATH_SEL_FILTER: {
@@ -1991,7 +2158,8 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
       for (size_t i = 0; i < len; i++) {
         const GTEXT_JSON_Value * child = gtext_json_array_get(node, i);
         if (json_path_eval_expr(ev, sel->filter, child)) {
-          if (!json_path_list_push(out, child)) {
+          if (!json_path_list_push_path(out, child,
+                  paths ? json_path_path_index(alloc, node_path, i) : NULL)) {
             return GTEXT_JSON_E_OOM;
           }
         }
@@ -2005,7 +2173,11 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
       for (size_t i = 0; i < len; i++) {
         const GTEXT_JSON_Value * child = gtext_json_object_value(node, i);
         if (json_path_eval_expr(ev, sel->filter, child)) {
-          if (!json_path_list_push(out, child)) {
+          size_t key_len = 0;
+          const char * key = gtext_json_object_key(node, i, &key_len);
+          if (!json_path_list_push_path(out, child,
+                  paths ? json_path_path_name(alloc, node_path, key, key_len)
+                        : NULL)) {
             return GTEXT_JSON_E_OOM;
           }
         }
@@ -2023,7 +2195,11 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
     }
     const GTEXT_JSON_Value * found =
         gtext_json_object_get(node, sel->name, sel->name_len);
-    if (found && !json_path_list_push(out, found)) {
+    if (found
+        && !json_path_list_push_path(out, found,
+            paths ? json_path_path_name(
+                        alloc, node_path, sel->name, sel->name_len)
+                  : NULL)) {
       return GTEXT_JSON_E_OOM;
     }
     return GTEXT_JSON_OK;
@@ -2042,7 +2218,12 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
       return GTEXT_JSON_OK;
     }
     const GTEXT_JSON_Value * found = gtext_json_array_get(node, (size_t)index);
-    if (found && !json_path_list_push(out, found)) {
+    /* The path carries the *resolved* index: a normalized path has no negative
+     * index, so `$[-1]` on a three-element array is `$[2]`. */
+    if (found
+        && !json_path_list_push_path(out, found,
+            paths ? json_path_path_index(alloc, node_path, (size_t)index)
+                  : NULL)) {
       return GTEXT_JSON_E_OOM;
     }
     return GTEXT_JSON_OK;
@@ -2052,7 +2233,8 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
     if (type == GTEXT_JSON_ARRAY) {
       const size_t len = gtext_json_array_size(node);
       for (size_t i = 0; i < len; i++) {
-        if (!json_path_list_push(out, gtext_json_array_get(node, i))) {
+        if (!json_path_list_push_path(out, gtext_json_array_get(node, i),
+                paths ? json_path_path_index(alloc, node_path, i) : NULL)) {
           return GTEXT_JSON_E_OOM;
         }
       }
@@ -2062,7 +2244,11 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
        * and this DOM keeps them in document order, so that is what comes out. */
       const size_t len = gtext_json_object_size(node);
       for (size_t i = 0; i < len; i++) {
-        if (!json_path_list_push(out, gtext_json_object_value(node, i))) {
+        size_t key_len = 0;
+        const char * key = gtext_json_object_key(node, i, &key_len);
+        if (!json_path_list_push_path(out, gtext_json_object_value(node, i),
+                paths ? json_path_path_name(alloc, node_path, key, key_len)
+                      : NULL)) {
           return GTEXT_JSON_E_OOM;
         }
       }
@@ -2083,14 +2269,20 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
     json_path_slice_bounds(sel, len, &lower, &upper);
     if (sel->step > 0) {
       for (int64_t i = lower; i < upper; i += sel->step) {
-        if (!json_path_list_push(out, gtext_json_array_get(node, (size_t)i))) {
+        if (!json_path_list_push_path(out,
+                gtext_json_array_get(node, (size_t)i),
+                paths ? json_path_path_index(alloc, node_path, (size_t)i)
+                      : NULL)) {
           return GTEXT_JSON_E_OOM;
         }
       }
     }
     else {
       for (int64_t i = lower; i > upper; i += sel->step) {
-        if (!json_path_list_push(out, gtext_json_array_get(node, (size_t)i))) {
+        if (!json_path_list_push_path(out,
+                gtext_json_array_get(node, (size_t)i),
+                paths ? json_path_path_index(alloc, node_path, (size_t)i)
+                      : NULL)) {
           return GTEXT_JSON_E_OOM;
         }
       }
@@ -2108,28 +2300,45 @@ static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
  * document's depth, and a query is not a reason to put that on the C stack.
  * Children are pushed in reverse so they are visited front to back.
  */
-static GTEXT_JSON_Status json_path_collect_descendants(
-    const GTEXT_JSON_Value * root, json_path_list * out) {
+static GTEXT_JSON_Status json_path_collect_descendants(json_path_eval * ev,
+    const GTEXT_JSON_Value * root, const char * root_path,
+    json_path_list * out) {
+  const GTEXT_Allocator * alloc = out->alloc;
+  const bool paths = out->want_paths;
+
   json_path_list stack;
   memset(&stack, 0, sizeof(stack));
-  stack.alloc = out->alloc;
+  stack.alloc = alloc;
+  stack.want_paths = paths;
 
-  if (!json_path_list_push(&stack, root)) {
+  char * first_path = paths ? json_path_path_dup(alloc, root_path) : NULL;
+  if (paths && !first_path) {
+    return GTEXT_JSON_E_OOM;
+  }
+  if (!json_path_list_push_path(&stack, root, first_path)) {
+    json_path_list_free(&stack);
     return GTEXT_JSON_E_OOM;
   }
 
   GTEXT_JSON_Status status = GTEXT_JSON_OK;
   while (stack.count > 0) {
-    const GTEXT_JSON_Value * node = stack.items[--stack.count];
-    if (!json_path_list_push(out, node)) {
-      status = GTEXT_JSON_E_OOM;
-      break;
+    stack.count--;
+    const GTEXT_JSON_Value * node = stack.items[stack.count];
+    /* The path moves from the stack to the output, so the stack must not free
+     * it: this is the one place a path changes owner. */
+    char * node_path = paths ? stack.paths[stack.count] : NULL;
+    if (paths) {
+      stack.paths[stack.count] = NULL;
     }
     const GTEXT_JSON_Type type = gtext_json_typeof(node);
+
+    /* The children are pushed before the node's own path is handed over,
+     * because building theirs reads it. */
     if (type == GTEXT_JSON_ARRAY) {
       const size_t len = gtext_json_array_size(node);
       for (size_t i = len; i > 0; i--) {
-        if (!json_path_list_push(&stack, gtext_json_array_get(node, i - 1))) {
+        if (!json_path_list_push_path(&stack, gtext_json_array_get(node, i - 1),
+                paths ? json_path_path_index(alloc, node_path, i - 1) : NULL)) {
           status = GTEXT_JSON_E_OOM;
           break;
         }
@@ -2138,11 +2347,24 @@ static GTEXT_JSON_Status json_path_collect_descendants(
     else if (type == GTEXT_JSON_OBJECT) {
       const size_t len = gtext_json_object_size(node);
       for (size_t i = len; i > 0; i--) {
-        if (!json_path_list_push(&stack, gtext_json_object_value(node, i - 1))) {
+        size_t key_len = 0;
+        const char * key = gtext_json_object_key(node, i - 1, &key_len);
+        if (!json_path_list_push_path(&stack,
+                gtext_json_object_value(node, i - 1),
+                paths ? json_path_path_name(alloc, node_path, key, key_len)
+                      : NULL)) {
           status = GTEXT_JSON_E_OOM;
           break;
         }
       }
+    }
+
+    if (status == GTEXT_JSON_OK
+        && !json_path_list_push_path(out, node, node_path)) {
+      status = GTEXT_JSON_E_OOM;
+    }
+    else if (status != GTEXT_JSON_OK) {
+      gtext_allocator_free(alloc, node_path);
     }
     if (status != GTEXT_JSON_OK) {
       break;
@@ -2150,6 +2372,7 @@ static GTEXT_JSON_Status json_path_collect_descendants(
   }
 
   json_path_list_free(&stack);
+  (void)ev;
   return status;
 }
 
@@ -2162,11 +2385,21 @@ static GTEXT_JSON_Status json_path_collect_descendants(
 static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
     const json_path_segment * segments, size_t count,
     const GTEXT_JSON_Value * start, json_path_list * out) {
+  const bool paths = out->want_paths;
+
   json_path_list current;
   memset(&current, 0, sizeof(current));
   current.alloc = ev->alloc;
-  if (!json_path_list_push(&current, start)) {
-    return GTEXT_JSON_E_OOM;
+  current.want_paths = paths;
+  {
+    char * root_path = paths ? json_path_path_root(ev->alloc) : NULL;
+    if (paths && !root_path) {
+      return GTEXT_JSON_E_OOM;
+    }
+    if (!json_path_list_push_path(&current, start, root_path)) {
+      json_path_list_free(&current);
+      return GTEXT_JSON_E_OOM;
+    }
   }
 
   GTEXT_JSON_Status status = GTEXT_JSON_OK;
@@ -2175,12 +2408,14 @@ static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
     json_path_list next;
     memset(&next, 0, sizeof(next));
     next.alloc = ev->alloc;
+    next.want_paths = paths;
 
     for (size_t i = 0; i < current.count && status == GTEXT_JSON_OK; i++) {
+      const char * item_path = paths ? current.paths[i] : NULL;
       if (!seg->descendant) {
         for (size_t k = 0; k < seg->selector_count; k++) {
           status = json_path_apply_selector(
-              ev, &seg->selectors[k], current.items[i], &next);
+              ev, &seg->selectors[k], current.items[i], item_path, &next);
           if (status != GTEXT_JSON_OK) {
             break;
           }
@@ -2193,11 +2428,13 @@ static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
       json_path_list visited;
       memset(&visited, 0, sizeof(visited));
       visited.alloc = ev->alloc;
-      status = json_path_collect_descendants(current.items[i], &visited);
+      visited.want_paths = paths;
+      status = json_path_collect_descendants(
+          ev, current.items[i], item_path, &visited);
       for (size_t v = 0; v < visited.count && status == GTEXT_JSON_OK; v++) {
         for (size_t k = 0; k < seg->selector_count; k++) {
-          status = json_path_apply_selector(
-              ev, &seg->selectors[k], visited.items[v], &next);
+          status = json_path_apply_selector(ev, &seg->selectors[k],
+              visited.items[v], paths ? visited.paths[v] : NULL, &next);
           if (status != GTEXT_JSON_OK) {
             break;
           }
@@ -2215,9 +2452,15 @@ static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
     return status;
   }
 
-  /* Hand the list over rather than copying it. */
+  /* Hand the nodes - and their paths, which move rather than being copied -
+   * to the caller's list. */
   for (size_t i = 0; i < current.count; i++) {
-    if (!json_path_list_push(out, current.items[i])) {
+    char * moved = NULL;
+    if (paths) {
+      moved = current.paths[i];
+      current.paths[i] = NULL;
+    }
+    if (!json_path_list_push_path(out, current.items[i], moved)) {
       json_path_list_free(&current);
       return GTEXT_JSON_E_OOM;
     }
@@ -2226,8 +2469,9 @@ static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
   return GTEXT_JSON_OK;
 }
 
-GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
-    const GTEXT_JSON_Value * root, GTEXT_JSON_Path_Result * out) {
+static GTEXT_JSON_Status json_path_select_internal(
+    const GTEXT_JSON_Path * path, const GTEXT_JSON_Value * root,
+    GTEXT_JSON_Path_Result * out, bool want_paths) {
   if (!path || !root || !out) {
     return GTEXT_JSON_E_INVALID;
   }
@@ -2243,6 +2487,7 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
   json_path_list nodes;
   memset(&nodes, 0, sizeof(nodes));
   nodes.alloc = path->alloc;
+  nodes.want_paths = want_paths;
 
   GTEXT_JSON_Status status = json_path_apply_segments(
       &ev, path->segments, path->segment_count, root, &nodes);
@@ -2255,13 +2500,26 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
   }
 
   out->nodes = nodes.items;
+  out->paths = nodes.paths;
   out->count = nodes.count;
   return GTEXT_JSON_OK;
 }
 
-GTEXT_API GTEXT_JSON_Status gtext_json_path_query(const GTEXT_JSON_Value * root,
-    const char * query, size_t len, const GTEXT_Allocator * alloc,
-    GTEXT_JSON_Path_Result * out, GTEXT_JSON_Error * err) {
+GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
+    const GTEXT_JSON_Value * root, GTEXT_JSON_Path_Result * out) {
+  return json_path_select_internal(path, root, out, false);
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_path_select_paths(
+    const GTEXT_JSON_Path * path, const GTEXT_JSON_Value * root,
+    GTEXT_JSON_Path_Result * out) {
+  return json_path_select_internal(path, root, out, true);
+}
+
+static GTEXT_JSON_Status json_path_query_internal(
+    const GTEXT_JSON_Value * root, const char * query, size_t len,
+    const GTEXT_Allocator * alloc, GTEXT_JSON_Path_Result * out,
+    GTEXT_JSON_Error * err, bool want_paths) {
   if (!root || !query || !out) {
     return GTEXT_JSON_E_INVALID;
   }
@@ -2270,14 +2528,35 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_query(const GTEXT_JSON_Value * root,
     memset(out, 0, sizeof(*out));
     return err ? err->code : GTEXT_JSON_E_PATH;
   }
-  const GTEXT_JSON_Status status = gtext_json_path_select(path, root, out);
+  const GTEXT_JSON_Status status =
+      json_path_select_internal(path, root, out, want_paths);
   gtext_json_path_free(path);
   return status;
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_path_query(const GTEXT_JSON_Value * root,
+    const char * query, size_t len, const GTEXT_Allocator * alloc,
+    GTEXT_JSON_Path_Result * out, GTEXT_JSON_Error * err) {
+  return json_path_query_internal(root, query, len, alloc, out, err, false);
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_path_query_paths(
+    const GTEXT_JSON_Value * root, const char * query, size_t len,
+    const GTEXT_Allocator * alloc, GTEXT_JSON_Path_Result * out,
+    GTEXT_JSON_Error * err) {
+  return json_path_query_internal(root, query, len, alloc, out, err, true);
 }
 
 GTEXT_API void gtext_json_path_result_free(GTEXT_JSON_Path_Result * result) {
   if (!result) {
     return;
+  }
+  if (result->paths) {
+    for (size_t i = 0; i < result->count; i++) {
+      gtext_allocator_free(result->alloc, result->paths[i]);
+    }
+    gtext_allocator_free(result->alloc, result->paths);
+    result->paths = NULL;
   }
   gtext_allocator_free(result->alloc, (void *)result->nodes);
   result->nodes = NULL;

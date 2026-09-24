@@ -372,8 +372,8 @@ Compared against nlohmann/json, RapidJSON, jansson and cJSON.
 **Present, and competitive.** DOM with typed accessors; push streaming; a
 writer with buffer and fixed-buffer sinks; file read and write; JSON Pointer
 (RFC 6901); JSON Patch (RFC 6902); JSON Merge Patch (RFC 7386); JSONPath
-(RFC 9535), filter selector included, scoring 650 of the 650 compliance cases it
-attempts; duplicate-key
+(RFC 9535) with the filter selector and normalized paths, scoring 650 of the 650
+compliance cases it attempts on both the node lists and the paths; duplicate-key
 policy with four modes including collect-into-array; number handling that keeps
 the original lexeme and offers exact `int64`, `uint64`, `double` and
 string-backed big decimal; in-situ zero-copy parsing; depth, string, element

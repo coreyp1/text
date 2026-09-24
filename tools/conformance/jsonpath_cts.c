@@ -7,10 +7,12 @@
  * whose selector contains a NUL - `$["\u0000"]` is a legal query naming a
  * member whose name is one - and an argument cannot carry one.
  *
- * Prints one line: "OK <json array>" with the selected nodes in order,
- * "INVALID <message>" for a query this library says is not well-formed,
- * "UNSUPPORTED <message>" for one it says is well-formed but does not
- * evaluate - the filter selector - or "ERROR <message>" for anything else.
+ * Prints "OK <json array>" with the selected nodes in order and then a second
+ * line, "PATHS <json array>", with the normalized path of each - so the suite's
+ * result and result_paths can both be checked. Or one line: "INVALID <message>"
+ * for a query this library says is not well-formed, "UNSUPPORTED <message>" for
+ * one it says is well-formed but does not evaluate - match() and search() - or
+ * "ERROR <message>" for anything else.
  *
  * The three refusals are kept apart because the suite's invalid_selector
  * cases are asking for the first one. Counting "unsupported" as a pass there
@@ -78,7 +80,8 @@ int main(void) {
   }
 
   GTEXT_JSON_Path_Result result;
-  const GTEXT_JSON_Status status = gtext_json_path_select(path, doc, &result);
+  const GTEXT_JSON_Status status =
+      gtext_json_path_select_paths(path, doc, &result);
   if (status != GTEXT_JSON_OK) {
     printf("ERROR select: %d\n", (int)status);
     gtext_json_free(doc);
@@ -110,6 +113,37 @@ int main(void) {
     fwrite(gtext_json_sink_buffer_data(&sink), 1,
         gtext_json_sink_buffer_size(&sink), stdout);
     gtext_json_sink_buffer_free(&sink);
+    gtext_json_error_free(&werr);
+  }
+  printf("]\n");
+
+  /* The paths, written as JSON strings by the library rather than by hand: a
+     normalized path may contain a backslash of its own - `$['x\\ty']` - and
+     escaping that correctly is the writer's job. */
+  printf("PATHS [");
+  for (size_t i = 0; i < result.count; i++) {
+    GTEXT_JSON_Value * as_string =
+        gtext_json_new_string(result.paths[i], strlen(result.paths[i]));
+    GTEXT_JSON_Sink sink;
+    if (!as_string || gtext_json_sink_buffer(&sink) != GTEXT_JSON_OK) {
+      printf("]\nERROR path sink\n");
+      return 0;
+    }
+    GTEXT_JSON_Write_Options wopts = gtext_json_write_options_default();
+    GTEXT_JSON_Error werr;
+    memset(&werr, 0, sizeof(werr));
+    if (gtext_json_write_value(&sink, &wopts, as_string, &werr)
+        != GTEXT_JSON_OK) {
+      printf("]\nERROR path write\n");
+      return 0;
+    }
+    if (i) {
+      printf(",");
+    }
+    fwrite(gtext_json_sink_buffer_data(&sink), 1,
+        gtext_json_sink_buffer_size(&sink), stdout);
+    gtext_json_sink_buffer_free(&sink);
+    gtext_json_free(as_string);
     gtext_json_error_free(&werr);
   }
   printf("]\n");

@@ -92,8 +92,21 @@ typedef struct GTEXT_JSON_Path GTEXT_JSON_Path;
  */
 typedef struct {
   const GTEXT_JSON_Value ** nodes; ///< Selected nodes, or NULL when count is 0
-  size_t count;                    ///< How many
-  const GTEXT_Allocator * alloc;   ///< The allocator `nodes` came from
+  /**
+   * The normalized path of each node (RFC 9535 §2.7), or NULL.
+   *
+   * Filled in only by @ref gtext_json_path_select_paths and
+   * @ref gtext_json_path_query_paths, because building them costs an
+   * allocation per result. A normalized path names exactly one node - `$`
+   * followed by a bracketed index or single-quoted name per step, as in
+   * `$['store']['book'][0]['author']` - and is itself a valid query, so it can
+   * be handed back to this module to reach the same node again.
+   *
+   * Owned by the result and released with it.
+   */
+  char ** paths;
+  size_t count;                  ///< How many
+  const GTEXT_Allocator * alloc; ///< The allocator `nodes` came from
 } GTEXT_JSON_Path_Result;
 
 /**
@@ -132,6 +145,24 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
     const GTEXT_JSON_Value * root, GTEXT_JSON_Path_Result * out);
 
 /**
+ * @brief Evaluate a query and record where each result came from
+ *
+ * As @ref gtext_json_path_select, and additionally fills `out->paths` with the
+ * normalized path of each selected node. A separate entry point because the
+ * paths cost an allocation and a copy per result, which a caller who wants only
+ * the values should not pay.
+ *
+ * @param path The compiled query (must not be NULL)
+ * @param root The document to query (must not be NULL)
+ * @param out Filled in with the selected nodes and their paths
+ * @return GTEXT_JSON_OK, GTEXT_JSON_E_INVALID for a NULL argument, or
+ *   GTEXT_JSON_E_OOM
+ */
+GTEXT_API GTEXT_JSON_Status gtext_json_path_select_paths(
+    const GTEXT_JSON_Path * path, const GTEXT_JSON_Value * root,
+    GTEXT_JSON_Path_Result * out);
+
+/**
  * @brief Compile, evaluate, and release the query
  *
  * For a query used once. A query used repeatedly should be compiled once.
@@ -147,6 +178,22 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
 GTEXT_API GTEXT_JSON_Status gtext_json_path_query(const GTEXT_JSON_Value * root,
     const char * query, size_t len, const GTEXT_Allocator * alloc,
     GTEXT_JSON_Path_Result * out, GTEXT_JSON_Error * err);
+
+/**
+ * @brief Compile, evaluate with paths, and release the query
+ *
+ * @param root The document to query (must not be NULL)
+ * @param query The query text
+ * @param len Its length in bytes, or SIZE_MAX to measure it with strlen()
+ * @param alloc Allocator for the query, the result and the paths, or NULL
+ * @param out Filled in with the selected nodes and their normalized paths
+ * @param err Filled in on failure, or NULL
+ * @return As @ref gtext_json_path_compile and @ref gtext_json_path_select_paths
+ */
+GTEXT_API GTEXT_JSON_Status gtext_json_path_query_paths(
+    const GTEXT_JSON_Value * root, const char * query, size_t len,
+    const GTEXT_Allocator * alloc, GTEXT_JSON_Path_Result * out,
+    GTEXT_JSON_Error * err);
 
 /**
  * @brief Release the array a result owns

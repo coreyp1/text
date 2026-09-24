@@ -161,7 +161,8 @@ syntax error.
 
 **JSONPath (RFC 9535), without the filter selector.**
 `gtext_json_path_compile()` and `gtext_json_path_select()`, with
-`gtext_json_path_query()` for a one-shot. The root identifier, child and
+`gtext_json_path_query()` for a one-shot, and `_select_paths()` / `_query_paths()`
+where the *normalized path* of each result is wanted as well as the node. The root identifier, child and
 descendant segments, and the name, wildcard, index and slice selectors,
 including several selectors in one bracket. A result is a node list in the order
 the specification gives, and it may hold the same node twice - `$[0,0]` selects
@@ -195,12 +196,13 @@ implementation. `make conformance-jsonpath` scores it against the
 counted as passes or failures - a percentage over a subset means nothing without
 that number beside it.
 
-What that score is about is the **node list**: which nodes a query selects and
-in what order, which is the suite's `result` field. Every valid case also carries
-`result_paths`, the *normalized path* of each result (§2.7) - `$['a'][0]` and so
-on - and this library does not produce those, so the scorer does not check them
-and the score says nothing about them. Producing them is the other open piece of
-RFC 9535 here, alongside `match()` and `search()`.
+That score covers **both** halves of what the suite asserts: the node list -
+which nodes a query selects and in what order - and the *normalized path* of each
+result (§2.7), which `gtext_json_path_query_paths()` produces.
+`$['store']['book'][0]['author']` is the only spelling §2.7 blesses: brackets
+throughout, single-quoted names, no negative indices. Comparing only the values
+would pass a query that selected the right nodes by the wrong route, and a
+planted off-by-one in the index builder shows up as 99 failing cases.
 
 That runner has found three defects so far, each of which the hand-written tests
 agreed with: `$ ` is not a well-formed query, because `segments = *(S segment)`
