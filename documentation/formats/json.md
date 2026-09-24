@@ -153,9 +153,9 @@ name is normalized exactly as a quoted one is.
 *between* tokens from JSON's four characters - tab, LF, CR, space - to
 ECMAScript's set: vertical tab, form feed, U+FEFF, every character in
 General_Category Zs (U+00A0 and U+3000 among them), and the line terminators
-U+2028 and U+2029. Zs comes from a generated table checked against the pinned
-UCD by `make check-json5-tables`, because that category has moved before:
-U+180E was Zs until Unicode 6.3 reclassified it as Cf. A character that only
+U+2028 and U+2029. Zs is asked of `ghoti.io-unicode`, because that category has
+moved before: U+180E was Zs until Unicode 6.3 reclassified it as Cf, so the
+answer depends on which UCD version answers, and the suite keeps one. A character that only
 looks space-like is not whitespace - U+200B ZERO WIDTH SPACE is Cf and stays a
 syntax error.
 

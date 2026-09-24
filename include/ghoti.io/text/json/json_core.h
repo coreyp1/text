@@ -237,9 +237,10 @@ typedef struct {
    * (which includes the no-break space U+00A0 and the ideographic space
    * U+3000), and the line terminators U+2028 and U+2029.
    *
-   * Zs comes from a generated table rather than a list written out here,
-   * because that category has changed: U+180E was Zs until Unicode 6.3 moved
-   * it to Cf. `make check-json5-tables` holds the table to the pinned UCD.
+   * Zs is asked of ghoti.io-unicode rather than written out here, because
+   * that category has changed: U+180E was Zs until Unicode 6.3 moved it to
+   * Cf. `make check-ucd-pin` holds that library's UCD version and this one's
+   * IDNA pin to the same value.
    *
    * This is about the space *between* tokens. It says nothing about what may
    * appear inside a string, where JSON already allows every one of these
@@ -254,8 +255,8 @@ typedef struct {
    * `[A-Za-z_]`: any character with the Unicode property ID_Start may begin
    * one and any with ID_Continue may continue it, `$` and `_` may do either,
    * and `\uXXXX` escapes are allowed - `{\u0061: 1}` names `a`. The
-   * properties come from a generated table, held to the pinned UCD by
-   * `make check-json5-tables`.
+   * properties are ghoti.io-unicode's, which is where the suite keeps one
+   * copy of the UCD.
    *
    * `IdentifierName` includes the reserved words, so `{true: 1}` is an object
    * whose name is the three letters `true`, and `{null: 1}`, `{NaN: 1}` and

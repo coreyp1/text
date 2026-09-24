@@ -461,7 +461,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
+TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin check-metaschema
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -736,7 +736,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-json5-tables check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin check-metaschema
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1557,44 +1557,50 @@ IDNA_TABLES := src/idna/tables
 # schedule - there is no 17.0.0 of it - so it has its own pin. The skew is
 # harmless because the two answer different questions; tools/idna/fetch.sh
 # says why at length.
+COMMA := ,
 IDNA_MAPPING_VERSION := $(shell cat tools/idna/IDNA_MAPPING_VERSION 2>/dev/null)
 IDNA_MAPPING_DIR := third_party/idna/$(IDNA_MAPPING_VERSION)
 METASCHEMA_DIR := third_party/json-schema
 METASCHEMA_SRC := src/json/metaschema
 
-JSON5_TABLES := src/json/tables
-
-check-json5-tables: ## Fail if the committed JSON5 identifier table is not what the generator produces
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		printf "check-json5-tables: skipped (no python3)\n"; \
-		exit 0; \
-	fi; \
-	if [ ! -d "$(UCD_DIR)" ]; then \
-		printf "check-json5-tables: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
-		exit 0; \
-	fi; \
-	tmp=$$(mktemp -d) || exit 1; \
+# The JSON5 identifier and whitespace tables used to be generated here and
+# committed, and a gate diffed them against the generator's output so that they
+# could not drift from the pinned UCD.  They are gone: the lexer asks
+# ghoti.io-unicode for ID_Start, ID_Continue and General_Category, so there is
+# no committed copy left to drift.
+#
+# The hazard that replaces it is a version skew.  Two UCD versions are now in
+# play - the one this library pins for IDNA's own tables, in
+# tools/idna/UCD_VERSION, and the one the unicode library was generated from -
+# and a JSON5 document whose names are decided by one while IDNA's validity is
+# decided by the other is a library that disagrees with itself about which
+# characters exist.  Nothing else compares them: the suite-level check named in
+# unicode's design.md section 16 is not written yet, and even when it is it
+# will compare what the repositories say rather than what this build linked.
+check-ucd-pin: ## Fail if the linked unicode library's UCD version is not the one pinned here
+check-ucd-pin: $(APP_DIR)/$(TARGET)
+	@tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	mkdir -p "$$tmp/out"; \
-	if ! python3 tools/json5/gen_ident_tables.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
-		printf "\033[0;31m\n### The JSON5 identifier generator failed ###\033[0m\n" >&2; \
+	printf '#include <stdio.h>\n#include <ghoti.io/unicode/char.h>\nint main(void){printf("%%s\\n",guni_ucd_version());return 0;}\n' > "$$tmp/ask.c"; \
+	if ! $(CC) -o "$$tmp/ask" "$$tmp/ask.c" $(UNICODE_CFLAGS) $(UNICODE_LIBS) \
+			$(patsubst -L%,-Wl$(COMMA)-rpath$(COMMA)%,$(filter -L%,$(UNICODE_LIBS))) \
+			2>"$$tmp/err"; then \
+		printf "\033[0;31m\n### Could not ask ghoti.io-unicode for its UCD version ###\033[0m\n" >&2; \
 		cat "$$tmp/err" >&2; \
 		exit 1; \
 	fi; \
-	cp $(JSON5_TABLES)/json5_tables_internal.h "$$tmp/out/"; \
-	if ! diff -ru $(JSON5_TABLES) "$$tmp/out" >"$$tmp/diff" 2>&1; then \
-		printf "\033[0;31m\n### The committed JSON5 tables are stale ###\033[0m\n" >&2; \
-		head -40 "$$tmp/diff" >&2; \
-		printf "\nAn unquoted JSON5 name is an ECMAScript IdentifierName, defined over\n" >&2; \
-		printf "the Unicode properties ID_Start and ID_Continue, and its whitespace is\n" >&2; \
-		printf "ECMAScript's, which includes General_Category Zs. Both tables are\n" >&2; \
-		printf "committed so that a build needs neither the network nor\n" >&2; \
-		printf "Python, which means it can drift from the generator that is supposed\n" >&2; \
-		printf "to produce it. Regenerate with:\n" >&2; \
-		printf "  tools/json5/gen_ident_tables.py\n" >&2; \
+	theirs=$$("$$tmp/ask") || exit 1; \
+	if [ "$$theirs" != "$(UCD_VERSION)" ]; then \
+		printf "\033[0;31m\n### Two UCD versions in one library ###\033[0m\n" >&2; \
+		printf "ghoti.io-unicode was generated from UCD %s\n" "$$theirs" >&2; \
+		printf "tools/idna/UCD_VERSION pins %s\n" "$(UCD_VERSION)" >&2; \
+		printf "\nJSON5 names and JSON5 whitespace are decided by the first; IDNA2008\n" >&2; \
+		printf "validity and UTS #46 mapping by the second. Move this library's pin\n" >&2; \
+		printf "and regenerate (tools/idna/fetch.sh && tools/idna/gen_tables.py &&\n" >&2; \
+		printf "tools/idna/gen_uts46.py), or build against a unicode that matches.\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mThe JSON5 tables are byte-identical to the generator's output (UCD $(UCD_VERSION)).\033[0m\n"
+	printf "\033[0;32mOne UCD version: ghoti.io-unicode and tools/idna/UCD_VERSION both say $$theirs.\033[0m\n"
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \

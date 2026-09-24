@@ -38,27 +38,19 @@
 #include "../idna/nfc_utf8_internal.h"
 #include "json_internal.h"
 #include "json_stream_internal.h"
-#include "tables/json5_tables_internal.h"
+
+#include <ghoti.io/unicode/char.h>
+#include <ghoti.io/unicode/enums.h>
 
 #include <ghoti.io/text/json/json_core.h>
 
-/* The ranges are sorted and disjoint, so this is a binary search. */
+/* ECMAScript's <USP> is General_Category=Zs, asked of ghoti.io-unicode rather
+ * than of a table generated here. U+180E is why that matters: it was Zs until
+ * Unicode 6.3 and is Cf now, so the answer is a property of the UCD version,
+ * and there should be one UCD version in the suite rather than one per
+ * library. */
 static int json5_space_table_has(uint32_t cp) {
-  size_t lo = 0;
-  size_t hi = gtext_json5_space_count;
-  while (lo < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    if (cp < gtext_json5_space[mid].lo) {
-      hi = mid;
-    }
-    else if (cp > gtext_json5_space[mid].hi) {
-      lo = mid + 1;
-    }
-    else {
-      return 1;
-    }
-  }
-  return 0;
+  return guni_general_category(cp) == GUNI_GC_ZS;
 }
 
 /* How many bytes the UTF-8 character starting with `lead` occupies, or 0 if
@@ -138,40 +130,25 @@ static int json_hex_value(char c) {
   return -1;
 }
 
-/* Where in an ECMAScript IdentifierName this codepoint may appear, or 0 if
- * nowhere. The ranges are sorted and disjoint, so this is a binary search. */
-static uint32_t json5_ident_class(uint32_t cp) {
-  size_t lo = 0;
-  size_t hi = gtext_json5_ident_count;
-  while (lo < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    if (cp < gtext_json5_ident[mid].lo) {
-      hi = mid;
-    }
-    else if (cp > gtext_json5_ident[mid].hi) {
-      lo = mid + 1;
-    }
-    else {
-      return gtext_json5_ident[mid].value;
-    }
-  }
-  return 0;
-}
 
 /* May this codepoint start an IdentifierName, or continue one?
  *
  * ID_Start and ID_Continue answer most of it; `$` and `_` are ECMAScript's own
  * additions, and `_` needs naming only as a *start* because the UCD has it as
  * Pc and therefore already as a continuation. ZWNJ and ZWJ need no naming at
- * all: they carry ID_Continue in this UCD, so the table admits them exactly
- * where ECMAScript does. */
+ * all: they carry ID_Continue in this UCD, so the property admits them exactly
+ * where ECMAScript does.
+ *
+ * The properties come from ghoti.io-unicode. They used to come from a table
+ * generated here, which is the same data regex generated separately and font
+ * would have generated a third time. */
 static int json5_ident_start(uint32_t cp) {
-  return cp == '$' || cp == '_' ||
-      json5_ident_class(cp) == GTEXT_JSON5_IDENT_START;
+  return cp == '$' || cp == '_'
+      || guni_has_property(cp, GUNI_PROP_ID_START);
 }
 
 static int json5_ident_continue(uint32_t cp) {
-  return cp == '$' || json5_ident_class(cp) != 0;
+  return cp == '$' || guni_has_property(cp, GUNI_PROP_ID_CONTINUE);
 }
 
 /* The whitespace at `p`, in bytes, or 0 if there is none. `*ends_line` says
@@ -179,9 +156,9 @@ static int json5_ident_continue(uint32_t cp) {
  *
  * JSON allows four characters here. ECMAScript's WhiteSpace and
  * LineTerminator productions, which JSON5 takes, add vertical tab, form feed,
- * U+FEFF, every Zs, and U+2028 and U+2029. Zs comes from the generated table;
- * the others are named by ECMAScript rather than by a Unicode property, so
- * they are written out. */
+ * U+FEFF, every Zs, and U+2028 and U+2029. Zs is a Unicode property and
+ * is asked of ghoti.io-unicode; the others are named by ECMAScript rather than
+ * by a property, so they are written out. */
 static size_t json_lexer_whitespace_length(
     const json_lexer * lexer, const char * p, size_t available,
     int * ends_line) {
