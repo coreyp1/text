@@ -254,8 +254,13 @@ static void json_lexer_skip_whitespace(json_lexer * lexer) {
   }
 }
 
-// Skip a single-line comment (//). Returns 1 if comment was skipped, 0 if not a
-// comment.
+/* Skip a single-line comment (//).
+ *
+ * Returns 1 if a comment was skipped, 0 if there is not one here, and -2 if
+ * one began and the buffer ended before its newline did while more input may
+ * still arrive. That third answer is the streaming case, and it matters: a
+ * comment running to the end of a chunk is *not* a comment that ended, and
+ * treating it as one reads the rest of it, in the next chunk, as code. */
 static int json_lexer_skip_single_line_comment(json_lexer * lexer) {
   // Check for underflow and sufficient length using shared helper
   if (lexer->input_len < 2 || json_check_sub_underflow(lexer->input_len, 2) ||
@@ -297,6 +302,12 @@ static int json_lexer_skip_single_line_comment(json_lexer * lexer) {
       }
       lexer->current_offset++;
       json_position_update_offset(&lexer->pos, 1);
+    }
+    /* The buffer ended with no newline. In a complete document that is a
+     * comment ended by the end of input, which is allowed; in a stream it is
+     * a comment that has not finished arriving. */
+    if (lexer->streaming_mode) {
+      return -2;
     }
     // Update position offset to match current_offset
     lexer->pos.offset = lexer->current_offset;
@@ -380,6 +391,15 @@ static int json_lexer_skip_multi_line_comment(json_lexer * lexer) {
       lexer->current_offset++;
       json_position_update_offset(&lexer->pos, 1);
     }
+    /* The closing delimiter is not in the buffer. In a complete document the
+     * comment is
+     * unclosed and that is an error; in a stream it may still be coming, and it
+     * may even be split - a star at the end of one chunk and a slash at the
+     * start of the next, which is why the loop above stops two bytes short
+     * rather than reading the star as ordinary text. */
+    if (lexer->streaming_mode) {
+      return -2;
+    }
     // Unclosed comment
     return -1;
   }
@@ -395,9 +415,23 @@ static GTEXT_JSON_Status json_lexer_skip_comments(json_lexer * lexer) {
   int skipped;
   do {
     skipped = 0;
+    /* Where a comment is unfinished, everything about this call is undone: the
+     * caller keeps the bytes and lexes them again when the rest arrives, so
+     * the offset and the position have to be where they were. Without the
+     * rewind the comment's first half would be consumed and its second half
+     * read as code. */
+    const size_t restore_offset = lexer->current_offset;
+    const json_position restore_pos = lexer->pos;
+
     // Try single-line comment
-    if (json_lexer_skip_single_line_comment(lexer)) {
+    const int single_result = json_lexer_skip_single_line_comment(lexer);
+    if (single_result == 1) {
       skipped = 1;
+    }
+    else if (single_result == -2) {
+      lexer->current_offset = restore_offset;
+      lexer->pos = restore_pos;
+      return GTEXT_JSON_E_INCOMPLETE;
     }
     // Try multi-line comment
     int multi_result = json_lexer_skip_multi_line_comment(lexer);
@@ -407,11 +441,25 @@ static GTEXT_JSON_Status json_lexer_skip_comments(json_lexer * lexer) {
     else if (multi_result == -1) {
       return GTEXT_JSON_E_BAD_TOKEN; // Unclosed comment
     }
+    else if (multi_result == -2) {
+      lexer->current_offset = restore_offset;
+      lexer->pos = restore_pos;
+      return GTEXT_JSON_E_INCOMPLETE;
+    }
     // Skip whitespace after comments
     if (skipped) {
       json_lexer_skip_whitespace(lexer);
     }
   } while (skipped);
+
+  /* A lone slash at the end of the buffer begins a comment whose second
+   * character has not arrived: the two comment openings are the only tokens
+   * that start with one, so it is unfinished rather than unknown. */
+  if (lexer->streaming_mode && lexer->current_offset < lexer->input_len &&
+      lexer->input_len - lexer->current_offset == 1 &&
+      lexer->input[lexer->current_offset] == '/') {
+    return GTEXT_JSON_E_INCOMPLETE;
+  }
 
   return GTEXT_JSON_OK;
 }

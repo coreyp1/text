@@ -13251,3 +13251,145 @@ TEST(JsonSchemaDialect, AnUnreadableDefaultIsRefused) {
 	gtext_json_free(doc);
 	gtext_json_error_free(&err);
 }
+
+/*
+ * Comments across a feed boundary.
+ *
+ * A comment that runs to the end of a chunk has not ended, and the streaming
+ * lexer used to treat it as though it had: the rest of it, in the next chunk,
+ * was read as code. With `// "a": 1` that is not an error but a wrong parse -
+ * the comment's contents become part of the document - so these tests compare
+ * the events against the DOM parser rather than only asking whether the parse
+ * succeeded.
+ *
+ * Nothing here is JSON5: allow_comments is JSONC's, and the defect was equally
+ * visible with quoted names.
+ */
+namespace {
+
+// Every event the streaming parser emits, flattened to a string.
+std::string stream_event_trace(const std::string & src,
+    const GTEXT_JSON_Parse_Options * opts, size_t chunk, bool * ok) {
+	static std::string trace;
+	trace.clear();
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event * ev,
+	                             GTEXT_JSON_Error *) {
+		trace += std::to_string((int)ev->type);
+		if (ev->type == GTEXT_JSON_EVT_KEY || ev->type == GTEXT_JSON_EVT_STRING) {
+			trace += "(" + std::string(ev->as.str.s, ev->as.str.len) + ")";
+		}
+		trace += " ";
+		return GTEXT_JSON_OK;
+	};
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(opts, cb, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	GTEXT_JSON_Status status = GTEXT_JSON_OK;
+	for (size_t i = 0; i < src.size(); i += chunk) {
+		size_t n = std::min(chunk, src.size() - i);
+		status = gtext_json_stream_feed(st, src.data() + i, n, &err);
+		if (status != GTEXT_JSON_OK) {
+			break;
+		}
+	}
+	if (status == GTEXT_JSON_OK) {
+		status = gtext_json_stream_finish(st, &err);
+	}
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+	*ok = status == GTEXT_JSON_OK;
+	return trace;
+}
+
+} // namespace
+
+TEST(JsonStreamComments, ACommentSplitBetweenFeedsIsStillOneComment) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_comments = true;
+
+	const char * documents[] = {
+	    "{\n  // c\n  \"ab\": 1\n}",
+	    "{ /* c */ \"ab\": 1 }",
+	    "// leading\n{\"a\":1}",
+	    "{\"a\":1 /* between */ , \"b\":2}",
+	    // The case that is a wrong answer rather than an error: the comment
+	    // contains something that would parse.
+	    "{\n  // \"ghost\": 99\n  \"real\": 1\n}",
+	    "{\n  /* \"ghost\": 99, */\n  \"real\": 1\n}",
+	    // A comment opening and a comment closing that can each be split.
+	    "{\"a\":1,/**/\"b\":2}",
+	    "[1,2 // x\n,3]",
+	};
+	/* A comment *after* the document is absent on purpose: a feed of any kind
+	   once the top-level value is complete is GTEXT_JSON_E_STATE, which is the
+	   streaming parser's contract and not a comment question. */
+	for (const char * src : documents) {
+		const std::string whole = src;
+		bool reference_ok = false;
+		const std::string reference =
+		    stream_event_trace(whole, &opts, whole.size(), &reference_ok);
+		ASSERT_TRUE(reference_ok) << src << " in one feed";
+
+		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
+			bool ok = false;
+			const std::string got =
+			    stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_TRUE(ok) << src << " at chunk " << chunk;
+			EXPECT_EQ(got, reference) << src << " at chunk " << chunk;
+		}
+	}
+}
+
+/* Waiting for the rest of a comment must not turn a genuinely unclosed one
+   into a wait that never ends: finish() has to refuse it. */
+TEST(JsonStreamComments, AnUnclosedCommentIsStillAnError) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_comments = true;
+	for (const char * src : {"[1, /* never closed", "/* never closed",
+	         "{\"a\": /* never closed"}) {
+		const std::string whole = src;
+		for (size_t chunk : {size_t(1), size_t(3), whole.size()}) {
+			bool ok = false;
+			stream_event_trace(whole, &opts, chunk, &ok);
+			EXPECT_FALSE(ok) << src << " at chunk " << chunk;
+		}
+	}
+	// And a single-line comment with no newline is not an error: the end of
+	// input ends it, which is what finish() means.
+	bool ok = false;
+	stream_event_trace("[1,2] // to the end", &opts, 19, &ok);
+	EXPECT_TRUE(ok);
+}
+
+/* A lone slash at the end of a feed is the start of a comment whose second
+   character has not arrived, not an unknown token. */
+TEST(JsonStreamComments, ASlashAtTheEndOfAFeedWaits) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.allow_comments = true;
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+	                             GTEXT_JSON_Error *) { return GTEXT_JSON_OK; };
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+	ASSERT_NE(st, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_stream_feed(st, "[1,", 3, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_feed(st, "/", 1, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_feed(st, "/ c\n", 4, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_feed(st, "2]", 2, &err), GTEXT_JSON_OK);
+	EXPECT_EQ(gtext_json_stream_finish(st, &err), GTEXT_JSON_OK);
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+
+	// With comments off, a slash is an error rather than a wait.
+	GTEXT_JSON_Parse_Options strict = gtext_json_parse_options_default();
+	GTEXT_JSON_Stream * st2 = gtext_json_stream_new(&strict, cb, nullptr);
+	ASSERT_NE(st2, nullptr);
+	GTEXT_JSON_Error err2;
+	std::memset(&err2, 0, sizeof(err2));
+	GTEXT_JSON_Status a = gtext_json_stream_feed(st2, "[1,", 3, &err2);
+	GTEXT_JSON_Status b = gtext_json_stream_feed(st2, "/", 1, &err2);
+	GTEXT_JSON_Status c = gtext_json_stream_finish(st2, &err2);
+	EXPECT_TRUE(a != GTEXT_JSON_OK || b != GTEXT_JSON_OK || c != GTEXT_JSON_OK);
+	gtext_json_stream_free(st2);
+	gtext_json_error_free(&err2);
+}

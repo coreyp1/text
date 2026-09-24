@@ -1297,9 +1297,13 @@ TEST(Json5Preset, TheDocumentFromTheSpecification) {
 	GTEXT_JSON_Parse_Options strict = gtext_json_parse_options_default();
 	EXPECT_NE(dom_status(src, &strict), GTEXT_JSON_OK);
 
-	// The streaming parser gets this document in the commit that repairs
-	// comments across chunk boundaries; in one feed it already agrees.
-	EXPECT_TRUE(stream_accepts(src, &opts, src.size()));
+	// Every chunk size, because this document has a comment, a continuation and
+	// a split-able name in it, and each of those is carried across a feed
+	// boundary by different machinery.
+	for (size_t chunk = 1; chunk <= src.size(); chunk++) {
+		EXPECT_TRUE(stream_accepts(src, &opts, chunk))
+		    << "streaming parser at chunk " << chunk;
+	}
 }
 
 /* Valid JSON is valid JSON5, so the preset must accept everything the default

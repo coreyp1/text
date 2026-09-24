@@ -248,6 +248,18 @@ help. It is documented here because the status code is part of the API and
 changing it would break callers. (With `allow_bare_decimal_point`, `5.` is a
 number and the row does not apply to it; `1e` is still incomplete.)
 
+**Fixed: a comment split across two feeds was read as code.** The streaming
+lexer skipped a `//` comment to the end of the buffer and reported that it had
+skipped a comment, whether or not the newline had arrived - so the rest of the
+comment, in the next chunk, was lexed as part of the document. With
+`{ // "ghost": 99` and `"real": 1 }` in separate feeds that is not an error but
+a wrong parse: the name `ghost` appears in the events. A `/* */` comment cut in
+the same place was reported as unclosed instead of unfinished, and a lone `/` at
+the end of a feed was an unknown token. All three now say "not yet" and keep
+the bytes: `JsonStreamComments` feeds nine documents at every chunk size from
+one byte up and compares the events against the same document in one feed. A
+genuinely unclosed comment is still an error at `finish()`.
+
 **The streaming parser does not enforce the duplicate-name policy.** `dupkeys`
 defaults to `GTEXT_JSON_DUPKEY_ERROR` and `gtext_json_parse()` honors it, but
 `gtext_json_stream_feed()` emits both names and reports success. So the same
