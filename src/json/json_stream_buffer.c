@@ -112,17 +112,6 @@ void json_token_buffer_set_string_state(json_token_buffer * tb, int in_escape,
   tb->parse_state.string_state.high_surrogate_seen = high_surrogate_seen;
 }
 
-void json_token_buffer_set_number_state(json_token_buffer * tb, int has_dot,
-    int has_exp, int exp_sign_seen, int starts_with_minus) {
-  if (!tb) {
-    return;
-  }
-  tb->parse_state.number_state.has_dot = has_dot;
-  tb->parse_state.number_state.has_exp = has_exp;
-  tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
-  tb->parse_state.number_state.starts_with_minus = starts_with_minus;
-}
-
 const char * json_token_buffer_data(const json_token_buffer * tb) {
   if (!tb || !tb->is_buffered) {
     return NULL;

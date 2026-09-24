@@ -106,6 +106,8 @@ typedef struct json_token_buffer {
       int has_exp;           ///< 1 if number contains 'e' or 'E'
       int exp_sign_seen;     ///< 1 if exponent sign (+/-) seen
       int starts_with_minus; ///< 1 if number starts with '-'
+      int starts_with_plus;  ///< 1 if number starts with '+' (JSON5)
+      int is_hex;            ///< 1 if number is a JSON5 hex literal
     } number_state;
   } parse_state;
 
@@ -200,20 +202,6 @@ GTEXT_JSON_Status json_token_buffer_grow(json_token_buffer * tb, size_t needed);
  */
 void json_token_buffer_set_string_state(json_token_buffer * tb, int in_escape,
     int unicode_escape_remaining, int high_surrogate_seen);
-
-/**
- * @brief Set parsing state for number token
- *
- * Sets the number parsing state in the token buffer.
- *
- * @param tb Token buffer to set state on (must not be NULL)
- * @param has_dot 1 if number contains '.', 0 otherwise
- * @param has_exp 1 if number contains 'e' or 'E', 0 otherwise
- * @param exp_sign_seen 1 if exponent sign (+/-) seen, 0 otherwise
- * @param starts_with_minus 1 if number starts with '-', 0 otherwise
- */
-void json_token_buffer_set_number_state(json_token_buffer * tb, int has_dot,
-    int has_exp, int exp_sign_seen, int starts_with_minus);
 
 /**
  * @brief Get current buffer data pointer

@@ -35,6 +35,9 @@ GTEXT_API GTEXT_JSON_Parse_Options gtext_json_parse_options_default(void) {
   opts.allow_nonfinite_numbers = false;
   opts.allow_single_quotes = false;
   opts.allow_unescaped_controls = false;
+  opts.allow_hex_numbers = false;
+  opts.allow_leading_plus = false;
+  opts.allow_bare_decimal_point = false;
 
   // Unicode / input handling
   opts.allow_leading_bom = true;  // default on

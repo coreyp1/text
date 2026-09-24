@@ -24,6 +24,9 @@ cases that were checked are listed under
 - **JSON Schema:** still **names no draft**, but now covers most of
   draft-07 and 2020-12 including `$ref`, and refuses any schema it cannot
   fully enforce - see [Deviations](#json-deviations).
+- **JSON5:** [json5.org](https://json5.org/), version 1.0.0, whose numeric
+  and string grammars are ECMAScript's. Its extensions are opt-in and named
+  individually below, one option per difference rather than one dialect flag.
 - **JSONC:** no specification exists. The extensions are opt-in and named
   individually below; where the dialect is ambiguous this page states what the
   parser does, and that decision is the specification as far as this library
@@ -87,6 +90,23 @@ and `COLLECT`, the last gathering duplicates into an array.
 `allow_nonfinite_numbers` (`NaN`, `Infinity`, `-Infinity`) and
 `allow_unescaped_controls`. None of these is RFC 8259; enabling any of them
 means the input is no longer JSON.
+
+**JSON5 numeric literals**, each off by default and each a separate question:
+
+- `allow_hex_numbers` - `0x1F`, `0XdeadBEEF`, `-0x10`. A hex literal has no
+  fraction and no exponent, because `e` is one of its digits: `0x1e2` is 482,
+  not 100. The value goes into `int64`/`uint64` and the `double` is derived
+  from it; the preserved lexeme keeps the spelling that was written.
+- `allow_leading_plus` - `+1`, `+1.5e2`. The integer accessors see through the
+  sign, so `+42` still has an `int64`.
+- `allow_bare_decimal_point` - `.5` and `5.`, one option because they are one
+  question: whether the point may sit at an edge. `.` alone is still not a
+  number, and neither is `.e1`.
+
+JSON5 puts the sign in front of the whole value, so `+Infinity` and `+NaN` are
+valid JSON5 and need `allow_leading_plus` *and* `allow_nonfinite_numbers`.
+`-NaN` needs only the latter, for the same reason `-Infinity` always has.
+NaN's sign is not observable, so both signed spellings give NaN.
 
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,

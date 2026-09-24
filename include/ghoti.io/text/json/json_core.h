@@ -150,6 +150,39 @@ typedef struct {
   bool allow_unescaped_controls; ///< Allow unescaped control characters
                                  ///< (relaxed mode)
 
+  /**
+   * Allow a hexadecimal integer: `0x1F`, `0XdeadBEEF`. JSON5. Default: off.
+   *
+   * A hex literal has no fraction and no exponent, because `e` is one of its
+   * digits. Sign applies as it does to a decimal number, so `-0x10` is -16.
+   * The preserved lexeme keeps the spelling that was written; `int64` and
+   * `uint64` carry the value, and `double` is derived from it, so a literal
+   * above 2^53 loses precision in `double` exactly as a long decimal one
+   * does.
+   */
+  bool allow_hex_numbers;
+
+  /**
+   * Allow a leading `+` on a number: `+1`, `+1.5`, `+Infinity`. JSON5.
+   * Default: off.
+   *
+   * `+Infinity` and `+NaN` also need allow_nonfinite_numbers, which is what
+   * admits the word; this option is only about the sign in front of it.
+   * `-NaN` needs only allow_nonfinite_numbers, for the same reason
+   * `-Infinity` always has.
+   */
+  bool allow_leading_plus;
+
+  /**
+   * Allow a number whose decimal point has digits on only one side: `.5`,
+   * `5.`. JSON5. Default: off.
+   *
+   * Both spellings, because they are one question: whether the point may sit
+   * at an edge. `.` alone is not a number under either setting, and neither
+   * is `.e1`.
+   */
+  bool allow_bare_decimal_point;
+
   // Unicode / input handling
   bool allow_leading_bom; ///< Allow leading UTF-8 BOM (default: on)
   bool validate_utf8;     ///< Validate UTF-8 sequences (default: on)

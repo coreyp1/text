@@ -522,62 +522,96 @@ static int json_lexer_match_keyword(json_lexer * lexer, json_token * token) {
 // be handled in the number parsing path.
 // Returns 1 if matched and allowed, GTEXT_JSON_E_NONFINITE if matched but not
 // allowed, 0 if not matched.
-static int json_lexer_match_neg_infinity(
+/* How a run of bytes that starts with a sign relates to the signed nonfinite
+ * spellings: 2 if it is exactly one of them, 1 if it is a proper prefix of
+ * one, 0 if it is neither. The streaming lexer needs all three answers, and
+ * needs them for "NaN" as well as "Infinity" - the unsigned words go through
+ * the keyword path, which has json_is_keyword_prefix() for the same job, but
+ * anything with a sign arrives in the number path instead. */
+static int json_signed_nonfinite_match(
+    const char * content, size_t len, int allow_plus) {
+  static const char * const words[] = {
+      "-Infinity", "+Infinity", "-NaN", "+NaN"};
+  int best = 0;
+  if (len == 0) {
+    return 0;
+  }
+  for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
+    const char * word = words[w];
+    if (word[0] == '+' && !allow_plus) {
+      continue;
+    }
+    const size_t word_len = strlen(word);
+    if (len > word_len || memcmp(content, word, len) != 0) {
+      continue;
+    }
+    if (len == word_len) {
+      return 2;
+    }
+    best = 1;
+  }
+  return best;
+}
+
+/* A nonfinite value with a sign in front of it: "-Infinity" as JSON's
+ * extensions have always spelled it, and "+Infinity", "-NaN" and "+NaN" as
+ * JSON5 does. The sign is what brings these here rather than to the keyword
+ * path: '-' and '+' also start numbers.
+ *
+ * Returns 1 on a match, GTEXT_JSON_E_NONFINITE for a spelling this parser
+ * recognises but was not asked to accept, and 0 for anything else - which
+ * leaves the caller to read it as a number.
+ *
+ * NaN has no meaningful sign, so "-NaN" and "+NaN" both produce
+ * JSON_TOKEN_NAN. Infinity's sign decides between two token types.
+ */
+static int json_lexer_match_signed_nonfinite(
     json_lexer * lexer, json_token * token) {
-  // Always check for -Infinity, but return error if not allowed
-
-  size_t start = lexer->current_offset;
-  // Check for underflow and sufficient length using shared helper
-  if (lexer->input_len < 9 || json_check_sub_underflow(lexer->input_len, 9) ||
-      start > lexer->input_len - 9) { // "-Infinity" is 9 chars
+  const size_t start = lexer->current_offset;
+  if (!json_check_bounds_offset(start, lexer->input_len)) {
     return 0;
   }
-  // Defensive bounds checks before buffer access
-  if (!json_check_bounds_offset(start, lexer->input_len) ||
-      !json_check_bounds_offset(start + 1, lexer->input_len)) {
+  const char sign = lexer->input[start];
+  if (sign != '-' && sign != '+') {
+    return 0;
+  }
+  /* A leading '+' is JSON5's alone. Without that option "+Infinity" is not a
+   * spelling this parser knows, so it must read as a bad number rather than
+   * as a refused nonfinite. */
+  if (sign == '+' && !(lexer->opts && lexer->opts->allow_leading_plus)) {
     return 0;
   }
 
-  if (lexer->input[start] == '-' &&
+  json_token_type matched;
+  size_t length;
+  if (lexer->input_len - start >= 9 &&
       json_matches(lexer->input + start + 1, 8, "Infinity")) {
-    if (lexer->opts && lexer->opts->allow_nonfinite_numbers) {
-      token->type = JSON_TOKEN_NEG_INFINITY;
-      token->pos = lexer->pos;
-      token->length = 9;
-      // Check for overflow before adding start + 9
-      if (json_check_add_overflow(start, 9)) {
-        // Overflow - saturate at SIZE_MAX
-        lexer->current_offset = SIZE_MAX;
-        lexer->pos.offset = SIZE_MAX;
-      }
-      else {
-        lexer->current_offset = start + 9;
-        lexer->pos.offset = lexer->current_offset;
-      }
-      json_position_update_column(&lexer->pos, 9);
-      return 1;
-    }
-    else {
-      // -Infinity not allowed - return error
-      token->type = JSON_TOKEN_ERROR;
-      token->pos = lexer->pos;
-      token->length = 9;
-      // Check for overflow before adding start + 9
-      if (json_check_add_overflow(start, 9)) {
-        // Overflow - saturate at SIZE_MAX
-        lexer->current_offset = SIZE_MAX;
-        lexer->pos.offset = SIZE_MAX;
-      }
-      else {
-        lexer->current_offset = start + 9;
-        lexer->pos.offset = lexer->current_offset;
-      }
-      json_position_update_column(&lexer->pos, 9);
-      return GTEXT_JSON_E_NONFINITE;
-    }
+    matched = sign == '-' ? JSON_TOKEN_NEG_INFINITY : JSON_TOKEN_INFINITY;
+    length = 9;
+  }
+  else if (lexer->input_len - start >= 4 &&
+      json_matches(lexer->input + start + 1, 3, "NaN")) {
+    matched = JSON_TOKEN_NAN;
+    length = 4;
+  }
+  else {
+    return 0;
   }
 
-  return 0;
+  const int allowed = lexer->opts && lexer->opts->allow_nonfinite_numbers;
+  token->type = allowed ? matched : JSON_TOKEN_ERROR;
+  token->pos = lexer->pos;
+  token->length = length;
+  if (json_check_add_overflow(start, length)) {
+    lexer->current_offset = SIZE_MAX;
+    lexer->pos.offset = SIZE_MAX;
+  }
+  else {
+    lexer->current_offset = start + length;
+    lexer->pos.offset = lexer->current_offset;
+  }
+  json_position_update_column(&lexer->pos, length);
+  return allowed ? 1 : GTEXT_JSON_E_NONFINITE;
 }
 
 // Parse a string token
@@ -950,6 +984,10 @@ static GTEXT_JSON_Status json_lexer_parse_number(
   int has_exp = 0;
   int exp_sign_seen = 0;
   int starts_with_minus = 0;
+  int starts_with_plus = 0;
+  int is_hex = 0;
+  const int allow_plus = lexer->opts && lexer->opts->allow_leading_plus;
+  const int allow_hex = lexer->opts && lexer->opts->allow_hex_numbers;
 
   if (tb && tb->type == JSON_TOKEN_BUFFER_NUMBER) {
     resuming = 1;
@@ -958,56 +996,37 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     has_exp = tb->parse_state.number_state.has_exp;
     exp_sign_seen = tb->parse_state.number_state.exp_sign_seen;
     starts_with_minus = tb->parse_state.number_state.starts_with_minus;
+    starts_with_plus = tb->parse_state.number_state.starts_with_plus;
+    is_hex = tb->parse_state.number_state.is_hex;
 
-    // If resuming and we have a minus sign but no dot/exp, check if we're in
-    // the middle of -Infinity
-    if (starts_with_minus && !has_dot && !has_exp && tb->buffer_used > 0 &&
-        tb->buffer_used < 9 && lexer->opts &&
-        lexer->opts->allow_nonfinite_numbers) {
-      // Check if what we have so far matches a prefix of "-Infinity"
-      const char * infinity_str = "-Infinity";
-      int is_infinity_prefix = 1;
-      for (size_t i = 0; i < tb->buffer_used && i < 9; i++) {
-        if (tb->buffer[i] != infinity_str[i]) {
-          is_infinity_prefix = 0;
+    /* A signed nonfinite word that was cut in half by a chunk boundary. The
+     * buffer holds the sign and however much of the word arrived; take as many
+     * more bytes as keep it a prefix of one of the spellings. The main scan
+     * loop below cannot do this - the letters are not number characters - and
+     * whatever it leaves behind, the check before validation decides between
+     * "complete" and "needs more input". */
+    if ((starts_with_minus || starts_with_plus) && !has_dot && !has_exp &&
+        !is_hex && tb->buffer_used > 0 && lexer->opts &&
+        lexer->opts->allow_nonfinite_numbers &&
+        json_signed_nonfinite_match(tb->buffer, tb->buffer_used, allow_plus) ==
+            1) {
+      while (end < lexer->input_len &&
+          json_check_bounds_offset(end, lexer->input_len)) {
+        char next_c = lexer->input[end];
+        char candidate[16];
+        if (tb->buffer_used + 1 > sizeof(candidate)) {
           break;
         }
-      }
-      if (is_infinity_prefix) {
-        // We're resuming an incomplete -Infinity - continue reading
-        // We already have tb->buffer_used characters in the buffer
-        // We need to read the remaining (9 - tb->buffer_used) characters
-        size_t chars_needed = 9 - tb->buffer_used;
-
-        while (chars_needed > 0 && end < lexer->input_len) {
-          if (!json_check_bounds_offset(end, lexer->input_len)) {
-            break;
-          }
-          char next_c = lexer->input[end];
-          size_t expected_pos = tb->buffer_used; // Position in "-Infinity" string
-          if (expected_pos < 9 && next_c == infinity_str[expected_pos]) {
-            end++;
-            // Append to buffer if available
-            GTEXT_JSON_Status status =
-                json_token_buffer_append(tb, &next_c, 1);
-            if (status != GTEXT_JSON_OK) {
-              return status;
-            }
-            chars_needed--;
-          }
-          else {
-            // Not matching -Infinity, break and let validation handle it
-            break;
-          }
+        memcpy(candidate, tb->buffer, tb->buffer_used);
+        candidate[tb->buffer_used] = next_c;
+        if (!json_signed_nonfinite_match(
+                candidate, tb->buffer_used + 1, allow_plus)) {
+          break; // The next byte is not part of any spelling.
         }
-        // If we've read all 9 characters, we can skip the main loop
-        // and go straight to validation
-        if (tb->buffer_used >= 9) {
-          // Set end to indicate we've processed all input for this token
-          // The validation below will handle the complete -Infinity
-          // We need to make sure end reflects that we've read everything
-          // Actually, we should just let the loop run, but it will break
-          // immediately since we've already read all characters
+        end++;
+        GTEXT_JSON_Status status = json_token_buffer_append(tb, &next_c, 1);
+        if (status != GTEXT_JSON_OK) {
+          return status;
         }
       }
     }
@@ -1047,6 +1066,47 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       continue;
     }
 
+    /* The 'x' that opens a hex literal, and then its digits. 'e' is one of
+     * those digits rather than an exponent marker, and a '.' ends the token
+     * rather than opening a fraction, so both of those branches below are
+     * closed while is_hex holds. */
+    if (allow_hex && !is_hex && !has_dot && !has_exp && (c == 'x' || c == 'X')) {
+      const size_t digits_so_far =
+          resuming && tb ? tb->buffer_used : (end - start);
+      const size_t sign_len = (starts_with_minus || starts_with_plus) ? 1u : 0u;
+      const char zero = resuming && tb && tb->buffer_used > sign_len
+          ? tb->buffer[sign_len]
+          : (json_check_bounds_offset(start + sign_len, lexer->input_len)
+                    ? lexer->input[start + sign_len]
+                    : '\0');
+      if (digits_so_far == sign_len + 1 && zero == '0') {
+        is_hex = 1;
+        end++;
+        if (tb) {
+          GTEXT_JSON_Status status = json_token_buffer_append(tb, &c, 1);
+          if (status != GTEXT_JSON_OK) {
+            return status;
+          }
+        }
+        continue;
+      }
+      // An 'x' anywhere else is not part of a number.
+      break;
+    }
+    /* Hex letters, and this branch sits above the exponent one so that 'e'
+     * and 'E' arrive here rather than there. The !is_hex on the exponent
+     * branch is therefore belt-and-braces: it keeps the rule true if these
+     * branches are ever reordered. */
+    if (is_hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+      end++;
+      if (tb) {
+        GTEXT_JSON_Status status = json_token_buffer_append(tb, &c, 1);
+        if (status != GTEXT_JSON_OK) {
+          return status;
+        }
+      }
+      continue;
+    }
     if (c >= '0' && c <= '9') {
       end++;
       // Append to buffer if available
@@ -1058,7 +1118,7 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       }
       continue;
     }
-    if (c == '.' && !has_dot && !has_exp) {
+    if (c == '.' && !has_dot && !has_exp && !is_hex) {
       has_dot = 1;
       end++;
       // Append to buffer if available
@@ -1070,7 +1130,7 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       }
       continue;
     }
-    if ((c == 'e' || c == 'E') && !has_exp) {
+    if ((c == 'e' || c == 'E') && !has_exp && !is_hex) {
       has_exp = 1;
       exp_sign_seen = 0;
       end++;
@@ -1102,9 +1162,14 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       }
       continue;
     }
-    if (c == '-' && end == start) {
-      // Leading minus sign
-      starts_with_minus = 1;
+    if ((c == '-' || (allow_plus && c == '+')) && end == start && !resuming) {
+      // Leading sign
+      if (c == '-') {
+        starts_with_minus = 1;
+      }
+      else {
+        starts_with_plus = 1;
+      }
       end++;
       // Append to buffer if available
       if (tb) {
@@ -1119,40 +1184,36 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     // Check if this could be part of -Infinity (if enabled and we started with
     // minus) When we encounter a non-number character after '-', check if it's
     // 'I' (start of "Infinity")
-    if (starts_with_minus && !has_dot && !has_exp && lexer->opts &&
-        lexer->opts->allow_nonfinite_numbers && (end == start + 1) &&
-        c == 'I') {
-      // After "-", we have "I" - could be start of "Infinity"
-      // Read the rest of "-Infinity" if available
-      const char * infinity_rest = "nfinity";
-      size_t infinity_rest_len = 7;
-      size_t read_pos = 0;
-
-      // Read as many characters as we can
-      while (read_pos < infinity_rest_len && end < lexer->input_len) {
-        if (!json_check_bounds_offset(end, lexer->input_len)) {
-          break;
-        }
+    /* The sign was consumed above and a letter follows, so this may be a
+     * signed nonfinite word rather than a number: "-Infinity" as JSON's
+     * extensions spell it, or one of the three JSON5 adds. Take bytes while
+     * they keep the token a prefix of one of the spellings, then leave the
+     * loop - the check before validation decides between a complete word, an
+     * unfinished one, and something that is neither. */
+    if ((starts_with_minus || starts_with_plus) && !has_dot && !has_exp &&
+        !is_hex && lexer->opts && lexer->opts->allow_nonfinite_numbers &&
+        (end == start + 1) && (c == 'I' || c == 'N')) {
+      char candidate[16];
+      size_t candidate_len = 1;
+      candidate[0] = lexer->input[start];
+      while (end < lexer->input_len &&
+          json_check_bounds_offset(end, lexer->input_len) &&
+          candidate_len + 1 <= sizeof(candidate)) {
         char next_c = lexer->input[end];
-        if (next_c == infinity_rest[read_pos]) {
-          end++;
-          read_pos++;
-          // Append to buffer if available
-          if (tb) {
-            GTEXT_JSON_Status status = json_token_buffer_append(tb, &next_c, 1);
-            if (status != GTEXT_JSON_OK) {
-              return status;
-            }
+        candidate[candidate_len] = next_c;
+        if (!json_signed_nonfinite_match(
+                candidate, candidate_len + 1, allow_plus)) {
+          break; // The next byte is not part of any spelling.
+        }
+        candidate_len++;
+        end++;
+        if (tb) {
+          GTEXT_JSON_Status status = json_token_buffer_append(tb, &next_c, 1);
+          if (status != GTEXT_JSON_OK) {
+            return status;
           }
         }
-        else {
-          // Not matching -Infinity, break and let validation handle it
-          break;
-        }
       }
-      // After reading "-Infinity" (or as much as available), break out of the
-      // main loop The validation check below will handle complete vs incomplete
-      // -Infinity
       break;
     }
 
@@ -1176,13 +1237,15 @@ static GTEXT_JSON_Status json_lexer_parse_number(
           : (json_check_bounds_offset(start, lexer->input_len)
                     ? lexer->input[start]
                     : '\0');
-      if (first_char == '-') {
-        // Just a minus sign - incomplete, need digits
+      if (first_char == '-' || (allow_plus && first_char == '+')) {
+        // Just a sign - incomplete, need digits
         if (tb) {
           tb->parse_state.number_state.has_dot = has_dot;
           tb->parse_state.number_state.has_exp = has_exp;
           tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
           tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+          tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+          tb->parse_state.number_state.is_hex = is_hex;
         }
         lexer->current_offset = end;
         return GTEXT_JSON_E_INCOMPLETE;
@@ -1213,8 +1276,28 @@ static GTEXT_JSON_Status json_lexer_parse_number(
     // If ends with '.', 'e', 'E', '+', or '-' (exponent sign), clearly
     // incomplete For '-', check if it's an exponent sign (has_exp) - if so,
     // it's incomplete
-    if (last_char == '.' || last_char == 'e' || last_char == 'E' ||
-        last_char == '+' || (last_char == '-' && has_exp)) {
+    int trailing_incomplete;
+    if (is_hex) {
+      /* A hex literal has no exponent and no fraction: 'e' is one of its
+       * digits and 'x' is its opening. So nothing about the last character
+       * says the token is unfinished, and only a stream that may still send
+       * more digits makes it so. In a complete buffer "0x" is left to the
+       * validator, which refuses it as a number with no digits. */
+      trailing_incomplete = lexer->streaming_mode;
+    }
+    else if (last_char == '.') {
+      /* A point at the edge is a number in its own right where JSON5 asks
+       * for it, so only a stream that may still send digits makes it
+       * unfinished. */
+      trailing_incomplete =
+          !(lexer->opts && lexer->opts->allow_bare_decimal_point) ||
+          lexer->streaming_mode;
+    }
+    else {
+      trailing_incomplete = last_char == 'e' || last_char == 'E' ||
+          last_char == '+' || (last_char == '-' && has_exp);
+    }
+    if (trailing_incomplete) {
       // Number ends with incomplete indicator - preserve state and return
       // incomplete
       if (tb) {
@@ -1222,6 +1305,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
         tb->parse_state.number_state.has_exp = has_exp;
         tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
         tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+        tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+        tb->parse_state.number_state.is_hex = is_hex;
       }
       // Advance current_offset to end so the incomplete token gets removed from
       // input buffer
@@ -1254,6 +1339,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
             tb->parse_state.number_state.has_exp = has_exp;
             tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
             tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+            tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+            tb->parse_state.number_state.is_hex = is_hex;
             lexer->current_offset = end;
             return GTEXT_JSON_E_INCOMPLETE;
           }
@@ -1267,6 +1354,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
           tb->parse_state.number_state.has_exp = has_exp;
           tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
           tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+          tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+          tb->parse_state.number_state.is_hex = is_hex;
           // Advance current_offset to end so the incomplete token gets removed
           // from input buffer
           lexer->current_offset = end;
@@ -1280,6 +1369,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
           tb->parse_state.number_state.has_exp = has_exp;
           tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
           tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+          tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+          tb->parse_state.number_state.is_hex = is_hex;
         }
         // Advance current_offset to end so the incomplete token gets removed
         // from input buffer
@@ -1300,8 +1391,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
   // json_lexer_match_neg_infinity because it was called before we had enough
   // characters, or in streaming mode We need to check if what we have matches
   // "-Infinity" or is a prefix of it
-  if (starts_with_minus && total_len >= 1 && total_len <= 9 && lexer->opts &&
-      lexer->opts->allow_nonfinite_numbers) {
+  if ((starts_with_minus || starts_with_plus) && !is_hex && total_len >= 1 &&
+      total_len <= 9 && lexer->opts && lexer->opts->allow_nonfinite_numbers) {
     const char * number_content;
     size_t content_len;
     if (resuming && tb && tb->buffer_used > 0) {
@@ -1312,26 +1403,14 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       number_content = lexer->input + start;
       content_len = end - start;
     }
-    // Check if it matches "-Infinity" or is a prefix of it
-    const char * infinity_str = "-Infinity";
-    size_t infinity_len = 9;
-    int is_prefix = 1;
-    size_t check_len =
-        (content_len < infinity_len) ? content_len : infinity_len;
-    for (size_t i = 0; i < check_len; i++) {
-      if (number_content[i] != infinity_str[i]) {
-        is_prefix = 0;
-        break;
-      }
-    }
-    if (is_prefix) {
-      if (content_len == 9) {
-        // Complete -Infinity - let json_parse_number handle it (it will
-        // recognize it) Make sure we use the buffered content if resuming
-        if (resuming && tb && tb->buffer_used > 0) {
-          // We have complete -Infinity in buffer, use it for parsing
-          // The validation and parsing below will handle it
-        }
+    // Exactly one of the signed nonfinite spellings, a prefix of one, or
+    // neither.
+    const int nonfinite_match =
+        json_signed_nonfinite_match(number_content, content_len, allow_plus);
+    if (nonfinite_match) {
+      if (nonfinite_match == 2) {
+        // A complete word - json_parse_number() below recognises it, from the
+        // buffered content when resuming.
       }
       else {
         // Incomplete -Infinity prefix - treat as incomplete
@@ -1360,6 +1439,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
           tb->parse_state.number_state.has_exp = has_exp;
           tb->parse_state.number_state.exp_sign_seen = exp_sign_seen;
           tb->parse_state.number_state.starts_with_minus = starts_with_minus;
+          tb->parse_state.number_state.starts_with_plus = starts_with_plus;
+          tb->parse_state.number_state.is_hex = is_hex;
         }
         // Advance current_offset to end so the incomplete token gets removed
         // from input buffer The token buffer has the data, so it's safe to mark
@@ -1375,7 +1456,8 @@ static GTEXT_JSON_Status json_lexer_parse_number(
       ? tb->buffer[0]
       : (json_check_bounds_offset(start, lexer->input_len) ? lexer->input[start]
                                                            : '\0');
-  if (total_len == 0 || (total_len == 1 && first_char_check == '-')) {
+  if (total_len == 0 ||
+      (total_len == 1 && (first_char_check == '-' || first_char_check == '+'))) {
     if (tb) {
       json_token_buffer_clear(tb);
     }
@@ -1633,18 +1715,23 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_lexer_next(
     return json_lexer_parse_string(lexer, token);
   }
 
-  // Number tokens (including -Infinity special case)
-  // Note: -Infinity is checked here because it starts with '-', which is
-  // also the start of negative numbers. It's gated behind
-  // allow_nonfinite_numbers (same as "Infinity" in the keyword path).
-  if (c == '-' || (c >= '0' && c <= '9')) {
-    // Check for -Infinity first (if enabled)
-    if (c == '-') {
-      int neg_inf_result = json_lexer_match_neg_infinity(lexer, token);
-      if (neg_inf_result == 1) {
+  // Number tokens (including the signed nonfinite special cases)
+  // Note: -Infinity and friends are checked here because they start with a
+  // sign, which is also the start of a signed number. They are gated behind
+  // allow_nonfinite_numbers (same as "Infinity" in the keyword path), and the
+  // '+' spellings additionally behind allow_leading_plus.
+  const int lex_allow_plus = lexer->opts && lexer->opts->allow_leading_plus;
+  const int lex_allow_bare_point =
+      lexer->opts && lexer->opts->allow_bare_decimal_point;
+  if (c == '-' || (c >= '0' && c <= '9') || (lex_allow_plus && c == '+') ||
+      (lex_allow_bare_point && c == '.')) {
+    // Check for a signed nonfinite first (if enabled)
+    if (c == '-' || c == '+') {
+      int nonfinite_result = json_lexer_match_signed_nonfinite(lexer, token);
+      if (nonfinite_result == 1) {
         return GTEXT_JSON_OK;
       }
-      else if (neg_inf_result == GTEXT_JSON_E_NONFINITE) {
+      else if (nonfinite_result == GTEXT_JSON_E_NONFINITE) {
         return GTEXT_JSON_E_NONFINITE;
       }
       // Otherwise (0), continue to number parsing

@@ -43,29 +43,58 @@ static int json_is_digit(char c) {
   return c >= '0' && c <= '9';
 }
 
-// Validate number syntax according to RFC 8259
+static int json_is_hex_digit(char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+      (c >= 'A' && c <= 'F');
+}
+
+// Validate number syntax according to RFC 8259, plus the JSON5 numeric
+// literal forms each option asks for.
 // Validates that the number follows JSON number grammar:
 // - No leading zeros (except 0 itself)
-// - No trailing decimal point (1. is invalid)
-// - No leading decimal point (.1 is invalid, but 0.1 is valid)
+// - No trailing decimal point (1. is invalid unless allow_bare_decimal_point)
+// - No leading decimal point (.1 is invalid unless allow_bare_decimal_point)
+// - No leading plus (+1 is invalid unless allow_leading_plus)
+// - No hexadecimal (0x10 is invalid unless allow_hex_numbers)
 // - Proper exponent format
 // - No invalid characters
-static int json_validate_number_syntax(
-    const char * input, size_t len, size_t start_pos) {
+static int json_validate_number_syntax(const char * input, size_t len,
+    size_t start_pos, const GTEXT_JSON_Parse_Options * opts) {
   if (len == 0 || start_pos >= len) {
     return 0;
   }
 
+  const int allow_plus = opts && opts->allow_leading_plus;
+  const int allow_hex = opts && opts->allow_hex_numbers;
+  const int allow_bare_point = opts && opts->allow_bare_decimal_point;
+
   size_t i = start_pos;
   int has_digit = 0;
 
-  // Optional minus sign
-  if (input[i] == '-') {
+  // Optional sign
+  if (input[i] == '-' || (allow_plus && input[i] == '+')) {
     i++;
   }
 
+  // Hexadecimal, which has no fraction and no exponent: `e` is a digit here.
+  if (allow_hex && i + 1 < len && input[i] == '0' &&
+      (input[i + 1] == 'x' || input[i + 1] == 'X')) {
+    i += 2;
+    if (i >= len || !json_is_hex_digit(input[i])) {
+      return 0; // "0x" with no digits
+    }
+    while (i < len && json_is_hex_digit(input[i])) {
+      i++;
+    }
+    return i == len;
+  }
+
   // Integer part
-  if (i < len && input[i] == '0') {
+  if (allow_bare_point && i < len && input[i] == '.') {
+    // ".5": no integer part at all. The fractional part below insists on a
+    // digit, so "." and ".e1" are still refused.
+  }
+  else if (i < len && input[i] == '0') {
     // Leading zero - must be followed by . or end or e/E
     i++;
     has_digit = 1;
@@ -89,12 +118,17 @@ static int json_validate_number_syntax(
   // Fractional part (optional)
   if (i < len && input[i] == '.') {
     i++;
-    // Must have at least one digit after decimal point
+    // Must have at least one digit after the decimal point, unless the point
+    // is allowed at an edge - and then there must be a digit on the other
+    // side, so that "." alone is still not a number.
     if (i >= len || !json_is_digit(input[i])) {
-      return 0; // Invalid: 1. or .1 (without leading zero)
+      if (!allow_bare_point || !has_digit) {
+        return 0; // Invalid: 1. or .1 (without leading zero)
+      }
     }
     while (i < len && json_is_digit(input[i])) {
       i++;
+      has_digit = 1;
     }
   }
 
@@ -124,24 +158,35 @@ static int json_validate_number_syntax(
 }
 
 // Parse nonfinite number (NaN, Infinity, -Infinity)
+/* The six spellings of a nonfinite value. "-NaN" and the two '+' forms are
+ * JSON5's, whose grammar puts an optional sign in front of the whole value;
+ * the '+' ones are only recognised where a leading plus was asked for, so that
+ * json_parse_number() refuses "+NaN" for the same reason the lexer does not
+ * offer it. NaN's sign is not observable, so both signed spellings give NaN. */
 static int json_parse_nonfinite(
-    const char * input, size_t len, json_number * num) {
-  if (json_matches(input, len, "NaN")) {
-    num->dbl = NAN;
-    num->flags = JSON_NUMBER_HAS_DOUBLE | JSON_NUMBER_IS_NONFINITE;
-    return 1;
+    const char * input, size_t len, json_number * num, int allow_plus) {
+  double value;
+  if (json_matches(input, len, "NaN") || json_matches(input, len, "-NaN")) {
+    value = NAN;
   }
-  if (json_matches(input, len, "Infinity")) {
-    num->dbl = INFINITY;
-    num->flags = JSON_NUMBER_HAS_DOUBLE | JSON_NUMBER_IS_NONFINITE;
-    return 1;
+  else if (json_matches(input, len, "Infinity")) {
+    value = INFINITY;
   }
-  if (json_matches(input, len, "-Infinity")) {
-    num->dbl = -INFINITY;
-    num->flags = JSON_NUMBER_HAS_DOUBLE | JSON_NUMBER_IS_NONFINITE;
-    return 1;
+  else if (json_matches(input, len, "-Infinity")) {
+    value = -INFINITY;
   }
-  return 0;
+  else if (allow_plus && json_matches(input, len, "+NaN")) {
+    value = NAN;
+  }
+  else if (allow_plus && json_matches(input, len, "+Infinity")) {
+    value = INFINITY;
+  }
+  else {
+    return 0;
+  }
+  num->dbl = value;
+  num->flags = JSON_NUMBER_HAS_DOUBLE | JSON_NUMBER_IS_NONFINITE;
+  return 1;
 }
 
 // Parse uint64 from string with overflow detection
@@ -157,6 +202,15 @@ static int json_parse_uint64(
   }
 
   size_t i = 0;
+
+  // A leading '+' is JSON5's, and the validator has already decided whether
+  // it was allowed to be there. Digits mean the same either way.
+  if (input[i] == '+') {
+    i++;
+    if (i >= len) {
+      return 0;
+    }
+  }
 
   // Skip leading zeros
   while (i < len && input[i] == '0') {
@@ -256,6 +310,58 @@ static int json_parse_int64(const char * input, size_t len, int64_t * out_i64) {
   return 1;
 }
 
+/* Where a JSON5 hex literal's digits begin, or 0 if this is not one. The
+ * caller has already had the spelling validated, so this only has to find the
+ * "0x" past an optional sign. */
+static size_t json_hex_digits_at(
+    const char * input, size_t len, const GTEXT_JSON_Parse_Options * opts) {
+  if (!opts || !opts->allow_hex_numbers) {
+    return 0;
+  }
+  size_t i = 0;
+  if (i < len && (input[i] == '-' || input[i] == '+')) {
+    i++;
+  }
+  if (i + 1 < len && input[i] == '0' &&
+      (input[i + 1] == 'x' || input[i + 1] == 'X')) {
+    return i + 2;
+  }
+  return 0;
+}
+
+/* A hex literal's magnitude. Returns 0 on overflow, which leaves the number
+ * with its lexeme and its double and no integer, exactly as a decimal integer
+ * too large for uint64 is left. */
+static int json_parse_hex_u64(
+    const char * input, size_t len, size_t from, uint64_t * out_u64) {
+  uint64_t result = 0;
+  if (from >= len) {
+    return 0;
+  }
+  for (size_t i = from; i < len; ++i) {
+    unsigned digit;
+    char c = input[i];
+    if (c >= '0' && c <= '9') {
+      digit = (unsigned)(c - '0');
+    }
+    else if (c >= 'a' && c <= 'f') {
+      digit = (unsigned)(c - 'a') + 10u;
+    }
+    else if (c >= 'A' && c <= 'F') {
+      digit = (unsigned)(c - 'A') + 10u;
+    }
+    else {
+      return 0;
+    }
+    if (result > (UINT64_MAX >> 4)) {
+      return 0; // Overflow
+    }
+    result = (result << 4) | digit;
+  }
+  *out_u64 = result;
+  return 1;
+}
+
 GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
     size_t input_len, json_number * num, json_position * pos,
     const GTEXT_JSON_Parse_Options * opts) {
@@ -269,7 +375,8 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
 
   // Check for nonfinite numbers first (always check, but return error if
   // disabled)
-  if (json_parse_nonfinite(input, input_len, num)) {
+  if (json_parse_nonfinite(
+          input, input_len, num, opts && opts->allow_leading_plus)) {
     // Found a non-finite number
     if (!opts || !opts->allow_nonfinite_numbers) {
       // Non-finite numbers not allowed - return specific error
@@ -297,9 +404,11 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
   }
 
   // Validate number syntax
-  if (!json_validate_number_syntax(input, input_len, 0)) {
+  if (!json_validate_number_syntax(input, input_len, 0, opts)) {
     return GTEXT_JSON_E_BAD_NUMBER;
   }
+
+  const size_t hex_from = json_hex_digits_at(input, input_len, opts);
 
   // Preserve lexeme if requested
   if (opts && opts->preserve_number_lexeme) {
@@ -315,6 +424,41 @@ GTEXT_INTERNAL_API GTEXT_JSON_Status json_parse_number(const char * input,
     num->lexeme[input_len] = '\0';
     num->lexeme_len = input_len;
     num->flags |= JSON_NUMBER_HAS_LEXEME;
+  }
+
+  if (hex_from) {
+    // A hex literal is an integer by construction, so the integer paths are
+    // the authority here and the double is derived from what they found
+    // rather than from a second scan of the text.
+    uint64_t magnitude;
+    if (json_parse_hex_u64(input, input_len, hex_from, &magnitude)) {
+      const int negative = input[0] == '-';
+      if (opts && opts->parse_uint64 && !negative) {
+        num->u64 = magnitude;
+        num->flags |= JSON_NUMBER_HAS_U64;
+      }
+      if (opts && opts->parse_int64) {
+        if (negative && magnitude <= (uint64_t)INT64_MAX + 1) {
+          num->i64 = magnitude == (uint64_t)INT64_MAX + 1
+              ? INT64_MIN
+              : -(int64_t)magnitude;
+          num->flags |= JSON_NUMBER_HAS_I64;
+        }
+        else if (!negative && magnitude <= (uint64_t)INT64_MAX) {
+          num->i64 = (int64_t)magnitude;
+          num->flags |= JSON_NUMBER_HAS_I64;
+        }
+      }
+      if (opts && opts->parse_double) {
+        num->dbl = negative ? -(double)magnitude : (double)magnitude;
+        num->flags |= JSON_NUMBER_HAS_DOUBLE;
+      }
+    }
+    if (pos) {
+      json_position_update_offset(pos, input_len);
+      json_position_update_column(pos, input_len);
+    }
+    return GTEXT_JSON_OK;
   }
 
   // Parse int64 if requested
