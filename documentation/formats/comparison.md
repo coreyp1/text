@@ -505,7 +505,18 @@ file's comments is a case where this library is the better choice outright.
   equivalent of the JSON Schema engine, nor of Kwalify or Rx.
 - ~~A custom allocator.~~ **Done**: `GTEXT_YAML_Parse_Options::allocator`, covering
   every parse entry point, the scanner, the arena and the DOM functions.
-- In-situ zero-copy parsing, which JSON and CSV both offer.
+- In-situ zero-copy parsing, which JSON and CSV both offer - **measured rather
+  than done**, and the measurement is why. Over yaml-test-suite's 366 parsing
+  documents, 70% of scalars are contiguous in the input and only **30% of
+  scalar bytes** are: what makes a scalar long is folding, escapes and block
+  indentation, and each of those means the text in the document is not the text
+  of the value. The other 70% of bytes would still be copied. And it would not
+  be an option flag: the scanner owns a buffer it mutates, dropping the consumed
+  prefix with a `memmove`, because the reader feeds it incrementally and because
+  UTF-16 and UTF-32 input is decoded into it - for those encodings there is no
+  caller buffer to point at. The DOM parser already retains that whole buffer,
+  since per-node source locations index it by absolute offset, so the memory
+  in-situ saves in JSON is memory this parser holds anyway.
 - Enforcing the duplicate-name policy in the streaming JSON parser, which is a
   JSON gap rather than a YAML one but belongs on a list of what is missing.
 - ~~Conversion from JSON, the reverse of the supported direction.~~ **Added**:
