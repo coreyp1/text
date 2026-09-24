@@ -13622,3 +13622,126 @@ TEST(JsonStreamBom, InsideAStringItIsJustACharacter) {
 		EXPECT_TRUE(ok) << "at chunk " << chunk;
 	}
 }
+
+/*
+ * What max_depth is for, and what it costs.
+ *
+ * The DOM parser is recursive descent, so a document's nesting depth is the
+ * parser's stack depth. Measured on this machine by bisecting the depth at which
+ * the parse segfaults, at four stack sizes:
+ *
+ *     1 MiB   2276 levels   445 bytes/level
+ *     2 MiB   4608 levels   447 bytes/level
+ *     4 MiB   9272 levels   448 bytes/level
+ *     8 MiB  18437 levels   447 bytes/level
+ *
+ * Linear, as it should be, which is what makes the figure usable: the default
+ * max_depth of 256 needs about 115 KB and is safe on any stack a thread is
+ * likely to have, and a caller who *raises* the limit is choosing a number their
+ * stack has to be able to hold.
+ *
+ * These tests pin the part that protects a caller who does not raise it: a
+ * document past the limit is refused, with E_DEPTH and not a crash, and the
+ * default is far enough below the smallest measured ceiling to have room.
+ */
+TEST(JsonParseDepth, ADocumentPastTheLimitIsRefused) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	EXPECT_EQ(opts.max_depth, 0u) << "0 means the library default";
+
+	// The default is 256, so 300 levels is past it.
+	auto nest = [](size_t depth) {
+		std::string text;
+		for (size_t i = 0; i < depth; i++) {
+			text += "[";
+		}
+		for (size_t i = 0; i < depth; i++) {
+			text += "]";
+		}
+		return text;
+	};
+
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	const std::string deep = nest(300);
+	EXPECT_EQ(gtext_json_parse(deep.data(), deep.size(), &opts, &err), nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_DEPTH);
+	gtext_json_error_free(&err);
+
+	// And one inside it parses.
+	const std::string shallow = nest(200);
+	GTEXT_JSON_Value * v =
+	    gtext_json_parse(shallow.data(), shallow.size(), &opts, nullptr);
+	EXPECT_NE(v, nullptr);
+	if (v) {
+		gtext_json_free(v);
+	}
+}
+
+/* A raised limit is still enforced, so a caller who chooses 2000 gets an error
+   at 2001 rather than a deeper recursion than they asked for. 2000 levels is
+   about 900 KB of stack by the figures above - inside the 8 MiB the tests run
+   with, and the reason this number is not larger. */
+TEST(JsonParseDepth, ARaisedLimitIsStillALimit) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.max_depth = 2000;
+
+	std::string ok_text, over_text;
+	for (size_t i = 0; i < 2000; i++) {
+		ok_text += "[";
+	}
+	for (size_t i = 0; i < 2000; i++) {
+		ok_text += "]";
+	}
+	for (size_t i = 0; i < 2001; i++) {
+		over_text += "[";
+	}
+	for (size_t i = 0; i < 2001; i++) {
+		over_text += "]";
+	}
+
+	GTEXT_JSON_Value * v =
+	    gtext_json_parse(ok_text.data(), ok_text.size(), &opts, nullptr);
+	EXPECT_NE(v, nullptr);
+	if (v) {
+		gtext_json_free(v);
+	}
+
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	EXPECT_EQ(
+	    gtext_json_parse(over_text.data(), over_text.size(), &opts, &err),
+	    nullptr);
+	EXPECT_EQ(err.code, GTEXT_JSON_E_DEPTH);
+	gtext_json_error_free(&err);
+}
+
+/* The streaming parser is not recursive - it keeps its own stack on the heap -
+   so it takes a document the DOM parser could not, and its limit is a limit
+   rather than a cliff. This is the one place the two parsers are allowed to
+   differ in what they accept, and the difference is in the safe direction. */
+TEST(JsonParseDepth, TheStreamingParserIsNotBoundByTheCStack) {
+	GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
+	opts.max_depth = 100000;
+
+	std::string text;
+	for (size_t i = 0; i < 50000; i++) {
+		text += "[";
+	}
+	for (size_t i = 0; i < 50000; i++) {
+		text += "]";
+	}
+
+	GTEXT_JSON_Event_cb cb = [](void *, const GTEXT_JSON_Event *,
+	                             GTEXT_JSON_Error *) { return GTEXT_JSON_OK; };
+	GTEXT_JSON_Stream * st = gtext_json_stream_new(&opts, cb, nullptr);
+	ASSERT_NE(st, nullptr);
+	GTEXT_JSON_Error err;
+	std::memset(&err, 0, sizeof(err));
+	EXPECT_EQ(gtext_json_stream_feed(st, text.data(), text.size(), &err),
+	    GTEXT_JSON_OK)
+	    << (err.message ? err.message : "");
+	EXPECT_EQ(gtext_json_stream_finish(st, &err), GTEXT_JSON_OK)
+	    << (err.message ? err.message : "");
+	gtext_json_stream_free(st);
+	gtext_json_error_free(&err);
+}

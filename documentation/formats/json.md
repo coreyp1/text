@@ -213,6 +213,22 @@ Applied unless overridden; `0` in the option means "use the default".
 | `max_container_elems` | 1 Mi elements |
 | `max_total_bytes` | 64 MiB |
 
+**`max_depth` is a stack budget, not only a resource limit.**
+`gtext_json_parse()` is recursive descent, so a document's nesting depth is the
+parser's stack depth - measured at about **448 bytes per level**, calibrated by
+bisecting the depth at which the parse dies at four stack sizes (445, 447, 448
+and 447 bytes per level at 1, 2, 4 and 8 MiB). The default 256 needs some 115 KB
+and is safe anywhere; the ceiling is about **2,300 levels on a 1 MiB thread
+stack** and **18,000 on Linux's 8 MiB main stack**, and past it the parse does
+not return an error - the process dies. So raising this limit for untrusted
+input is choosing a number rather than removing one.
+
+`gtext_json_stream_feed()` has no such bound: the streaming parser keeps its
+nesting stack on the heap, and a 50,000-level document goes through it with
+`max_depth` raised. For deep or untrusted input it is the parser to use. This is
+the one place the two parsers accept different documents, and the difference is
+in the safe direction.
+
 ## Save
 
 The writer emits RFC 8259 by default and nothing else: compact, no trailing

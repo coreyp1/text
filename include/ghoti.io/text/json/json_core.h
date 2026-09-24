@@ -332,7 +332,28 @@ typedef struct {
   GTEXT_JSON_Dupkey_Mode dupkeys; ///< Duplicate key handling policy
 
   // Limits (0 => library default)
-  size_t max_depth;        ///< Maximum nesting depth (0 = default, e.g. 256)
+  /**
+   * Maximum nesting depth (0 = default, 256).
+   *
+   * This is not only a resource limit, because gtext_json_parse() is recursive
+   * descent: a document's nesting depth is the parser's stack depth, measured
+   * at about **448 bytes per level** (calibrated by bisecting the depth at
+   * which the parse dies, at four stack sizes - 445, 447, 448 and 447 bytes
+   * per level at 1, 2, 4 and 8 MiB). The default 256 needs some 115 KB and is
+   * safe on any stack a thread is likely to have; raising this to N is a claim
+   * that the calling thread can hold N times that.
+   *
+   * As a rule of thumb, the ceiling is about 2,300 levels on a 1 MiB thread
+   * stack and 18,000 on Linux's 8 MiB main stack. Past it the parse does not
+   * return an error - the process dies - so a caller raising the limit for
+   * untrusted input is choosing a number rather than removing one.
+   *
+   * gtext_json_stream_feed() has no such bound: the streaming parser keeps its
+   * nesting stack on the heap, so max_depth there is a resource limit and
+   * nothing else, and a 50,000-level document goes through it. For deep or
+   * untrusted input, that is the parser to use.
+   */
+  size_t max_depth;
   size_t max_string_bytes; ///< Maximum string size in bytes (0 = default, e.g.
                            ///< 16MB)
   size_t max_container_elems; ///< Maximum array/object elements (0 = default,
