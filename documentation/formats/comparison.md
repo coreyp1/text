@@ -537,16 +537,32 @@ file's comments is a case where this library is the better choice outright.
 ## What this adds up to
 
 On correctness and on breadth of feature, the library is in good shape, and in
-two places - YAML comment and style preservation, JSON patch and pointer
-together with the duplicate-key modes - it is ahead of the common alternatives.
-The format pages are unusually honest about deviations, which is itself worth
-something to an adopter.
+three places - YAML comment and style preservation, JSON patch and pointer
+together with the duplicate-key modes, and JSONPath with normalized paths - it
+is ahead of the common alternatives. The format pages are unusually honest about
+deviations, which is itself worth something to an adopter.
 
-What stands between it and the stated goal is a short list, and most of it is
-not parser work: a license, an optimized default build, an allocator hook, two
-pull readers, one honest failure in the schema engine, and a paragraph each on
-thread safety for JSON and YAML. Throughput on the JSON side is the one item
-that is genuinely a project rather than a task.
+The short list that used to stand between it and the stated goal is done: the
+license is LGPL-3.0-only with `COPYING` and `COPYING.LESSER` in every
+repository, the release build compiles at `-O2`, every parse entry point takes a
+caller's allocator, all three formats have a pull reader, the schema engine
+refuses a schema it cannot enforce, and each module page states its
+thread-safety position.
+
+What is left is shorter and more specific:
+
+- **Throughput on the JSON side**, which is genuinely a project rather than a
+  task - SIMD scanning is the item, and the measurement to take first is where
+  the time actually goes.
+- **`match()` and `search()` in a JSONPath filter**, which want an I-Regexp
+  engine (RFC 9485). The workspace has ghoti.io-regex; whether this library
+  should take that dependency for two functions is a decision rather than a
+  coding problem.
+- **The duplicate-name policy in the streaming JSON parser**, which is not
+  enforced at all. Closing it means holding every name of every open object,
+  bounded but real, and that is a cost a streaming parser should be asked for.
+- **The JSON writer, streaming parser, Pointer, Patch and Schema** still take no
+  allocator, which the \ref format_allocator_todo "allocator page" tracks.
 
 ---
 
