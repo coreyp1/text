@@ -311,8 +311,13 @@ TEST(YamlWriter, FoldedAutoLineWidth) {
   opts.line_width = 6;
 
     std::string output = write_doc(doc, &opts);
+    /* A plain scalar longer than line_width is folded, which is what this
+       option is for. It used to come out double-quoted instead - not because
+       quoting was chosen, but because the writer's plain-scalar whitelist
+       refused any text with a space in it, so the fold branch was never
+       reached. The fixture was named for that answer. */
     std::string expected = read_file(
-      get_test_data_dir() + "/formatting/auto-fold-quoted.yaml");
+      get_test_data_dir() + "/formatting/auto-fold.yaml");
     ASSERT_FALSE(expected.empty());
     EXPECT_EQ(output, expected);
 

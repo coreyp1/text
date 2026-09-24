@@ -677,10 +677,20 @@ written down instead, on each of those fields.
   with the same digits, which the test establishes by parsing them rather than
   assuming it.
 
-- **Comment preservation on write.** Comments can be retained in the DOM but
-  the DOM writer does not re-emit them. The streaming writer does write a
-  COMMENT event it is given.
-- **Scalar style preservation.** A parse-write cycle normalizes style.
+- ~~**Comment preservation on write.**~~ Both of these were **wrong**, and
+  measurement said so: with `retain_comments` on the parse and `pretty` on the
+  write, a document's leading and inline comments come back out - on mapping
+  keys, on nested keys and on sequence entries - and so does every scalar
+  style, the folded and literal block styles included. The cycle is
+  repeatable: writing what was written gives the same bytes.
+
+  What is true, and is what those two lines were probably reaching for, is
+  that **the default write options are flow style** (`pretty` is off), and in a
+  flow collection there is nowhere to put a comment on a line of its own and no
+  spelling for a block scalar at all. So a tool that rewrites a file has to ask
+  for `pretty`; with the defaults it gets `{key: value, ...}` and loses the
+  leading comments. `tests/yaml/test-yaml-comment-roundtrip.cpp` pins both
+  halves of that.
 - **Timestamp parsing into a time type**, as above.
 - **Benchmarks**, as above.
 - **Native Windows (MSVC)** is untested; MSYS2/MinGW is exercised.

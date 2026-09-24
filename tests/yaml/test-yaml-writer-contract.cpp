@@ -1047,8 +1047,14 @@ TEST(YamlWriterContract, AColonDoesNotForceQuotesOntoANonString) {
 		{ "a:",      true  },
 		/* A leading one is left quoted whatever follows. */
 		{ ":a",      true  }, { "::a",     true  },
-		/* Controls from either side of the whitelist. */
-		{ "word",    false }, { "a b",     true  }, { "a#b",     true  },
+		/* A space between plain characters is separation inside the scalar,
+		   and 7.3.3 admits "#" where an ns-char precedes it - both were
+		   quoted while this test read a whitelist rather than the rule. */
+		{ "word",    false }, { "a b",     false }, { "a#b",     false },
+		/* And the two shapes that are not the rule: white space at an edge is
+		   separation the scanner removes, and a "#" after white space starts
+		   a comment. */
+		{ " a",      true  }, { "a ",      true  }, { "a #b",    true  },
 	};
 
 	for (const Case &c : cases) {

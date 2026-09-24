@@ -489,7 +489,12 @@ reader; a YAML 1.1 resolution mode; conversion to JSON with and without tag
 information; file read and write, including read-all-documents.
 
 Comment retention with round-trip emission and per-node source locations are
-the standout features. libyaml discards comments entirely and yaml-cpp's
+the standout features - and the round trip means a parse and a write, not only
+comments a caller sets: with `retain_comments` and `pretty`, a document's
+comments and every scalar style come back out, and writing what was written
+gives the same bytes. A plain scalar containing a space stays plain, so
+rewriting one value in a file does not re-quote every line that has a space in
+it. libyaml discards comments entirely and yaml-cpp's
 support is partial, so a configuration-rewriting tool that must preserve a
 file's comments is a case where this library is the better choice outright.
 
@@ -501,6 +506,8 @@ file's comments is a case where this library is the better choice outright.
 - ~~A custom allocator.~~ **Done**: `GTEXT_YAML_Parse_Options::allocator`, covering
   every parse entry point, the scanner, the arena and the DOM functions.
 - In-situ zero-copy parsing, which JSON and CSV both offer.
+- Enforcing the duplicate-name policy in the streaming JSON parser, which is a
+  JSON gap rather than a YAML one but belongs on a list of what is missing.
 - ~~Conversion from JSON, the reverse of the supported direction.~~ **Added**:
   `gtext_json_to_yaml()`.
 - ~~A documented thread-safety position.~~ **Fixed**, and it was already fixed

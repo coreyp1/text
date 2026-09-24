@@ -1150,19 +1150,26 @@ static bool comment_text_is_writable(const char *text, bool allow_breaks) {
 
 /* Whether a value has to be quoted rather than written plain.
  *
- * This is a whitelist, and deliberately a conservative one: quoting text that
- * would have been safe plain is only a matter of style, and the by-event
- * round trip holds the writer to the *text* of every scalar, which quoting
- * preserves.
+ * This is 7.3.3's rule rather than a whitelist of safe characters. It was a
+ * whitelist - alphanumerics, "_", "-", ".", "~", "+" and a ":" under a rule -
+ * on the reasoning that quoting text which would have been safe plain is only
+ * a matter of style, and the by-event round trip holds the writer to the text
+ * of every scalar either way.
  *
- * There is one exception, and it is not a matter of style. Quoting changes
- * the value whenever the plain text would have resolved to something other
- * than a string, because only a plain scalar is resolved by its contents
- * (10.3.2). So every character that can appear in a resolvable plain scalar
- * has to be here: "~" is the null the 10.3.2 table gives first, and "+" leads
- * the core schema's integer and float rows ("[-+]? [0-9]+"). Neither is a
- * c-indicator, so neither needs quoting in the first place - and quoting them
- * turned null into the string "~" and the integer +1 into the string "+1". */
+ * Style is the point, though, for the one use this library is better at than
+ * its alternatives: reading a configuration file, changing one value, and
+ * writing it back. Under the whitelist every plain scalar containing a space
+ * came back double-quoted, so `name: John Smith` became `name: "John Smith"`
+ * and a one-line change produced a diff touching every line that had a space
+ * in it. A space between plain characters is separation *inside* the scalar
+ * (nb-ns-plain-in-line), not a reason to quote.
+ *
+ * Quoting is still value-preserving, and where it is not, that is decided
+ * elsewhere: gtext_yaml_plain_text_resolves_to_non_string_as() asks whether
+ * the target dialect would resolve this text to a number, a bool or a null,
+ * and plan_scalar_style() quotes it if so. That check is what makes widening
+ * this one safe - it is a separate question from whether the characters can be
+ * written plain, and it was already separate. */
 /* 7.3.3's ns-plain-safe(c): every ns-char, less the flow indicators where a
    flow collection is what we are inside of.  A flow indicator inside a plain
    scalar there would end the scalar rather than belong to it. */
@@ -1201,28 +1208,99 @@ static bool scalar_needs_quotes(const char *value, size_t len, bool in_flow) {
           || value[3] == '\n' || value[3] == '\r')) {
     return true;
   }
+  /* ns-plain-first(c) is an ns-char that is not a c-indicator.  Only the first
+     character asks that question: "a'b" and "a|b" are plain scalars, because
+     every one of those indicators is an ordinary ns-char anywhere but the
+     front.  The three that keep their meaning inside a scalar - ":", "#", and
+     the flow indicators - are handled in the loop.
+
+     "?" and ":" are admitted by ns-plain-first when an ns-plain-safe character
+     follows, and are refused here anyway: "? " is an explicit key and a
+     leading ":" is how a block mapping writes a value with no key, so neither
+     is worth the one character it saves.
+
+     "-" is absent from this list because the check above already has it, and
+     has it more precisely: ns-plain-first admits a "-" that is followed by an
+     ns-plain-safe character, so "-1" and "-x" are plain scalars and only a
+     lone "-" or one before white space is the sequence-entry indicator. */
+  {
+    const unsigned char first = (unsigned char)value[0];
+    if (strchr("?:,[]{}#&*!|>'\"%@`", (int)first) != NULL) {
+      return true;
+    }
+  }
+
+  /* White space at either end is separation rather than content: the scanner
+     takes it off, and " 3" written plain reads back as the integer 3.
+     plain_style_cannot_carry() says the same thing, but it is consulted only
+     for binary scalars - this function is the whole test for every other
+     kind. */
+  if (value[0] == ' ' || value[0] == '\t' || value[len - 1] == ' '
+      || value[len - 1] == '\t') {
+    return true;
+  }
+
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)value[i];
-    if (isalnum(c) || c == '_' || c == '-' || c == '.'
-        || c == '~' || c == '+') {
-      continue;
-    }
-    /* ns-plain-char admits ":" where an ns-plain-safe character follows it
-       (7.3.3), and the whitelist did not - so "0:0" was quoted.  For a string
-       that costs nothing, which is what the note above says and why it went
-       unnoticed; for anything else quoting is not value-preserving, and "0:0"
-       parsed with yaml_1_1 is the sexagesimal integer 0.  It went out as the
-       string.
 
-       Not in first position: there ns-plain-first admits ":" only under the
-       same following-character rule, and a leading ":" is how a block mapping
-       writes a value with no key - too close to the syntax to be worth the
-       character it saves. */
-    if (c == ':' && i > 0 && i + 1 < len
-        && plain_safe_char((unsigned char)value[i + 1], in_flow)) {
+    /* White space *between* plain characters is separation inside the scalar
+       (nb-ns-plain-in-line), so "John Smith" is one plain scalar and does not
+       need quoting. */
+    if (c == ' ' || c == '\t') {
       continue;
     }
-    return true;
+
+    /* Three characters that this parser reads as content and another reader
+       may not, so they are quoted wherever they stand.  U+0085 NEL, U+2028
+       LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are line breaks in YAML
+       1.1 and ordinary nb-chars in 1.2: written raw in a plain scalar they
+       round-trip here and fold to a space there.  U+FEFF is excluded from
+       nb-char outright (5.2), so it has no plain spelling at all.  Inside
+       double quotes each of them is unambiguous. */
+    if (c == 0xC2 && i + 1 < len && (unsigned char)value[i + 1] == 0x85) {
+      return true; // U+0085
+    }
+    if (c == 0xE2 && i + 2 < len && (unsigned char)value[i + 1] == 0x80
+        && ((unsigned char)value[i + 2] == 0xA8
+            || (unsigned char)value[i + 2] == 0xA9)) {
+      return true; // U+2028, U+2029
+    }
+    if (c == 0xEF && i + 2 < len && (unsigned char)value[i + 1] == 0xBB
+        && (unsigned char)value[i + 2] == 0xBF) {
+      return true; // U+FEFF
+    }
+
+    /* A flow indicator inside a flow collection would end the scalar. */
+    if (!plain_safe_char(c, in_flow)) {
+      return true;
+    }
+
+    /* ns-plain-char admits "#" only where an ns-char precedes it: after white
+       space it starts a comment and the rest of the line stops being content.
+       Not in first position either, which the check above already refused. */
+    if (c == '#') {
+      if (i == 0 || value[i - 1] == ' ' || value[i - 1] == '\t') {
+        return true;
+      }
+      continue;
+    }
+
+    /* ns-plain-char admits ":" where an ns-plain-safe character follows it
+       (7.3.3), and the whitelist this replaced did not - so "0:0" was quoted.
+       For a string that costs nothing; for anything else quoting is not
+       value-preserving, and "0:0" parsed with yaml_1_1 is the sexagesimal
+       integer 0.  It went out as the string.
+
+       ": " is the other side of the same rule, and the one that matters most
+       here: it ends a key, so a scalar containing it cannot be written plain
+       at all. */
+    if (c == ':') {
+      if (i + 1 >= len
+          || !plain_safe_char((unsigned char)value[i + 1], in_flow)) {
+        return true;
+      }
+      continue;
+    }
   }
   return false;
 }
