@@ -384,20 +384,18 @@ TEST(JsonPath, MalformedQueriesAreRefused) {
 	}
 }
 
-/* The filter selector is refused as unimplemented rather than ignored: a query
-   whose filter was dropped would select every element of the array instead of
-   the ones asked for, which is a wrong answer where this is a missing feature.
-   The status says which of the two it is. */
-TEST(JsonPath, AFilterIsRefusedAsUnsupported) {
+/* A filter compiles wherever a selector may stand - alone, beside other
+   segments, inside a descendant segment, and inside another filter. */
+TEST(JsonPath, AFilterCompilesWhereverASelectorMay) {
 	for (const char * query : {"$[?@.a]", "$.a[?@.b == 1]", "$..[?@]",
-	         "$[?@.a][0]", "$[0][?@.a]"}) {
+	         "$[?@.a][0]", "$[0][?@.a]", "$[?@[?@.b]]", "$[?@.a,?@.b]",
+	         "$[0,?@.a,'x']"}) {
 		GTEXT_JSON_Error err;
 		std::memset(&err, 0, sizeof(err));
 		GTEXT_JSON_Path * path =
 		    gtext_json_path_compile(query, SIZE_MAX, nullptr, &err);
-		EXPECT_EQ(path, nullptr) << "accepted [" << query << "]";
-		EXPECT_EQ(err.code, GTEXT_JSON_E_PATH_UNSUPPORTED)
-		    << "[" << query << "] gave " << (int)err.code;
+		EXPECT_NE(path, nullptr)
+		    << "[" << query << "] " << (err.message ? err.message : "");
 		if (path) {
 			gtext_json_path_free(path);
 		}
@@ -503,4 +501,201 @@ TEST(JsonPath, ADeepDocumentDoesNotOverflowTheStack) {
 	EXPECT_EQ(result.count, depth);
 	gtext_json_path_result_free(&result);
 	gtext_json_free(inner);
+}
+
+// ===========================================================================
+// The filter selector
+// ===========================================================================
+
+/* The examples of RFC 9535 §2.3.5.3, on the document that section uses. */
+TEST(JsonPathFilter, TheTableFromSectionTwoPointThreePointFive) {
+	Parsed p;
+	p.doc = parse(R"({
+	  "a": [3, 5, 1, 2, 4, 6,
+	        {"b": "j"}, {"b": "k"}, {"b": {}}, {"b": "kilo"}],
+	  "o": {"p": 1, "q": 2, "r": 3, "s": 5, "t": {"u": 6}},
+	  "e": "f"
+	})");
+	ASSERT_NE(p.doc, nullptr);
+
+	// $.a[?@.b == 'kilo'] - the object whose b is "kilo".
+	EXPECT_EQ(select(p.doc, "$.a[?@.b == 'kilo']"), "{\"b\":\"kilo\"}");
+	// The same with the other quote, which is the same selector.
+	EXPECT_EQ(select(p.doc, "$.a[?@.b == \"kilo\"]"), "{\"b\":\"kilo\"}");
+	// $.a[?@>3.5] - the numbers above 3.5; a non-number compares false.
+	EXPECT_EQ(select(p.doc, "$.a[?@>3.5]"), "5|4|6");
+	// $.a[?@.b] - the elements that have a b at all.
+	EXPECT_EQ(select(p.doc, "$.a[?@.b]"),
+	    "{\"b\":\"j\"}|{\"b\":\"k\"}|{\"b\":{}}|{\"b\":\"kilo\"}");
+	// $[?@.*] - the values that have at least one child.
+	EXPECT_EQ(count(p.doc, "$[?@.*]"), 2u);
+	// $[?@[?@.b]] - a filter inside a filter.
+	EXPECT_EQ(count(p.doc, "$[?@[?@.b]]"), 1u);
+	// $.o[?@<3, ?@<3] - two filters in one bracket, so each match twice.
+	EXPECT_EQ(select(p.doc, "$.o[?@<3, ?@<3]"), "1|2|1|2");
+	// $.a[?@<2 || @.b == \"k\"] - either.
+	EXPECT_EQ(select(p.doc, "$.a[?@<2 || @.b == \"k\"]"), "1|{\"b\":\"k\"}");
+	// $.o[?@>1 && @<4] - both.
+	EXPECT_EQ(select(p.doc, "$.o[?@>1 && @<4]"), "2|3");
+	// $.o[?@.u || @.x] - one member has u.
+	EXPECT_EQ(select(p.doc, "$.o[?@.u || @.x]"), "{\"u\":6}");
+	// $.a[?@.b == $.x] - $.x is nothing, and so is @.b for most elements;
+	// nothing equals nothing, so the elements without a b match.
+	EXPECT_EQ(count(p.doc, "$.a[?@.b == $.x]"), 6u);
+	// $.a[?@ == @] - every element equals itself.
+	EXPECT_EQ(count(p.doc, "$.a[?@ == @]"), 10u);
+}
+
+/* Comparison is the part with the most rules (2.3.5.2.2), and most of them are
+   about what is *not* comparable. */
+TEST(JsonPathFilter, ComparisonRules) {
+	Parsed p;
+	p.doc = parse(R"({"n":1,"s":"a","t":true,"f":false,"z":null,
+	                  "arr":[1,2],"obj":{"x":1},"arr2":[1,2],"obj2":{"x":1}})");
+	ASSERT_NE(p.doc, nullptr);
+
+	// A missing member is Nothing: it equals only Nothing, and orders against
+	// nothing at all - both directions false.
+	EXPECT_EQ(select(p.doc, "$[?@.missing == $.alsoMissing]").empty(), false);
+	EXPECT_EQ(count(p.doc, "$[?$.missing < 1]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?1 < $.missing]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.missing != $.missing]"), 0u);
+
+	// Types that are not the same are unequal and unordered.
+	EXPECT_EQ(count(p.doc, "$[?$.n == $.s]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.n < $.s]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.t == 1]"), 0u);
+
+	// null and the booleans compare for equality, and <= / >= follow from it
+	// even though they are unordered.
+	EXPECT_GT(count(p.doc, "$[?$.z == null]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?$.z <= null]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?$.t >= true]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.z < null]"), 0u);
+
+	// Structured values compare by deep equality, in either order of members.
+	EXPECT_GT(count(p.doc, "$[?$.arr == $.arr2]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?$.obj == $.obj2]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.arr == $.obj]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?$.arr < $.arr2]"), 0u);
+
+	// Numbers compare by value whatever their spelling.
+	Parsed nums;
+	nums.doc = parse(R"([1, 1.0, 1e0, 2])");
+	ASSERT_NE(nums.doc, nullptr);
+	EXPECT_EQ(count(nums.doc, "$[?@ == 1]"), 3u);
+	EXPECT_EQ(count(nums.doc, "$[?@ == 1.0]"), 3u);
+}
+
+TEST(JsonPathFilter, Functions) {
+	Parsed p;
+	p.doc = parse(R"({"s":"hello","u":"éé","arr":[1,2,3],
+	                  "obj":{"a":1,"b":2},"n":42,"deep":{"a":{"b":1}}})");
+	ASSERT_NE(p.doc, nullptr);
+
+	// length() counts characters in a string, elements in an array, members in
+	// an object, and is Nothing for anything else.
+	EXPECT_GT(count(p.doc, "$[?length($.s) == 5]"), 0u);
+	// Two two-byte characters are two characters, not four.
+	EXPECT_GT(count(p.doc, "$[?length($.u) == 2]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?length($.arr) == 3]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?length($.obj) == 2]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?length($.n) == 2]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?length($.missing) == 0]"), 0u);
+
+	// count() counts the nodes a query selects, including zero.
+	EXPECT_GT(count(p.doc, "$[?count($.arr[*]) == 3]"), 0u);
+	EXPECT_GT(count(p.doc, "$[?count($.missing[*]) == 0]"), 0u);
+	/* Two members are named "a": obj.a and deep.a. */
+	EXPECT_GT(count(p.doc, "$[?count($..a) == 2]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?count($..a) == 1]"), 0u);
+
+	// value() takes a node list to a value, and is Nothing unless there is
+	// exactly one node.
+	EXPECT_GT(count(p.doc, "$[?value($.n) == 42]"), 0u);
+	EXPECT_EQ(count(p.doc, "$[?value($.arr[*]) == 1]"), 0u);
+}
+
+/* match() and search() need a regular expression engine, so a filter using one
+   is refused as unsupported - the same distinction the whole selector used to
+   get. A caller learns that the query is fine and this build cannot run it. */
+TEST(JsonPathFilter, MatchAndSearchAreUnsupported) {
+	for (const char * query : {"$[?match(@.a, 'a.*')]", "$[?search(@.a, 'b')]",
+	         "$[?!match(@.a, 'x')]", "$[?@.b && match(@.a, 'x')]"}) {
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Path * path =
+		    gtext_json_path_compile(query, SIZE_MAX, nullptr, &err);
+		EXPECT_EQ(path, nullptr) << "accepted [" << query << "]";
+		EXPECT_EQ(err.code, GTEXT_JSON_E_PATH_UNSUPPORTED)
+		    << "[" << query << "] gave " << (int)err.code;
+		if (path) {
+			gtext_json_path_free(path);
+		}
+	}
+}
+
+/* The type rules of 2.4.2 make an ill-typed query invalid rather than false, so
+   these are E_PATH and not E_PATH_UNSUPPORTED. */
+TEST(JsonPathFilter, IllTypedQueriesAreInvalid) {
+	for (const char * query : {
+	         "$[?length(@.*) == 1]",   // length() wants a value, not a list
+	         "$[?count(1) == 1]",      // count() wants a list, not a value
+	         "$[?value(1) == 1]",      //
+	         "$[?@.a[*] == 1]",        // only a singular query compares
+	         "$[?length(@.a)]",        // a value is not a test
+	         "$[?1]",                  // nor is a literal
+	         "$[?'a']",                //
+	         "$[?@.a == ]",            //
+	         "$[?== 1]",               //
+	         "$[?nosuch(@.a)]",        // an unregistered function name
+	         "$[?length(@.a, @.b) == 1]", // wrong arity
+	         "$[?@.a &&]",             //
+	         "$[?@.a ||]",             //
+	         "$[?(@.a]",               // unclosed parenthesis
+	     }) {
+		GTEXT_JSON_Error err;
+		std::memset(&err, 0, sizeof(err));
+		GTEXT_JSON_Path * path =
+		    gtext_json_path_compile(query, SIZE_MAX, nullptr, &err);
+		EXPECT_EQ(path, nullptr) << "accepted [" << query << "]";
+		if (path) {
+			gtext_json_path_free(path);
+			continue;
+		}
+		EXPECT_EQ(err.code, GTEXT_JSON_E_PATH)
+		    << "[" << query << "] gave " << (int)err.code;
+	}
+}
+
+/* A filter applies to the elements of an array and the member values of an
+   object - never to the node it is applied to, and never to a scalar's
+   nothing. */
+TEST(JsonPathFilter, WhatAFilterIsAppliedTo) {
+	Parsed p;
+	p.doc = parse(R"({"arr":[1,2,3],"obj":{"a":1,"b":2},"scalar":7})");
+	ASSERT_NE(p.doc, nullptr);
+	EXPECT_EQ(select(p.doc, "$.arr[?@>1]"), "2|3");
+	EXPECT_EQ(select(p.doc, "$.obj[?@>1]"), "2");
+	EXPECT_EQ(select(p.doc, "$.scalar[?@>1]"), "");
+	/* A filter in a descendant segment reaches every level, and the root is a
+	   level: 7 from the root object, 2 and 3 from arr, 2 from obj. */
+	EXPECT_EQ(count(p.doc, "$..[?@>1]"), 4u);
+}
+
+/* Parentheses and negation, including the precedence they exist to override. */
+TEST(JsonPathFilter, LogicalOperators) {
+	Parsed p;
+	p.doc = parse(R"([{"a":1,"b":1},{"a":1},{"b":1},{}])");
+	ASSERT_NE(p.doc, nullptr);
+
+	EXPECT_EQ(count(p.doc, "$[?@.a && @.b]"), 1u);
+	EXPECT_EQ(count(p.doc, "$[?@.a || @.b]"), 3u);
+	EXPECT_EQ(count(p.doc, "$[?!@.a]"), 2u);
+	EXPECT_EQ(count(p.doc, "$[?!@.a && !@.b]"), 1u);
+	// && binds tighter than ||, so this is (a && b) || (!a && !b).
+	EXPECT_EQ(count(p.doc, "$[?@.a && @.b || !@.a && !@.b]"), 2u);
+	// And parentheses change it.
+	EXPECT_EQ(count(p.doc, "$[?@.a && (@.b || !@.a)]"), 1u);
+	EXPECT_EQ(count(p.doc, "$[?!(@.a || @.b)]"), 1u);
 }

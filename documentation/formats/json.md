@@ -167,26 +167,47 @@ including several selectors in one bracket. A result is a node list in the order
 the specification gives, and it may hold the same node twice - `$[0,0]` selects
 the first element twice, and §2.3.1.2 says so.
 
-The **filter selector** (`$[?@.price < 10]`) is refused at compile time with
-`GTEXT_JSON_E_PATH_UNSUPPORTED`, and so is any query containing one. It needs an
-expression evaluator, and `match()` and `search()` need an I-Regexp engine,
-which this library does not have. Refusing is the point: a query whose filter
-was quietly dropped selects *every* element of the array rather than the ones
-asked for, so ignoring it would turn a missing feature into a wrong answer. A
-query that is not well-formed is `GTEXT_JSON_E_PATH`, which is a different
-status because it asks the caller for something different.
+The **filter selector** is implemented: `$[?@.price < 10]`, with `&&`, `||`,
+`!`, parentheses, the six comparison operators, and the functions `length()`,
+`count()` and `value()`. A filter may hold another filter, and a comparison may
+name the document root - `$.a[?@.b == $.x]` - as well as the current node.
+
+`match()` and `search()` are the exception: they need an I-Regexp engine, which
+this library does not have, so a query using either is refused with
+`GTEXT_JSON_E_PATH_UNSUPPORTED`. That status is separate from
+`GTEXT_JSON_E_PATH` for a query that is not well-formed, because the two ask the
+caller for different things - and a query whose filter was quietly dropped would
+select *every* element of the array rather than the ones asked for, which is why
+refusing is the only safe answer to a construct that cannot be evaluated.
+
+An **ill-typed** query is invalid rather than false, as §2.4.2 says: `length()`
+takes a value so its argument cannot be a multi-node query, `count()` and
+`value()` take a node list so their arguments cannot be literals, only a
+singular query may be compared, and a value is not a test expression. Each of
+those is `GTEXT_JSON_E_PATH`.
 
 The examples in RFC 9535 §1.5 and the slice examples in §2.3.4 are in the suite,
 in `tests/test-json-path.cpp`, written from the RFC rather than from this
 implementation. `make conformance-jsonpath` scores it against the
 [JSONPath Compliance Test Suite](https://github.com/jsonpath-standard/jsonpath-compliance-test-suite):
-**324 of the 324 cases it attempts**, out of the 706 the suite ships. The other
-382 use the filter selector and are refused as unsupported rather than counted
-as passes or failures - a percentage over a subset means nothing without that
-number beside it. Writing that runner found one defect the hand-written tests
-had agreed with: `$ ` is not a well-formed query, because `segments = *(S
-segment)` puts the blank space *before* a segment, and this parser accepted a
-query that ended with one.
+**650 of the 650 cases it attempts**, out of the 706 the suite ships. The other
+56 use `match()` or `search()` and are refused as unsupported rather than
+counted as passes or failures - a percentage over a subset means nothing without
+that number beside it.
+
+What that score is about is the **node list**: which nodes a query selects and
+in what order, which is the suite's `result` field. Every valid case also carries
+`result_paths`, the *normalized path* of each result (§2.7) - `$['a'][0]` and so
+on - and this library does not produce those, so the scorer does not check them
+and the score says nothing about them. Producing them is the other open piece of
+RFC 9535 here, alongside `match()` and `search()`.
+
+That runner has found three defects so far, each of which the hand-written tests
+agreed with: `$ ` is not a well-formed query, because `segments = *(S segment)`
+puts the blank space *before* a segment; blank space *is* allowed before each
+segment of a query inside a filter, so `length(@ .a .b)` is one query with two
+segments; and `<=` is defined as "less than or equal" rather than as an ordering
+of its own, which is why `null <= null` is true even though null is unordered.
 
 **Pointer, Patch and Merge Patch.** RFC 6901 evaluation including the `~0`
 and `~1` escapes; the six RFC 6902 operations `add`, `remove`, `replace`,

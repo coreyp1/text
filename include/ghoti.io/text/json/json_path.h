@@ -43,12 +43,21 @@
  * outlive the result. What the result owns is the array holding them, which
  * @ref gtext_json_path_result_free releases.
  *
- * **What is not implemented yet.** The filter selector - `$[?@.price < 10]` -
- * is refused at compile time with @ref GTEXT_JSON_E_PATH_UNSUPPORTED, and so
- * is any query containing one. A query this build cannot evaluate is refused
- * rather than evaluated as though the filter were not there, for the same
- * reason the schema engine refuses a schema it cannot enforce: silently
- * selecting more nodes than the query asked for is worse than saying no.
+ * **What is not implemented.** `match()` and `search()` need an I-Regexp
+ * engine, which this library does not have, so a query using either is refused
+ * at compile time with @ref GTEXT_JSON_E_PATH_UNSUPPORTED. Everything else in
+ * RFC 9535 is here, the filter selector included: `&&`, `||`, `!`,
+ * parentheses, the six comparison operators, and `length()`, `count()` and
+ * `value()`.
+ *
+ * A query this build cannot evaluate is refused rather than evaluated as though
+ * the construct were absent, for the same reason the schema engine refuses a
+ * schema it cannot enforce: silently selecting more nodes than the query asked
+ * for is worse than saying no.
+ *
+ * An **ill-typed** query - `length()` over a multi-node query, `count()` of a
+ * literal, a comparison against a non-singular query, a value used as a test -
+ * is @ref GTEXT_JSON_E_PATH, because §2.4.2 makes it invalid rather than false.
  */
 
 #ifndef GHOTI_IO_GTEXT_JSON_JSON_PATH_H

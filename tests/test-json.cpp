@@ -13411,9 +13411,15 @@ TEST(JsonStreamTrailing, WhiteSpaceAfterTheDocumentMayArriveLate) {
 	for (const char * src : {"\"a\"\n", "{\"a\":1}\n", "[1,2]\n  \n",
 	         "null\t", "1 "}) {
 		const std::string whole = src;
-		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
-		    nullptr)
+		/* Freed rather than leaked: the ASan build's LSan reported 72 of these
+		   the first time these tests ran. */
+		GTEXT_JSON_Value * dom_value =
+		    gtext_json_parse(whole.data(), whole.size(), &opts, nullptr);
+		EXPECT_NE(dom_value, nullptr)
 		    << "the DOM parser refuses " << src;
+		if (dom_value) {
+			gtext_json_free(dom_value);
+		}
 		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
 			bool ok = false;
 			stream_event_trace(whole, &opts, chunk, &ok);
@@ -13474,9 +13480,15 @@ TEST(JsonStreamNonfinite, ASignedWordSurvivesEveryChunkBoundary) {
 	         "Infinity", "NaN", "[-Infinity]", "[1,-Infinity,2]",
 	         "{\"a\":-Infinity}", "[-Infinity,-Infinity]"}) {
 		const std::string whole = src;
-		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
-		    nullptr)
+		/* Freed rather than leaked: the ASan build's LSan reported 72 of these
+		   the first time these tests ran. */
+		GTEXT_JSON_Value * dom_value =
+		    gtext_json_parse(whole.data(), whole.size(), &opts, nullptr);
+		EXPECT_NE(dom_value, nullptr)
 		    << "the DOM parser refuses " << src;
+		if (dom_value) {
+			gtext_json_free(dom_value);
+		}
 		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
 			bool ok = false;
 			stream_event_trace(whole, &opts, chunk, &ok);
@@ -13546,9 +13558,15 @@ TEST(JsonStreamEmpty, AValueAfterAllThatIsStillAccepted) {
 	for (const char * src : {"1", " 1 ", "// c\n1", "/* c */ 1",
 	         "\xEF\xBB\xBF" "1", "\n\n[]\n"}) {
 		const std::string whole = src;
-		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
-		    nullptr)
+		/* Freed rather than leaked: the ASan build's LSan reported 72 of these
+		   the first time these tests ran. */
+		GTEXT_JSON_Value * dom_value =
+		    gtext_json_parse(whole.data(), whole.size(), &opts, nullptr);
+		EXPECT_NE(dom_value, nullptr)
 		    << "the DOM parser refuses [" << src << "]";
+		if (dom_value) {
+			gtext_json_free(dom_value);
+		}
 		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
 			bool ok = false;
 			stream_event_trace(whole, &opts, chunk, &ok);
@@ -13574,9 +13592,15 @@ TEST(JsonStreamBom, TheMarkMayArriveInPieces) {
 	for (const char * src : {"\xEF\xBB\xBF" "1", "\xEF\xBB\xBF" "[1,2]",
 	         "\xEF\xBB\xBF" "{\"a\":1}"}) {
 		const std::string whole = src;
-		EXPECT_NE(gtext_json_parse(whole.data(), whole.size(), &opts, nullptr),
-		    nullptr)
+		/* Freed rather than leaked: the ASan build's LSan reported 72 of these
+		   the first time these tests ran. */
+		GTEXT_JSON_Value * dom_value =
+		    gtext_json_parse(whole.data(), whole.size(), &opts, nullptr);
+		EXPECT_NE(dom_value, nullptr)
 		    << "the DOM parser refuses " << src;
+		if (dom_value) {
+			gtext_json_free(dom_value);
+		}
 		for (size_t chunk = 1; chunk <= whole.size(); chunk++) {
 			bool ok = false;
 			stream_event_trace(whole, &opts, chunk, &ok);

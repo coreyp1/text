@@ -371,7 +371,9 @@ Compared against nlohmann/json, RapidJSON, jansson and cJSON.
 
 **Present, and competitive.** DOM with typed accessors; push streaming; a
 writer with buffer and fixed-buffer sinks; file read and write; JSON Pointer
-(RFC 6901); JSON Patch (RFC 6902); JSON Merge Patch (RFC 7386); duplicate-key
+(RFC 6901); JSON Patch (RFC 6902); JSON Merge Patch (RFC 7386); JSONPath
+(RFC 9535), filter selector included, scoring 650 of the 650 compliance cases it
+attempts; duplicate-key
 policy with four modes including collect-into-array; number handling that keeps
 the original lexeme and offers exact `int64`, `uint64`, `double` and
 string-backed big decimal; in-situ zero-copy parsing; depth, string, element
@@ -415,6 +417,9 @@ real advantages over cJSON and jansson.
 - ~~Conversion to YAML.~~ **Added**: `gtext_json_to_yaml()`. Types are preserved
   rather than re-resolved, which is the whole difficulty - a JSON string reading
   `true` or `42` must not become a boolean or an integer.
+- `match()` and `search()` in a JSONPath filter, which need an I-Regexp engine.
+  Everything else in RFC 9535 is implemented, and a query using either function
+  is refused rather than evaluated without it.
 - SIMD-accelerated scanning, which is what the throughput gap is really about.
 
 ### CSV

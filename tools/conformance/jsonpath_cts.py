@@ -10,9 +10,8 @@ acceptable because the specification leaves object member order to the
 implementation.
 
 Three outcomes are counted, not two. A query this library refuses as
-*unsupported* - the filter selector, which needs an expression evaluator and, for
-match() and search(), a regular expression engine - is not attempted, and is
-reported separately rather than as a pass or a failure. Scoring it as a pass
+*unsupported* - one using match() or search(), which need an I-Regexp engine - is
+not attempted, and is reported separately rather than as a pass or a failure. Scoring it as a pass
 where the case happens to be an invalid_selector one would count an
 unimplemented feature as conformance; scoring it as a failure would bury the
 cases that do work.
@@ -20,6 +19,12 @@ cases that do work.
 Environment:
     JPC_MIN         floor on the pass rate over attempted cases (default 100)
     JPC_VERBOSE     print every failing case
+
+What is compared is the node list - the suite's `result` or `results` field.
+Every valid case also carries `result_paths`, the normalized path of each result
+(section 2.7), and this library does not produce those, so they are not checked.
+The score is therefore about which nodes are selected and in what order, which
+is what `result` asserts; a claim about paths would need the feature first.
 """
 
 import json
@@ -106,9 +111,12 @@ def main():
     print("  attempted             %5d" % attempted)
     print("  passed                %5d  (%.1f%% of attempted, %.1f%% of the suite)"
           % (passed, rate, 100.0 * passed / total))
-    print("  not attempted         %5d  (the filter selector, refused as unsupported)"
+    print("  not attempted         %5d  (match() and search(), refused as unsupported)"
           % unsupported)
     print("A percentage over attempted cases means nothing without that last count.")
+    print("Values only: every valid case also carries result_paths, the normalized")
+    print("path of each result (RFC 9535 section 2.7), which this library does not")
+    print("produce and this scorer therefore does not check.")
 
     floor = float(os.environ.get("JPC_MIN", "100"))
     if rate + 1e-9 < floor:

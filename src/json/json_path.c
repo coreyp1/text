@@ -44,13 +44,21 @@
  * rather than unions, and a caller counting results gets the number the
  * specification gives.
  *
- * **A filter is refused, not ignored.** The filter selector needs an
- * expression evaluator and, for match() and search(), a regular expression
- * engine; neither is here yet. A query containing one is refused at compile
- * time with GTEXT_JSON_E_PATH_UNSUPPORTED rather than evaluated as though the
- * filter were absent, which would select every element of the array instead of
- * the ones asked for - a wrong answer where the refusal is merely an absent
- * feature.
+ * **A construct that cannot be evaluated is refused, not ignored.** match()
+ * and search() need an I-Regexp engine, which this library does not have, so a
+ * query using either is refused at compile time with
+ * GTEXT_JSON_E_PATH_UNSUPPORTED rather than evaluated as though the call were
+ * absent. Dropping a filter and evaluating the rest would select every element
+ * of the array instead of the ones asked for - a wrong answer where the refusal
+ * is merely an absent feature. The same reasoning makes an *ill-typed* query
+ * GTEXT_JSON_E_PATH: 2.4.2 says it is invalid, not false.
+ *
+ * **The filter's recursion is the query's, not the document's.** The
+ * expression parser and evaluator recurse over the expression tree, whose
+ * depth is however many parentheses the caller wrote. Everything that walks the
+ * *document* - the descendant collector, and deep equality for `==` between two
+ * structured values - uses an explicit stack instead, because that depth is the
+ * document's.
  */
 
 #include <stdbool.h>
@@ -73,10 +81,90 @@ typedef enum {
   JSON_PATH_SEL_NAME,     /* ["a"] and .a */
   JSON_PATH_SEL_INDEX,    /* [3], [-1] */
   JSON_PATH_SEL_WILDCARD, /* [*] and .* */
-  JSON_PATH_SEL_SLICE     /* [1:5:2] */
+  JSON_PATH_SEL_SLICE,    /* [1:5:2] */
+  JSON_PATH_SEL_FILTER    /* [?<logical-expr>] */
 } json_path_selector_kind;
 
+/* ---------------------------------------------------------------------- *
+ * The filter selector's expression (2.3.5)
+ * ---------------------------------------------------------------------- */
+
+typedef enum {
+  JSON_PATH_EXPR_OR,
+  JSON_PATH_EXPR_AND,
+  JSON_PATH_EXPR_NOT,
+  JSON_PATH_EXPR_TEST,   /* a query, true when it selects anything */
+  JSON_PATH_EXPR_COMPARE /* comparable <op> comparable */
+} json_path_expr_kind;
+
+typedef enum {
+  JSON_PATH_CMP_EQ,
+  JSON_PATH_CMP_NE,
+  JSON_PATH_CMP_LT,
+  JSON_PATH_CMP_LE,
+  JSON_PATH_CMP_GT,
+  JSON_PATH_CMP_GE
+} json_path_cmp_op;
+
+typedef enum {
+  JSON_PATH_LIT_NUMBER,
+  JSON_PATH_LIT_STRING,
+  JSON_PATH_LIT_TRUE,
+  JSON_PATH_LIT_FALSE,
+  JSON_PATH_LIT_NULL
+} json_path_literal_kind;
+
 typedef struct {
+  json_path_literal_kind kind;
+  double number;
+  int64_t integer;
+  bool has_integer; /* so two large integers compare exactly */
+  char * string;
+  size_t string_len;
+} json_path_literal;
+
+/* A query inside a filter: relative to the current node (@) or to the root
+ * ($). `singular` records whether every segment is a single name or index,
+ * which is what 2.4.1 needs to know before a query may be compared. */
+typedef struct {
+  bool relative;
+  bool singular;
+  struct json_path_segment * segments;
+  size_t segment_count;
+} json_path_query;
+
+typedef enum {
+  JSON_PATH_FN_NONE,
+  JSON_PATH_FN_LENGTH, /* length(ValueType) -> ValueType */
+  JSON_PATH_FN_COUNT,  /* count(NodesType) -> ValueType */
+  JSON_PATH_FN_VALUE   /* value(NodesType) -> ValueType */
+} json_path_fn;
+
+typedef enum {
+  JSON_PATH_COMPARABLE_LITERAL,
+  JSON_PATH_COMPARABLE_QUERY,
+  JSON_PATH_COMPARABLE_FUNCTION
+} json_path_comparable_kind;
+
+typedef struct json_path_comparable {
+  json_path_comparable_kind kind;
+  json_path_literal literal;
+  json_path_query query;
+  json_path_fn fn;
+  struct json_path_comparable * arg; /* the function's one argument */
+} json_path_comparable;
+
+typedef struct json_path_expr {
+  json_path_expr_kind kind;
+  struct json_path_expr * left;
+  struct json_path_expr * right;
+  json_path_cmp_op op;
+  json_path_comparable lhs;
+  json_path_comparable rhs;
+  json_path_query test;
+} json_path_expr;
+
+typedef struct json_path_selector {
   json_path_selector_kind kind;
   /* NAME: the decoded name, owned by the query. */
   char * name;
@@ -89,11 +177,13 @@ typedef struct {
   int64_t step;
   bool has_start;
   bool has_end;
+  /* FILTER: the expression, owned by the selector. */
+  json_path_expr * filter;
 } json_path_selector;
 
-typedef struct {
+typedef struct json_path_segment {
   bool descendant; /* ".." rather than "." or "[" */
-  json_path_selector * selectors;
+  struct json_path_selector * selectors;
   size_t selector_count;
 } json_path_segment;
 
@@ -115,6 +205,16 @@ typedef struct {
   GTEXT_JSON_Status status;
   const char * message;
 } json_path_parser;
+
+static bool json_path_bracket(json_path_parser * p, json_path_segment * seg);
+static bool json_path_shorthand(json_path_parser * p, json_path_segment * seg);
+static json_path_expr * json_path_logical_or(json_path_parser * p);
+static void json_path_free_expr(
+    const GTEXT_Allocator * alloc, json_path_expr * expr);
+static void json_path_free_comparable(
+    const GTEXT_Allocator * alloc, json_path_comparable * c);
+static void json_path_free_segments(const GTEXT_Allocator * alloc,
+    json_path_segment * segments, size_t count);
 
 static void json_path_fail(json_path_parser * p, GTEXT_JSON_Status status,
     const char * message) {
@@ -405,9 +505,11 @@ static bool json_path_selector_parse(
     return out->name != NULL;
   }
   if (c == '?') {
-    json_path_fail(p, GTEXT_JSON_E_PATH_UNSUPPORTED,
-        "the filter selector is not implemented");
-    return false;
+    p->at++;
+    json_path_skip_space(p);
+    out->kind = JSON_PATH_SEL_FILTER;
+    out->filter = json_path_logical_or(p);
+    return out->filter != NULL;
   }
 
   /* An index or a slice. The two are told apart by the colon, which may come
@@ -453,6 +555,540 @@ static bool json_path_selector_parse(
     }
   }
   return true;
+}
+
+/* ---------------------------------------------------------------------- *
+ * The filter expression parser
+ *
+ * Straight recursive descent over 2.3.5's grammar, with "||" lowest, then
+ * "&&", then "!" and the comparisons. The recursion here is bounded by the
+ * *query text*, not by the document, so it is the C stack's - a query with a
+ * thousand nested parentheses is a thousand frames, and a query is written by
+ * the caller rather than arriving as data.
+ * ---------------------------------------------------------------------- */
+
+/* The segments of a query inside a filter, and whether they are all singular.
+ * 2.4.1: only a singular query - every segment one name or one index - may be
+ * compared, because a comparison needs a value and a query yields a list. */
+static bool json_path_filter_query(json_path_parser * p, json_path_query * out) {
+  memset(out, 0, sizeof(*out));
+  const char c = json_path_peek(p);
+  if (c == '@') {
+    out->relative = true;
+  }
+  else if (c == '$') {
+    out->relative = false;
+  }
+  else {
+    json_path_fail(p, GTEXT_JSON_E_PATH, "expected '@' or '$'");
+    return false;
+  }
+  p->at++;
+
+  out->singular = true;
+  size_t capacity = 0;
+  for (;;) {
+    /* `segments = *(S segment)` and `singular-query-segments = *(S (...))`, so
+     * blank space comes before each segment: `length(@ .a .b)` is a query with
+     * two segments, and the compliance suite has eight cases saying so. The
+     * position is restored when what follows the space is not a segment, so
+     * the space in `@.a == 1` still belongs to the operator. */
+    const size_t before_space = p->at;
+    json_path_skip_space(p);
+    const char next = json_path_peek(p);
+    if (next != '.' && next != '[') {
+      p->at = before_space;
+      break;
+    }
+    if (out->segment_count == capacity) {
+      const size_t grown_capacity = capacity ? capacity * 2 : 4;
+      json_path_segment * grown = (json_path_segment *)gtext_allocator_realloc(
+          p->alloc, out->segments, grown_capacity * sizeof(json_path_segment));
+      if (!grown) {
+        json_path_fail(p, GTEXT_JSON_E_OOM, "out of memory");
+        return false;
+      }
+      out->segments = grown;
+      capacity = grown_capacity;
+    }
+    json_path_segment * seg = &out->segments[out->segment_count];
+    memset(seg, 0, sizeof(*seg));
+
+    bool ok;
+    if (next == '[') {
+      ok = json_path_bracket(p, seg);
+    }
+    else {
+      p->at++;
+      if (json_path_peek(p) == '.') {
+        p->at++;
+        seg->descendant = true;
+        ok = (json_path_peek(p) == '[') ? json_path_bracket(p, seg)
+                                        : json_path_shorthand(p, seg);
+      }
+      else {
+        ok = json_path_shorthand(p, seg);
+      }
+    }
+    if (!ok) {
+      for (size_t j = 0; j < seg->selector_count; j++) {
+        gtext_allocator_free(p->alloc, seg->selectors[j].name);
+        json_path_free_expr(p->alloc, seg->selectors[j].filter);
+      }
+      gtext_allocator_free(p->alloc, seg->selectors);
+      return false;
+    }
+
+    /* Singular means one selector, and that selector a name or an index, and
+     * the segment a child rather than a descendant. */
+    if (seg->descendant || seg->selector_count != 1
+        || (seg->selectors[0].kind != JSON_PATH_SEL_NAME
+            && seg->selectors[0].kind != JSON_PATH_SEL_INDEX)) {
+      out->singular = false;
+    }
+    out->segment_count++;
+  }
+  return true;
+}
+
+/* A JSON number as a literal (2.3.5.1 number). */
+static bool json_path_number_literal(
+    json_path_parser * p, json_path_literal * out) {
+  const size_t start = p->at;
+  if (json_path_peek(p) == '-') {
+    p->at++;
+  }
+  if (!json_path_is_digit(json_path_peek(p))) {
+    json_path_fail(p, GTEXT_JSON_E_PATH, "expected a number");
+    return false;
+  }
+  if (json_path_peek(p) == '0') {
+    p->at++;
+    if (json_path_is_digit(json_path_peek(p))) {
+      json_path_fail(p, GTEXT_JSON_E_PATH, "a number has no leading zero");
+      return false;
+    }
+  }
+  else {
+    while (json_path_is_digit(json_path_peek(p))) {
+      p->at++;
+    }
+  }
+  bool integral = true;
+  if (json_path_peek(p) == '.') {
+    integral = false;
+    p->at++;
+    if (!json_path_is_digit(json_path_peek(p))) {
+      json_path_fail(p, GTEXT_JSON_E_PATH, "a fraction wants a digit");
+      return false;
+    }
+    while (json_path_is_digit(json_path_peek(p))) {
+      p->at++;
+    }
+  }
+  if (json_path_peek(p) == 'e' || json_path_peek(p) == 'E') {
+    integral = false;
+    p->at++;
+    if (json_path_peek(p) == '+' || json_path_peek(p) == '-') {
+      p->at++;
+    }
+    if (!json_path_is_digit(json_path_peek(p))) {
+      json_path_fail(p, GTEXT_JSON_E_PATH, "an exponent wants a digit");
+      return false;
+    }
+    while (json_path_is_digit(json_path_peek(p))) {
+      p->at++;
+    }
+  }
+
+  /* The text is a JSON number, which json_parse_number() already knows how to
+   * read - including keeping an exact int64 where there is one, which is what
+   * lets two large integers compare by value rather than through a double. */
+  const size_t len = p->at - start;
+  json_number num;
+  json_position pos = {0, 1, 1};
+  GTEXT_JSON_Parse_Options number_opts = gtext_json_parse_options_default();
+  number_opts.parse_int64 = true;
+  number_opts.parse_double = true;
+  number_opts.preserve_number_lexeme = false;
+  if (json_parse_number(p->text + start, len, &num, &pos, &number_opts)
+      != GTEXT_JSON_OK) {
+    json_path_fail(p, GTEXT_JSON_E_PATH, "not a number");
+    return false;
+  }
+  out->kind = JSON_PATH_LIT_NUMBER;
+  out->number = (num.flags & JSON_NUMBER_HAS_DOUBLE) ? num.dbl : 0.0;
+  out->has_integer = integral && (num.flags & JSON_NUMBER_HAS_I64) != 0;
+  out->integer = out->has_integer ? num.i64 : 0;
+  if (!(num.flags & JSON_NUMBER_HAS_DOUBLE) && out->has_integer) {
+    out->number = (double)out->integer;
+  }
+  json_number_destroy(&num);
+  return true;
+}
+
+static bool json_path_word(json_path_parser * p, const char * word) {
+  const size_t len = strlen(word);
+  if (p->at + len > p->len || memcmp(p->text + p->at, word, len) != 0) {
+    return false;
+  }
+  p->at += len;
+  return true;
+}
+
+/* A word that has to end where it ends: `true` is the literal, `trueish` is
+ * not it followed by junk. The operators do not need this - nothing follows
+ * "==" that could continue it - and must not have it, because what follows an
+ * operator is usually a name character. */
+static bool json_path_keyword(json_path_parser * p, const char * word) {
+  const size_t len = strlen(word);
+  if (p->at + len > p->len || memcmp(p->text + p->at, word, len) != 0) {
+    return false;
+  }
+  if (p->at + len < p->len
+      && json_path_name_char((unsigned char)p->text[p->at + len])) {
+    return false;
+  }
+  p->at += len;
+  return true;
+}
+
+static bool json_path_comparable_parse(
+    json_path_parser * p, json_path_comparable * out);
+
+/* function-expr, restricted to the three this library evaluates.
+ *
+ * match() and search() are refused as unsupported rather than as invalid: they
+ * are standard and well-formed, and what is missing is an I-Regexp engine.
+ * Their absence is why a filter that uses them cannot be evaluated, and saying
+ * "unsupported" rather than "invalid" tells a caller which of the two it is. */
+static bool json_path_function(json_path_parser * p, json_path_comparable * out) {
+  const size_t start = p->at;
+  while (!json_path_at_end(p)
+      && ((p->text[p->at] >= 'a' && p->text[p->at] <= 'z')
+          || p->text[p->at] == '_')) {
+    p->at++;
+  }
+  const size_t name_len = p->at - start;
+  const char * name = p->text + start;
+
+  if (json_path_peek(p) != '(') {
+    json_path_fail(p, GTEXT_JSON_E_PATH, "expected '(' after a function name");
+    return false;
+  }
+
+  json_path_fn fn = JSON_PATH_FN_NONE;
+  if (name_len == 6 && memcmp(name, "length", 6) == 0) {
+    fn = JSON_PATH_FN_LENGTH;
+  }
+  else if (name_len == 5 && memcmp(name, "count", 5) == 0) {
+    fn = JSON_PATH_FN_COUNT;
+  }
+  else if (name_len == 5 && memcmp(name, "value", 5) == 0) {
+    fn = JSON_PATH_FN_VALUE;
+  }
+  else if ((name_len == 5 && memcmp(name, "match", 5) == 0)
+      || (name_len == 6 && memcmp(name, "search", 6) == 0)) {
+    json_path_fail(p, GTEXT_JSON_E_PATH_UNSUPPORTED,
+        "match() and search() need a regular expression engine");
+    return false;
+  }
+  else {
+    /* 2.4.1: a function this implementation does not know is not a
+     * well-formed query, because the name has to be registered. */
+    json_path_fail(p, GTEXT_JSON_E_PATH, "unknown function");
+    return false;
+  }
+
+  p->at++; /* '(' */
+  json_path_skip_space(p);
+  json_path_comparable * arg = (json_path_comparable *)gtext_allocator_calloc(
+      p->alloc, 1, sizeof(json_path_comparable));
+  if (!arg) {
+    json_path_fail(p, GTEXT_JSON_E_OOM, "out of memory");
+    return false;
+  }
+  if (!json_path_comparable_parse(p, arg)) {
+    json_path_free_comparable(p->alloc, arg);
+    gtext_allocator_free(p->alloc, arg);
+    return false;
+  }
+  json_path_skip_space(p);
+  if (json_path_peek(p) != ')') {
+    /* One argument is all any of the three takes, so a comma here is an arity
+     * error rather than a syntax one - and 2.4.1 makes a wrong arity invalid. */
+    json_path_fail(p, GTEXT_JSON_E_PATH,
+        "this function takes exactly one argument");
+    json_path_free_comparable(p->alloc, arg);
+    gtext_allocator_free(p->alloc, arg);
+    return false;
+  }
+  p->at++;
+
+  /* The type rules of 2.4.2/2.4.3, which make an ill-typed query invalid.
+   * count() and value() take a node list, so their argument has to be a query;
+   * length() takes a value, so a query argument has to be a singular one. */
+  if (fn == JSON_PATH_FN_COUNT || fn == JSON_PATH_FN_VALUE) {
+    if (arg->kind != JSON_PATH_COMPARABLE_QUERY) {
+      json_path_fail(p, GTEXT_JSON_E_PATH,
+          "count() and value() take a query, not a value");
+      json_path_free_comparable(p->alloc, arg);
+      gtext_allocator_free(p->alloc, arg);
+      return false;
+    }
+  }
+  else if (arg->kind == JSON_PATH_COMPARABLE_QUERY && !arg->query.singular) {
+    json_path_fail(p, GTEXT_JSON_E_PATH,
+        "length() takes a value, so its query must be singular");
+    json_path_free_comparable(p->alloc, arg);
+    gtext_allocator_free(p->alloc, arg);
+    return false;
+  }
+
+  out->kind = JSON_PATH_COMPARABLE_FUNCTION;
+  out->fn = fn;
+  out->arg = arg;
+  return true;
+}
+
+/* comparable = literal / singular-query / function-expr - and, where this is a
+ * function's argument, a query that need not be singular. The caller checks
+ * that. */
+static bool json_path_comparable_parse(
+    json_path_parser * p, json_path_comparable * out) {
+  memset(out, 0, sizeof(*out));
+  const char c = json_path_peek(p);
+
+  if (c == '@' || c == '$') {
+    out->kind = JSON_PATH_COMPARABLE_QUERY;
+    return json_path_filter_query(p, &out->query);
+  }
+  if (c == '\'' || c == '"') {
+    out->kind = JSON_PATH_COMPARABLE_LITERAL;
+    out->literal.kind = JSON_PATH_LIT_STRING;
+    out->literal.string = json_path_string(p, &out->literal.string_len);
+    return out->literal.string != NULL;
+  }
+  if (c == '-' || json_path_is_digit(c)) {
+    out->kind = JSON_PATH_COMPARABLE_LITERAL;
+    return json_path_number_literal(p, &out->literal);
+  }
+  if (json_path_keyword(p, "true")) {
+    out->kind = JSON_PATH_COMPARABLE_LITERAL;
+    out->literal.kind = JSON_PATH_LIT_TRUE;
+    return true;
+  }
+  if (json_path_keyword(p, "false")) {
+    out->kind = JSON_PATH_COMPARABLE_LITERAL;
+    out->literal.kind = JSON_PATH_LIT_FALSE;
+    return true;
+  }
+  if (json_path_keyword(p, "null")) {
+    out->kind = JSON_PATH_COMPARABLE_LITERAL;
+    out->literal.kind = JSON_PATH_LIT_NULL;
+    return true;
+  }
+  if ((c >= 'a' && c <= 'z') || c == '_') {
+    return json_path_function(p, out);
+  }
+  json_path_fail(p, GTEXT_JSON_E_PATH, "expected a value, a query or a function");
+  return false;
+}
+
+static json_path_expr * json_path_new_expr(
+    json_path_parser * p, json_path_expr_kind kind) {
+  json_path_expr * expr = (json_path_expr *)gtext_allocator_calloc(
+      p->alloc, 1, sizeof(json_path_expr));
+  if (!expr) {
+    json_path_fail(p, GTEXT_JSON_E_OOM, "out of memory");
+    return NULL;
+  }
+  expr->kind = kind;
+  return expr;
+}
+
+/* basic-expr = paren-expr / comparison-expr / test-expr */
+static json_path_expr * json_path_basic(json_path_parser * p) {
+  bool negated = false;
+  if (json_path_peek(p) == '!') {
+    p->at++;
+    json_path_skip_space(p);
+    negated = true;
+  }
+
+  json_path_expr * inner = NULL;
+
+  if (json_path_peek(p) == '(') {
+    p->at++;
+    json_path_skip_space(p);
+    inner = json_path_logical_or(p);
+    if (!inner) {
+      return NULL;
+    }
+    json_path_skip_space(p);
+    if (json_path_peek(p) != ')') {
+      json_path_fail(p, GTEXT_JSON_E_PATH, "expected ')'");
+      json_path_free_expr(p->alloc, inner);
+      return NULL;
+    }
+    p->at++;
+  }
+  else {
+    /* A comparable, and then either a comparison operator or nothing - in
+     * which case this is a test expression and the comparable has to have been
+     * a query. */
+    json_path_comparable first;
+    if (!json_path_comparable_parse(p, &first)) {
+      return NULL;
+    }
+    const size_t after_first = p->at;
+    json_path_skip_space(p);
+
+    json_path_cmp_op op = JSON_PATH_CMP_EQ;
+    bool have_op = true;
+    if (json_path_word(p, "==")) {
+      op = JSON_PATH_CMP_EQ;
+    }
+    else if (json_path_word(p, "!=")) {
+      op = JSON_PATH_CMP_NE;
+    }
+    else if (json_path_word(p, "<=")) {
+      op = JSON_PATH_CMP_LE;
+    }
+    else if (json_path_word(p, ">=")) {
+      op = JSON_PATH_CMP_GE;
+    }
+    else if (json_path_word(p, "<")) {
+      op = JSON_PATH_CMP_LT;
+    }
+    else if (json_path_word(p, ">")) {
+      op = JSON_PATH_CMP_GT;
+    }
+    else {
+      have_op = false;
+      p->at = after_first; /* the space belonged to whatever follows */
+    }
+
+    if (!have_op) {
+      /* test-expr: a query, true when it selects at least one node. A function
+       * cannot stand here - of the standard five only match() and search()
+       * return a logical value, and those are refused above - and neither can
+       * a literal. 2.4.3 makes either of those ill-typed, which is invalid. */
+      if (first.kind != JSON_PATH_COMPARABLE_QUERY) {
+        json_path_fail(p, GTEXT_JSON_E_PATH,
+            "this expression is not a test: it has no comparison");
+        json_path_free_comparable(p->alloc, &first);
+        return NULL;
+      }
+      inner = json_path_new_expr(p, JSON_PATH_EXPR_TEST);
+      if (!inner) {
+        json_path_free_comparable(p->alloc, &first);
+        return NULL;
+      }
+      inner->test = first.query;
+      /* The query's segments moved into the expression. */
+      memset(&first, 0, sizeof(first));
+    }
+    else {
+      json_path_skip_space(p);
+      json_path_comparable second;
+      if (!json_path_comparable_parse(p, &second)) {
+        json_path_free_comparable(p->alloc, &first);
+        return NULL;
+      }
+      /* 2.4.1: only a singular query may be compared. A non-singular one is
+       * ill-typed rather than false. */
+      if ((first.kind == JSON_PATH_COMPARABLE_QUERY && !first.query.singular)
+          || (second.kind == JSON_PATH_COMPARABLE_QUERY
+              && !second.query.singular)) {
+        json_path_fail(p, GTEXT_JSON_E_PATH,
+            "only a singular query may be compared");
+        json_path_free_comparable(p->alloc, &first);
+        json_path_free_comparable(p->alloc, &second);
+        return NULL;
+      }
+      inner = json_path_new_expr(p, JSON_PATH_EXPR_COMPARE);
+      if (!inner) {
+        json_path_free_comparable(p->alloc, &first);
+        json_path_free_comparable(p->alloc, &second);
+        return NULL;
+      }
+      inner->op = op;
+      inner->lhs = first;
+      inner->rhs = second;
+    }
+  }
+
+  if (!negated) {
+    return inner;
+  }
+  json_path_expr * not_expr = json_path_new_expr(p, JSON_PATH_EXPR_NOT);
+  if (!not_expr) {
+    json_path_free_expr(p->alloc, inner);
+    return NULL;
+  }
+  not_expr->left = inner;
+  return not_expr;
+}
+
+static json_path_expr * json_path_logical_and(json_path_parser * p) {
+  json_path_expr * left = json_path_basic(p);
+  if (!left) {
+    return NULL;
+  }
+  for (;;) {
+    const size_t before = p->at;
+    json_path_skip_space(p);
+    if (!json_path_word(p, "&&")) {
+      p->at = before;
+      return left;
+    }
+    json_path_skip_space(p);
+    json_path_expr * right = json_path_basic(p);
+    if (!right) {
+      json_path_free_expr(p->alloc, left);
+      return NULL;
+    }
+    json_path_expr * both = json_path_new_expr(p, JSON_PATH_EXPR_AND);
+    if (!both) {
+      json_path_free_expr(p->alloc, left);
+      json_path_free_expr(p->alloc, right);
+      return NULL;
+    }
+    both->left = left;
+    both->right = right;
+    left = both;
+  }
+}
+
+static json_path_expr * json_path_logical_or(json_path_parser * p) {
+  json_path_expr * left = json_path_logical_and(p);
+  if (!left) {
+    return NULL;
+  }
+  for (;;) {
+    const size_t before = p->at;
+    json_path_skip_space(p);
+    if (!json_path_word(p, "||")) {
+      p->at = before;
+      return left;
+    }
+    json_path_skip_space(p);
+    json_path_expr * right = json_path_logical_and(p);
+    if (!right) {
+      json_path_free_expr(p->alloc, left);
+      return NULL;
+    }
+    json_path_expr * either = json_path_new_expr(p, JSON_PATH_EXPR_OR);
+    if (!either) {
+      json_path_free_expr(p->alloc, left);
+      json_path_free_expr(p->alloc, right);
+      return NULL;
+    }
+    either->left = left;
+    either->right = right;
+    left = either;
+  }
 }
 
 /* A bracketed selection: at least one selector, comma-separated. */
@@ -524,6 +1160,50 @@ static bool json_path_shorthand(json_path_parser * p, json_path_segment * seg) {
   return true;
 }
 
+static void json_path_free_query(
+    const GTEXT_Allocator * alloc, json_path_query * q) {
+  json_path_free_segments(alloc, q->segments, q->segment_count);
+  q->segments = NULL;
+  q->segment_count = 0;
+}
+
+static void json_path_free_comparable(
+    const GTEXT_Allocator * alloc, json_path_comparable * c) {
+  switch (c->kind) {
+  case JSON_PATH_COMPARABLE_LITERAL:
+    gtext_allocator_free(alloc, c->literal.string);
+    c->literal.string = NULL;
+    break;
+  case JSON_PATH_COMPARABLE_QUERY:
+    json_path_free_query(alloc, &c->query);
+    break;
+  case JSON_PATH_COMPARABLE_FUNCTION:
+    if (c->arg) {
+      json_path_free_comparable(alloc, c->arg);
+      gtext_allocator_free(alloc, c->arg);
+      c->arg = NULL;
+    }
+    break;
+  }
+}
+
+static void json_path_free_expr(
+    const GTEXT_Allocator * alloc, json_path_expr * expr) {
+  if (!expr) {
+    return;
+  }
+  json_path_free_expr(alloc, expr->left);
+  json_path_free_expr(alloc, expr->right);
+  if (expr->kind == JSON_PATH_EXPR_COMPARE) {
+    json_path_free_comparable(alloc, &expr->lhs);
+    json_path_free_comparable(alloc, &expr->rhs);
+  }
+  else if (expr->kind == JSON_PATH_EXPR_TEST) {
+    json_path_free_query(alloc, &expr->test);
+  }
+  gtext_allocator_free(alloc, expr);
+}
+
 static void json_path_free_segments(const GTEXT_Allocator * alloc,
     json_path_segment * segments, size_t count) {
   if (!segments) {
@@ -532,6 +1212,7 @@ static void json_path_free_segments(const GTEXT_Allocator * alloc,
   for (size_t i = 0; i < count; i++) {
     for (size_t j = 0; j < segments[i].selector_count; j++) {
       gtext_allocator_free(alloc, segments[i].selectors[j].name);
+      json_path_free_expr(alloc, segments[i].selectors[j].filter);
     }
     gtext_allocator_free(alloc, segments[i].selectors);
   }
@@ -762,13 +1443,580 @@ static void json_path_slice_bounds(const json_path_selector * sel, size_t len,
   *out_upper = end;
 }
 
+/* ---------------------------------------------------------------------- *
+ * Evaluating a filter expression
+ * ---------------------------------------------------------------------- */
+
+/* What a comparable evaluates to (2.4.1's ValueType): nothing at all, a node
+ * from the document, or a value this evaluator made - a literal from the query,
+ * or a number from length() or count(). */
+typedef enum {
+  JSON_PATH_FV_NOTHING,
+  JSON_PATH_FV_NODE,
+  JSON_PATH_FV_NUMBER,
+  JSON_PATH_FV_STRING,
+  JSON_PATH_FV_BOOL,
+  JSON_PATH_FV_NULL
+} json_path_fv_kind;
+
+typedef struct {
+  json_path_fv_kind kind;
+  const GTEXT_JSON_Value * node;
+  double number;
+  int64_t integer;
+  bool has_integer;
+  const char * string;
+  size_t string_len;
+  bool boolean;
+} json_path_fv;
+
+/* What the evaluator needs that a node does not carry: the document's root,
+ * for a filter's absolute queries, and the allocator. */
+typedef struct {
+  const GTEXT_JSON_Value * root;
+  const GTEXT_Allocator * alloc;
+  GTEXT_JSON_Status status;
+} json_path_eval;
+
+static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
+    const json_path_segment * segments, size_t count,
+    const GTEXT_JSON_Value * start, json_path_list * out);
+
+/* A node as a comparable value, so that a literal and a document value are
+ * compared by the same code. */
+static json_path_fv json_path_fv_of_node(const GTEXT_JSON_Value * node) {
+  json_path_fv fv;
+  memset(&fv, 0, sizeof(fv));
+  if (!node) {
+    fv.kind = JSON_PATH_FV_NOTHING;
+    return fv;
+  }
+  switch (gtext_json_typeof(node)) {
+  case GTEXT_JSON_NUMBER: {
+    fv.kind = JSON_PATH_FV_NUMBER;
+    int64_t i64 = 0;
+    if (gtext_json_get_i64(node, &i64) == GTEXT_JSON_OK) {
+      fv.has_integer = true;
+      fv.integer = i64;
+      fv.number = (double)i64;
+    }
+    double d = 0.0;
+    if (gtext_json_get_double(node, &d) == GTEXT_JSON_OK) {
+      fv.number = d;
+    }
+    fv.node = node;
+    return fv;
+  }
+  case GTEXT_JSON_STRING: {
+    fv.kind = JSON_PATH_FV_STRING;
+    const char * s = NULL;
+    size_t len = 0;
+    gtext_json_get_string(node, &s, &len);
+    fv.string = s;
+    fv.string_len = len;
+    fv.node = node;
+    return fv;
+  }
+  case GTEXT_JSON_BOOL: {
+    fv.kind = JSON_PATH_FV_BOOL;
+    bool b = false;
+    gtext_json_get_bool(node, &b);
+    fv.boolean = b;
+    fv.node = node;
+    return fv;
+  }
+  case GTEXT_JSON_NULL:
+    fv.kind = JSON_PATH_FV_NULL;
+    fv.node = node;
+    return fv;
+  default:
+    /* An array or an object: comparable only as a whole, by deep equality. */
+    fv.kind = JSON_PATH_FV_NODE;
+    fv.node = node;
+    return fv;
+  }
+}
+
+/*
+ * Deep equality of two nodes (2.3.5.2.2): arrays elementwise in order, objects
+ * by name with order ignored, everything else by value.
+ *
+ * Iterative, with a stack of pairs, for the reason the descendant walk is: the
+ * depth is the caller's document's.
+ */
+typedef struct {
+  const GTEXT_JSON_Value * a;
+  const GTEXT_JSON_Value * b;
+} json_path_pair;
+
+static bool json_path_scalar_equal(
+    const GTEXT_JSON_Value * a, const GTEXT_JSON_Value * b);
+
+static bool json_path_deep_equal(json_path_eval * ev,
+    const GTEXT_JSON_Value * a, const GTEXT_JSON_Value * b) {
+  json_path_pair * stack = NULL;
+  size_t count = 0;
+  size_t capacity = 0;
+  bool equal = true;
+
+  const json_path_pair first = {a, b};
+  json_path_pair * grown = (json_path_pair *)gtext_allocator_realloc(
+      ev->alloc, stack, 8 * sizeof(json_path_pair));
+  if (!grown) {
+    ev->status = GTEXT_JSON_E_OOM;
+    return false;
+  }
+  stack = grown;
+  capacity = 8;
+  stack[count++] = first;
+
+  while (count > 0 && equal) {
+    const json_path_pair pair = stack[--count];
+    const GTEXT_JSON_Type ta = gtext_json_typeof(pair.a);
+    const GTEXT_JSON_Type tb = gtext_json_typeof(pair.b);
+    if (ta != tb) {
+      equal = false;
+      break;
+    }
+    if (ta == GTEXT_JSON_ARRAY) {
+      const size_t na = gtext_json_array_size(pair.a);
+      if (na != gtext_json_array_size(pair.b)) {
+        equal = false;
+        break;
+      }
+      for (size_t i = 0; i < na; i++) {
+        if (count == capacity) {
+          const size_t next_capacity = capacity * 2;
+          json_path_pair * bigger = (json_path_pair *)gtext_allocator_realloc(
+              ev->alloc, stack, next_capacity * sizeof(json_path_pair));
+          if (!bigger) {
+            ev->status = GTEXT_JSON_E_OOM;
+            equal = false;
+            break;
+          }
+          stack = bigger;
+          capacity = next_capacity;
+        }
+        stack[count].a = gtext_json_array_get(pair.a, i);
+        stack[count].b = gtext_json_array_get(pair.b, i);
+        count++;
+      }
+      continue;
+    }
+    if (ta == GTEXT_JSON_OBJECT) {
+      const size_t na = gtext_json_object_size(pair.a);
+      if (na != gtext_json_object_size(pair.b)) {
+        equal = false;
+        break;
+      }
+      for (size_t i = 0; i < na; i++) {
+        size_t key_len = 0;
+        const char * key = gtext_json_object_key(pair.a, i, &key_len);
+        const GTEXT_JSON_Value * other =
+            gtext_json_object_get(pair.b, key, key_len);
+        if (!other) {
+          equal = false; /* a name the other object does not have */
+          break;
+        }
+        if (count == capacity) {
+          const size_t next_capacity = capacity * 2;
+          json_path_pair * bigger = (json_path_pair *)gtext_allocator_realloc(
+              ev->alloc, stack, next_capacity * sizeof(json_path_pair));
+          if (!bigger) {
+            ev->status = GTEXT_JSON_E_OOM;
+            equal = false;
+            break;
+          }
+          stack = bigger;
+          capacity = next_capacity;
+        }
+        stack[count].a = gtext_json_object_value(pair.a, i);
+        stack[count].b = other;
+        count++;
+      }
+      continue;
+    }
+    if (!json_path_scalar_equal(pair.a, pair.b)) {
+      equal = false;
+    }
+  }
+
+  gtext_allocator_free(ev->alloc, stack);
+  return equal;
+}
+
+static bool json_path_scalar_equal(
+    const GTEXT_JSON_Value * a, const GTEXT_JSON_Value * b) {
+  switch (gtext_json_typeof(a)) {
+  case GTEXT_JSON_NULL:
+    return true;
+  case GTEXT_JSON_BOOL: {
+    bool ba = false;
+    bool bb = false;
+    gtext_json_get_bool(a, &ba);
+    gtext_json_get_bool(b, &bb);
+    return ba == bb;
+  }
+  case GTEXT_JSON_STRING: {
+    const char * sa = NULL;
+    const char * sb = NULL;
+    size_t la = 0;
+    size_t lb = 0;
+    gtext_json_get_string(a, &sa, &la);
+    gtext_json_get_string(b, &sb, &lb);
+    return la == lb && memcmp(sa, sb, la) == 0;
+  }
+  case GTEXT_JSON_NUMBER: {
+    int64_t ia = 0;
+    int64_t ib = 0;
+    if (gtext_json_get_i64(a, &ia) == GTEXT_JSON_OK
+        && gtext_json_get_i64(b, &ib) == GTEXT_JSON_OK) {
+      return ia == ib;
+    }
+    double da = 0.0;
+    double db = 0.0;
+    if (gtext_json_get_double(a, &da) != GTEXT_JSON_OK
+        || gtext_json_get_double(b, &db) != GTEXT_JSON_OK) {
+      return false;
+    }
+    return da == db;
+  }
+  default:
+    return false;
+  }
+}
+
+/* Two comparables, compared as 2.3.5.2.2 says.
+ *
+ * Nothing equals only Nothing, and orders against nothing at all - which makes
+ * every ordering comparison against a missing member false, both ways round.
+ * Numbers compare by value, exactly where both have an int64. Strings compare
+ * by their bytes, which for well-formed UTF-8 is codepoint order. Arrays and
+ * objects compare only for equality. A number against a string is unequal and
+ * unordered rather than an error. */
+static bool json_path_compare(json_path_eval * ev, json_path_cmp_op op,
+    const json_path_fv * a, const json_path_fv * b) {
+  const bool a_nothing = a->kind == JSON_PATH_FV_NOTHING;
+  const bool b_nothing = b->kind == JSON_PATH_FV_NOTHING;
+  if (a_nothing || b_nothing) {
+    switch (op) {
+    case JSON_PATH_CMP_EQ:
+      return a_nothing && b_nothing;
+    case JSON_PATH_CMP_NE:
+      return !(a_nothing && b_nothing);
+    default:
+      return false; /* unordered */
+    }
+  }
+
+  int order = 0;      /* -1, 0, 1 when comparable */
+  bool ordered = false;
+  bool equal = false;
+
+  if (a->kind == JSON_PATH_FV_NUMBER && b->kind == JSON_PATH_FV_NUMBER) {
+    if (a->has_integer && b->has_integer) {
+      order = (a->integer < b->integer) ? -1 : (a->integer > b->integer ? 1 : 0);
+    }
+    else {
+      order = (a->number < b->number) ? -1 : (a->number > b->number ? 1 : 0);
+    }
+    ordered = true;
+    equal = order == 0;
+  }
+  else if (a->kind == JSON_PATH_FV_STRING && b->kind == JSON_PATH_FV_STRING) {
+    const size_t shortest = a->string_len < b->string_len ? a->string_len
+                                                          : b->string_len;
+    int cmp = shortest ? memcmp(a->string, b->string, shortest) : 0;
+    if (cmp == 0) {
+      cmp = (a->string_len < b->string_len)
+          ? -1
+          : (a->string_len > b->string_len ? 1 : 0);
+    }
+    order = cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
+    ordered = true;
+    equal = order == 0;
+  }
+  else if (a->kind == JSON_PATH_FV_NULL && b->kind == JSON_PATH_FV_NULL) {
+    equal = true;
+  }
+  else if (a->kind == JSON_PATH_FV_BOOL && b->kind == JSON_PATH_FV_BOOL) {
+    equal = a->boolean == b->boolean;
+  }
+  else if (a->kind == JSON_PATH_FV_NODE && b->kind == JSON_PATH_FV_NODE) {
+    equal = json_path_deep_equal(ev, a->node, b->node);
+  }
+
+  switch (op) {
+  case JSON_PATH_CMP_EQ:
+    return equal;
+  case JSON_PATH_CMP_NE:
+    return !equal;
+  case JSON_PATH_CMP_LT:
+    return ordered && order < 0;
+  case JSON_PATH_CMP_GT:
+    return ordered && order > 0;
+  /* 2.3.5.2.2 defines these as "less than or equal" rather than as an ordering
+   * of their own, and that matters where two values are equal but unordered:
+   * `null <= null` and `true >= true` are true, and asking for an order first
+   * made them false. Six compliance cases. */
+  case JSON_PATH_CMP_LE:
+    return equal || (ordered && order < 0);
+  case JSON_PATH_CMP_GE:
+    return equal || (ordered && order > 0);
+  }
+  return false;
+}
+
+/* The node list a query inside a filter selects, with @ bound to `current`. */
+static GTEXT_JSON_Status json_path_run_query(json_path_eval * ev,
+    const json_path_query * query, const GTEXT_JSON_Value * current,
+    json_path_list * out) {
+  const GTEXT_JSON_Value * start = query->relative ? current : ev->root;
+  return json_path_apply_segments(
+      ev, query->segments, query->segment_count, start, out);
+}
+
+/* The number of Unicode scalar values in a UTF-8 string, which is what
+ * length() counts for a string (2.4.4) - not its bytes. A byte that is not a
+ * continuation byte begins a character. */
+static size_t json_path_codepoint_count(const char * s, size_t len) {
+  size_t n = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (((unsigned char)s[i] & 0xC0) != 0x80) {
+      n++;
+    }
+  }
+  return n;
+}
+
+static json_path_fv json_path_eval_comparable(json_path_eval * ev,
+    const json_path_comparable * c, const GTEXT_JSON_Value * current);
+
+static json_path_fv json_path_eval_function(json_path_eval * ev,
+    const json_path_comparable * c, const GTEXT_JSON_Value * current) {
+  json_path_fv result;
+  memset(&result, 0, sizeof(result));
+  result.kind = JSON_PATH_FV_NOTHING;
+
+  switch (c->fn) {
+  case JSON_PATH_FN_COUNT: {
+    json_path_list nodes;
+    memset(&nodes, 0, sizeof(nodes));
+    nodes.alloc = ev->alloc;
+    const GTEXT_JSON_Status status =
+        json_path_run_query(ev, &c->arg->query, current, &nodes);
+    if (status != GTEXT_JSON_OK) {
+      ev->status = status;
+      json_path_list_free(&nodes);
+      return result;
+    }
+    result.kind = JSON_PATH_FV_NUMBER;
+    result.has_integer = true;
+    result.integer = (int64_t)nodes.count;
+    result.number = (double)nodes.count;
+    json_path_list_free(&nodes);
+    return result;
+  }
+
+  case JSON_PATH_FN_VALUE: {
+    /* 2.4.8: one node gives its value, any other count gives Nothing. */
+    json_path_list nodes;
+    memset(&nodes, 0, sizeof(nodes));
+    nodes.alloc = ev->alloc;
+    const GTEXT_JSON_Status status =
+        json_path_run_query(ev, &c->arg->query, current, &nodes);
+    if (status != GTEXT_JSON_OK) {
+      ev->status = status;
+      json_path_list_free(&nodes);
+      return result;
+    }
+    if (nodes.count == 1) {
+      result = json_path_fv_of_node(nodes.items[0]);
+    }
+    json_path_list_free(&nodes);
+    return result;
+  }
+
+  case JSON_PATH_FN_LENGTH: {
+    const json_path_fv arg = json_path_eval_comparable(ev, c->arg, current);
+    switch (arg.kind) {
+    case JSON_PATH_FV_STRING:
+      result.kind = JSON_PATH_FV_NUMBER;
+      result.has_integer = true;
+      result.integer =
+          (int64_t)json_path_codepoint_count(arg.string, arg.string_len);
+      result.number = (double)result.integer;
+      return result;
+    case JSON_PATH_FV_NODE: {
+      const GTEXT_JSON_Type type = gtext_json_typeof(arg.node);
+      if (type == GTEXT_JSON_ARRAY) {
+        result.kind = JSON_PATH_FV_NUMBER;
+        result.has_integer = true;
+        result.integer = (int64_t)gtext_json_array_size(arg.node);
+        result.number = (double)result.integer;
+      }
+      else if (type == GTEXT_JSON_OBJECT) {
+        result.kind = JSON_PATH_FV_NUMBER;
+        result.has_integer = true;
+        result.integer = (int64_t)gtext_json_object_size(arg.node);
+        result.number = (double)result.integer;
+      }
+      return result;
+    }
+    default:
+      /* A number, a boolean, a null, or Nothing: length() is Nothing. */
+      return result;
+    }
+  }
+
+  case JSON_PATH_FN_NONE:
+    break;
+  }
+  return result;
+}
+
+static json_path_fv json_path_eval_comparable(json_path_eval * ev,
+    const json_path_comparable * c, const GTEXT_JSON_Value * current) {
+  json_path_fv result;
+  memset(&result, 0, sizeof(result));
+  result.kind = JSON_PATH_FV_NOTHING;
+
+  switch (c->kind) {
+  case JSON_PATH_COMPARABLE_LITERAL:
+    switch (c->literal.kind) {
+    case JSON_PATH_LIT_NUMBER:
+      result.kind = JSON_PATH_FV_NUMBER;
+      result.number = c->literal.number;
+      result.has_integer = c->literal.has_integer;
+      result.integer = c->literal.integer;
+      return result;
+    case JSON_PATH_LIT_STRING:
+      result.kind = JSON_PATH_FV_STRING;
+      result.string = c->literal.string;
+      result.string_len = c->literal.string_len;
+      return result;
+    case JSON_PATH_LIT_TRUE:
+      result.kind = JSON_PATH_FV_BOOL;
+      result.boolean = true;
+      return result;
+    case JSON_PATH_LIT_FALSE:
+      result.kind = JSON_PATH_FV_BOOL;
+      result.boolean = false;
+      return result;
+    case JSON_PATH_LIT_NULL:
+      result.kind = JSON_PATH_FV_NULL;
+      return result;
+    }
+    return result;
+
+  case JSON_PATH_COMPARABLE_QUERY: {
+    /* A singular query: one node or none. */
+    json_path_list nodes;
+    memset(&nodes, 0, sizeof(nodes));
+    nodes.alloc = ev->alloc;
+    const GTEXT_JSON_Status status =
+        json_path_run_query(ev, &c->query, current, &nodes);
+    if (status != GTEXT_JSON_OK) {
+      ev->status = status;
+      json_path_list_free(&nodes);
+      return result;
+    }
+    if (nodes.count == 1) {
+      result = json_path_fv_of_node(nodes.items[0]);
+    }
+    json_path_list_free(&nodes);
+    return result;
+  }
+
+  case JSON_PATH_COMPARABLE_FUNCTION:
+    return json_path_eval_function(ev, c, current);
+  }
+  return result;
+}
+
+/* Is the expression true for this node? */
+static bool json_path_eval_expr(json_path_eval * ev,
+    const json_path_expr * expr, const GTEXT_JSON_Value * current) {
+  if (!expr || ev->status != GTEXT_JSON_OK) {
+    return false;
+  }
+  switch (expr->kind) {
+  case JSON_PATH_EXPR_OR:
+    /* Short-circuiting is not observable - no side effects - but it saves the
+     * work of a second query. */
+    return json_path_eval_expr(ev, expr->left, current)
+        || json_path_eval_expr(ev, expr->right, current);
+  case JSON_PATH_EXPR_AND:
+    return json_path_eval_expr(ev, expr->left, current)
+        && json_path_eval_expr(ev, expr->right, current);
+  case JSON_PATH_EXPR_NOT:
+    return !json_path_eval_expr(ev, expr->left, current);
+  case JSON_PATH_EXPR_TEST: {
+    json_path_list nodes;
+    memset(&nodes, 0, sizeof(nodes));
+    nodes.alloc = ev->alloc;
+    const GTEXT_JSON_Status status =
+        json_path_run_query(ev, &expr->test, current, &nodes);
+    if (status != GTEXT_JSON_OK) {
+      ev->status = status;
+      json_path_list_free(&nodes);
+      return false;
+    }
+    const bool any = nodes.count > 0;
+    json_path_list_free(&nodes);
+    return any;
+  }
+  case JSON_PATH_EXPR_COMPARE: {
+    const json_path_fv a = json_path_eval_comparable(ev, &expr->lhs, current);
+    const json_path_fv b = json_path_eval_comparable(ev, &expr->rhs, current);
+    return json_path_compare(ev, expr->op, &a, &b);
+  }
+  }
+  return false;
+}
+
 /* Apply one selector to one node, appending what it selects. */
-static GTEXT_JSON_Status json_path_apply_selector(
+static GTEXT_JSON_Status json_path_apply_selector(json_path_eval * ev,
     const json_path_selector * sel, const GTEXT_JSON_Value * node,
     json_path_list * out) {
   const GTEXT_JSON_Type type = gtext_json_typeof(node);
 
   switch (sel->kind) {
+  case JSON_PATH_SEL_FILTER: {
+    /* 2.3.5.2: the expression is applied to each *element* or *member value*,
+     * with @ bound to it - never to the node the selector is applied to. A
+     * scalar has neither, so it selects nothing. */
+    if (type == GTEXT_JSON_ARRAY) {
+      const size_t len = gtext_json_array_size(node);
+      for (size_t i = 0; i < len; i++) {
+        const GTEXT_JSON_Value * child = gtext_json_array_get(node, i);
+        if (json_path_eval_expr(ev, sel->filter, child)) {
+          if (!json_path_list_push(out, child)) {
+            return GTEXT_JSON_E_OOM;
+          }
+        }
+        if (ev->status != GTEXT_JSON_OK) {
+          return ev->status;
+        }
+      }
+    }
+    else if (type == GTEXT_JSON_OBJECT) {
+      const size_t len = gtext_json_object_size(node);
+      for (size_t i = 0; i < len; i++) {
+        const GTEXT_JSON_Value * child = gtext_json_object_value(node, i);
+        if (json_path_eval_expr(ev, sel->filter, child)) {
+          if (!json_path_list_push(out, child)) {
+            return GTEXT_JSON_E_OOM;
+          }
+        }
+        if (ev->status != GTEXT_JSON_OK) {
+          return ev->status;
+        }
+      }
+    }
+    return GTEXT_JSON_OK;
+  }
+
   case JSON_PATH_SEL_NAME: {
     if (type != GTEXT_JSON_OBJECT) {
       return GTEXT_JSON_OK;
@@ -905,33 +2153,34 @@ static GTEXT_JSON_Status json_path_collect_descendants(
   return status;
 }
 
-GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
-    const GTEXT_JSON_Value * root, GTEXT_JSON_Path_Result * out) {
-  if (!path || !root || !out) {
-    return GTEXT_JSON_E_INVALID;
-  }
-  memset(out, 0, sizeof(*out));
-  out->alloc = path->alloc;
-
+/*
+ * Apply a run of segments to one starting node, one segment at a time over a
+ * node list. Shared by the top-level query and by the queries inside a filter,
+ * which is what makes a nested filter work at all: `$[?@.a[?@.b]]` is this
+ * function calling the filter evaluator calling this function.
+ */
+static GTEXT_JSON_Status json_path_apply_segments(json_path_eval * ev,
+    const json_path_segment * segments, size_t count,
+    const GTEXT_JSON_Value * start, json_path_list * out) {
   json_path_list current;
   memset(&current, 0, sizeof(current));
-  current.alloc = path->alloc;
-  if (!json_path_list_push(&current, root)) {
+  current.alloc = ev->alloc;
+  if (!json_path_list_push(&current, start)) {
     return GTEXT_JSON_E_OOM;
   }
 
   GTEXT_JSON_Status status = GTEXT_JSON_OK;
-  for (size_t s = 0; s < path->segment_count && status == GTEXT_JSON_OK; s++) {
-    const json_path_segment * seg = &path->segments[s];
+  for (size_t s = 0; s < count && status == GTEXT_JSON_OK; s++) {
+    const json_path_segment * seg = &segments[s];
     json_path_list next;
     memset(&next, 0, sizeof(next));
-    next.alloc = path->alloc;
+    next.alloc = ev->alloc;
 
     for (size_t i = 0; i < current.count && status == GTEXT_JSON_OK; i++) {
       if (!seg->descendant) {
         for (size_t k = 0; k < seg->selector_count; k++) {
           status = json_path_apply_selector(
-              &seg->selectors[k], current.items[i], &next);
+              ev, &seg->selectors[k], current.items[i], &next);
           if (status != GTEXT_JSON_OK) {
             break;
           }
@@ -943,12 +2192,12 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
        * node under it (2.5.2.2), in document order. */
       json_path_list visited;
       memset(&visited, 0, sizeof(visited));
-      visited.alloc = path->alloc;
+      visited.alloc = ev->alloc;
       status = json_path_collect_descendants(current.items[i], &visited);
       for (size_t v = 0; v < visited.count && status == GTEXT_JSON_OK; v++) {
         for (size_t k = 0; k < seg->selector_count; k++) {
           status = json_path_apply_selector(
-              &seg->selectors[k], visited.items[v], &next);
+              ev, &seg->selectors[k], visited.items[v], &next);
           if (status != GTEXT_JSON_OK) {
             break;
           }
@@ -966,8 +2215,47 @@ GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
     return status;
   }
 
-  out->nodes = current.items;
-  out->count = current.count;
+  /* Hand the list over rather than copying it. */
+  for (size_t i = 0; i < current.count; i++) {
+    if (!json_path_list_push(out, current.items[i])) {
+      json_path_list_free(&current);
+      return GTEXT_JSON_E_OOM;
+    }
+  }
+  json_path_list_free(&current);
+  return GTEXT_JSON_OK;
+}
+
+GTEXT_API GTEXT_JSON_Status gtext_json_path_select(const GTEXT_JSON_Path * path,
+    const GTEXT_JSON_Value * root, GTEXT_JSON_Path_Result * out) {
+  if (!path || !root || !out) {
+    return GTEXT_JSON_E_INVALID;
+  }
+  memset(out, 0, sizeof(*out));
+  out->alloc = path->alloc;
+
+  json_path_eval ev;
+  memset(&ev, 0, sizeof(ev));
+  ev.root = root;
+  ev.alloc = path->alloc;
+  ev.status = GTEXT_JSON_OK;
+
+  json_path_list nodes;
+  memset(&nodes, 0, sizeof(nodes));
+  nodes.alloc = path->alloc;
+
+  GTEXT_JSON_Status status = json_path_apply_segments(
+      &ev, path->segments, path->segment_count, root, &nodes);
+  if (status == GTEXT_JSON_OK && ev.status != GTEXT_JSON_OK) {
+    status = ev.status;
+  }
+  if (status != GTEXT_JSON_OK) {
+    json_path_list_free(&nodes);
+    return status;
+  }
+
+  out->nodes = nodes.items;
+  out->count = nodes.count;
   return GTEXT_JSON_OK;
 }
 
