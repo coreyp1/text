@@ -202,7 +202,7 @@ result (§2.7), which `gtext_json_path_query_paths()` produces.
 `$['store']['book'][0]['author']` is the only spelling §2.7 blesses: brackets
 throughout, single-quoted names, no negative indices. Comparing only the values
 would pass a query that selected the right nodes by the wrong route, and a
-planted off-by-one in the index builder shows up as 99 failing cases.
+planted off-by-one in the index builder takes the score from 650 to 364.
 
 That runner has found three defects so far, each of which the hand-written tests
 agreed with: `$ ` is not a well-formed query, because `segments = *(S segment)`
