@@ -62,18 +62,25 @@ done
 printf '\nUCD %s is in %s\n' "$version" "$dest"
 
 #
-# UTS #46's mapping table, which versions on its own schedule.
+# UTS #46's mapping table, which versions on its own schedule and is not part
+# of the UCD - two data sets, two version files.
 #
-# It is not part of the UCD and it lags it: there is no 17.0.0 of it at the
-# time of writing, and pinning it to the UCD version would have made this
-# script fail on a 404 rather than fetch the current one. Two data sets, two
-# version files.
+# **The Consortium publishes it at two different paths and moved between them**,
+# which is the whole of why this loops over candidates. `Public/idna/<version>/`
+# exists up to 16.0.0 and stops; 17.0.0 lives at `Public/<version>/idna/`. An
+# earlier revision of this script knew only the first, and the comment here drew
+# the obvious conclusion from the listing it could see: "there is no 17.0.0 of
+# it at the time of writing". There is - dated 2025-07-25 - and that false
+# premise is what the version pin below has been resting on.
 #
-# The skew is harmless here because the two are used for different questions.
-# The mapping table is read only for the characters it *changes* - mapped and
-# ignored - and RFC 5892, derived from the UCD above, decides what is valid. A
-# character the UCD has and the mapping table does not is simply one the
-# mapping step leaves alone, which is what an unlisted character means anyway.
+# The skew between the two pins is harmless *for the derivation*, because they
+# answer different questions: the mapping table is read only for the characters
+# it changes - mapped and ignored - and RFC 5892, derived from the UCD above,
+# decides what is valid. A character the UCD has and the mapping table does not
+# is one the mapping step leaves alone, which is what an unlisted character
+# means anyway. Whether to raise IDNA_MAPPING_VERSION to 17.0.0 now that it can
+# be fetched is a separate decision with regenerated tables attached to it, and
+# is deliberately not made here.
 #
 mapping_version=${2:-$(cat "$root/tools/idna/IDNA_MAPPING_VERSION")}
 mapping_dest="$root/third_party/idna/$mapping_version"
@@ -82,11 +89,30 @@ if [ -s "$mapping_dest/IdnaMappingTable.txt" ]; then
 	printf 'have    %s\n' "IdnaMappingTable.txt"
 else
 	printf 'fetch   %s\n' "IdnaMappingTable.txt"
-	curl --fail --silent --show-error --location \
-		--output "$mapping_dest/IdnaMappingTable.txt.partial" \
-		"https://www.unicode.org/Public/idna/$mapping_version/IdnaMappingTable.txt"
+	got=
+	for url in \
+		"https://www.unicode.org/Public/idna/$mapping_version/IdnaMappingTable.txt" \
+		"https://www.unicode.org/Public/$mapping_version/idna/IdnaMappingTable.txt"
+	do
+		if curl --fail --silent --location \
+			--output "$mapping_dest/IdnaMappingTable.txt.partial" "$url" \
+			2>/dev/null
+		then
+			got=$url
+			break
+		fi
+	done
+	if [ -z "$got" ]; then
+		printf 'could not fetch IdnaMappingTable.txt for %s from either\n' \
+			"$mapping_version" >&2
+		printf '  https://www.unicode.org/Public/idna/%s/\n' "$mapping_version" >&2
+		printf '  https://www.unicode.org/Public/%s/idna/\n' "$mapping_version" >&2
+		rm -f "$mapping_dest/IdnaMappingTable.txt.partial"
+		exit 1
+	fi
 	mv "$mapping_dest/IdnaMappingTable.txt.partial" \
 		"$mapping_dest/IdnaMappingTable.txt"
+	printf 'from    %s\n' "$got"
 fi
 
 printf 'IDNA mapping %s is in %s\n' "$mapping_version" "$mapping_dest"

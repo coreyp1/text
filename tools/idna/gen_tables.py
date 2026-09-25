@@ -11,7 +11,7 @@ What is derived, and why from here rather than from a published table: RFC
 5892 section 2 defines the IDNA2008 derived property as an *algorithm* over
 UCD properties, and the algorithm is short. Deriving it is therefore closer to
 the specification than copying somebody's rendering of it, and it is checked
-against an independent implementation by tools/idna/oracle.py.
+against an independent implementation by tools/oracle/idna_diff.py.
 
 Four narrow tables used to come along for the contextual and bidi rules
 (RFC 5892 appendix A, RFC 5893): Script restricted to the six scripts the

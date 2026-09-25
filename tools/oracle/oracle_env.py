@@ -348,10 +348,21 @@ def decline(where, why):
     two, because a second one would drift - and the shape of the line is what a
     reader greps for.
     """
+    gate = os.environ.get("GHOTI_ORACLE_GATE", "")
+    # The per-gate opt-out, in the shape this library's other unreachable-input
+    # messages use: a gate that cannot be run is dropped by name, in the
+    # command, so the choice is visible rather than silent. There is
+    # deliberately no global switch.
+    escape = ""
+    if gate:
+        escape = ("\nOr drop the gate for the run, so the choice is in the "
+                  "command:\n\n"
+                  "  make test TEST_GATES='$(filter-out %s,$(ALL_TEST_GATES))'"
+                  "\n" % gate)
     if os.environ.get("GHOTI_ORACLE_REQUIRED", "0") == "1":
         sys.stderr.write(
             "\033[0;31m### %s: the reference this gate needs is not "
-            "available ###\033[0m\n%s\n" % (where, why))
+            "available ###\033[0m\n%s\n%s" % (where, why, escape))
         return 1
     sys.stderr.write("SKIPPED %s\n  %s\n" % (where, why))
     return 0

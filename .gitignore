@@ -30,6 +30,6 @@ oom-*
 # the data they came from is not (tools/idna/fetch.sh).
 third_party
 
-# Python bytecode from the generators; tools/idna/oracle.py imports them, and
-# importing is what writes these.
+# Python bytecode from the generators; tools/oracle/idna_diff.py imports them,
+# and importing is what writes these.
 __pycache__

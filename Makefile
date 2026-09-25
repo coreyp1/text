@@ -1717,7 +1717,28 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 # hatch for a machine with no container engine, it says `unpinned` in the line
 # it prints, and it names the pin it is not.
 ORACLE_ENGINE ?= $(if $(GHOTI_CONTAINER_ENGINE),$(GHOTI_CONTAINER_ENGINE),docker)
-ORACLE_RUN := python3 tools/oracle/oracle_run.py
+# ORACLE_REQUIRED is the fail-closed half, and 1 is the suite's default: an
+# unreachable reference is an error naming what is missing, rather than a skip.
+# It matters more here than the word "default" suggests. Both oracle gates are
+# in TEST_GATES, and four gates in this repository spent their whole lives
+# exiting 0 because they answered "is python3 on PATH" instead of "can this gate
+# reach its reference". python3 has always been on PATH on this machine; the
+# reference it reached was two Unicode releases from the tables it was checking.
+#
+#   make test ORACLE_MODE=host       this machine's own tools, printed as unpinned
+#   make check-idna-oracle ORACLE_REQUIRED=0   decline loudly, exit 0
+#
+# GHOTI_ORACLE_GATE carries the target name so that an unreachable reference
+# prints the same per-gate opt-out as a missing python3 or a missing UCD.
+ORACLE_MODE ?= container
+ORACLE_REQUIRED ?= 1
+# Recursive, not simple: `$@` in a `:=` assignment expands where there is no
+# target and lands as the empty string, which is how the first version of this
+# printed no opt-out at all. The flag only means anything if it is expanded in
+# the recipe.
+ORACLE_ENV = GHOTI_ORACLE_MODE=$(ORACLE_MODE) \
+	GHOTI_ORACLE_REQUIRED=$(ORACLE_REQUIRED) GHOTI_ORACLE_GATE=$@
+ORACLE_RUN = $(ORACLE_ENV) python3 tools/oracle/oracle_run.py
 ORACLE_IMAGES := tools/oracle/containers
 
 check-oracle-env: ## Fail if the oracle pin table or the code reading it has rotted
@@ -1756,19 +1777,24 @@ oracle-clean: ## Remove the oracle images built here, leaving the pulled ones
 		| grep '^localhost/ghoti-text-oracle-' \
 		| xargs -r $(ORACLE_ENGINE) rmi
 
-check-idna-oracle: ## Compare the derived IDNA property against an independent implementation
+check-idna-oracle: ## Compare the derived IDNA property against a pinned independent implementation
+# The one gate here whose pin changed an answer rather than only making it
+# reproducible. python-idna vendors its own generated tables, so the package
+# version *is* the data version and no interpreter could have moved it: Debian
+# packages 3.10, whose tables are UCD 15.1.0 against this library's 17.0.0, and
+# that gap was 925 codepoints this library assigns, the reference does not, and
+# both call DISALLOWED - so a DISALLOWED of ours that should have been PVALID
+# agreed with the reference's ignorance and passed. Against the pinned 3.19,
+# whose tables are 17.0.0, the comparison covers all 299,382 assigned codepoints
+# and that bucket has no members.
+#
+# The host `import idna` check is gone because it asked the wrong question. Any
+# idna satisfied it; what this gate needs is one whose tables are the pinned
+# UCD, and oracle_env.py is what can tell the difference.
+check-idna-oracle:
 	@$(REQUIRE_PYTHON3); \
-	if ! python3 -c "import idna" >/dev/null 2>&1; then \
-		printf "\033[0;31m\n### $@: the python3 idna package is missing ###\033[0m\n" >&2; \
-		printf "\nThis gate is the only thing here that holds RFC 5892's derived\n" >&2; \
-		printf "property against another author's reading of the same RFC. Without\n" >&2; \
-		printf "python-idna it checks nothing.\n\n  pip install idna\n\n" >&2; \
-		printf "Or drop the gate for the run, so the choice is in the command:\n\n" >&2; \
-		printf "  make test TEST_GATES='$$(filter-out $@,$$(ALL_TEST_GATES))'\n\n" >&2; \
-		exit 1; \
-	fi; \
 	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
-	python3 tools/idna/oracle.py
+	$(ORACLE_RUN) idna -- python3 tools/oracle/idna_diff.py
 
 check-nfc-oracle: ## Compare this library's NFC against a pinned CPython's, over every sequence
 # CPython's unicodedata is a normaliser written by other people from the same
