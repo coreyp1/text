@@ -344,6 +344,18 @@ endif
 INCLUDE += $(UNICODE_CFLAGS)
 LDFLAGS += $(UNICODE_LIBS)
 
+# The three above, in one place, because every consumer of this list used to
+# carry its own copy and they drifted.  When chron arrived, tools/conformance's
+# scripts still asked pkg-config for cutil alone, so `make conformance` stopped
+# compiling and nothing noticed - it is not a target `make test` runs.  The same
+# thing happened again when unicode arrived: six conformance targets and the
+# fuzzers all failed to link, in fourteen hand-written dependency lists.  So the
+# Makefile hands the list to the scripts the way it hands them PREFIX, and a
+# script with no list refuses rather than falling back to a stale one.
+DEP_PCS := $(CUTIL_PC) $(CHRON_PC) $(UNICODE_PC)
+DEP_CFLAGS := $(CUTIL_CFLAGS) $(CHRON_CFLAGS) $(UNICODE_CFLAGS)
+DEP_LIBS := $(CUTIL_LIBS) $(CHRON_LIBS) $(UNICODE_LIBS)
+
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
 
@@ -1324,7 +1336,7 @@ clean: ## Remove all contents of the build directories.
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 
 # Dependencies a consumer of this library needs on its own include path.
-PC_REQUIRES := $(CUTIL_PC) $(CHRON_PC) $(UNICODE_PC)
+PC_REQUIRES := $(DEP_PCS)
 
 # Where this project's own .pc file is installed. Defaults to the directory
 # pkg-config is already being told to search, but separate from it so a
@@ -1499,7 +1511,7 @@ $$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.cpp $$(FUZZ_OBJECTS)
 	@mkdir -p $$(@D) $$(FUZZ_CORPUS)
 	@printf "\n### Building $1 ###\n"
 	$$(FUZZ_CXX) $$(FUZZ_BIN_FLAGS) -std=c++20 -w $$(INCLUDE) \
-		-o $$@ $$< $$(FUZZ_OBJECTS) $$(CUTIL_LIBS) $$(CHRON_LIBS) $$(FUZZ_RPATH)
+		-o $$@ $$< $$(FUZZ_OBJECTS) $$(DEP_LIBS) $$(FUZZ_RPATH)
 
 fuzz-run-$2: ## Run the $2 fuzzer for $$(FUZZ_TIME) seconds
 fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
@@ -1523,32 +1535,32 @@ fuzz-clean:
 
 conformance: ## Score the YAML parser against yaml-test-suite (clones it on first use)
 conformance:
-	@PREFIX="$(PREFIX)" tools/conformance/run.sh
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" tools/conformance/run.sh
 
 conformance-roundtrip: ## Round-trip yaml-test-suite through all three YAML writers
 conformance-roundtrip:
 	@echo "--- the DOM writer, flow style ---"
-	@PREFIX="$(PREFIX)" YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
 	@echo "--- the DOM writer, block style ---"
-	@PREFIX="$(PREFIX)" YTS_RT_BLOCK=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" YTS_RT_BLOCK=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
 	@echo "--- the streaming writer ---"
-	@PREFIX="$(PREFIX)" YTS_RT_STREAM=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" YTS_RT_STREAM=1 YTS_RT_MIN=100 tools/conformance/run.sh roundtrip
 
 conformance-fastpath: ## Check the YAML JSON fast path against the general parser
 conformance-fastpath:
-	@PREFIX="$(PREFIX)" YTS_FP_MIN=100 tools/conformance/run.sh fastpath
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" YTS_FP_MIN=100 tools/conformance/run.sh fastpath
 
 conformance-json: ## Score the JSON parser against JSONTestSuite (clones it on first use)
 conformance-json:
-	@PREFIX="$(PREFIX)" tools/conformance/run-json.sh
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" tools/conformance/run-json.sh
 
 conformance-csv: ## Score the CSV parser against csv-spectrum (clones it on first use)
 conformance-csv:
-	@PREFIX="$(PREFIX)" tools/conformance/run-csv.sh
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" tools/conformance/run-csv.sh
 
 conformance-jsonpath: ## Score JSONPath against the compliance test suite (clones it on first use)
 conformance-jsonpath:
-	@PREFIX="$(PREFIX)" tools/conformance/run-jsonpath.sh
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" tools/conformance/run-jsonpath.sh
 
 UCD_VERSION := $(shell cat tools/idna/UCD_VERSION 2>/dev/null)
 UCD_DIR := third_party/ucd/$(UCD_VERSION)
@@ -1708,7 +1720,7 @@ check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.
 
 conformance-json-schema: ## Score the schema engine against JSON-Schema-Test-Suite (clones it on first use)
 conformance-json-schema:
-	@PREFIX="$(PREFIX)" tools/conformance/run-json-schema.sh
+	@PREFIX="$(PREFIX)" DEP_PCS="$(DEP_PCS)" tools/conformance/run-json-schema.sh
 
 conformance-all: ## Score every parser against its external corpus
 conformance-all: conformance conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath

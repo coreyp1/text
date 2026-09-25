@@ -42,14 +42,15 @@ fi
 case "$which" in
 ours)
 	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
+	[ -n "$DEP_PCS" ] || { echo "DEP_PCS must be set; the Makefile passes it (see DEP_PCS there)" >&2; exit 1; }
 	# chron as well as cutil: yaml_dom.h has included <ghoti.io/chron/chron.h>
 	# since !!timestamp stopped being parsed by hand, and this script asked
 	# only for cutil - so `make conformance` stopped compiling at that commit
 	# and nobody noticed, because it is not one of the targets `make test`
 	# runs. Both lookup directories, the way run-json-schema.sh does it.
 	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
-	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
-	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags $DEP_PCS)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs $DEP_PCS)
 	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
 	generated=$(dirname "$(dirname "$archive")")/generated
 	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
@@ -75,8 +76,8 @@ ours)
 roundtrip)
 	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
 	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
-	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
-	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags $DEP_PCS)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs $DEP_PCS)
 	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
 	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
 	generated=$(dirname "$(dirname "$archive")")/generated
@@ -93,8 +94,8 @@ roundtrip)
 fastpath)
 	[ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
 	pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
-	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
-	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+	cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags $DEP_PCS)
+	libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs $DEP_PCS)
 	archive=$(ls "$root"/build/*/release/apps/*.a 2>/dev/null | head -1)
 	[ -n "$archive" ] || { echo "build the library first (make)" >&2; exit 1; }
 	generated=$(dirname "$(dirname "$archive")")/generated

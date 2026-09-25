@@ -45,9 +45,11 @@ if [ "$(git -C "$suite" rev-parse HEAD)" != "$commit" ]; then
 fi
 
 [ -n "$PREFIX" ] || { echo "PREFIX must be set, as for any build here" >&2; exit 1; }
+
+[ -n "$DEP_PCS" ] || { echo "DEP_PCS must be set; the Makefile passes it (see DEP_PCS there)" >&2; exit 1; }
 pc="$PREFIX/share/pkgconfig:$PREFIX/lib/pkgconfig"
-cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags ghoti.io-cutil-0 ghoti.io-chron-0)
-libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs ghoti.io-cutil-0 ghoti.io-chron-0)
+cflags=$(PKG_CONFIG_PATH="$pc" pkg-config --cflags $DEP_PCS)
+libs=$(PKG_CONFIG_PATH="$pc" pkg-config --libs $DEP_PCS)
 
 # `pattern` and `patternProperties` are regular expressions, and this library
 # has no engine - the caller supplies one. ghoti.io-regex is the one written
