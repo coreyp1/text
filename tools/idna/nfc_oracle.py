@@ -245,8 +245,21 @@ def main():
                 flush()
         flush()
 
-        print("compared %d sequences, skipped %d that Python's Unicode "
-              "(%s) does not assign" % (checked, skipped, unicodedata.unidata_version))
+        # The reference's Unicode version against this library's pin, on the
+        # line with the numbers rather than somewhere a reader has to know to
+        # look. The skew is what the skip count *is*: a reference two releases
+        # behind cannot answer for a codepoint it has never heard of, so a
+        # clean run here is a claim about 3.4 million sequences and silent
+        # about a million more. It is also why a disagreement is a finding
+        # rather than a defect until someone checks whether the Consortium
+        # changed that codepoint.
+        oracle_ucd = unicodedata.unidata_version
+        print("reference: CPython %s carrying UCD %s; these tables are UCD %s%s"
+              % (".".join(str(n) for n in sys.version_info[:3]), oracle_ucd,
+                 args.version,
+                 "" if oracle_ucd == args.version else "  <- behind"))
+        print("compared %d sequences, skipped %d the reference's UCD does not "
+              "assign" % (checked, skipped))
         if disagreements:
             print("\ndisagreements:")
             for seq, ours, theirs in disagreements:
