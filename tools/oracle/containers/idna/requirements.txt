@@ -1,0 +1,9 @@
+# The oracle, pinned by wheel hash rather than by version alone.
+#
+# 3.19 is not the newest release; it is the one whose vendored tables are UCD
+# 17.0.0, an exact match for tools/idna/UCD_VERSION. That match is the whole
+# point - see the idna entry in ../IMAGES.
+#
+# Raising this is a deliberate act with a measurement attached, not a version
+# bump: a different idna is a different set of answers.
+idna==3.19 --hash=sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4

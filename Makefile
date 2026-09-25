@@ -474,6 +474,7 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
 ALL_TEST_GATES := check-symbols check-allocators check-headers \
+	check-oracle-env \
 	check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin \
 	check-metaschema
 TEST_GATES ?= $(ALL_TEST_GATES)
@@ -796,7 +797,7 @@ $(foreach pair,$(TEST_PAIRS),$(eval $(call asan-test-executable-rule,$(word 1,$(
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin check-metaschema
+.PHONY: clean cloc docs docs-pdf examples help coverage conformance conformance-roundtrip conformance-fastpath conformance-json conformance-csv conformance-json-schema conformance-jsonpath conformance-all fuzz fuzz-clean check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin check-metaschema check-oracle-env check-nfc-oracle-strict oracle-images oracle-version oracle-clean
 # Release build commands
 .PHONY: all install test test-quiet test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1701,6 +1702,59 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 		exit 1; \
 	fi; \
 	printf "\033[0;32mIDNA tables are byte-identical to the generators' output (UCD $(UCD_VERSION), IDNA mapping $(IDNA_MAPPING_VERSION)).\033[0m\n"
+
+# ---------------------------------------------------------------------------
+# Oracles
+#
+# Both references this library compares against used to be "whatever is
+# installed": CPython's unicodedata for NFC, and python-idna for the derived
+# IDNA property. tools/oracle/ pins them - see containers/IMAGES for what each
+# one is and why that version - and every gate below reaches its reference
+# through tools/oracle/oracle_run.py, which resolves the pin, prints what
+# answered, and fails rather than skipping when GHOTI_ORACLE_REQUIRED=1.
+#
+# GHOTI_ORACLE_MODE=host runs this machine's own tools instead. It is an escape
+# hatch for a machine with no container engine, it says `unpinned` in the line
+# it prints, and it names the pin it is not.
+ORACLE_ENGINE ?= $(if $(GHOTI_CONTAINER_ENGINE),$(GHOTI_CONTAINER_ENGINE),docker)
+ORACLE_RUN := python3 tools/oracle/oracle_run.py
+ORACLE_IMAGES := tools/oracle/containers
+
+check-oracle-env: ## Fail if the oracle pin table or the code reading it has rotted
+# In TEST_GATES, unlike every gate that consults an oracle, because it needs no
+# engine, no reference and no build - only the committed table and the module
+# that parses it. It is also the only thing that ties the oracle pins to
+# tools/idna/UCD_VERSION: raising the UCD pin without raising the idna pin puts
+# the reference back behind the tables it checks, which is the state that gate
+# spent today climbing out of.
+	@$(REQUIRE_PYTHON3); \
+	python3 tools/oracle/check_oracle_env.py
+
+oracle-version: ## Resolve every oracle pin and print what answered
+	@$(REQUIRE_PYTHON3); \
+	python3 tools/oracle/oracle_env.py
+
+oracle-images: ## Build the oracle images that are made here rather than pulled
+# Only python-idna needs building: it vendors its own UCD tables, so the version
+# of the package *is* the version of the data and no stock image carries the one
+# this library needs. The stock CPython images are pulled on demand by
+# oracle_env.py.
+	@set -e; \
+	for dir in $(ORACLE_IMAGES)/*/; do \
+		[ -f "$$dir/Dockerfile" ] || continue; \
+		name=$$(basename "$$dir"); \
+		tag=$$(sed -n 's/^[a-zA-Z0-9_.-]*==\([^ \t]*\).*/\1/p' \
+			"$$dir/requirements.txt" 2>/dev/null | head -1); \
+		[ -n "$$tag" ] || { printf "no version to tag %s with\n" "$$name" >&2; exit 1; }; \
+		printf "\033[0;36mbuilding ghoti-text-oracle-%s:%s\033[0m\n" "$$name" "$$tag"; \
+		$(ORACLE_ENGINE) build -t "localhost/ghoti-text-oracle-$$name:$$tag" "$$dir"; \
+	done; \
+	printf "\033[0;32mOracle images built. 'make oracle-version' checks them against IMAGES.\033[0m\n"
+
+oracle-clean: ## Remove the oracle images built here, leaving the pulled ones
+	@$(ORACLE_ENGINE) images --format '{{.Repository}}:{{.Tag}}' \
+		| grep '^localhost/ghoti-text-oracle-' \
+		| xargs -r $(ORACLE_ENGINE) rmi
 
 check-idna-oracle: ## Compare the derived IDNA property against an independent implementation
 	@$(REQUIRE_PYTHON3); \
