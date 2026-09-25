@@ -137,7 +137,7 @@ def build_driver(root, workdir):
     return binary
 
 
-def sequences(marks, starters):
+def sequences(marks, starters, ccc):
     """Everything the two implementations are asked about."""
     for cp in range(0, MAX_CODEPOINT + 1):
         if 0xD800 <= cp <= 0xDFFF:
@@ -150,9 +150,22 @@ def sequences(marks, starters):
     # pair of marks would be forty million sequences; every pair drawn from
     # one mark per combining class, against every mark, is the part of that
     # space where the classes actually differ.
+    # The class comes from the pinned UCD, like the marks themselves. It used
+    # to come from unicodedata.combining(), which is the reference - and for a
+    # mark the reference does not assign that returns 0, so the 46 marks newer
+    # than the host's UCD all collapsed into a spurious class-0 bucket that
+    # merged four real classes (9, 220, 230 and 234). It cost no coverage,
+    # because all four are also held by long-assigned marks, and it added a
+    # 56th representative whose sequences were skipped in their entirety. But
+    # the key was wrong, and a class held *only* by marks the reference does
+    # not know would have lost its representative to that bucket.
+    #
+    # This is the same substitution one line below the one the population
+    # already avoided, which is the useful part: checking that `marks` comes
+    # from the pin says nothing about the line that groups them.
     per_class = {}
     for mark in marks:
-        per_class.setdefault(unicodedata.combining(chr(mark)), mark)
+        per_class.setdefault(ccc[mark], mark)
     for starter in starters[:24]:
         for first in per_class.values():
             for second in marks:
@@ -184,6 +197,7 @@ def main():
     # still asked about and then skipped by name rather than silently missed.
     marks = []
     starters = []
+    ccc = {}
     for line in open(os.path.join(ucd, "UnicodeData.txt"), encoding="utf-8"):
         fields = line.split(";")
         if len(fields) < 6:
@@ -191,6 +205,7 @@ def main():
         cp = int(fields[0], 16)
         if int(fields[3]) != 0:
             marks.append(cp)
+            ccc[cp] = int(fields[3])
         elif fields[5] and not fields[5].startswith("<"):
             starters.append(cp)
     if not marks or not starters:
@@ -239,7 +254,7 @@ def main():
                              answer, expected))
             batch.clear()
 
-        for seq in sequences(marks, starters):
+        for seq in sequences(marks, starters, ccc):
             batch.append(seq)
             if len(batch) >= 50000:
                 flush()
