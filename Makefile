@@ -1634,9 +1634,15 @@ METASCHEMA_SRC := src/json/metaschema
 # tools/idna/UCD_VERSION, and the one the unicode library was generated from -
 # and a JSON5 document whose names are decided by one while IDNA's validity is
 # decided by the other is a library that disagrees with itself about which
-# characters exist.  Nothing else compares them: the suite-level check named in
-# unicode's design.md section 16 is not written yet, and even when it is it
-# will compare what the repositories say rather than what this build linked.
+# characters exist.
+#
+# The workspace's tools/check-ucd-pins.sh asks the neighbouring question - it
+# compares the UCD_VERSION files of regex, text and unicode and today reports
+# three pins all at 17.0.0.  This gate is not that one and does not replace it:
+# it asks the **linked library**, because a pin file says what a repository
+# intends and a build can still have resolved an older unicode from an older
+# prefix.  The two together are what make the claim; either alone leaves the
+# other's failure invisible.
 check-ucd-pin: ## Fail if the linked unicode library's UCD version is not the one pinned here
 check-ucd-pin: $(APP_DIR)/$(TARGET)
 	@tmp=$$(mktemp -d) || exit 1; \
