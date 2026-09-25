@@ -13,13 +13,18 @@ UCD properties, and the algorithm is short. Deriving it is therefore closer to
 the specification than copying somebody's rendering of it, and it is checked
 against an independent implementation by tools/idna/oracle.py.
 
-Four narrow tables come along for the contextual and bidi rules (RFC 5892
-appendix A, RFC 5893). They are narrow on purpose - Script restricted to the
-six scripts the CONTEXTO rules name, Joining_Type to the four values the ZWNJ
-rule reads, Canonical_Combining_Class to Virama alone, Bidi_Class to the
-classes the bidi rule distinguishes. This library validates host names; it is
-not a Unicode library, and a table that carried more than the rules read would
-be inviting it to become one.
+Four narrow tables used to come along for the contextual and bidi rules
+(RFC 5892 appendix A, RFC 5893): Script restricted to the six scripts the
+CONTEXTO rules name, Joining_Type to the four values the ZWNJ rule reads,
+Canonical_Combining_Class to Virama alone, Bidi_Class to the classes the bidi
+rule distinguishes. The reason they were narrow was that this library validates
+host names and is not a Unicode library, so a table carrying more than the
+rules read would have been inviting it to become one. There is a Unicode
+library in the suite now, so the answer to that is to ask it rather than to
+carry a careful subset: ghoti.io-unicode holds all four properties in full and
+idna.c reads them from char.h. What is still generated here is RFC 5892's
+derived property alone, which is the one thing in that list that Unicode does
+not define.
 
 Determinism is a requirement, not a nicety: the check target diffs the
 regenerated output against the committed files, so every table is emitted from
@@ -112,15 +117,8 @@ IGNORABLE_BLOCK_NAMES = {
     "Ancient Greek Musical Notation",
 }
 
-# The scripts the CONTEXTO rules of RFC 5892 appendix A name, and nothing
-# else.
-SCRIPTS_WANTED = ["Greek", "Hebrew", "Hiragana", "Katakana", "Han"]
 
-# The Joining_Type values the CONTEXTJ zero-width-non-joiner rule reads.
-JOINING_WANTED = ["T", "L", "R", "D"]
 
-# The Bidi_Class values RFC 5893's rule distinguishes.
-BIDI_WANTED = ["L", "R", "AL", "AN", "EN", "ES", "CS", "ET", "ON", "BN", "NSM"]
 
 
 def parse_ranges(path, wanted=None):
@@ -246,20 +244,6 @@ def runs(values, skip):
     return out
 
 
-def ranges_of(ucd_ranges, wanted):
-    """One flat, sorted, merged list per wanted value."""
-    out = {}
-    for value in wanted:
-        merged = []
-        for lo, hi in sorted(ucd_ranges.get(value, [])):
-            if merged and lo <= merged[-1][1] + 1:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
-            else:
-                merged.append((lo, hi))
-        out[value] = merged
-    return out
-
-
 # Every generated source carries the same licence notice as a hand-written
 # one. It is emitted here rather than added afterwards, so that regenerating
 # does not quietly drop it.
@@ -333,17 +317,6 @@ def main():
     # DISALLOWED is the default answer, so it is the one value not stored.
     derived_runs = runs(derived, DISALLOWED)
 
-    scripts = ranges_of(parse_ranges(os.path.join(ucd, "Scripts.txt"),
-                                     SCRIPTS_WANTED), SCRIPTS_WANTED)
-    joining = ranges_of(parse_ranges(os.path.join(ucd, "DerivedJoiningType.txt"),
-                                     JOINING_WANTED), JOINING_WANTED)
-    bidi = ranges_of(parse_ranges(os.path.join(ucd, "DerivedBidiClass.txt"),
-                                  BIDI_WANTED), BIDI_WANTED)
-    # Virama is Canonical_Combining_Class 9, and nothing else here reads any
-    # other class, so the table is that one value.
-    combining = ranges_of(parse_ranges(os.path.join(ucd, "DerivedCombiningClass.txt"),
-                                       ["9"]), ["9"])
-
     os.makedirs(args.out, exist_ok=True)
     body = [BANNER.format(version=args.version).rstrip(), "",
             '#include "tables_internal.h"', ""]
@@ -351,46 +324,10 @@ def main():
     emit_ranges(body, "gtext_idna_derived", derived_runs,
                 lambda v: PROPERTY_NAMES[v])
 
-    script_entries = []
-    for index, name in enumerate(SCRIPTS_WANTED):
-        for lo, hi in scripts[name]:
-            script_entries.append((lo, hi, index))
-    script_entries.sort()
-    emit_ranges(body, "gtext_idna_script", script_entries,
-                lambda v: "GTEXT_IDNA_SCRIPT_" + SCRIPTS_WANTED[v].upper())
-
-    joining_entries = []
-    for index, name in enumerate(JOINING_WANTED):
-        for lo, hi in joining[name]:
-            joining_entries.append((lo, hi, index))
-    joining_entries.sort()
-    emit_ranges(body, "gtext_idna_joining", joining_entries,
-                lambda v: "GTEXT_IDNA_JOINING_" + JOINING_WANTED[v])
-
-    bidi_entries = []
-    for index, name in enumerate(BIDI_WANTED):
-        for lo, hi in bidi[name]:
-            bidi_entries.append((lo, hi, index))
-    bidi_entries.sort()
-    emit_ranges(body, "gtext_idna_bidi", bidi_entries,
-                lambda v: "GTEXT_IDNA_BIDI_" + BIDI_WANTED[v])
-
-    virama_entries = [(lo, hi, 0) for lo, hi in combining["9"]]
-    emit_ranges(body, "gtext_idna_virama", virama_entries, lambda v: "0")
-
     with open(os.path.join(args.out, "idna_tables.c"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(body).rstrip() + "\n")
 
-    counts = {
-        "derived": len(derived_runs),
-        "script": len(script_entries),
-        "joining": len(joining_entries),
-        "bidi": len(bidi_entries),
-        "virama": len(virama_entries),
-    }
-    print("UCD %s: %s" % (args.version,
-                          ", ".join("%s %d ranges" % (k, v)
-                                    for k, v in sorted(counts.items()))))
+    print("UCD %s: derived %d ranges" % (args.version, len(derived_runs)))
 
 
 if __name__ == "__main__":

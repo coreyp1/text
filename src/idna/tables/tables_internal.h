@@ -54,38 +54,6 @@ typedef enum {
   GTEXT_IDNA_DISALLOWED = 4
 } GTEXT_IDNA_Property;
 
-/** The scripts the CONTEXTO rules name, and no others. */
-typedef enum {
-  GTEXT_IDNA_SCRIPT_GREEK = 0,
-  GTEXT_IDNA_SCRIPT_HEBREW = 1,
-  GTEXT_IDNA_SCRIPT_HIRAGANA = 2,
-  GTEXT_IDNA_SCRIPT_KATAKANA = 3,
-  GTEXT_IDNA_SCRIPT_HAN = 4
-} GTEXT_IDNA_Script;
-
-/** The Joining_Type values the zero-width-non-joiner rule reads. */
-typedef enum {
-  GTEXT_IDNA_JOINING_T = 0,
-  GTEXT_IDNA_JOINING_L = 1,
-  GTEXT_IDNA_JOINING_R = 2,
-  GTEXT_IDNA_JOINING_D = 3
-} GTEXT_IDNA_Joining;
-
-/** The Bidi_Class values RFC 5893's rule distinguishes. */
-typedef enum {
-  GTEXT_IDNA_BIDI_L = 0,
-  GTEXT_IDNA_BIDI_R = 1,
-  GTEXT_IDNA_BIDI_AL = 2,
-  GTEXT_IDNA_BIDI_AN = 3,
-  GTEXT_IDNA_BIDI_EN = 4,
-  GTEXT_IDNA_BIDI_ES = 5,
-  GTEXT_IDNA_BIDI_CS = 6,
-  GTEXT_IDNA_BIDI_ET = 7,
-  GTEXT_IDNA_BIDI_ON = 8,
-  GTEXT_IDNA_BIDI_BN = 9,
-  GTEXT_IDNA_BIDI_NSM = 10
-} GTEXT_IDNA_Bidi;
-
 /** One run of codepoints sharing a value. */
 typedef struct {
   uint32_t lo;
@@ -93,16 +61,12 @@ typedef struct {
   uint32_t value;
 } GTEXT_IDNA_Range;
 
+/* Script, Joining_Type, Bidi_Class and the viramas were four more tables here.
+ * They were the UCD's data narrowed to the values RFC 5892 and RFC 5893 name;
+ * ghoti.io-unicode answers all four now. What is left is RFC 5892's own
+ * derived property, which is not a Unicode property and has no other home. */
 extern const GTEXT_IDNA_Range gtext_idna_derived[];
 extern const size_t gtext_idna_derived_count;
-extern const GTEXT_IDNA_Range gtext_idna_script[];
-extern const size_t gtext_idna_script_count;
-extern const GTEXT_IDNA_Range gtext_idna_joining[];
-extern const size_t gtext_idna_joining_count;
-extern const GTEXT_IDNA_Range gtext_idna_bidi[];
-extern const size_t gtext_idna_bidi_count;
-extern const GTEXT_IDNA_Range gtext_idna_virama[];
-extern const size_t gtext_idna_virama_count;
 
 /**
  * @brief What UTS #46's mapping step does to a character

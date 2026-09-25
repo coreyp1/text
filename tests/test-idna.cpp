@@ -15,7 +15,11 @@
 #include <string>
 
 extern "C" {
+#include <ghoti.io/unicode/char.h>
+#include <ghoti.io/unicode/enums.h>
+
 #include "../src/idna/idna_internal.h"
+#include "../src/idna/tables/tables_internal.h"
 }
 
 static bool host(const std::string & s) {
@@ -327,4 +331,82 @@ TEST(Idna, AnALabelMustDecodeToNfc) {
 	// test above would pass for an implementation that refused anything it
 	// found hard to decode.
 	EXPECT_TRUE(idn("xn--e-uga"));
+}
+
+TEST(Idna, EveryAdmittedCodepointHasABidiClassRule5893Names) {
+	// RFC 5893's rule is an allow-list: a label is valid only if every
+	// character's Bidi_Class is one of eleven, and anything else refuses the
+	// label. This asserts the two RFCs agree - that no codepoint RFC 5892
+	// admits into a label carries a class the bidi rule has no arm for.
+	//
+	// It is here because of what the migration to ghoti.io-unicode found.
+	// Script, Joining_Type, Bidi_Class and the virama test used to come from
+	// tables generated here that held the UCD narrowed to the values these
+	// rules read, with everything else folded into one OTHER sentinel. Against
+	// the full property, the narrow Bidi_Class table disagreed about 812,943
+	// codepoints - always in the same direction, OTHER where the UCD has a
+	// real class, never a different class - and not one of them was a
+	// codepoint IDNA lets into a label. 810,895 were unassigned, which
+	// DerivedBidiClass.txt gives default classes by block, and the remaining
+	// 2,048 were exactly the surrogates U+D800..U+DFFF.
+	//
+	// That is why the substitution changed no answer. The reason is a property
+	// of the two RFCs over one UCD version, though, not a theorem, so it is
+	// checked rather than remembered: a future UCD that admitted a character
+	// with an exotic class would make the bidi rule refuse a name it should
+	// accept, and nothing else here would notice.
+	size_t admitted = 0;
+	size_t outside = 0;
+	uint32_t first_outside = 0;
+	for (uint32_t cp = 0; cp <= 0x10FFFF; cp++) {
+		if (cp >= 0xD800 && cp <= 0xDFFF) {
+			continue; // not a scalar value; no UTF-8 decoder yields one
+		}
+		size_t lo = 0;
+		size_t hi = gtext_idna_derived_count;
+		uint32_t property = GTEXT_IDNA_DISALLOWED;
+		while (lo < hi) {
+			size_t mid = lo + (hi - lo) / 2;
+			if (cp < gtext_idna_derived[mid].lo) {
+				hi = mid;
+			}
+			else if (cp > gtext_idna_derived[mid].hi) {
+				lo = mid + 1;
+			}
+			else {
+				property = gtext_idna_derived[mid].value;
+				break;
+			}
+		}
+		if (property == GTEXT_IDNA_DISALLOWED) {
+			continue;
+		}
+		admitted++;
+		switch (guni_bidi_class(cp)) {
+		case GUNI_BIDI_L:
+		case GUNI_BIDI_R:
+		case GUNI_BIDI_AL:
+		case GUNI_BIDI_AN:
+		case GUNI_BIDI_EN:
+		case GUNI_BIDI_ES:
+		case GUNI_BIDI_CS:
+		case GUNI_BIDI_ET:
+		case GUNI_BIDI_ON:
+		case GUNI_BIDI_BN:
+		case GUNI_BIDI_NSM:
+			break;
+		default:
+			if (outside++ == 0) {
+				first_outside = cp;
+			}
+			break;
+		}
+	}
+	// The count is asserted as well as the property: a derived table that
+	// admitted nothing would satisfy the loop above without testing anything.
+	EXPECT_GT(admitted, 100000u);
+	EXPECT_EQ(outside, 0u)
+	    << "U+" << std::hex << first_outside
+	    << " is admitted into a label but its Bidi_Class is not one RFC 5893"
+	       " names";
 }

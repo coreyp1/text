@@ -18,9 +18,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_tables as g
 
 failures = []
+checked = 0
 
 
 def check(condition, what):
+    global checked
+    checked += 1
     if not condition:
         failures.append(what)
 
@@ -53,14 +56,12 @@ check(g.EXCEPTIONS[0x0640] == g.DISALLOWED, "exceptions: tatweel is DISALLOWED")
 check(g.EXCEPTIONS[0x30FB] == g.CONTEXTO,
       "exceptions: katakana middle dot is CONTEXTO")
 
-# The narrow tables must name exactly what the rules read, or a value the C
-# side switches on would have no range behind it.
-check(g.SCRIPTS_WANTED == ["Greek", "Hebrew", "Hiragana", "Katakana", "Han"],
-      "scripts: the five the CONTEXTO rules name, in table order")
-check(g.JOINING_WANTED == ["T", "L", "R", "D"], "joining: the four the ZWNJ rule reads")
+# The Script and Joining_Type lists these two checks guarded are gone: idna.c
+# reads both properties from ghoti.io-unicode, in full, so there is no longer a
+# narrow subset that could fail to name a value the C side switches on.
 
 if failures:
     for line in failures:
         print("FAIL: %s" % line)
     sys.exit(1)
-print("generator tests pass (%d checks)" % 18)
+print("generator tests pass (%d checks)" % checked)

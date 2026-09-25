@@ -49,6 +49,9 @@
 #include <string.h>
 
 #include "idna_internal.h"
+#include <ghoti.io/unicode/char.h>
+#include <ghoti.io/unicode/enums.h>
+
 #include "nfc_internal.h"
 #include "tables/tables_internal.h"
 
@@ -103,27 +106,23 @@ static uint32_t idna_property(uint32_t cp) {
       GTEXT_IDNA_DISALLOWED);
 }
 
-#define IDNA_SCRIPT_OTHER 0xFFFFu
-#define IDNA_JOINING_OTHER 0xFFFFu
-#define IDNA_BIDI_OTHER 0xFFFFu
-
-static uint32_t idna_script(uint32_t cp) {
-  return idna_lookup(
-      gtext_idna_script, gtext_idna_script_count, cp, IDNA_SCRIPT_OTHER);
-}
-
-static uint32_t idna_joining(uint32_t cp) {
-  return idna_lookup(
-      gtext_idna_joining, gtext_idna_joining_count, cp, IDNA_JOINING_OTHER);
-}
-
-static uint32_t idna_bidi(uint32_t cp) {
-  return idna_lookup(
-      gtext_idna_bidi, gtext_idna_bidi_count, cp, IDNA_BIDI_OTHER);
-}
-
+/* Script, Joining_Type, Bidi_Class and the virama test used to come from four
+ * tables generated here - 1,290 of idna_tables.c's 1,948 lines - which were
+ * the UCD's own data narrowed to the values RFC 5892's contextual rules and
+ * RFC 5893's bidi rule name. They come from ghoti.io-unicode now. Only the
+ * IDNA2008 derived property is still generated here, because that one is
+ * RFC 5892's own and not a Unicode property.
+ *
+ * Narrowing those four to the values the rules mention was safe only because
+ * every rule below is written as an allow-list with a `default: return 0`:
+ * a class the old table called OTHER and a class it had never heard of both
+ * fall to the same arm. That is still how they read, so widening them back to
+ * the UCD's full sets changes no answer - and it is why this could be a
+ * substitution rather than a rewrite.
+ *
+ * A virama is Canonical_Combining_Class 9, which is what the old table held. */
 static int idna_is_virama(uint32_t cp) {
-  return idna_lookup(gtext_idna_virama, gtext_idna_virama_count, cp, 1) == 0;
+  return guni_combining_class(cp) == 9;
 }
 
 // ===========================================================================
@@ -398,25 +397,25 @@ static int idna_contextj(const uint32_t * cps, size_t len, size_t at) {
     return 1;
   }
   size_t i = at;
-  while (i > 0 && idna_joining(cps[i - 1]) == GTEXT_IDNA_JOINING_T) {
+  while (i > 0 && guni_joining_type(cps[i - 1]) == GUNI_JT_T) {
     i--;
   }
   if (i == 0) {
     return 0;
   }
-  uint32_t before = idna_joining(cps[i - 1]);
-  if (before != GTEXT_IDNA_JOINING_L && before != GTEXT_IDNA_JOINING_D) {
+  uint32_t before = guni_joining_type(cps[i - 1]);
+  if (before != GUNI_JT_L && before != GUNI_JT_D) {
     return 0;
   }
   size_t j = at + 1;
-  while (j < len && idna_joining(cps[j]) == GTEXT_IDNA_JOINING_T) {
+  while (j < len && guni_joining_type(cps[j]) == GUNI_JT_T) {
     j++;
   }
   if (j >= len) {
     return 0;
   }
-  uint32_t after = idna_joining(cps[j]);
-  return after == GTEXT_IDNA_JOINING_R || after == GTEXT_IDNA_JOINING_D;
+  uint32_t after = guni_joining_type(cps[j]);
+  return after == GUNI_JT_R || after == GUNI_JT_D;
 }
 
 static int idna_contexto(const uint32_t * cps, size_t len, size_t at) {
@@ -426,16 +425,16 @@ static int idna_contexto(const uint32_t * cps, size_t len, size_t at) {
     return at > 0 && at + 1 < len && cps[at - 1] == 0x006C
         && cps[at + 1] == 0x006C;
   case 0x0375: // GREEK LOWER NUMERAL SIGN, rule A.4
-    return at + 1 < len && idna_script(cps[at + 1]) == GTEXT_IDNA_SCRIPT_GREEK;
+    return at + 1 < len && guni_script(cps[at + 1]) == GUNI_SCRIPT_GREEK;
   case 0x05F3: // HEBREW PUNCTUATION GERESH, rule A.5
   case 0x05F4: // HEBREW PUNCTUATION GERSHAYIM, rule A.6
-    return at > 0 && idna_script(cps[at - 1]) == GTEXT_IDNA_SCRIPT_HEBREW;
+    return at > 0 && guni_script(cps[at - 1]) == GUNI_SCRIPT_HEBREW;
   case 0x30FB: { // KATAKANA MIDDLE DOT, rule A.7
     for (size_t i = 0; i < len; i++) {
-      uint32_t script = idna_script(cps[i]);
-      if (script == GTEXT_IDNA_SCRIPT_HIRAGANA
-          || script == GTEXT_IDNA_SCRIPT_KATAKANA
-          || script == GTEXT_IDNA_SCRIPT_HAN) {
+      uint32_t script = guni_script(cps[i]);
+      if (script == GUNI_SCRIPT_HIRAGANA
+          || script == GUNI_SCRIPT_KATAKANA
+          || script == GUNI_SCRIPT_HAN) {
         return 1;
       }
     }
@@ -469,9 +468,9 @@ static int idna_contexto(const uint32_t * cps, size_t len, size_t at) {
 
 static int idna_label_has_rtl(const uint32_t * cps, size_t len) {
   for (size_t i = 0; i < len; i++) {
-    uint32_t class = idna_bidi(cps[i]);
-    if (class == GTEXT_IDNA_BIDI_R || class == GTEXT_IDNA_BIDI_AL
-        || class == GTEXT_IDNA_BIDI_AN) {
+    uint32_t class = guni_bidi_class(cps[i]);
+    if (class == GUNI_BIDI_R || class == GUNI_BIDI_AL
+        || class == GUNI_BIDI_AN) {
       return 1;
     }
   }
@@ -489,34 +488,34 @@ static int idna_bidi_label_valid(const uint32_t * cps, size_t len) {
   if (len == 0) {
     return 0;
   }
-  uint32_t first = idna_bidi(cps[0]);
+  uint32_t first = guni_bidi_class(cps[0]);
   size_t last = len;
-  while (last > 0 && idna_bidi(cps[last - 1]) == GTEXT_IDNA_BIDI_NSM) {
+  while (last > 0 && guni_bidi_class(cps[last - 1]) == GUNI_BIDI_NSM) {
     last--; // trailing combining marks do not decide the ending class
   }
   if (last == 0) {
     return 0;
   }
-  uint32_t ending = idna_bidi(cps[last - 1]);
+  uint32_t ending = guni_bidi_class(cps[last - 1]);
 
-  if (first == GTEXT_IDNA_BIDI_R || first == GTEXT_IDNA_BIDI_AL) {
+  if (first == GUNI_BIDI_R || first == GUNI_BIDI_AL) {
     int has_en = 0;
     int has_an = 0;
     for (size_t i = 0; i < len; i++) {
-      switch (idna_bidi(cps[i])) {
-      case GTEXT_IDNA_BIDI_R:
-      case GTEXT_IDNA_BIDI_AL:
-      case GTEXT_IDNA_BIDI_ES:
-      case GTEXT_IDNA_BIDI_CS:
-      case GTEXT_IDNA_BIDI_ET:
-      case GTEXT_IDNA_BIDI_ON:
-      case GTEXT_IDNA_BIDI_BN:
-      case GTEXT_IDNA_BIDI_NSM:
+      switch (guni_bidi_class(cps[i])) {
+      case GUNI_BIDI_R:
+      case GUNI_BIDI_AL:
+      case GUNI_BIDI_ES:
+      case GUNI_BIDI_CS:
+      case GUNI_BIDI_ET:
+      case GUNI_BIDI_ON:
+      case GUNI_BIDI_BN:
+      case GUNI_BIDI_NSM:
         break;
-      case GTEXT_IDNA_BIDI_EN:
+      case GUNI_BIDI_EN:
         has_en = 1;
         break;
-      case GTEXT_IDNA_BIDI_AN:
+      case GUNI_BIDI_AN:
         has_an = 1;
         break;
       default:
@@ -526,26 +525,26 @@ static int idna_bidi_label_valid(const uint32_t * cps, size_t len) {
     if (has_en && has_an) {
       return 0; // rule 4: not both kinds of digit
     }
-    return ending == GTEXT_IDNA_BIDI_R || ending == GTEXT_IDNA_BIDI_AL
-        || ending == GTEXT_IDNA_BIDI_EN || ending == GTEXT_IDNA_BIDI_AN;
+    return ending == GUNI_BIDI_R || ending == GUNI_BIDI_AL
+        || ending == GUNI_BIDI_EN || ending == GUNI_BIDI_AN;
   }
-  if (first == GTEXT_IDNA_BIDI_L) {
+  if (first == GUNI_BIDI_L) {
     for (size_t i = 0; i < len; i++) {
-      switch (idna_bidi(cps[i])) {
-      case GTEXT_IDNA_BIDI_L:
-      case GTEXT_IDNA_BIDI_EN:
-      case GTEXT_IDNA_BIDI_ES:
-      case GTEXT_IDNA_BIDI_CS:
-      case GTEXT_IDNA_BIDI_ET:
-      case GTEXT_IDNA_BIDI_ON:
-      case GTEXT_IDNA_BIDI_BN:
-      case GTEXT_IDNA_BIDI_NSM:
+      switch (guni_bidi_class(cps[i])) {
+      case GUNI_BIDI_L:
+      case GUNI_BIDI_EN:
+      case GUNI_BIDI_ES:
+      case GUNI_BIDI_CS:
+      case GUNI_BIDI_ET:
+      case GUNI_BIDI_ON:
+      case GUNI_BIDI_BN:
+      case GUNI_BIDI_NSM:
         break;
       default:
         return 0;
       }
     }
-    return ending == GTEXT_IDNA_BIDI_L || ending == GTEXT_IDNA_BIDI_EN;
+    return ending == GUNI_BIDI_L || ending == GUNI_BIDI_EN;
   }
   return 0; // rule 1: a label starts L, R or AL and nothing else
 }
@@ -561,7 +560,7 @@ static int idna_bidi_label_valid(const uint32_t * cps, size_t len) {
  * that is here: a leading character whose bidi class is NSM, or whose
  * canonical combining class is non-zero. */
 static int idna_is_leading_mark(uint32_t cp) {
-  return idna_bidi(cp) == GTEXT_IDNA_BIDI_NSM || idna_is_virama(cp)
+  return guni_bidi_class(cp) == GUNI_BIDI_NSM || idna_is_virama(cp)
       || (cp >= 0x0900 && cp <= 0x0903) || (cp >= 0x093A && cp <= 0x093C)
       || (cp >= 0x093E && cp <= 0x094F) || (cp >= 0x0951 && cp <= 0x0957);
 }
