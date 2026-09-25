@@ -158,6 +158,13 @@ def main():
     disagree = []
     skipped = 0
     compared = 0
+    # Three counts rather than two, because the headline was 73.8% padding.
+    # A codepoint the oracle's Unicode does not assign gets DISALLOWED from it
+    # by default, and this library usually says DISALLOWED too - so the pair
+    # agrees without either side having an opinion, and 815,655 such agreements
+    # were being counted in the same total as the real comparisons. `shared`
+    # holds them separately; `compared - shared` is the figure to quote.
+    shared = 0
     for cp in range(gen_tables.MAX_CODEPOINT + 1):
         # Surrogates and codepoints the oracle's Unicode does not assign are
         # not a disagreement about anything.
@@ -171,13 +178,23 @@ def main():
             skipped += 1
             continue
         compared += 1
+        if not assigned_there:
+            shared += 1
         if mine != yours:
             disagree.append((cp, mine, yours))
 
     print("oracle: python-idna %s (Unicode %s) against UCD %s"
           % (idna.__version__, unicodedata.unidata_version, args.version))
-    print("compared %d codepoints, skipped %d the oracle's Unicode "
-          "does not assign" % (compared, skipped))
+    print("compared %d codepoints where both versions have an opinion"
+          % (compared - shared))
+    print("  %d more agreed only because neither version assigns them, and"
+          % shared)
+    print("  %d were skipped: the oracle does not assign them and we disagree."
+          % skipped)
+    print("  The first number is the one to quote. The second is not a")
+    print("  comparison, and a codepoint this library wrongly called DISALLOWED")
+    print("  would sit in it as a pass."
+          )
     status = 0
     if not disagree:
         print("no disagreements")
