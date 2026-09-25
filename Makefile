@@ -473,7 +473,55 @@ TEXTLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # this: --coverage links the gcov runtime, which exports mangle_path, and
 # check-symbols is right to reject that in a shipping build but it is not a
 # defect in an instrumented one.
-TEST_GATES ?= check-symbols check-allocators check-headers check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin check-metaschema
+ALL_TEST_GATES := check-symbols check-allocators check-headers \
+	check-idna-tables check-idna-oracle check-nfc-oracle check-ucd-pin \
+	check-metaschema
+TEST_GATES ?= $(ALL_TEST_GATES)
+
+# Four of those gates used to exit 0 when they could not run: three printed
+# "skipped (no python3 ...)" and four printed "skipped (no third_party/...)".
+# Nothing under third_party/ is tracked - it is gitignored and arrives through
+# tools/idna/fetch.sh and tools/metaschema/fetch.sh - so the absent case is not
+# a rare machine, it is **every clone**, and `make test` reported success with
+# half its gates having compared nothing.
+#
+# The rule for which way a missing tool should go, from the regex session: a
+# gate may skip when the property it checks *cannot exist* in that environment,
+# and must fail when the property exists and the gate merely cannot see it. A
+# wrong table is wrong whether or not this machine has python3, so exit 0 is a
+# false statement about it.
+#
+# Both macros print the per-gate opt-out rather than offering a global one, so
+# that dropping a check is visible in the command someone typed instead of in
+# the output of a run that looked like it passed.
+#
+# The `#` in each banner is escaped as `\#`: this is a variable assignment, and
+# make lexes an unescaped `#` as the start of a comment and truncates the rest
+# of the value silently. The same text is safe in a recipe line, which is where
+# it used to live. (regex hit this first; it is worth the two lines.)
+REQUIRE_PYTHON3 = if ! command -v python3 >/dev/null 2>&1; then \
+		printf "\033[0;31m\n\#\#\# $@: python3 is missing \#\#\#\033[0m\n" >&2; \
+		printf "\nThis gate is a python3 script. Without an interpreter it does not\n" >&2; \
+		printf "check less - it checks nothing, and used to say so only by printing\n" >&2; \
+		printf "\"skipped\" and exiting 0.\n\n" >&2; \
+		printf "If this machine genuinely has no python3, drop the gate for the run,\n" >&2; \
+		printf "so the choice is visible in the command:\n\n" >&2; \
+		printf "  make test TEST_GATES='\$$(filter-out $@,\$$(ALL_TEST_GATES))'\n\n" >&2; \
+		exit 1; \
+	fi
+
+# $1 is the directory, $2 the script that fetches it.
+REQUIRE_DATA = if [ ! -d "$1" ]; then \
+		printf "\033[0;31m\n\#\#\# $@: $1 is not here \#\#\#\033[0m\n" >&2; \
+		printf "\nThis gate compares committed output against the data it was\n" >&2; \
+		printf "generated from. Nothing under third_party/ is tracked, so a fresh\n" >&2; \
+		printf "clone has none of it and this gate used to print \"skipped\" and exit\n" >&2; \
+		printf "0 - which says the committed output is right, having read none of it.\n\n" >&2; \
+		printf "Fetch it:\n\n  $2\n\n" >&2; \
+		printf "Or drop the gate for the run, so the choice is in the command:\n\n" >&2; \
+		printf "  make test TEST_GATES='\$$(filter-out $@,\$$(ALL_TEST_GATES))'\n\n" >&2; \
+		exit 1; \
+	fi
 
 TEST_PAIRS := $(shell find tests -type f -name 'test*.cpp' -o -name 'test-*.cpp' 2>/dev/null | sort | while read f; do \
 	if [ "$$f" = "tests/test.cpp" ]; then echo "$$f|testText"; \
@@ -1615,19 +1663,13 @@ check-ucd-pin: $(APP_DIR)/$(TARGET)
 	printf "\033[0;32mOne UCD version: ghoti.io-unicode and tools/idna/UCD_VERSION both say $$theirs.\033[0m\n"
 
 check-idna-tables: ## Fail if the committed IDNA tables are not what the generator produces
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		printf "check-idna-tables: skipped (no python3)\n"; \
-		exit 0; \
-	fi; \
+	@$(REQUIRE_PYTHON3); \
 	if ! python3 tools/idna/test_gen.py >/dev/null 2>&1; then \
 		printf "\033[0;31m\n### The IDNA generator's own tests fail ###\033[0m\n" >&2; \
 		python3 tools/idna/test_gen.py >&2 || true; \
 		exit 1; \
 	fi; \
-	if [ ! -d "$(UCD_DIR)" ]; then \
-		printf "check-idna-tables: generator tests pass; table diff skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
-		exit 0; \
-	fi; \
+	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	mkdir -p "$$tmp/out"; \
@@ -1637,10 +1679,8 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 		cat "$$tmp/err" >&2; \
 		exit 1; \
 	fi; \
-	if [ ! -d "$(IDNA_MAPPING_DIR)" ]; then \
-		printf "check-idna-tables: mapping table diff skipped (no $(IDNA_MAPPING_DIR); run tools/idna/fetch.sh)\n"; \
-		cp $(IDNA_TABLES)/uts46_tables.c $(IDNA_TABLES)/nfc_tables.c "$$tmp/out/"; \
-	elif ! python3 tools/idna/gen_uts46.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
+	$(call REQUIRE_DATA,$(IDNA_MAPPING_DIR),tools/idna/fetch.sh); \
+	if ! python3 tools/idna/gen_uts46.py --out "$$tmp/out" >/dev/null 2>"$$tmp/err"; then \
 		printf "\033[0;31m\n### The UTS #46 generator failed ###\033[0m\n" >&2; \
 		cat "$$tmp/err" >&2; \
 		exit 1; \
@@ -1657,14 +1697,17 @@ check-idna-tables: ## Fail if the committed IDNA tables are not what the generat
 	printf "\033[0;32mIDNA tables are byte-identical to the generators' output (UCD $(UCD_VERSION), IDNA mapping $(IDNA_MAPPING_VERSION)).\033[0m\n"
 
 check-idna-oracle: ## Compare the derived IDNA property against an independent implementation
-	@if ! python3 -c "import idna" >/dev/null 2>&1; then \
-		printf "check-idna-oracle: skipped (no python3 idna package)\n"; \
-		exit 0; \
+	@$(REQUIRE_PYTHON3); \
+	if ! python3 -c "import idna" >/dev/null 2>&1; then \
+		printf "\033[0;31m\n### $@: the python3 idna package is missing ###\033[0m\n" >&2; \
+		printf "\nThis gate is the only thing here that holds RFC 5892's derived\n" >&2; \
+		printf "property against another author's reading of the same RFC. Without\n" >&2; \
+		printf "python-idna it checks nothing.\n\n  pip install idna\n\n" >&2; \
+		printf "Or drop the gate for the run, so the choice is in the command:\n\n" >&2; \
+		printf "  make test TEST_GATES='$$(filter-out $@,$$(ALL_TEST_GATES))'\n\n" >&2; \
+		exit 1; \
 	fi; \
-	if [ ! -d "$(UCD_DIR)" ]; then \
-		printf "check-idna-oracle: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
-		exit 0; \
-	fi; \
+	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
 	python3 tools/idna/oracle.py
 
 check-nfc-oracle: ## Compare this library's NFC against Python's, over every sequence
@@ -1674,14 +1717,8 @@ check-nfc-oracle: ## Compare this library's NFC against Python's, over every seq
 # that is right about almost every string. The driver links the archive, so
 # this needs a build.
 check-nfc-oracle: $(APP_DIR)/$(TARGET)
-	@if ! python3 -c "import unicodedata" >/dev/null 2>&1; then \
-		printf "check-nfc-oracle: skipped (no python3 unicodedata)\n"; \
-		exit 0; \
-	fi; \
-	if [ ! -d "$(UCD_DIR)" ]; then \
-		printf "check-nfc-oracle: skipped (no $(UCD_DIR); run tools/idna/fetch.sh)\n"; \
-		exit 0; \
-	fi; \
+	@$(REQUIRE_PYTHON3); \
+	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
 	python3 tools/idna/nfc_oracle.py
 
 check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.org publishes
@@ -1693,14 +1730,8 @@ check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.
 # compare against. Regenerating from the published documents and diffing is
 # the comparison; it is also a content check, since the bytes are verbatim and
 # any difference at all is a difference from what is published.
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		printf "check-metaschema: skipped (no python3)\n"; \
-		exit 0; \
-	fi; \
-	if [ ! -d "$(METASCHEMA_DIR)" ]; then \
-		printf "check-metaschema: skipped (no $(METASCHEMA_DIR); run tools/metaschema/fetch.sh)\n"; \
-		exit 0; \
-	fi; \
+	@$(REQUIRE_PYTHON3); \
+	$(call REQUIRE_DATA,$(METASCHEMA_DIR),tools/metaschema/fetch.sh); \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	if ! python3 tools/metaschema/gen_metaschema.py --out "$$tmp" >/dev/null 2>"$$tmp/err"; then \
