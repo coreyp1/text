@@ -2,7 +2,7 @@
 
 # JSON Module Documentation (ghoti.io)
 
-This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) and [ghoti.io-chron](https://github.com/Ghoti-io/chron), and both appear in *public* headers, so a consumer needs their headers to compile against this one. See the [Dependencies](../../README.md) section of the README.
+This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only, so a consumer needs their headers to compile against this one. See the [Dependencies](../../README.md) section of the README.
 
 ---
 
@@ -549,20 +549,27 @@ on which - only the characters the mapping table *changes* are taken from it.
 
 ### The tables, and what checks them
 
-Four generated files under `src/idna/tables/`, all committed so that a build
+Two generated files under `src/idna/tables/`, both committed so that a build
 needs neither the network nor Python:
 
-- `idna_tables.c`, the RFC 5892 derived property and the narrow tables the
-  contextual and bidi rules read, from `tools/idna/gen_tables.py`;
-- `uts46_tables.c`, the characters UTS #46's mapping step changes, and
-- `nfc_tables.c`, the combining classes, canonical decompositions and
-  composition pairs, both from `tools/idna/gen_uts46.py`.
+- `idna_tables.c`, the RFC 5892 derived property, from
+  `tools/idna/gen_tables.py`;
+- `uts46_tables.c`, the characters UTS #46's mapping step changes, from
+  `tools/idna/gen_uts46.py`.
+
+There were four. `nfc_tables.c` - the combining classes, canonical
+decompositions and composition pairs - and the narrow Script, Joining_Type,
+Bidi_Class and virama tables inside `idna_tables.c` were about 2,600 lines of
+UCD data that [ghoti.io-unicode](https://github.com/coreyp1/unicode) now holds
+for the whole suite. What is still generated here is what Unicode does not
+define: RFC 5892's derived property, and UTS #46's mapping table, which is not
+part of the UCD and versions on its own schedule.
 
 The UCD version is pinned in `tools/idna/UCD_VERSION` and the mapping table's
 in `tools/idna/IDNA_MAPPING_VERSION`, because the two version on different
 schedules - there is no 17.0.0 of the mapping table.
 
-Three gates:
+Four gates:
 
 - `make check-idna-tables` regenerates and diffs, so a committed table cannot
   drift from the generator that is supposed to produce it;
@@ -571,12 +578,18 @@ Three gates:
   of the mapping table against python-idna's, *on the version python-idna was
   built from*, so that a genuine change between table versions is not reported
   as a finding;
-- `make check-nfc-oracle` compares this library's normalisation against
-  CPython's over three and a half million sequences: every codepoint alone,
-  every starter-and-mark pair, starter-and-two-marks across the combining
-  classes, and Hangul in every combination. A wrong normaliser is right about
-  almost every string, which is exactly why it needs an oracle rather than a
-  test suite.
+- `make check-nfc-oracle` compares the normalisation this library reaches
+  through `ghoti.io-unicode` against CPython's, over three and a half million
+  sequences: every codepoint alone, every starter-and-mark pair,
+  starter-and-two-marks across the combining classes, and Hangul in every
+  combination. A wrong normaliser is right about almost every string, which is
+  exactly why it needs an oracle rather than a test suite. `unicode` runs its
+  own, larger oracle; this one asks the question through the call path `text`
+  actually uses, which is the part a migration can break;
+- `make check-ucd-pin` fails if the `unicode` this build linked was generated
+  from a different UCD version than `tools/idna/UCD_VERSION` names. Two
+  versions in one library would mean JSON5 names and IDNA validity disagreeing
+  about which characters exist.
 
 `pattern` and `patternProperties` are implemented, but only against a
 regular-expression engine the caller supplies through

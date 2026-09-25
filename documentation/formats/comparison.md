@@ -412,7 +412,7 @@ real advantages over cJSON and jansson.
   eleven the dialect asks for. One option per difference rather than one dialect
   flag, and each tested as refused with its option clear as well as accepted
   with it set. An unquoted name is an ECMAScript IdentifierName, so ID_Start and
-  ID_Continue come from a table generated from the UCD: `{café: 1}` is a name and
+  ID_Continue are asked of `ghoti.io-unicode`: `{café: 1}` is a name and
   `{😀: 1}` is not.
 - ~~Conversion to YAML.~~ **Added**: `gtext_json_to_yaml()`. Types are preserved
   rather than re-resolved, which is the whole difficulty - a JSON string reading

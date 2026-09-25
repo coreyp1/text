@@ -37,7 +37,7 @@ int main(void) {
 
 ## Dependencies
 
-Two, both inside the suite and both resolved through pkg-config:
+Three, all inside the suite and all resolved through pkg-config:
 
 - [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
   vtable the suite shares. All three formats route a whole parse - and
@@ -52,6 +52,17 @@ Two, both inside the suite and both resolved through pkg-config:
   own - one that refused four spellings YAML permits and accepted one it does
   not, because it had never been held against another implementation. Time is
   not a text format's business.
+- [ghoti.io-unicode](https://github.com/coreyp1/unicode), for the Unicode
+  Character Database and the algorithms over it: normalisation form C, which
+  UTS #46 needs and which JSON's `normalize_unicode` uses, and the properties
+  the rest reads - ID_Start and ID_Continue for a JSON5 name, General_Category
+  for JSON5's whitespace, and Script, Joining_Type, Bidi_Class and the
+  combining classes for IDNA's contextual and bidi rules. This library used to
+  generate all of that itself, about 2,900 lines of tables from a generator of
+  its own; `regex` generated the same data from the same files with a second
+  generator, and `font` would have been the third, with three version pins that
+  nothing compared. It does not appear in a public header - it is a link
+  dependency, not a compile one, for a consumer of this library.
 
 Nothing else beyond libc. Google Test is required only to build the test
 suite, and clang only to build the fuzzers.
@@ -67,7 +78,8 @@ sudo make install
 ```
 
 Otherwise build the suite into a local prefix from the parent folder, which
-installs cutil and chron first, and point this build at the same prefix:
+installs cutil, unicode and chron first, and point this build at the same
+prefix:
 
 ```bash
 ./bootstrap.sh

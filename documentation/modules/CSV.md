@@ -2,7 +2,7 @@
 
 # CSV Module Documentation (ghoti.io)
 
-This document describes the **full‑featured CSV parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **predictability** over convenience shortcuts. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) and [ghoti.io-chron](https://github.com/Ghoti-io/chron), and both appear in *public* headers. See the [Dependencies](../../README.md) section of the README.
+This document describes the **full‑featured CSV parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **predictability** over convenience shortcuts. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only. See the [Dependencies](../../README.md) section of the README.
 
 CSV in the wild is not a single format. This module supports a **strict RFC 4180 mode** plus an explicit, configurable **dialect system** to handle common variants (TSV, custom delimiters, different quoting rules, Excel‑style behaviors, etc.).
 
