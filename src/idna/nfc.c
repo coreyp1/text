@@ -39,9 +39,15 @@
  * The behaviour did not change, and that is measured rather than assumed:
  * every codepoint on its own, a starter with each of the 968 marks that have
  * a non-zero combining class, starter-with-two-marks over a spread of both,
- * and every L/V/T jamo combination - 1,202,634 sequences, no disagreement.
- * tools/idna/nfc_oracle.py still compiles against this header and still
- * answers to CPython.
+ * and every L/V/T jamo combination. tools/oracle/nfc_diff.py still compiles
+ * against this header and still answers to CPython.
+ *
+ * The figure that belongs here is the one that gate prints, and it depends on
+ * which CPython answers, so it names the pin: against a reference carrying the
+ * same UCD 17.0.0 these tables do, 3,596,802 of 4,411,532 sequences compared
+ * with no disagreement, the remaining 814,730 being sequences that contain a
+ * codepoint 17.0.0 leaves unassigned. An earlier revision of this comment said
+ * 1,202,634, which matched nothing the gate has ever printed.
  */
 
 #include <stdint.h>

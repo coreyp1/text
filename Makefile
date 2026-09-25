@@ -1770,16 +1770,40 @@ check-idna-oracle: ## Compare the derived IDNA property against an independent i
 	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
 	python3 tools/idna/oracle.py
 
-check-nfc-oracle: ## Compare this library's NFC against Python's, over every sequence
-# Python's unicodedata is a normaliser written by other people from the same
-# annex, and a wrong one here is not visible from outside: a missed
-# composition exclusion or an unstable canonical sort produces a normaliser
-# that is right about almost every string. The driver links the archive, so
-# this needs a build.
+check-nfc-oracle: ## Compare this library's NFC against a pinned CPython's, over every sequence
+# CPython's unicodedata is a normaliser written by other people from the same
+# annex, and a wrong one here is not visible from outside: a missed composition
+# exclusion or an unstable canonical sort produces a normaliser that is right
+# about almost every string. The driver links the archive, so this needs a
+# build - and that is why only the *reference* half runs in the image.
+#
+# The gating pin carries UCD 16.0.0 against these tables' 17.0.0, so the skew is
+# stated rather than closed. Measured before the conversion: over the 3,412,112
+# sequences the host's 15.1.0 could answer, UCD 15.1.0, 16.0.0 and 17.0.0 return
+# identical NFC, so moving off the host buys coverage and reproducibility and
+# corrects nothing. check-nfc-oracle-strict below is where the skew goes away.
 check-nfc-oracle: $(APP_DIR)/$(TARGET)
 	@$(REQUIRE_PYTHON3); \
 	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
-	python3 tools/idna/nfc_oracle.py
+	$(ORACLE_RUN) python -- python3 tools/oracle/nfc_diff.py
+
+check-nfc-oracle-strict: ## The NFC oracle against a UCD-matched CPython, where a disagreement is a defect
+# Deliberately outside TEST_GATES. The only pin whose UCD equals this library's
+# is a release candidate, and gating on one of those is not something to do -
+# but a matched reference is the only configuration in which a disagreement is
+# necessarily a defect rather than a finding to read, and it is the only one
+# with no skipped-for-age bucket at all. It also compares 184,690 more sequences
+# than the gating pin, which is the whole of what the skew costs: the remaining
+# 814,730 skips are codepoints 17.0.0 does not assign either, so no reference
+# reaches them and this gate cannot pass 81.5% coverage at any version.
+#
+# When CPython 3.15.0 is released the python pin moves to it and the two gates
+# converge; until then this is the one to run by hand after touching NFC.
+check-nfc-oracle-strict: $(APP_DIR)/$(TARGET)
+	@$(REQUIRE_PYTHON3); \
+	$(call REQUIRE_DATA,$(UCD_DIR),tools/idna/fetch.sh); \
+	GHOTI_ORACLE_ALIAS=python=python-next \
+		$(ORACLE_RUN) python -- python3 tools/oracle/nfc_diff.py --strict
 
 check-metaschema: ## Fail if the embedded meta-schemas are not what json-schema.org publishes
 # The sixteen documents under $(METASCHEMA_SRC) - 2020-12's nine and 2019-09's

@@ -25,7 +25,7 @@
  *
  * Separate from nfc_internal.h on purpose. That header declares nothing but
  * codepoint arrays and includes nothing but stddef and stdint, which is what
- * lets tools/idna/nfc_oracle.py compile a standalone driver against it with no
+ * lets tools/oracle/nfc_diff.py compile a standalone driver against it with no
  * dependency on cutil. Pulling GTEXT_Allocator in there broke that gate -
  * GTEXT_Allocator is a typedef of cutil's GCU_Allocator and cannot be forward
  * declared - so the wrapper that needs an allocator lives here instead and the
