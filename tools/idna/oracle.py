@@ -140,6 +140,28 @@ def main():
         sys.exit("no UCD at %s - run tools/idna/fetch.sh" % ucd)
 
     ours = gen_tables.derive(ucd)
+
+    # Which codepoints this library's UCD assigns, so that the three reasons a
+    # comparison did not happen can be told apart. UnicodeData.txt lists the
+    # large blocks as First/Last pairs rather than row by row, and without
+    # expanding them the CJK and Hangul ranges read as unassigned - 254,501
+    # codepoints in the wrong bucket.
+    listed, blocks, first = set(), [], None
+    for line in open(os.path.join(ucd, "UnicodeData.txt"), encoding="utf-8"):
+        fields = line.split(";")
+        if len(fields) < 2:
+            continue
+        cp, name = int(fields[0], 16), fields[1]
+        if name.endswith(", First>"):
+            first = cp
+        elif name.endswith(", Last>"):
+            blocks.append((first, cp))
+            first = None
+        else:
+            listed.add(cp)
+
+    def assigned_here(cp):
+        return cp in listed or any(lo <= cp <= hi for lo, hi in blocks)
     classes = idna.idnadata.codepoint_classes
     # Each entry packs a half-open range into one integer as
     # (lo << 32) | hi_exclusive, which is the oracle's own storage format and
@@ -158,13 +180,25 @@ def main():
     disagree = []
     skipped = 0
     compared = 0
-    # Three counts rather than two, because the headline was 73.8% padding.
-    # A codepoint the oracle's Unicode does not assign gets DISALLOWED from it
-    # by default, and this library usually says DISALLOWED too - so the pair
-    # agrees without either side having an opinion, and 815,655 such agreements
-    # were being counted in the same total as the real comparisons. `shared`
-    # holds them separately; `compared - shared` is the figure to quote.
+    # Four counts, not two and not three.  A codepoint the oracle's Unicode does
+    # not assign gets DISALLOWED from it by default, and this library usually
+    # says DISALLOWED too, so the pair agrees without either side having an
+    # opinion; those agreements used to sit in the same total as the real
+    # comparisons.  Splitting them out was the first fix and it was not enough,
+    # because 925 of them are assigned in *our* UCD and only unassigned in the
+    # reference's - so a line reading "neither version assigns them" was hiding
+    # the one bucket where a wrong answer of ours passes silently.  That is the
+    # finding's own shape one level up, which is why it gets its own line and
+    # the wording says what it is rather than what it mostly is.
+    #
+    #   compared      both versions assign it: the figure to quote
+    #   novel_agreed  ours assigns it, the reference does not, and we both say
+    #                 DISALLOWED - so a DISALLOWED of ours that should have been
+    #                 PVALID agrees with the reference's ignorance and passes
+    #   skipped       ours assigns it, the reference does not, answers differ
+    #   unassigned    neither assigns it
     shared = 0
+    novel_agreed = 0
     for cp in range(gen_tables.MAX_CODEPOINT + 1):
         # Surrogates and codepoints the oracle's Unicode does not assign are
         # not a disagreement about anything.
@@ -180,6 +214,8 @@ def main():
         compared += 1
         if not assigned_there:
             shared += 1
+            if assigned_here(cp):
+                novel_agreed += 1
         if mine != yours:
             disagree.append((cp, mine, yours))
 
@@ -187,14 +223,17 @@ def main():
           % (idna.__version__, unicodedata.unidata_version, args.version))
     print("compared %d codepoints where both versions have an opinion"
           % (compared - shared))
-    print("  %d more agreed only because neither version assigns them, and"
-          % shared)
-    print("  %d were skipped: the oracle does not assign them and we disagree."
+    print("  %d are assigned by neither version and agree by shared default"
+          % (shared - novel_agreed))
+    print("  %d were skipped: we assign them, the oracle does not, and the"
           % skipped)
-    print("  The first number is the one to quote. The second is not a")
-    print("  comparison, and a codepoint this library wrongly called DISALLOWED")
-    print("  would sit in it as a pass."
-          )
+    print("    answers differ, so the difference is a UCD version and not a bug")
+    print("  %d are the blind spot: we assign them, the oracle does not, and we"
+          % novel_agreed)
+    print("    both say DISALLOWED - so a DISALLOWED of ours that should have")
+    print("    been PVALID agrees with the oracle's ignorance and passes here")
+    print("  %d total; the first number is the one to quote"
+          % (compared + skipped))
     status = 0
     if not disagree:
         print("no disagreements")
