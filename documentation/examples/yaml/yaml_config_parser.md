@@ -1,6 +1,6 @@
-@page example_yaml_config_parser YAML Configuration File Parser
+@page example_yaml_config_parser YAML: config
 
-# YAML Configuration File Parser
+# YAML: config
 
 This example demonstrates building a structured configuration from YAML events: collecting key-value pairs, handling nested sections, and constructing a usable config object.
 
@@ -389,4 +389,4 @@ if (strlen(config->app_name) == 0) {
 
 - [yaml_streaming_basic.c](@ref example_yaml_streaming_basic) - Basic streaming parser
 - [yaml_security.c](@ref example_yaml_security) - Security limits and validation
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

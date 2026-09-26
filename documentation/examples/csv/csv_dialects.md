@@ -1,6 +1,6 @@
-@page example_csv_dialects csv_dialects.c - CSV Dialects
+@page example_csv_dialects CSV: dialects
 
-# csv_dialects.c - CSV Dialects
+# CSV: dialects
 
 This example demonstrates using different CSV dialects (TSV, semicolon-delimited, backslash escaping) and configuring dialect options.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

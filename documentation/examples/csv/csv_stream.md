@@ -1,6 +1,6 @@
-@page example_csv_stream csv_stream.c - Streaming Parser
+@page example_csv_stream CSV: streaming
 
-# csv_stream.c - Streaming Parser
+# CSV: streaming
 
 This example demonstrates using the streaming parser for incremental CSV processing, ideal for large files.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

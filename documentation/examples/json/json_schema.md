@@ -1,6 +1,6 @@
-@page example_json_schema json_schema.c - JSON Schema Validation
+@page example_json_schema JSON: Schema
 
-# json_schema.c - JSON Schema Validation
+# JSON: Schema
 
 This example demonstrates compiling JSON Schemas and validating JSON documents against them.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

@@ -60,33 +60,16 @@ To run an example (on Linux):
 LD_LIBRARY_PATH=build/linux/release/apps build/linux/release/apps/examples/csv/csv_basic
 ```
 
-### Manual Compilation
-
-If you prefer to compile examples manually:
+Against an installed library:
 
 ```bash
-# Build the library first
-make
-
-# Compile a specific example
-gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/csv/csv_basic.c -lghoti.io-text-0 -o csv_basic
-
-# Run (set LD_LIBRARY_PATH on Linux)
-LD_LIBRARY_PATH=build/linux/release/apps ./csv_basic
+cc -o csv_basic examples/csv/csv_basic.c $(pkg-config --cflags --libs ghoti.io-text-0)
 ```
 
-Or use pkg-config if installed:
-
-```bash
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
-    examples/csv/csv_basic.c \
-    $(pkg-config --libs ghoti.io-text-0) \
-    -o csv_basic
-```
+A line that only adds `-I include` cannot see cutil, chron or unicode.
 
 ## Requirements
 
 - C17-compatible compiler (gcc, clang)
-- The ghoti.io-text library built and installed (or available in build directory)
-- On Linux: may need to set `LD_LIBRARY_PATH` to point to the library location
+- The ghoti.io-text library, and cutil, chron and unicode, on `PKG_CONFIG_PATH`
+- On Linux, `make examples` needs `LD_LIBRARY_PATH=build/linux/release/apps`

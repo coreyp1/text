@@ -1,6 +1,5 @@
-@page examples Examples
+@page text_examples Examples
 
-# Examples
 
 This page provides an overview of the example programs included with the Ghoti.io Text library. These examples demonstrate practical usage of the library's APIs and serve as starting points for your own projects.
 
@@ -12,7 +11,7 @@ The examples are organized by module:
 
 - **JSON Examples** - Demonstrate JSON parsing, writing, streaming, and advanced features
 - **CSV Examples** - Demonstrate CSV reading, writing, streaming, and dialect handling
-- **YAML Examples** - Demonstrate YAML streaming parser, security limits, and config parsing
+- **YAML Examples** - `yaml_writer_formatting.c` is the program in the tree. The security, streaming and config pages are guides for programs that have not been written
 
 All examples are located in the `examples/` directory and can be built using the Makefile.
 
@@ -103,42 +102,15 @@ LD_LIBRARY_PATH=build/linux/release/apps \
 
 On other platforms, adjust the library path as needed for your system.
 
-### Manual Compilation
+### Compiling one file
 
-If you prefer to compile examples manually:
-
-```bash
-# Build the library first
-make
-
-# Compile a specific example (JSON)
-gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/json/json_basic.c -lghoti.io-text-0 -o json_basic
-
-# Compile a specific example (CSV)
-gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/csv/csv_basic.c -lghoti.io-text-0 -o csv_basic
-
-# Run (set LD_LIBRARY_PATH on Linux)
-LD_LIBRARY_PATH=build/linux/release/apps ./json_basic
-```
-
-### Using pkg-config
-
-If the library is installed system-wide, you can use pkg-config:
+`make examples` is the in-tree build. A compiler line that only adds
+`-I include` cannot see cutil, chron or unicode. Against an installed
+library:
 
 ```bash
-# JSON example
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
-    examples/json/json_basic.c \
-    $(pkg-config --libs ghoti.io-text-0) \
-    -o json_basic
-
-# CSV example
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
-    examples/csv/csv_basic.c \
-    $(pkg-config --libs ghoti.io-text-0) \
-    -o csv_basic
+cc -o json_basic examples/json/json_basic.c $(pkg-config --cflags --libs ghoti.io-text-0)
+cc -o csv_basic examples/csv/csv_basic.c $(pkg-config --cflags --libs ghoti.io-text-0)
 ```
 
 ---
@@ -176,5 +148,5 @@ To build and run the examples, you need:
 - [JSON Module](@ref json_module) - Complete JSON module documentation
 - [CSV Module](@ref csv_module) - Complete CSV module documentation
 - [Core Module](@ref core_module) - Core utilities and macros
-- [Function Index](@ref functions_index) - Complete API reference
+- [Function Index](@ref text_functions_index) - Complete API reference
 - [Main Documentation](@ref index) - Library overview

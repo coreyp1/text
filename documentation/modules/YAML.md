@@ -1,8 +1,8 @@
-@page yaml_module YAML Module Documentation
+@page yaml_module YAML
 
-# YAML Module Documentation (ghoti.io)
+# YAML
 
-This document describes the **YAML parsing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross-platform** and prioritizes **correctness** and **memory safety** over simplicity. It is not dependency-free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) for `GCU_Allocator`, [ghoti.io-chron](https://github.com/Ghoti-io/chron) for `!!timestamp` and [ghoti.io-unicode](https://github.com/coreyp1/unicode) for the UCD; the first two appear in *public* headers - `GCHRON_YamlValue` is what a timestamp node holds. See the [Dependencies](../../README.md) section of the README.
+This document describes the **YAML parsing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross-platform** and prioritizes **correctness** and **memory safety** over simplicity. It is not dependency-free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) for `GCU_Allocator`, [ghoti.io-chron](https://github.com/Ghoti-io/chron) for `!!timestamp` and [ghoti.io-unicode](https://github.com/coreyp1/unicode) for the UCD; the first two appear in *public* headers - `GCHRON_YamlValue` is what a timestamp node holds. See the [Dependencies](README.md#dependencies) section of the README.
 
 ---
 
@@ -24,128 +24,28 @@ the `!!timestamp`/`!!set`/`!!omap`/`!!pairs` types with validation, custom
 application tags, UTF-8/16/32 input with BOM detection, limit enforcement,
 and conversion to JSON.
 
-**Recently fixed:** block-context plain scalars containing ` - `, ` , `,
-` ? ` or a bare `#` were silently truncated at the indicator; they are now
-kept whole, as is `[a-b, c]` in flow context. The before-and-after table and
-the PyYAML comparison are on \ref format_yaml "the YAML format page".
-
 **Measured:** `make conformance` runs the
 [YAML test suite](https://github.com/yaml/yaml-test-suite) against this
 parser, at the commit pinned in `tools/conformance/YAML_SUITE_COMMIT`. Of the
-suite's **406 cases it checks 395** - those carrying a `json` field, by value,
-those carrying a `tree`, by event stream, and those marked `fail`, by refusal
-- and **all 395 pass**. The same harness scores
-js-yaml at 82.0% and PyYAML at 77.3% on the value cases, which is the
-calibration that makes the figure readable: neither reference scores 100%
-either. Those two are driven through the JSON interface alone, so their
-denominator is the old 366 and not 395 - the comparison is not like for like,
-and it runs *against* this parser rather than for it: the 29 extra cases are
-the harder ones.
+suite's 406 cases it checks 395, and all 395 pass. The eleven left over carry
+no expectation, or one the harness cannot decode. The same harness scores
+js-yaml at 82.0% and PyYAML at 77.3% on the value cases. Those two are scored
+through the JSON interface, so their denominator is the value cases, not all
+395. Shapes the suite never contains are in
+`tests/data/yaml/spec-1.2.2.corpus`. See
+\ref format_yaml "the YAML format page".
 
-The eleven cases left over are not a pass and not a failure - they were never
-asked. Nine carry no expectation of any kind, and two carry one the harness
-cannot decode.
+An alias may carry no property of its own. A property on the line above an
+alias belongs to the node that line opens. `&a` on its own line over `: 1`
+is refused: accepting it would move the anchor onto the value.
 
-**What the event stream found.** Until `gtext_yaml_stream_walk()` existed, the
-thirty-eight cases asserting an event stream were skipped, and the score was
-"all 366 checked cases pass". Twenty-nine of those thirty-eight can now be
-asked, and **sixteen of them were refused outright** - documents this parser
-called invalid and the suite says are valid. That was not a coincidence: a
-mapping with an empty key has a null key, JSON cannot write one, so the suite
-gives those cases an event stream and no JSON. The harness had been skipping
-exactly the cases that were failing.
-
-They were one cluster, and all of it is now fixed:
-
-| Shape | Grammar | Cases |
-| --- | --- | --- |
-| A block mapping entry with no key: `: a`, `:`, `- :` | `c-l-block-map-implicit-entry`'s `e-node` arm (8.2.2) | NHX8, UKK6, NKF9, 2JQS, S3PD, 6M2F |
-| A flow collection as an implicit key: `[a]: b` | `c-s-implicit-json-key` (8.2.2) | LX3P, Q9WF |
-| A compact collection as an explicit key on the `?`'s own line: `? earth: blue` | `s-l+block-indented` (8.2.2) | V9D5, M2N8, KK5P |
-| An explicit entry whose key never got a `:` | `c-l-block-map-explicit-entry`'s second `e-node` (8.2.2) | KK5P |
-| A sequence at the mapping's own column as an explicit key | `seq-spaces(n,block-out)` = `n-1` (8.2.1) | 6PBE |
-| `%21` in a `%TAG` suffix | URI escaping in `ns-tag-char` (5.6) | 6CK3 |
-| Two pairs with the same key, kept rather than collapsed | `GTEXT_YAML_DUPKEY_KEEP_ALL`, below | 2JQS, X38W |
-| A property whose node is a block mapping with no scalar key | `c-ns-properties` (7.1) reaching a `SEQUENCE_START` or `ALIAS` | 26DV, 6BFJ |
-
-**The last two.** `26DV` and `6BFJ` were one gap: a property written at the
-end of a line, whose node turns out to be a block mapping whose first key is
-not a scalar.
-
-```yaml
-top3: &node3
-  *alias1 : scalar3     # &node3 anchors the mapping, not the alias
-```
-
-A property reaches the parser on the first node it can attach to, and the
-handover that gives it to the collection instead (`adopt_own_line_anchor()`)
-ran only on a `SCALAR` event - the one shape where the key and the `:` that
-opens the mapping are adjacent. An alias key or a flow collection key puts
-other events between the two. `26DV` carried `&node3` on to `scalar3`, which
-says the wrong thing rather than nothing; `6BFJ` dropped its anchor.
-
-Three changes closed it. `parser_hold_outer_props()` is now called from every
-event that can carry a node, not just `SCALAR`. The check that a held
-property was claimed - one event later at most - waits through the flow
-collection it precedes, since a `[` cannot reach its `:` in one event. And
-`stream_emit_alias()` hands a property past an alias instead of onto it: an
-alias node is `*` and a name and nothing else (`c-ns-alias-node`, 7.1), so a
-property on the alias's own line is an error and one on the line above
-belongs to what that line opens. A tag written on an alias used to be dropped
-without a word and an anchor carried on to the next node; both are refused
-now, and the message says an alias may carry no property rather than
-reporting a second one. js-yaml agrees in so many words: *alias node should
-not have any properties*.
-
-What is still refused, deliberately, is `&a` on its own line over `: 1` -
-accepting it would move the anchor silently onto the value, and refusing
-beats that. The parser can see the property there because `prop_line` and
-`prop_col` travel on `INDICATOR` events for exactly this purpose.
-
-`YTS_MIN_CORPUS` floors the second denominator so the corpus cannot quietly
-shrink back.
-
-**And a corpus is still not a specification.** Eleven divergences from YAML
-1.2.2 were found after the score reached 395 of 395, by reading the grammar
-instead of running the suite: case-insensitive matching of the core schema's
-resolution table, YAML 1.1 integer forms resolving under 1.2, tabs refused in
-directive separation, a repeated `%TAG` handle, `%YAML 2.0`, a directive with
-no `---` after it, a forward alias reference and an empty `!<>`. Three more
-came out of checking those: `c-printable` (5.1) was not enforced anywhere, so
-a NUL truncated the scalar it stood in, and the byte order mark was accepted
-inside scalars and refused before a later document - each the wrong way
-round. None of the fourteen shapes appears in any of the suite's 406
-documents, which is why the score did not move while they were wrong. They are fixed and pinned in
-`tests/data/yaml/spec-1.2.2.corpus`, scored by `make test` so they are asked
-on every build rather than only when somebody runs the conformance target.
-See \ref format_yaml "the YAML format page" for the table.
-
-**Recently closed:** a node carrying two anchors, which was the last case the
-harness could check and this parser could not answer. The second anchor
-silently replaced the first, which lost the outer anchor from the *valid*
-half of that shape - two anchors on two different nodes - as well as
-accepting the invalid half. Telling them apart needs two properties pending
-at once, where the stream had one slot. The first run scored 51.9%; the
-hundred and seventy-five cases since came from quoted-scalar line folding,
-directives, a group of structural refusals, the rule that `:`, `-` and `?`
-are indicators only where nothing plain-safe follows them, tabs in leading
-white space, a group of positional rules, a group around documents and
-anchors, the tag property in its three spellings, a group of closed lists,
-a group about where a line may begin, the empty node, the indentation a
-node's properties have to clear, what may be written on the "---" line, and
-the document markers a multi-line scalar may not contain, how far in a
-scalar's continuation lines have to be, and rendering `!!set` and `!!omap` as
-the JSON they already are, and the line a flow pair's key and colon share.
-There are no benchmarks.
-
-**Verified:** the suite runs 2154 tests across 104 binaries with zero
-failures, clean under valgrind and under ASan/UBSan, with a libFuzzer harness
-that has found two scanner hangs, a use-after-free and several leaks.
+There are no benchmarks. The suite runs under valgrind and under ASan/UBSan,
+and `tests/fuzz/fuzz_yaml.cpp` parses and walks.
 
 For the specification-level detail - which clauses are implemented, the
 deviations, and what evidence backs each claim - see
 \ref format_yaml "YAML" under
-\ref format_references "Format and specification references".
+\ref text_format_references "Format and specification references".
 
 ### Core Capabilities
 
@@ -339,29 +239,11 @@ no parent pointers, so asking a node how deep it sits would cost a walk on
 every append — and a document built through the API can therefore nest as far
 as memory allows.
 
-Parsing is **linear in nesting depth**. It was quadratic until recently, for
-two independent reasons that are worth knowing if you are looking at a
-profile: a property sentinel with two spellings made a stack walk run for
-every event that had no properties, and five helpers each walked backwards
-to the start of the current line — which, in a deeply nested *flow*
-document, is the whole document. A 100,000-deep parse took 11.3 seconds and
-now takes 0.03, and the shape holds out to 800,000 levels.
-
-`SIZE_MAX` removes the limit, and removing it is safe. That was not always
-true: the three walks recursed on the C stack at roughly 344 bytes a level
-while resolving, 228 in the DOM writer and 113 in the clone, so "no limit"
-meant a segmentation fault at about 24,000 levels resolving, 37,000 writing
-and 74,000 cloning. Each keeps its stack on the heap now, so depth costs
-memory rather than a frame, and `max_depth` is a policy about what you are
-willing to accept rather than a guard against your own process dying.
-
-That sentence has been in `yaml_core.h` since the struct was written, and
-until recently nothing implemented it. Every check reads
-`if (limit > 0 && ...)`, so a zero did not select the default — it removed
-the limit, and `GTEXT_YAML_Parse_Options opts = {0};` removed all three at
-once. `gtext_yaml_parse_options_effective()` now resolves them, and every
-entry point in the module already went through it. To ask for *no* limit,
-say `SIZE_MAX`.
+Parsing is linear in nesting depth. The resolver, the DOM writer and
+`gtext_yaml_node_clone()` keep their stacks on the heap, so depth costs
+memory rather than a C stack frame. `SIZE_MAX` removes the limit.
+`gtext_yaml_parse_options_effective()` resolves a zero to the default, and
+every entry point goes through it.
 
 **A zeroed struct is still not the defaults**, and cannot be: every `bool` in
 it zeroes to `false`, which is a setting rather than an absence, so
@@ -746,7 +628,7 @@ The parser tracks total expansion count and fails with `GTEXT_YAML_E_LIMIT` when
 ### 7.4 Cycles, and the one kind a document can hold
 
 An alias names "the most recent **preceding** node having the same anchor"
-(3.2.2.2), so the two-anchor cycle this section used to give as its example
+(3.2.2.2), so this is not a cycle:
 
 ```yaml
 a: &a
@@ -771,11 +653,9 @@ k: v
 j: *O         # *O is this mapping
 ```
 
-`gtext_yaml_alias_target()` returns the enclosing node, and PyYAML renders
-the same document as `{'k': 'v', 'j': {...}}`. The block spelling above was
-wrong until recently - the alias came back as the string `"k"` - and the flow
-spelling `&O [1, *O]` was always right; *An anchor moved, and the
-registration it made did not* in \ref format_yaml has the account.
+`gtext_yaml_alias_target()` returns the enclosing node. PyYAML renders the
+same document as `{'k': 'v', 'j': {...}}`. The flow spelling `&O [1, *O]`
+names the sequence the same way.
 
 A recursive document is finite to handle, because an alias is a node in its
 own right and nothing expands it: the DOM holds the alias and its target,
@@ -787,19 +667,9 @@ itself is the one that has to expect a cycle, and
 `gtext_yaml_node_anchor()` on each collection is what tells it where one can
 close.
 
-There used to be a cycle detector here, and it was never on this path.
-`gtext_yaml_resolver_compute_expansion()` walked anchors registered by name
-and returned `GTEXT_YAML_E_INVALID` on a genuine cycle, which it could see
-because names registered through *that* API can be made mutually referential
-in a way a parsed document cannot. Four of the resolver module's six
-functions had no caller anywhere under `src/`, and the other two were called
-only to build an object nothing ever read; its only exercise was four test
-files that drove it directly. It has been deleted. The accounting the
-library actually does is in three places that a caller reaches — the
-streaming parser's `alias_expansion_count`, the DOM parser's check in
-`resolve_aliases()`, and the conversion budget above — and the alias-bomb
-tests in `tests/yaml/test-yaml-to-json.cpp` are the coverage the resolver was
-credited with, asked of the code that answers.
+`max_alias_expansion` is counted by the streaming parser, by the DOM parser
+while it resolves aliases, and by `gtext_yaml_to_json()` when it
+materializes aliases.
 
 ---
 
@@ -1075,26 +945,15 @@ alternative, so a flow sequence entry that is the empty node with no
 properties has to be written `~`.
 
 **`gtext_yaml_stream_*` does not feed `gtext_yaml_writer_event()`**, however
-alike the two look - both speak `GTEXT_YAML_Event`. The writer takes composed
-events; the streaming parser reports the `:`, the `-` and the `,` as
-indicators and leaves composing to its consumer. Joining them used to return
-OK throughout and write `a1b2` for a two-key mapping. An indicator is refused
-now rather than ignored. `gtext_yaml_stream_walk()` is what produces events a
-writer can take.
+alike the two look. Both speak `GTEXT_YAML_Event`. The writer takes composed
+events. The streaming parser reports `:`, `-` and `,` as indicators and
+leaves composing to its consumer. An indicator passed to the writer is
+refused. `gtext_yaml_stream_walk()` produces events a writer can take.
 
-None of that is visible to `make conformance`, because yaml-test-suite is a
-corpus of inputs and tests no writer at all. What both backwards runs found -
-and what it cost to fix - is on \ref format_yaml "the YAML format page".
-`make test` runs the same properties over the shapes that were wrong, and
-`tests/fuzz/fuzz_yaml_writer.cpp` searches for the rest.
-
-**A corpus of inputs measures only half of a writer.** A document handed to a
-writer did not have to come from parsing; the DOM API takes any `char *`. So a
-value the parser would have refused never reaches a writer from the corpus
-direction and is ordinary from the API one, and that is where four further
-defects lived - a character 5.1 forbids written raw, an unchecked anchor
-name, a tag gaining a layer of percent-encoding on every round trip, and the
-dropped directives above.
+yaml-test-suite is a corpus of inputs and tests no writer.
+`tests/fuzz/fuzz_yaml_writer.cpp` builds documents through the DOM as well as
+from a parse, so a value the parser would have refused still reaches the
+writer.
 
 ### Building an omap
 
@@ -1144,30 +1003,24 @@ spell it - which is what the writer emits, and what a re-read gives back.
 ### Two parsers, one contract
 
 `gtext_yaml_parse()` hands input that is also JSON to the JSON parser and
-converts the result - faster, and on by default. It is a second
-implementation, and it had drifted: a JSON string became a scalar with no
-style, and a scalar is resolved by its contents only when it was written
-plain, so `["0x10"]` came back as `[16]` and `[""]` as `[null]`.
+converts the result. That path is on by default. A quoted scalar stays a
+string: its contents are resolved only when it was written plain.
 
-`make conformance` cannot see the fast path at all - it asks for
-`GTEXT_YAML_DUPKEY_KEEP_ALL`, the one setting that turns it off - and
-`make conformance-fastpath` reaches only five of the suite's 406 documents,
-because a corpus of YAML is a thin corpus of JSON.
+`make conformance` asks for `GTEXT_YAML_DUPKEY_KEEP_ALL`, which turns the
+fast path off, so the 395 does not include it. `make conformance-fastpath`
+reaches five of the suite's 406 documents, because the rest are not JSON.
 `tests/yaml/test-yaml-json-fastpath.cpp` is what holds the two together.
 
-### Planned Features
+Comments and scalar style survive a parse-write cycle when `retain_comments`
+was set at parse time and `pretty` is set on the write. The default write
+is flow style, which has nowhere for a comment on its own line and no
+spelling for a block scalar. `gtext_yaml_node_source_location()`,
+`gtext_yaml_to_json()` and `gtext_json_to_yaml()` are implemented.
 
-- **Comment preservation on write**: comments can be retained in the DOM
-  (`retain_comments`) but are not re-emitted by the DOM writer. The streaming
-  writer does write a COMMENT event it is given.
-- **Scalar style preservation**: a parse-write cycle normalizes style, so a
-  round trip is semantically faithful but not textually faithful.
-- **YAML test suite integration**: shipped; see Compatibility below.
-- **Benchmarks**: parsing speed and memory use are unmeasured.
+### Still open
 
-Source location tracking and YAML-to-JSON conversion were previously listed
-here as planned; both have shipped, as
-`gtext_yaml_node_source_location()` and `gtext_yaml_to_json()`.
+- **Benchmarks.** Parsing speed and memory use are unmeasured. `make
+  conformance` scores the test suite; see Compatibility below.
 
 ### Compatibility
 
@@ -1180,14 +1033,8 @@ failed. The same harness scores js-yaml at
 82.0% and PyYAML at 77.3% on the value cases, so neither reference reaches
 100% on the cases it does check.
 
-That number arrived late and corrected an impression. Fifteen defects had
-been found and fixed by hand-comparison against PyYAML and js-yaml, and a
-153-document corpus built from them agreed at 152/153 - which measured the
-cases already fixed rather than the parser. Running a corpus nobody here
-chose is what made the remaining distance visible.
-
-See \ref format_yaml "the YAML format page" for the deviation table and the
-full statement of tested scope.
+See \ref format_yaml "the YAML format page" for what that score covers and
+what it does not.
 
 ---
 
@@ -1264,32 +1111,8 @@ No YAML object is thread-safe. A document, a parser, a stream, a pull reader
 and a writer each belong to one thread at a time; two that were created
 separately share nothing and may be used concurrently.
 
-"Share nothing" is a claim about process-wide state as much as about objects,
-and it was false until recently for a reason nothing here could have shown
-you. Number conversion has to make the decimal separator belong to the format
-rather than to the user's language settings, and it used to do that by pinning
-`LC_NUMERIC` — thread-locally with `uselocale()` where that existed, and
-process-wide with `setlocale()` where it did not. The guard choosing between
-them was structurally unsatisfiable: it tested `_POSIX_C_SOURCE` above every
-`#include`, where `features.h` has not run yet. So Linux compiled the
-process-wide arm, and two threads writing two unrelated documents did share
-something — the symptom being a number formatted with the wrong separator in
-the *other* thread's output. No crash, no leak, nothing for a sanitizer to
-find.
-
-Repairing the guard was not enough, because Windows is a supported target and
-MinGW has no `uselocale`: the fallback was not covering a hypothetical
-platform, it was covering a third of what this library ships to. So the
-locale is no longer pinned, consulted or changed at all. A conversion reads
-no process-wide state, which means there is no arm left to select wrongly and
-nothing to assert about which one compiled.
-
-The suite measures the property directly instead: a bystander thread formats
-a number whose spelling it knows while the main thread runs 300,000
-conversions, and counts how often it gets something else. Against the old
-process-wide fallback that count was 4,003,481 — `setlocale` is not a narrow
-window, it is most of the runtime. Against what is here now it is 0. A
-document that no thread is modifying may be read from several at once.
+Number conversion does not read or change the process locale. A document
+that no thread is modifying may be read from several at once.
 
 The read accessors really are reads. `gtext_yaml_mapping_get()` is a linear
 scan of the stored pairs and `gtext_yaml_alias_target()` returns a stored

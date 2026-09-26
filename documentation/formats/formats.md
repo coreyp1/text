@@ -1,6 +1,5 @@
-@page format_references Format and Specification References
+@page text_format_references Formats
 
-# Format and specification references
 
 One page per format. Each says which external specification the parser
 implements, which parts of it, where the implementation is deliberately
@@ -11,7 +10,7 @@ which describe the API, and ahead of the source comments, which point back
 here.
 
 The distinction matters when reading: \ref json_module "JSON", \ref csv_module
-"CSV" and \ref yaml_module "YAML" under \ref modules "Modules" tell you how to
+"CSV" and \ref yaml_module "YAML" under \ref text_modules "Modules" tell you how to
 call the library. The pages here tell you what it will do with a given byte
 sequence, and how confident anyone should be about that.
 
@@ -19,20 +18,16 @@ sequence, and how confident anyone should be about that.
 
 | Format | Page | Specification | Read | Write |
 |---|---|---|---|---|
-| JSON | \ref format_json "JSON" | RFC 8259 / ECMA-404, plus RFC 6901, 6902, 7386 | strict RFC 8259, with opt-in JSONC extensions | compact, pretty, and a canonical mode |
-| CSV | \ref format_csv "CSV" | RFC 4180, plus configurable dialects | RFC 4180 and looser dialects; irregular rows | RFC 4180 with configurable quoting |
-| YAML | \ref format_yaml "YAML" | YAML 1.2.2, with a 1.1 resolution mode | block and flow, anchors, tags, multi-document | DOM and streaming event serialization |
+| JSON | @subpage format_json "JSON" | RFC 8259 / ECMA-404, plus RFC 6901, 6902, 7386, 9535, and JSON Schema 2020-12, 2019-09, draft-07, draft-06 | strict RFC 8259. JSONC and JSON5 are separate options, off by default | compact, pretty, and a canonical mode |
+| CSV | @subpage format_csv "CSV" | RFC 4180, plus configurable dialects | RFC 4180 and looser dialects; irregular rows | RFC 4180 with configurable quoting |
+| YAML | @subpage format_yaml "YAML" | YAML 1.2.2, with a 1.1 resolution mode | block and flow, anchors, tags, multi-document | DOM and streaming event serialization |
 
 A cross-format audit against the libraries these are meant to replace is in
 \ref format_comparison "Comparison with other libraries".
 
 INI and TOML are planned and have no parser, so they have no page here. A
-page is written with the parser, not after it.
-
-(This said "named in the README's roadmap", which no longer exists - and the
-suite README meanwhile listed INI/TOML as something this library *has*, on the
-strength of `GTEXT_YAML_MODE_CONFIG`, which is a YAML parse preset and not a
-parser for either format.)
+page is written with the parser, not after it. `GTEXT_YAML_MODE_CONFIG` is a
+YAML parse preset, not a parser for either format.
 
 ## What each page contains
 
@@ -54,7 +49,7 @@ has nothing to put under.
 - **Tested scope** - the fixtures, how they were generated, the external
   oracles and the reach of each, the fuzz harnesses, and the gaps.
 - **Not implemented** - what is absent, listed so it is visible rather than
-  discovered.
+  discovered. The JSON page calls this section Gaps.
 
 Format-independent concerns - the result codes, the allocation and ownership
 contract, the limits - are described in the
@@ -63,20 +58,17 @@ format does with them.
 
 ## A note on confidence
 
-These three parsers are not equally well established, and the pages say so
-rather than presenting a uniform face.
-
-JSON has a small, closed grammar and the page's claims are checked case by
-case. CSV has no single grammar to conform to, so its page spends most of its
-length on what the dialect options actually mean. YAML has the largest
-specification of the three by an order of magnitude, no conformance corpus is
-wired up, and its page carries the deviations found so far - including the
-silent truncation of plain scalars, which a differential comparison against
-PyYAML found and which is now fixed.
+JSON has a small, closed grammar. Its page is checked case by case, including
+JSONTestSuite and the JSON Schema test suite. CSV has no single grammar, so
+its page spends its length on what the dialect options mean, and csv-spectrum
+is scored. YAML's specification is the largest of the three. `make
+conformance` scores yaml-test-suite at 395 of the 395 cases it can check.
+That figure is a statement about those documents; the YAML page says where
+the suite ends. The deviations that page records are closed.
 
 ## Comparison with other libraries
 
-\ref format_comparison "Comparison with other libraries" asks a different
+@subpage format_comparison "Comparison with other libraries" asks a different
 question from the pages above. They ask whether a parser implements its
 specification; that page asks what a caller migrating from libyaml, RapidJSON,
 libcsv or PyYAML would find missing, and ranks the answers by how many
@@ -87,14 +79,15 @@ particular to this library.
 
 ## Work in progress
 
-\ref format_allocator_todo "Extending the allocator to CSV and YAML" records
-what remains of the allocator work, and why it was stopped rather than
-half-finished: a parse option that covers an arena but not the structure
-around it is heap corruption for anyone who uses it, not an incomplete
-feature.
+@subpage format_allocator_todo "Caller allocators" records what remains. CSV and
+YAML parses take a caller allocator. The JSON writer, the streaming parser,
+JSON Pointer, JSON Patch and JSON Schema do not yet. A parse option that
+covers an arena but not the structure around it is heap corruption for
+anyone who uses it, which is why the work stopped short of a half-finished
+option.
 
 ## Adding a format
 
-\ref format_adding "Adding a format" is the checklist and the page template:
+@subpage text_format_adding "Adding a format" is the checklist and the page template:
 what a new parser's documentation has to answer before the parser is
 considered done, and the skeleton to copy.

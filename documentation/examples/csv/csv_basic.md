@@ -1,6 +1,6 @@
-@page example_csv_basic csv_basic.c - Basic CSV Parsing and Writing
+@page example_csv_basic CSV: parsing and writing
 
-# csv_basic.c - Basic CSV Parsing and Writing
+# CSV: parsing and writing
 
 This example demonstrates the fundamental operations for working with CSV data: parsing CSV from a string, accessing values in the table, writing CSV to a buffer, and error handling.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

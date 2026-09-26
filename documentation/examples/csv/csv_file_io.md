@@ -1,6 +1,6 @@
-@page example_csv_file_io csv_file_io.c - CSV File I/O
+@page example_csv_file_io CSV: files
 
-# csv_file_io.c - CSV File I/O
+# CSV: files
 
 This example demonstrates reading CSV from files, writing CSV to files, and modifying CSV tables.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

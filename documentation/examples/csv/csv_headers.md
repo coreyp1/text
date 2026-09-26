@@ -1,6 +1,6 @@
-@page example_csv_headers csv_headers.c - CSV Header Processing
+@page example_csv_headers CSV: headers
 
-# csv_headers.c - CSV Header Processing
+# CSV: headers
 
 This example demonstrates parsing CSV with header rows, looking up columns by header name, and accessing data using header names.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

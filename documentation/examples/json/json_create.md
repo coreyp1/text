@@ -1,6 +1,6 @@
-@page example_json_create json_create.c - Creating JSON Programmatically
+@page example_json_create JSON: creating a document
 
-# json_create.c - Creating JSON Programmatically
+# JSON: creating a document
 
 This example demonstrates how to build JSON data structures from scratch in your code, rather than parsing existing JSON. It shows creating objects, arrays, and nested structures.
 
@@ -38,4 +38,4 @@ Use this example when you need to:
 
 - [json_basic.c](@ref example_json_basic) - Basic parsing and writing
 - [json_file_io.c](@ref example_json_file_io) - File I/O operations
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

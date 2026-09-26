@@ -1,6 +1,6 @@
-@page example_csv_write csv_write.c - Writing CSV Programmatically
+@page example_csv_write CSV: writing
 
-# csv_write.c - Writing CSV Programmatically
+# CSV: writing
 
 This example demonstrates creating CSV data programmatically using the streaming writer.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

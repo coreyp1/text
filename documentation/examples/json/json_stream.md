@@ -1,6 +1,6 @@
-@page example_json_stream json_stream.c - Streaming Parser
+@page example_json_stream JSON: streaming
 
-# json_stream.c - Streaming Parser
+# JSON: streaming
 
 This example demonstrates how to use the streaming parser for incremental JSON processing. The streaming parser is ideal for processing large JSON documents without building a full DOM in memory.
 
@@ -38,4 +38,4 @@ Use this example when you need to:
 
 - [json_basic.c](@ref example_json_basic) - Basic DOM parsing
 - [json_file_io.c](@ref example_json_file_io) - File I/O with streaming
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

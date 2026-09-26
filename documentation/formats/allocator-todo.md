@@ -1,6 +1,6 @@
-@page format_allocator_todo Extending the allocator to CSV and YAML
+@page format_allocator_todo Allocators
 
-# Extending the allocator to CSV and YAML
+# Allocators
 
 `GTEXT_JSON_Parse_Options::allocator` routes a whole JSON parse through a
 caller-supplied `GTEXT_Allocator`, which is cutil's `GCU_Allocator` under a

@@ -1,8 +1,8 @@
-@page csv_module CSV Module Documentation
+@page csv_module CSV
 
-# CSV Module Documentation (ghoti.io)
+# CSV
 
-This document describes the **full‑featured CSV parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **predictability** over convenience shortcuts. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only. See the [Dependencies](../../README.md) section of the README.
+This document describes the **full‑featured CSV parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **predictability** over convenience shortcuts. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only. See the [Dependencies](README.md#dependencies) section of the README.
 
 CSV in the wild is not a single format. This module supports a **strict RFC 4180 mode** plus an explicit, configurable **dialect system** to handle common variants (TSV, custom delimiters, different quoting rules, Excel‑style behaviors, etc.).
 
@@ -12,7 +12,7 @@ CSV in the wild is not a single format. This module supports a **strict RFC 4180
 RFC 4180 conformance, what each dialect option actually means, the reach of
 `validate_utf8`, and what evidence backs each claim - see
 \ref format_csv "CSV" under
-\ref format_references "Format and specification references".
+\ref text_format_references "Format and specification references".
 
 ## 1. Overview
 
@@ -131,7 +131,7 @@ The library provides extensive configuration options for output formatting:
 - **`quote_empty_fields`**: Quote empty fields — **Default: `true`**
 - **`quote_if_needed`**: Quote fields containing delimiter/quote/newline — **Default: `true`**
 - **`quoting`**: The policy as a whole — **Default: `GTEXT_CSV_QUOTE_MINIMAL`**, which is zero. `GTEXT_CSV_QUOTE_ALL`, `GTEXT_CSV_QUOTE_NONNUMERIC` and `GTEXT_CSV_QUOTE_NONE` are the other three, named after Python's. `NONNUMERIC` asks whether the field's text spells a number, not what type it is; `NONE` refuses a field unquoted bytes cannot carry. `quote_all_fields` still wins over this when set.
-- **`always_escape_quotes`**: What to do with a quote character in a field that is *not* being quoted — **Default: `true`**, which refuses it with `GTEXT_CSV_E_UNQUOTABLE_FIELD`. It used to escape it, which had no correct reading: RFC 4180 gives a quote inside an unquoted field no special meaning, so unquoted `a""b` is four characters rather than `a"b`, and a reader at the default `allow_unquoted_quotes` refuses those bytes anyway. Clearing it emits the quote verbatim, which is readable with `allow_unquoted_quotes` on and is left to the caller. Quotes inside quoted fields are always escaped regardless, since leaving one unescaped would end the field early. No effect when the dialect's escape mode is `GTEXT_CSV_ESCAPE_NONE`. Only observable with `quote_if_needed` cleared, because otherwise a field containing a quote is quoted.
+- **`always_escape_quotes`**: What to do with a quote character in a field that is *not* being quoted — **Default: `true`**, which refuses it with `GTEXT_CSV_E_UNQUOTABLE_FIELD`. RFC 4180 gives a quote inside an unquoted field no special meaning, so unquoted `a""b` is four characters rather than `a"b`, and a reader at the default `allow_unquoted_quotes` refuses those bytes. Clearing it emits the quote verbatim, which is readable with `allow_unquoted_quotes` on and is left to the caller. Quotes inside quoted fields are always escaped regardless, since leaving one unescaped would end the field early. No effect when the dialect's escape mode is `GTEXT_CSV_ESCAPE_NONE`. Only observable with `quote_if_needed` cleared, because otherwise a field containing a quote is quoted.
 
 ### 5.2 Formatting
 
@@ -1038,23 +1038,11 @@ Comprehensive usage examples are provided in the `examples/` directory.
 
 ---
 
-## 16. Future Work
+## 16. Not in this module
 
-This list had gone stale. A list of gaps that names something already shipped
-is worse than no list, because it is read as current.
+Dialect presets, `gtext_csv_sniff()`, the pull reader and
+`GTEXT_CSV_Parse_Options::allocator` are implemented. What this module does
+not do, on purpose:
 
-- ~~**Dialect presets**~~ - **shipped.** `gtext_csv_dialect_tsv()`,
-  `gtext_csv_dialect_semicolon()`, `gtext_csv_dialect_backslash_escape()`,
-  `gtext_csv_dialect_excel()` and `gtext_csv_dialect_permissive()`, each
-  differing from `gtext_csv_dialect_default()` only in the field it names.
-  Exporting them turned into a correctness pass: writing a test per preset
-  was the first time several dialect options had been exercised, and three of
-  them did nothing at all.
-- **Format detection**: automatic dialect detection from an input sample, the
-  equivalent of Python's `csv.Sniffer`. Absent, and nothing inspects a
-  document to guess its delimiter.
-- **A pull reader**, so that a caller drives the parse rather than being
-  called back. Absent for CSV and JSON both; YAML has one.
-- **The custom allocator.** `GTEXT_JSON_Parse_Options` carries a
-  `GTEXT_Allocator *`; `GTEXT_CSV_Parse_Options` does not, and neither does
-  YAML's. That is what blocks embedded and arena callers.
+- **RFC 7111 fragment identifiers.** A URI feature, not a parse.
+- **Type inference.** Fields are bytes. Nothing converts them to numbers or dates.

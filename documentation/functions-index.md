@@ -1,6 +1,5 @@
-@page functions_index Function Index
+@page text_functions_index Function index
 
-# Function Index
 
 ## Overview
 

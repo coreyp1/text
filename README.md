@@ -1,10 +1,66 @@
-# Ghoti.io Text Library
+# Ghoti.io Text
 
-A C library for parsing and serializing structured text formats. It provides
-three parsers - JSON, CSV and YAML - each with a DOM model, a streaming model
-and a writer, sharing one result-code, allocation and limits contract.
+Parsers and writers for structured text, in C. Each format below has a
+document you can walk, a streaming parser, and a writer. They share one
+contract for errors, limits and allocation.
 
-## Example
+## Formats
+
+This is what the library implements.
+
+- **JSON.** RFC 8259 / ECMA-404, plus JSON Pointer (RFC 6901), JSONPath (RFC 9535), JSON Patch (RFC 6902), JSON Merge Patch (RFC 7386), and JSON Schema (2020-12, 2019-09, draft-07 and draft-06). JSONC and JSON5 are each a set of options.
+- **CSV.** RFC 4180, and other dialects through `GTEXT_CSV_Dialect`.
+- **YAML.** YAML 1.2.2, including its Core, JSON and Failsafe schemas, plus a YAML 1.1 resolution mode and the 1.1 types `!!timestamp`, `!!set`, `!!omap`, `!!pairs` and the `<<` merge key.
+
+INI and TOML are planned and have no parser yet.
+
+## Before you call it
+
+For every format:
+
+- Options come from `*_options_default()`. `NULL` is that struct. There is no global mode.
+- An error is a status code plus a byte offset, line and column. Release a snippet with `*_error_free()`. The message is a static string.
+- Every parser caps nesting depth, total input size and its own counts, each with a default.
+- Pass a `GTEXT_Allocator`, or `NULL` for the default.
+- `gtext_*_parse_file()` reads incrementally, so a pipe works, and the size limit applies before the whole file is in memory.
+- `gtext_*_write_file()` writes a temporary beside the destination and renames it into place.
+
+### JSON
+
+| Standard | What it means here |
+| --- | --- |
+| RFC 8259 / ECMA-404 | The default grammar. A document may be any value, so `42` is complete. Numbers keep the text they were written with; integer and `double` accessors apply when the value fits. |
+| Duplicate names (RFC 8259 §4) | An error, unless the caller chooses `FIRST_WINS`, `LAST_WINS` or `COLLECT`. |
+| JSONC and JSON5 | Each extension is its own option, off by default: comments, trailing commas, single quotes, `NaN`, hex numbers, and the rest. Turning one on leaves RFC 8259. |
+| RFC 6901 JSON Pointer | Names one place in a document. |
+| RFC 9535 JSONPath | Selects a set of nodes. |
+| RFC 6902 JSON Patch, RFC 7386 Merge Patch | Applied to a document already parsed. |
+| JSON Schema 2020-12, 2019-09, draft-07, draft-06 | A keyword this library cannot enforce fails compilation and names the keyword. `pattern` and `patternProperties` run only when the caller supplies a regular-expression engine. `format` is an annotation unless the caller or the schema asks for it to be checked. `$schema` selects the dialect; a document with none is read as 2020-12, or as `default_dialect` when the caller set one. |
+| IDNA2008 and UTS #46 | What `hostname` and `idn-hostname` check. |
+| chron's grammars | What `date`, `date-time`, `time` and `duration` check. |
+
+### CSV
+
+| Standard | What it means here |
+| --- | --- |
+| RFC 4180 | The default dialect: comma, CRLF, doubled quotes. |
+| Line endings | Bare LF is accepted. A bare CR is refused. |
+| Header row | The first row is data until `treat_first_row_as_header` is set. |
+| Other dialects | Delimiter, quote, escape, trimming, comments and a repeated header name have no specification of their own. `GTEXT_CSV_Dialect` is the one this library implements. Rows do not have to be rectangular. The default writer quotes a field that needs it (`GTEXT_CSV_QUOTE_MINIMAL`). `GTEXT_CSV_QUOTE_NONE` refuses that field instead of writing it bare. |
+
+### YAML
+
+| Standard | What it means here |
+| --- | --- |
+| YAML 1.2.2 | Block and flow collections, all five scalar styles, anchors and aliases, tags, and multi-document streams. Input may be UTF-8, UTF-16 or UTF-32. A document can be turned into JSON and back. |
+| Core schema (1.2.2 §10.3) | The default. `yes` and `0755` are strings. JSON schema and Failsafe are the other two choices. |
+| YAML 1.1 resolution | A `%YAML 1.1` directive, or the 1.1 parse option, restores the older spellings and warns when one of them matched. |
+| YAML 1.1 type repository | `!!timestamp` comes back as a chron value. The `<<` merge key is on by default. Neither is part of the 1.2 core schema. |
+| Untrusted input | `gtext_yaml_parse_safe()` is the hardened option set. Anchors detect cycles, and expansion is capped. |
+
+## Examples
+
+### JSON, read and write
 
 ```c
 #include <ghoti.io/text/json.h>
@@ -12,64 +68,165 @@ and a writer, sharing one result-code, allocation and limits contract.
 #include <string.h>
 
 int main(void) {
-  const char *src = "{\"name\":\"ghoti\",\"version\":[0,0,0]}";
-
+  const char * src = "{\"name\":\"ghoti\",\"version\":[0,0,0]}";
   GTEXT_JSON_Error err = {0};
   GTEXT_JSON_Parse_Options opts = gtext_json_parse_options_default();
-  GTEXT_JSON_Value *doc = gtext_json_parse(src, strlen(src), &opts, &err);
+
+  GTEXT_JSON_Value * doc = gtext_json_parse(src, strlen(src), &opts, &err);
   if (!doc) {
-    fprintf(stderr, "%s at line %d, column %d\n", err.message, err.line, err.col);
+    fprintf(stderr, "%s at line %d, column %d\n",
+        err.message, err.line, err.col);
     gtext_json_error_free(&err);
     return 1;
   }
 
-  const char *name = NULL;
+  const GTEXT_JSON_Value * field =
+      gtext_json_object_get(doc, "name", strlen("name"));
+  const char * name = NULL;
   size_t name_len = 0;
-  if (gtext_json_get_string(gtext_json_object_get(doc, "name", strlen("name")), &name, &name_len)
-      == GTEXT_JSON_OK) {
+  if (field && gtext_json_get_string(field, &name, &name_len) == GTEXT_JSON_OK) {
     printf("%.*s\n", (int)name_len, name);
   }
 
+  GTEXT_JSON_Sink sink;
+  if (gtext_json_sink_buffer(&sink) != GTEXT_JSON_OK) {
+    gtext_json_free(doc);
+    return 1;
+  }
+  GTEXT_JSON_Write_Options write = gtext_json_write_options_default();
+  write.pretty = true;
+  if (gtext_json_write_value(&sink, &write, doc, &err) != GTEXT_JSON_OK) {
+    fprintf(stderr, "%s\n", err.message);
+    gtext_json_error_free(&err);
+    gtext_json_sink_buffer_free(&sink);
+    gtext_json_free(doc);
+    return 1;
+  }
+  printf("%s\n", gtext_json_sink_buffer_data(&sink));
+
+  gtext_json_sink_buffer_free(&sink);
   gtext_json_free(doc);
   return 0;
 }
 ```
 
-## Dependencies
+```
+ghoti
+{
+  "name": "ghoti",
+  "version": [
+    0,
+    0,
+    0
+  ]
+}
+```
 
-Three, all inside the suite and all resolved through pkg-config:
+`gtext_json_parse_file()` and `gtext_json_write_file()` are the same calls
+on a path. The write replaces the file by renaming a temporary beside it, so
+an interrupted write leaves the old file in place.
 
-- [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), for the `GCU_Allocator`
-  vtable the suite shares. All three formats route a whole parse - and
-  everything the resulting document owns - through a caller-supplied
-  allocator, enforced by a gate that refuses a direct `malloc` or `strdup` in
-  any converted source. The writers and the error snippets stay on the C
-  library deliberately, because they are freed by functions that are handed no
-  allocator; see [the allocator page](@ref format_allocator_todo).
-- [ghoti.io-chron](https://github.com/Ghoti-io/chron), for YAML's
-  `!!timestamp`. The type YAML 1.1 defines is a calendar date, a wall-clock
-  reading and an offset, and this library used to read it with a parser of its
-  own - one that refused four spellings YAML permits and accepted one it does
-  not, because it had never been held against another implementation. Time is
-  not a text format's business.
-- [ghoti.io-unicode](https://github.com/coreyp1/unicode), for the Unicode
-  Character Database and the algorithms over it: normalisation form C, which
-  UTS #46 needs and which JSON's `normalize_unicode` uses, and the properties
-  the rest reads - ID_Start and ID_Continue for a JSON5 name, General_Category
-  for JSON5's whitespace, and Script, Joining_Type, Bidi_Class and the
-  combining classes for IDNA's contextual and bidi rules. This library used to
-  generate all of that itself, about 2,900 lines of tables from a generator of
-  its own; `regex` generated the same data from the same files with a second
-  generator, and `font` would have been the third, with three version pins that
-  nothing compared. It does not appear in a public header - it is a link
-  dependency, not a compile one, for a consumer of this library.
+### CSV, with a header
 
-Nothing else beyond libc. Google Test is required only to build the test
-suite, and clang only to build the fuzzers.
+```c
+#include <ghoti.io/text/csv.h>
+#include <stdio.h>
+#include <string.h>
 
-## Building
+int main(void) {
+  const char * src = "name,version\nghoti,0\n";
+  GTEXT_CSV_Error err = {0};
+  GTEXT_CSV_Parse_Options opts = gtext_csv_parse_options_default();
+  opts.dialect.treat_first_row_as_header = true;
 
-If both are installed where pkg-config can find them:
+  GTEXT_CSV_Table * table =
+      gtext_csv_parse_table(src, strlen(src), &opts, &err);
+  if (!table) {
+    fprintf(stderr, "%s\n", err.message);
+    gtext_csv_error_free(&err);
+    return 1;
+  }
+
+  size_t col = 0;
+  size_t len = 0;
+  if (gtext_csv_header_index(table, "name", &col) == GTEXT_CSV_OK) {
+    const char * name = gtext_csv_field(table, 0, col, &len);
+    printf("%.*s\n", (int)len, name);
+  }
+
+  gtext_csv_free_table(table);
+  return 0;
+}
+```
+
+```
+ghoti
+```
+
+Row 0 is the first data row. Without `treat_first_row_as_header`, that same
+row would have been the words `name` and `version`.
+
+### YAML
+
+```c
+#include <ghoti.io/text/yaml.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(void) {
+  const char * src = "name: ghoti\nversion: 0\n";
+  GTEXT_YAML_Error err = {0};
+
+  GTEXT_YAML_Document * doc = gtext_yaml_parse(src, strlen(src), NULL, &err);
+  if (!doc) {
+    fprintf(stderr, "%s at line %d, column %d\n",
+        err.message, err.line, err.col);
+    gtext_yaml_error_free(&err);
+    return 1;
+  }
+
+  const GTEXT_YAML_Node * name =
+      gtext_yaml_mapping_get(gtext_yaml_document_root(doc), "name");
+  const char * text = name ? gtext_yaml_node_as_string(name) : NULL;
+  if (text) {
+    printf("%s\n", text);
+  }
+
+  gtext_yaml_free(doc);
+  return 0;
+}
+```
+
+```
+ghoti
+```
+
+`gtext_yaml_parse()` reads the first document. A stream of several is
+`gtext_yaml_parse_all()`.
+
+More programs live in `examples/`: streaming, building a document by hand,
+JSON Pointer, JSON Patch, and JSON Schema.
+
+## Compile and link
+
+Once the library is installed, pkg-config carries the include path, the
+library, and its dependencies:
+
+```bash
+cc -o show show.c $(pkg-config --cflags --libs ghoti.io-text-0)
+```
+
+The module name ends in the major version, `-0` for this release, so two
+majors can be installed side by side. A build made with `make BRANCH=-dev`
+installs `ghoti.io-text-dev` instead.
+
+## Building the library
+
+[cutil](https://github.com/Ghoti-io/cutil),
+[chron](https://github.com/Ghoti-io/chron) and
+[unicode](https://github.com/coreyp1/unicode) must already be installed
+where pkg-config can see them. A dependency it cannot find is a hard error
+naming the fix.
 
 ```bash
 make
@@ -77,465 +234,92 @@ make test
 sudo make install
 ```
 
-Otherwise build the suite into a local prefix from the parent folder, which
-installs cutil, unicode and chron first, and point this build at the same
-prefix:
+From the workspace, which builds those three first:
 
 ```bash
 ./bootstrap.sh
-make -C text test PREFIX="$PWD/.local"
+export PKG_CONFIG_PATH="$PWD/.local/share/pkgconfig"
+make -C libs/text test PREFIX="$PWD/.local"
 ```
 
-`make help` lists every target. `make docs` builds the Doxygen manual into
-`docs/`.
+`make test` is the suite. `make help` lists the rest. The ones that reach
+outside this repository:
+
+| Target | What it does |
+| --- | --- |
+| `make conformance` | YAML against yaml-test-suite |
+| `make conformance-json` | JSON against JSONTestSuite |
+| `make conformance-csv` | CSV against csv-spectrum |
+| `make conformance-jsonpath` | JSONPath against its compliance suite |
+| `make fuzz` | Build and run the parsers' fuzzers |
+| `make docs` | The Doxygen manual, into `./docs` |
+
+The conformance targets clone their corpora on first use. Google Test is
+required only to build the tests, and clang only to build the fuzzers.
 
 ## The API
 
-Each format lives behind one header - `ghoti.io/text/json.h`,
-`ghoti.io/text/csv.h`, `ghoti.io/text/yaml.h` - and follows the same shape.
+Each format has one header: `<ghoti.io/text/json.h>`,
+`<ghoti.io/text/csv.h>`, `<ghoti.io/text/yaml.h>`. Everything is prefixed
+`gtext_` / `GTEXT_`.
 
-**Parsing** has two models. The DOM parsers (`gtext_json_parse()`,
-`gtext_csv_parse_table()`, `gtext_yaml_parse()`) take a buffer and return an
-owned tree, freed by the format's free function. The streaming parsers take
-input in chunks of any size and deliver events through callbacks, for inputs
-too large to hold or arriving from a socket. All three formats also offer a
-pull-model reader, which inverts that control: the caller asks for the next
-event instead of being called back.
+**Two ways to read.** The DOM functions take a whole buffer and return an
+owned tree: `gtext_json_parse()`, `gtext_csv_parse_table()`,
+`gtext_yaml_parse()`. The streaming parsers take input in chunks of any size.
+Each format also has a pull reader, where the caller asks for the next
+event.
 
-**Options** are plain structs obtained from a `*_options_default()` function
-and modified before use, never global state. They carry the dialect or
-strictness settings, the resource limits, and the error-reporting detail
-level. `gtext_yaml_parse_options_safe()` returns a hardened variant for
-untrusted input.
+**Writing** mirrors reading: serialise a document, or drive a streaming
+writer with events.
 
-**Limits** are enforced by every parser - nesting depth, total input size,
-and per-format limits on string length, element counts, row and column
-counts. Each has a documented default rather than being unbounded, and each
-is tested at its boundary against a document that should exceed it.
+**Allocation.** Pass a `GTEXT_Allocator` (cutil's `GCU_Allocator` under this
+library's name) or `NULL` for the default. The document owns what the parse
+allocated; the format's free function releases it. `NULL` is safe to free.
 
-**Errors** come back as a status code plus a struct carrying byte offset,
-line and column, and optionally a context snippet with a caret. Snippets are
-owned by the caller and released with the format's `*_error_free()`.
+[Formats](#formats) is what is implemented.
+[Before you call it](#before-you-call-it) is what that changes about a call.
 
-**Writing** mirrors parsing: serialize a DOM, or drive a streaming writer
-with events. Write options control formatting, escaping and canonical output.
+## Dependencies
 
-**Files.** Each format reads and writes a path directly -
-`gtext_json_parse_file()` / `gtext_json_write_file()` and the CSV and YAML
-equivalents. Reads are incremental, so a pipe or `/dev/stdin` works and the
-size limit applies before the file is in memory; writes are atomic, going to a
-temporary file in the destination's own directory, committed to disk, and
-renamed over it only once complete. The plumbing is ghoti.io-cutil's file
-module rather than this library's - opening, growing a buffer and replacing a
-file by rename are not text-format problems, and there is no version of them
-worth keeping three copies of. That sentence was not true of YAML until it
-stopped keeping its own: it read with `fseek`/`ftell`, so it could not read a
-pipe at all.
+All three are found through pkg-config, and the installed `.pc` file names
+them, so a program that links `ghoti.io-text-0` links these too.
 
-JSON additionally implements JSON Pointer, JSON Patch, JSON Merge Patch and
-JSON Schema. It answers **all 1301** assertions in JSON-Schema-Test-Suite's
-required draft2020-12 files, all 162 of its optional ones and all 866 of its
-optional format ones, and **all 1261, 158 and 866** of draft2019-09's, getting
-none of them wrong; `make conformance-json-schema` measures it, and the gate is
-the whole required suite rather than a floor set just under it. draft-07 and
-draft-06 answer 921 of 929 and 833 of 841, with nothing wrong and the rest
-refused for reasons 
-ef json_module "the JSON module page" names.
-
-`$schema` selects a draft as well as a vocabulary set, scoped exactly as the
-base URI is, so a `$ref` into a 2019-09 or draft-07 document is read as that
-draft. A document carrying no `$schema` is read as
-`GTEXT_JSON_Schema_Options::default_dialect`, or as 2020-12 when the caller has
-not said - absence of a `$schema` does not make a document dialect-free, and
-the drafts disagree about what keywords mean rather than only about which
-exist.
-
-The dialect describes itself, so some of those assertions ask a schema to
-validate another schema through a `$ref` to the published meta-schema. All
-sixteen of those documents - 2020-12's nine and 2019-09's seven - are embedded,
-verbatim and under a byte-diff gate, so that reference resolves without a
-resolver: the dialect's URIs do not version, and the alternative is a validator
-that opens a connection during a compile to a URI it read out of the document
-it was handed. A caller's resolver is still asked first and still wins.
-
-`format` asserts when asked to, and the address, name, mailbox, URI and
-pointer formats are grammars rather than character-class filters. `hostname`
-and `idn-hostname` are IDNA2008 with UTS #46's mapping and normalisation in
-front of it, from tables derived out of the Unicode Character Database and
-committed - and held against two independent implementations, python-idna for
-the derived property and the mapping table, CPython's `unicodedata` for
-normalisation.
-
-The schema engine refuses a schema whose keywords it cannot enforce rather
-than ignoring them, since a schema that looks like it constrains its data and
-does not is the worse failure. Two of those keywords - `pattern` and
-`patternProperties` - are regular expressions, and this library has no engine;
-they are enforced when the caller supplies one through
-`GTEXT_JSON_Schema_Options`, which is three function pointers, and refused when
-they do not. `format` is an annotation by default, as 2020-12 requires, and an
-assertion when the caller or the schema's own metaschema asks for one; the
-temporal formats are ghoti.io-chron's grammars.
-
-YAML implements anchors and aliases, merge keys, multi-document streams, tag
-resolution and conversion to JSON.
+- [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator every
+  parse and every owned document goes through.
+- [ghoti.io-chron](https://github.com/Ghoti-io/chron) — YAML's `!!timestamp`,
+  and JSON Schema's `date`, `date-time`, `time` and `duration` formats.
+  `chron.h` is included from the YAML DOM header, so a program that reads a
+  timestamp gets the type.
+- [ghoti.io-unicode](https://github.com/coreyp1/unicode) — normalisation and
+  the character properties JSON5 names, JSON5 whitespace and IDNA need. It
+  is a link dependency: it does not appear in a public header.
 
 ## Documentation
 
-- [Modules](@ref modules) — the API, per module
-- [Format and specification references](@ref format_references) — which
-  specification each parser implements, its deviations, and the evidence
-- [Examples](@ref examples) — example programs
-- [Function Index](@ref functions_index) — complete API reference
+The manual is `make docs`. The pages worth reading as files:
+
+| Page | What it settles |
+| --- | --- |
+| \ref text_format_references "formats.md" | Which specification each parser implements |
+| \ref format_json "json.md" | RFC 8259, the extensions, Pointer, Patch, Schema |
+| \ref format_csv "csv.md" | RFC 4180 and what each dialect option does |
+| \ref format_yaml "yaml.md" | YAML 1.2.2, and where this parser departs from it |
+| \ref text_modules "modules/" | The API: types, functions, options |
+
+The format pages are the authority for what a given byte sequence does. The
+module pages are how to call it.
 
 ## Status
 
-The test suite runs 1,552 tests across 110 binaries with zero failures, clean
-under valgrind and under ASan/UBSan, at 76.9% line coverage. The UBSan half of
-that only became a claim worth making once `-fno-sanitize-recover=undefined`
-was added: without it UBSan prints a diagnostic and runs on past the defect,
-the process exits 0, and the run reports itself clean whatever it found. (Counting these
-from `make test` output needs care: several binaries are run twice, once under
-their module target and once in the sweep, so summing every `[ PASSED ]` line
-gives a larger number. `make test-quiet` prints the deduplicated total, and
-that is the number quoted here.)
+JSON, CSV and YAML parse and write. YAML's specification is much larger
+than the other two, and passing its corpus is a statement about those
+documents;
+\ref format_yaml "yaml.md" says where
+that stops.
 
-`tools/coverage.sh` also lists, separately, the reallocation lines no test
-executes - a growth path nothing reaches is untested rather than working. That
-list is ten, down from eighteen: one was a real gap and now has tests, seven
-were dead code and are gone, and each of the ten that remain carries a comment
-saying why it cannot be reached and what it is still guarding. Three libFuzzer
-harnesses cover the three parsers; `tests/fuzz/README.md` records what they
-have found. All of it runs in CI on every push and pull request, along with a
-coverage floor and the symbol, allocator and header gates - until recently
-none of it did, and `make test` exited 0 even with a failing suite.
-
-`tests/test-rfc-conformance.cpp` holds the worked examples from RFC 6901,
-RFC 6902, RFC 7386 and RFC 4180 §2, transcribed from the specifications rather
-than from this implementation. Writing them down found four divergences that
-the existing tests agreed with. Two external corpora are wired up:
-`make conformance` scores YAML against yaml-test-suite,
-`make conformance-json` scores JSON against JSONTestSuite, and
-`make conformance-csv` scores CSV against csv-spectrum; `make
-conformance-all` runs the three of them.
-
-**JSON — stable.** RFC 8259 by default, with opt-in JSONC extensions.
-Exact number round-tripping through lexeme preservation. `make
-conformance-json` scores it against JSONTestSuite: **281 of the 283 decidable
-`test_parsing` cases, 99.3%**, with none of the 188 must-refuse cases
-accepted. The two misses are the duplicate-name policy, which this parser
-refuses by default where the suite expects acceptance; with
-`dupkeys = LAST_WINS` it is 283 of 283. See [the JSON page](@ref format_json).
-
-**CSV — stable.** RFC 4180 by default, with configurable dialects and
-support for ragged rows. The dialect can be guessed from a sample rather than
-declared, and the writer names four quoting policies. A field that unquoted
-bytes cannot carry is refused rather than written out corrupt. The streaming parser gives the same answer whatever
-chunk sizes it is fed, and the fuzzer checks it against the table parser on
-every input, every dialect option included. `validate_utf8` is honored by both
-parsers, incrementally in the streaming one so that a sequence split across
-feeds is still checked.
-See [the CSV page](@ref format_csv).
-
-**YAML — alpha.** Block and flow collections, all five scalar styles,
-anchors and aliases, merge keys, tags, multi-document streams, UTF-16/32
-input, a DOM with mutation and cloning, a writer, and conversion in both
-directions between YAML and JSON. The API may change before 1.0. `make conformance` scores it
-against yaml-test-suite: **395 of the 395 checkable cases**, out of the 406
-the suite ships. Passing all of a corpus is not the same as conforming to the
-specification, and `tests/data/yaml/spec-1.2.2.corpus` holds the cases that
-say so - divergences found by reading the grammar, none of which appears
-anywhere in the suite.
-
-**The write side is measured too.** yaml-test-suite is a corpus of inputs and
-tests no writer at all, so `make conformance-roundtrip` runs it backwards:
-every document the parser accepts is written out again and re-read, through
-each of the writers. All keep **282 of 282 by value**, and block style keeps
-every anchor, tag and scalar spelling as well. The first time that was
-measured it was 90.4%, and 83.0% in block style: a resolved tag went out as
-bare text, block scalars had no chomping indicator, folding turned line breaks
-into spaces, an empty node became `~`, and an alias key took the colon with
-it. Running the suite backwards also found three parser defects, one of which
-was that `gtext_yaml_stream_feed()` stopped at the first alias and the rest of
-the document was read only by a second, drifted copy of the same loop.
-
-**And a corpus of inputs still measures only half of that.** A document the
-writer is given did not have to come from parsing - the DOM API takes any
-`char *` - so a value the parser would refuse never reaches a writer from the
-corpus direction and is ordinary from the API one. Four more writer defects
-lived there: a character the spec forbids written raw, so the parser refused
-the writer's own output; an anchor name emitted without being checked, so
-`a b` wrote `&a b` and read back as a different document; a tag gaining a
-layer of percent-encoding on every round trip, without bound; and the
-streaming writer answering an event it had no code for with OK and writing
-nothing - which for a `%TAG` directive left a document whose tag handles were
-undefined, and for the `:` of a block mapping left a caller who had joined the
-streaming parser to the streaming writer with no error and `a1b2` where a
-mapping had been. `tests/fuzz/fuzz_yaml_writer.cpp` now searches that space,
-holding the writers to the property all of them broke - *if the writer says
-OK, the bytes it wrote must parse, and must hold the same values* - and
-`make test` runs the shapes that were wrong. It has already found one more, in
-the parser: a verbatim tag lost the fact that it was verbatim as soon as its
-brackets came off, so `!<!a!>` was read as a shorthand naming a handle nobody
-had declared.
-
-**And one more parser than anybody was counting.** `gtext_yaml_parse()` hands
-input that is also JSON to the JSON parser and converts the result, which is
-faster and on by default. That second implementation never learned a rule the
-first one had: a scalar is resolved by its contents only when it was written
-plain, which is the whole point of quoting. So `["0x10"]` came back as `[16]`,
-`[""]` as `[null]`, and the key of `{"": ""}` as the string `"null"` - while
-the same documents read correctly the other way. `make conformance` could not
-have seen it: that runner asks for `KEEP_ALL` duplicate keys, which is the one
-setting that turns the fast path off, so all 395 cases had only ever taken the
-other route.
-
-**The writer keeps finding parser defects, which is not what it is for.** A
-flow collection could not be a block mapping's key on any line but the first -
-`{}: 1` parsed, `a: 1` over `{}: 2` did not - because three separate places
-measured the last *scalar* to find out where the key stood, and a key that is
-a flow collection has no scalar of its own. `{}` has none at all, so what they
-measured was whatever came before, on whatever line that was. Two were in the
-parser and one in the scanner, and each became visible only once the one in
-front of it was gone. A fourth was worse than a refusal: `a:` over `{}: 1` was
-*accepted*, with `{}` nested inside `a`, because the rule that a node standing
-at the key's own column is the next entry's key had never been given to the
-four places a completed collection is added to its parent.
-
-Five more followed from one fuzz run, and only the first was in the writer:
-the string `---` written plain, which is a document marker and read back as an
-empty document; a block mapping's *first* entry unable to have an empty key,
-where a later entry could; a shorthand tag written with a handle no `%TAG` had
-declared; two uninitialised pointers the DOM writer read off its own stack;
-and a property in front of a key not counting as part of the key, so
-`&a {}: 1` over `b: 2` put the second entry outside the mapping the first had
-opened.
-
-The last one to close was the largest, and it was larger than it had been
-written down as. An event's offset counts bytes of the decoded character
-stream; the parser's six positional helpers were reading the raw input the
-caller handed in. Those are the same bytes only for UTF-8 with no byte order
-mark - so a block mapping with two entries did not parse in UTF-16, and did
-not parse in ordinary UTF-8 with a mark in front of it either, which is what a
-good many editors write. The scanner can now be asked to keep its decoded
-stream whole rather than sliding a window over it, which is what the DOM
-parser needs and the streaming API does not; the helpers read that. Six
-encodings of fourteen shapes have to agree now, and yaml-test-suite - UTF-8
-throughout - could never have told anyone.
-
-Comparison against other implementations keeps finding defects here, so treat
-this module as the least settled of the three. What the rest have in
-common is worth stating plainly: most did not fail on valid input, they
-quietly changed what it meant. Plain scalars containing ` - `, ` , ` or ` # `
-were truncated. Tags were dropped from block-style collections. A mapping key
-with no value was dropped rather than made null, shifting every later pair. A
-block sequence at its parent key's own column never closed, so the next key
-became one of its entries. A key indented deeper than its mapping was nested
-as a mapping standing where a key belongs. Block scalars lost the line break
-clip chomping keeps, folded blank lines and more-indented lines wrongly, and
-ignored the indentation indicator. Plain scalars did not continue onto the
-lines below them, so a continuation became a key of its own. And a plain
-scalar inside `[` `]` or `{` `}` ended at its first space, so `[a b, c]` came
-out as three entries rather than two.
-
-Six more have been fixed since: a flow plain scalar now folds across a line
-break, `[a: 1]` parses as the single-pair mapping it is, input ending inside
-a flow collection is an error rather than an empty document, two flow entries
-with nothing between them are refused, a scalar with no key to hold it is
-refused, and `key: a : b` is refused rather than rearranged into
-`{key: "a", b: null}`.
-
-Thirty-eight more came out of running yaml-test-suite. Quoted scalars now fold
-their line breaks, which plain and block scalars already did - a wrapped
-`"a\n  b"` was coming back with the wrapping still in it. A `%` directive no
-longer stands as a document of its own, and on its own with no document to
-apply to it is now refused. And a quoted scalar whose escape or line break
-straddled a feed boundary lost bytes, because the scanner took the byte it
-was still deciding about for the closing quote; that one was found by a test
-that feeds the input one byte at a time, not by the suite.
-
-The rest are structural. A second top-level node used to overwrite the
-first, so `- a` and `- b` followed by `invalid: x` returned only
-`{"invalid": "x"}` with the sequence gone. A `-` at a block mapping's own
-column with no key waiting became a sequence standing where a key belongs.
-A block scalar that is the document's root was required to be indented past
-column 0, so `--- >` over three lines at column 0 collected nothing. In a
-folded scalar a blank line before a more-indented line lost its break. And
-a malformed block header - `|0`, `|10`, `|+-`, `| junk` - was read as
-something rather than refused. And a `:` that begins a node is now an
-ordinary plain character where it does not end a key, so `- ::vector` and
-`{x: :x}` parse instead of being refused for having no key in front of the
-colon. Tabs in leading white space were refused outright; indentation is
-counted in spaces and a tab after it is separation, so a tab may sit between
-the indentation and a value but not between it and a block mapping key. And
-a line of a space and a tab was not recognised as blank when a plain scalar
-looked past it, so `foo: 1` over such a line gave foo the string `"1 "`.
-
-The last group is positional. A scalar standing at a block mapping's own
-indentation that no `:` ever claimed was being made a key with a null value,
-so `top1:` over `  key1: val1` over `top2` parsed as three-quarters of a
-document and a pair invented from the rest. A comment has to be preceded by
-white space unless it opens the line, and `key: "value"# c` was reading the
-rest of the line as a comment. A block entry is preceded on its line only by
-indentation and by the `-`, `?` or `:` of the entries containing it, so
-`key: - a` and `- { y: z }- invalid` are refused. `-` and `?` are indicators
-only where nothing plain-safe follows them, the rule `:` already had - until
-that, `- !!int -2` came out as `[1, [2], 33]` with the `-2` read as a nested
-sequence. And an implicit key now ends the explicit key above it, so `? a`
-over `? b` over `c:` is the three keys it looks like.
-
-Four more concern documents and anchors. A `...` with no document open
-closes nothing - `l-document-suffix` stands on its own in a stream - and was
-opening one so that it could close it, so a bare `...` parsed as a null
-document and one between two documents put a third between them. A stream
-may then hold no documents at all, and `gtext_yaml_parse_all()` was
-returning NULL for that, which every caller reads as a failure; an empty
-input and a lone `...` both came back as parse errors. An anchor may be
-redefined and an alias takes the most recent *preceding* definition, so the
-binding is made where the alias is written rather than from the finished
-anchor map. And an alias may stand where a key does, which `*b : *a` needs.
-
-The last four are about tags and types. A `!` on its own is the
-non-specific tag and the node follows it; the stream was reading that node
-as the tag's name, so `! a` came back as null. A verbatim `!<...>` tag was
-not understood at all - the brackets are not plain characters and the `:`
-inside a URI is not a key separator - so `!<tag:yaml.org,2002:str> foo` was
-read as a plain scalar starting part way through the URI. A plain scalar
-never ends in white space, and a break that folded to a space and was then
-followed by something that ended the scalar left one behind, so `{foo`
-over `: bar}` had the key `"foo "`.
-
-The fourth is the worst of them and nothing in 1,305 tests had caught it:
-**only a plain scalar is resolved by its contents.** Every other style
-carries the non-specific tag, which for a scalar is `tag:yaml.org,2002:str`
-- that is what quoting is for - and the style was not being consulted at
-all, so `a: "12"` came back as the integer 12 and `a: "null"` as null.
-
-The last group is about lists that are closed and were being treated as
-open. The escapes a double-quoted scalar may carry are exactly those in
-§5.7, so `"\."` is malformed rather than a literal `.`; four escapes that
-are on that list were missing at the same time. A separator separates two
-entries, so `[ , a, b ]` and `[ a, b, , ]` are not the sequences they were
-being read as. A directive belongs to a document's prologue and may only
-follow the start of the stream or a `...`, so a `%YAML` line after a
-mapping is an error rather than a version for the document it is not part
-of - and `%YAML` takes one parameter, once. A `%` on a plain scalar's
-continuation line is content, though: `--- scalar` over `%YAML 1.2` is the
-one scalar `scalar %YAML 1.2`. A block scalar's leading empty lines may not be indented
-past its first content line.
-
-The last group is the empty node. A position that takes a node and holds
-nothing is the empty node, which resolves to null - or to whatever a tag on
-it says, so `!!str` with no content is the empty string. Every spelling of
-it was being dropped: `-` on its own was `[]` rather than `[null]`, `- a`
-over `- !!str` was one entry rather than two, and `a: &anchor` over
-`b: *anchor` handed the anchor to `b`, which then aliased to itself.
-
-A 153-document comparison backs this, checked against two implementations
-rather than one: PyYAML, which implements YAML 1.1, and js-yaml, which
-implements 1.2. 152 of the 153 agree with js-yaml, and the one that does not
-is a case where this parser is the more faithful of the two. Five differ from
-PyYAML, and all five are places where the two oracles disagree with each
-other and this parser follows 1.2 - it keeps tabs inside a plain scalar,
-which 1.1 refuses. Having two oracles is what made those five legible as a
-version question rather than as defects; against PyYAML alone they looked
-like bugs, and one of them had been recorded here as such.
-
-None of the defects this page used to list as open is outstanding, and that
-turned out to matter much less than it sounds. The corpus was chosen by
-working outward from defects already found, so it measured the things that
-had already been fixed.
-
-**yaml-test-suite has now been run.** `make conformance` clones it and scores
-this parser against it: **all 395** of the cases that can be checked by
-value, by event stream, or by refusal. For calibration, the same harness
-scores **js-yaml at 82.0%** and **PyYAML at 77.3%** on the value cases -
-neither reference scores anything like 100% here, which is what makes the
-number readable. Eleven cases carry no expectation the harness can use and
-are counted separately rather than folded into the rate.
-
-**A corpus is not a specification.** Scoring 395 of 395 says what it says:
-of those 406 documents, every judgeable one is answered correctly. It is not
-a claim about YAML 1.2.2, and reading it as one would be the same mistake
-this page has now recorded three times. Eleven divergences were found
-afterwards by reading the spec instead of running the suite - the core
-schema's resolution table matched case-insensitively, so `tRue` and `nULL`
-resolved; YAML 1.1 integer forms (`1_000`, `0b101`, `0O14`) resolved under
-1.2 without even a warning; tabs were refused where `s-separate-in-line`
-allows them in `%YAML` and `%TAG`; a second `%TAG` for one handle, a
-`%YAML 2.0`, a directive with no `---` after it, a forward alias reference
-and an empty `!<>` were all accepted. Checking those turned up three more:
-`c-printable` was not enforced at all, so a NUL, an ESC or a C1 control
-passed through as scalar content - and `a: x\0y` came back as `{"a": "x"}`
-with the rest of the scalar silently gone - while the byte order mark was
-allowed inside scalars, where `nb-char` excludes it, and refused before a
-second document, where `l-document-prefix` permits it. Every one of the
-fourteen is a shape that appears in none of the suite's 406 documents, which
-is exactly why the score stayed at 395 while they were wrong. They now live in
-`tests/data/yaml/spec-1.2.2.corpus`, checked by `make test` rather than
-behind `make conformance`, because the point of them is to be asked often.
-
-The first run scored 51.9%, a long way from the 99% the hand-built corpus
-had suggested. A hundred and seventy-five cases have been fixed since, in
-twelve batches:
-quoted-scalar line folding and directives; a group of structural refusals -
-a second top-level node no longer silently replaces the first, a root block
-scalar is no longer required to be indented past column 0, a blank line
-beside a more-indented line in a folded scalar keeps its break, and a
-malformed block header is refused; the rule that a `:` is a mapping
-indicator only where it ends a key; and tabs, which were refused wherever
-they appeared in leading white space when only indentation is forbidden to
-them; and a group of positional rules - a scalar no ":" ever claimed is not
-a key, a comment needs white space in front of it, a block entry cannot
-start beside a node already on its line, and "-" and "?" are indicators only
-where nothing plain-safe follows them, as `:` already was; and a group
-around documents and anchors - a lone `...` no longer invents a document,
-a stream may hold none at all, an anchor may be redefined, and an alias may
-stand where a key does; and the tag property in its three spellings, along
-with the rule that only a plain scalar is resolved by its contents; and a
-group of closed lists - the escapes a double-quoted scalar may carry, the
-entries a flow collection may leave empty, and where a directive may
-stand; and a group about where a line may begin - only a comment may follow
-a `...`, a comment needs white space in front of it wherever it appears,
-and a flow collection's continuation lines need indenting past the node
-that owns them; and the empty node, which was being dropped rather than
-made null; and a group about properties - a scanner error that kept its
-message, an explicit key in a flow sequence, an empty key in a flow
-collection, a document marker ending a block scalar, and the chunk size no
-longer changing what a document means; and a node's anchors and tags, where
-two of a kind with nothing between them name two nodes or none.
-
-**The skipped tenth of the corpus was where the failures were.** For as long
-as the harness checked only value and refusal, it reported 100% - and the
-thirty-eight cases it skipped were the ones asserting an event stream. That
-was not bad luck: a mapping with an empty key has a null key, JSON cannot
-write one, so the suite gives those cases an event stream instead of a value,
-and they are exactly the shape this parser was weakest on.
-`gtext_yaml_stream_walk()` made twenty-nine of them askable and sixteen were
-refused outright - valid documents this parser called invalid. All eighteen
-failures are fixed. The score went from "100% of 366" to 100% of 395, and
-only the second of those is a measurement: the first was a rate over a
-denominator that had quietly dropped a tenth of the corpus, and that tenth
-held every defect.
-
-The denominator moved from 368 to 366 along the way, and that was a harness
-bug rather than progress: three suite cases carry an explicit null where the
-expected value goes, and the harness was checking whether the parser had
-refused the input before it tried to decode that. Refusing one of those
-scored as a defect while accepting it was skipped. It is measured before the
-answer is judged now, and the reference scores moved with it.
-
-## Macros and Utilities
-
-Cross-compiler macros live in `include/ghoti.io/text/macros.h`:
-
-- `GTEXT_MAYBE_UNUSED(X)` — mark unused function parameters
-- `GTEXT_DEPRECATED` — mark deprecated functions
-- `GTEXT_API` — mark functions for library export
-- `GTEXT_ARRAY_SIZE(a)` — compile-time array size
-- `GTEXT_BIT(x)` — bitmask with bit x set
-
-See [the Core module page](@ref core_module) for the version API and the
-platform notes.
+What is still open is on the JSON side. The streaming parser does not
+enforce the duplicate-name policy. The writer, JSON Pointer, JSON Patch and
+JSON Schema do not take a caller allocator.
 
 ## License
 

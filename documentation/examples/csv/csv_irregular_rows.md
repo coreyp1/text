@@ -1,6 +1,6 @@
-@page example_csv_irregular_rows csv_irregular_rows.c - Irregular Rows Support
+@page example_csv_irregular_rows CSV: irregular rows
 
-# csv_irregular_rows.c - Irregular Rows Support
+# CSV: irregular rows
 
 This example demonstrates enabling irregular rows mode, parsing irregular CSV, normalizing tables, column insertion with padding, validation, and write trimming.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

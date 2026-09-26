@@ -1,6 +1,6 @@
-@page example_json_file_io json_file_io.c - JSON File I/O
+@page example_json_file_io JSON: files
 
-# json_file_io.c - JSON File I/O
+# JSON: files
 
 This example demonstrates reading JSON from files, writing JSON to files, and using different parse/write options for different scenarios.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

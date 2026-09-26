@@ -1,6 +1,6 @@
-@page core_module Core Module Documentation
+@page core_module Core
 
-# Core Module Documentation
+# Core
 
 The Core module provides the foundational utilities and infrastructure for the Ghoti.io Text library. This includes cross-compiler macros, version information API, and platform compatibility features.
 
@@ -347,30 +347,17 @@ This holds because the library keeps no mutable global state. Every parse
 writes only into the context, arena or table it was given, and the only
 file-scope variables in the sources are `const` tables. It was checked by
 searching for non-const file-scope variables rather than assumed - two things
-that turned up are worth naming:
+that turned up are worth naming, because they are easy to get wrong:
 
-- **`gtext_version_string()` used to race with itself.** It formatted the
-  version into a function-local static the first time it was called, guarded
-  by a second static flag, so two threads calling it at once both saw the flag
-  clear and both wrote the buffer. It now returns a compile-time constant, so
-  there is no buffer and no race.
-- **Number formatting does not touch the locale.** `LC_NUMERIC` decides
-  whether a double is written with `.` or `,`, and the library used to force
-  the C locale around each conversion - thread-locally via `uselocale()` where
-  that existed, and process-globally via `setlocale()` where it did not. The
-  process-global fallback was not a remote possibility: the guard selecting
-  between the two was structurally unsatisfiable, so Linux took the fallback,
-  and MinGW has no `uselocale` at all, so Windows took it by right.
-
-  The locale is no longer consulted or changed. A double is formatted with
-  whatever separator the locale gives and the one separator byte is rewritten
-  as `.` afterwards; a parse measures how far the number runs under C rules
-  and hands `strtod` a copy spelled the way the current locale reads, so
-  `"1,5"` in a German locale still parses as `1`, stopping at the comma, and
-  not as `1.5`. Integer conversion has no locale-dependent element and is
-  left alone. No `setlocale`, `uselocale`, `newlocale` or `localeconv`
-  appears anywhere in the library, which `nm -D --undefined-only` will
-  confirm.
+- **`gtext_version_string()` returns a compile-time constant.** There is no
+  buffer for two threads to share.
+- **Number formatting does not change the locale.** A double is formatted
+  with whatever separator the locale gives, and that one byte is rewritten as
+  `.`. A parse measures how far the number runs under C rules and hands
+  `strtod` a copy spelled the way the current locale reads, so `"1,5"` in a
+  German locale parses as `1`, stopping at the comma. Integer conversion has
+  no locale-dependent element. No `setlocale`, `uselocale`, `newlocale` or
+  `localeconv` appears in the library.
 
 **A caller-supplied `GTEXT_Allocator` must be thread-safe if the objects using
 it are touched from more than one thread.** The library adds no locking of its
@@ -384,5 +371,5 @@ mutual exclusion.
 
 - [JSON Module](@ref json_module) - JSON parsing and serialization
 - [CSV Module](@ref csv_module) - CSV reading and writing
-- [Function Index](@ref functions_index) - Complete API reference
+- [Function Index](@ref text_functions_index) - Complete API reference
 - [Main Documentation](@ref index) - Library overview

@@ -1,8 +1,8 @@
-@page json_module JSON Module Documentation
+@page json_module JSON
 
-# JSON Module Documentation (ghoti.io)
+# JSON
 
-This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only, so a consumer needs their headers to compile against this one. See the [Dependencies](../../README.md) section of the README.
+This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only, so a consumer needs their headers to compile against this one. See the [Dependencies](README.md#dependencies) section of the README.
 
 ---
 
@@ -10,7 +10,7 @@ This document describes the **full‑featured JSON parsing/writing library in C*
 which RFC clauses are implemented, what each malformed input returns, the
 deviations from other parsers, and what evidence backs each claim - see
 \ref format_json "JSON" under
-\ref format_references "Format and specification references".
+\ref text_format_references "Format and specification references".
 
 ## 1. Overview
 
@@ -21,12 +21,13 @@ The JSON module provides comprehensive JSON processing capabilities with support
 - **Strict JSON parsing** per RFC 8259 / ECMA‑404 with full grammar correctness
 - **Extended JSON modes** (JSONC, trailing commas, non-finite numbers, relaxed
   strings, and the JSON5 dialect in full)
-- **Two parsing models**: DOM/tree and streaming/SAX
+- **Three parsing models**: DOM, push streaming, and a pull reader
 - **Two writing models**: DOM serialization and streaming writer
 - **High-quality error diagnostics** with position information and context snippets
 - **Round-trip correctness** including exact number preservation
-- **JSON Pointer (RFC 6901)**, **JSON Patch (RFC 6902)**, and **JSON Merge Patch (RFC 7386)** support
-- **JSON Schema validation** with a pragmatic core subset
+- **JSON Pointer (RFC 6901)**, **JSONPath (RFC 9535)**, **JSON Patch (RFC 6902)**, and **JSON Merge Patch (RFC 7386)**
+- **JSON Schema** for 2020-12, 2019-09, draft-07 and draft-06. A keyword this library cannot enforce fails compilation
+- A pull reader, beside the DOM parser and the streaming parser
 
 ---
 
@@ -275,23 +276,12 @@ JSON Merge Patch provides a simpler merge operation that recursively merges a pa
 
 ## 12. JSON Schema Validation
 
-The library provides a pragmatic core subset of JSON Schema support. This subset covers the most commonly used validation features while omitting more advanced features for simplicity and maintainability.
-
-### 12.1 Supported Keywords
-
-- **Type validation**: `type` (supports `null`, `boolean`, `number`, `string`, `array`, `object`, or arrays of types)
-- **Object validation**: `properties` (recursive validation), `required`
-- **Array validation**: `items` (single schema for all items)
-- **Value constraints**: `enum`, `const`
-- **Numeric constraints**: `minimum`, `maximum` (inclusive)
-- **String constraints**: `minLength`, `maxLength`, counted in Unicode code points rather than bytes or UTF-16 units, and `pattern` when a regular-expression provider is supplied
-- **Array constraints**: `minItems`, `maxItems`
-
-Schemas are compiled once and can be reused for validating multiple instances.
-
-### 12.2 Omitted Features
-
-This core subset is sufficient for many validation use cases while keeping the implementation focused and maintainable. For a complete list of omitted JSON Schema features that are planned for future releases, see section 17.1, "Additional JSON Schema Keywords", below.
+The engine reads JSON Schema 2020-12, 2019-09, draft-07 and draft-06, each
+with its own keyword set. `$schema` selects the dialect. A schema this
+library cannot fully enforce is refused at compile time and names the
+keyword. `pattern` and `patternProperties` run only when the caller supplies
+a regular-expression engine. What is still open is in section 17.1. The format page is the
+authority for which keyword does what.
 
 ---
 
@@ -355,6 +345,7 @@ For fine-grained control, include specific headers:
 #include <ghoti.io/text/json/json_stream.h> // Streaming parser
 #include <ghoti.io/text/json/json_writer.h> // Writer
 #include <ghoti.io/text/json/json_pointer.h> // JSON Pointer
+#include <ghoti.io/text/json/json_path.h>    // JSONPath
 #include <ghoti.io/text/json/json_patch.h>   // JSON Patch
 #include <ghoti.io/text/json/json_schema.h>  // Schema validation
 ```
@@ -363,19 +354,12 @@ Comprehensive usage examples are provided in the `examples/` directory.
 
 ---
 
-## 17. Future Work
+## 17. What remains
 
-The following features are planned for future releases:
+### 17.1 What the schema engine does not cover
 
-### 17.1 Additional JSON Schema Keywords
-
-This list had gone stale: most of what it called planned has been
-implemented, and a list of gaps that names things which are not gaps is worse
-than no list, because it is read as current. `$recursiveRef` and
-`$recursiveAnchor` were the last entry and are now implemented.
-
-Every standard keyword in every draft this engine reads is now either enforced
-or ignored for a reason the specification gives. What remains is not keywords:
+Every standard keyword in every draft this engine reads is either enforced
+or ignored for a reason the specification gives. What remains:
 
 - **the draft-07 and draft-06 meta-schemas are not vendored.** 2020-12's nine
   documents and 2019-09's seven are embedded, so a `$ref` to either resolves
@@ -595,20 +579,16 @@ Four gates:
 regular-expression engine the caller supplies through
 `GTEXT_JSON_Schema_Options::regex`; this library has none of its own. Without
 a provider they are refused like the keywords above. See
-[the JSON format page](../formats/json.md) for the contract a provider has to
+\ref format_json "the JSON format page" for the contract a provider has to
 meet.
 
-### 17.2 JSONPath Support
+### 17.2 JSONPath
 
-JSONPath is a query language for JSON that provides XPath-like expressions for selecting and extracting values from JSON documents. Unlike JSON Pointer (RFC 6901), which provides single-path access, JSONPath supports:
-
-- **Wildcard matching**: `$.*` to select all properties
-- **Array slicing**: `$[0:5]` to select array ranges
-- **Filter expressions**: `$[?(@.price > 10)]` for conditional selection
-- **Recursive descent**: `$..name` to find all `name` properties at any depth
-- **Multiple path results**: Returns arrays of matching values
-
-JSONPath support would complement the existing JSON Pointer functionality and provide more powerful query capabilities for JSON documents.
+JSONPath (RFC 9535) is implemented, including the filter selector.
+`make conformance-jsonpath` scores 650 of the 650 cases it attempts.
+`match()` and `search()` need an I-Regexp engine this library does not
+have, and a query that uses either is refused. The format page is the
+authority for the rest.
 
 ---
 

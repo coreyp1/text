@@ -1,6 +1,6 @@
-@page example_yaml_security YAML Security Limits and Validation
+@page example_yaml_security YAML: security
 
-# YAML Security Limits and Validation
+# YAML: security
 
 This example demonstrates security best practices when parsing untrusted YAML input: enforcing depth limits, byte limits, alias expansion limits, and proper error handling.
 
@@ -216,16 +216,8 @@ tree, which is where the limit is spent:
   which is a different quantity: a bomb has few alias references and a large
   expansion, so that cap alone does not stop one.
 
-This list used to carry a third entry, a resolver API that computed the
-expanded size before expanding anything. It was internal, absent from the
-shared library, and called by nothing but its own tests; the whole module has
-since been deleted. If you read that advice, the conversion budget above is
-what to use instead.
-
-Until recently the conversion consulted none of this and allocated until
-`malloc()` failed, returning `GTEXT_YAML_E_OOM`. If you are relying on this
-limit, check that you get `GTEXT_YAML_E_LIMIT` rather than
-`GTEXT_YAML_E_OOM`: the second means something is expanding without a budget.
+Materializing aliases through `gtext_yaml_to_json_with_options()` spends
+`max_alias_expansion` and fails with `GTEXT_YAML_E_LIMIT`.
 
 ### 4. Zero Means Default, for the Size Limits Only
 
@@ -236,29 +228,12 @@ GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
 opts.max_depth = 0;   // 0 -> the default, which is 256
 ```
 
-**Do not build the struct by zeroing it.** This page used to print exactly
-that, with `opts.max_depth = 0; // Uses default (64)` beside it, and it was
-wrong three times over: the default is 256 and not 64; a zero did not select
-any default but *removed* the limit; and a struct zeroed whole is not the
-defaults even now.
-
-The first two were a library defect and are fixed — `max_depth`,
-`max_total_bytes` and `max_alias_expansion` are resolved against the defaults
-on every path, which is what `GTEXT_YAML_Parse_Options` in the public header
-has always said. Until that fix, this:
-
-```c
-GTEXT_YAML_Parse_Options opts = {0};   /* do not do this */
-```
-
-turned off every limit at once, and a few hundred bytes of nested flow
-sequences then exhausted the stack.
-
-The third is not a defect and will not be fixed, because it cannot be:
-every `bool` in the options struct zeroes to `false`, and `false` is a real
-setting rather than an absent one. A zeroed struct has `validate_utf8` off,
-`resolve_tags` off, `allow_aliases` off and `allow_merge_keys` off — some of
-those stricter than the defaults and some looser, none of them the defaults.
+**Do not build the struct by zeroing it.** `0` for `max_depth`,
+`max_total_bytes` and `max_alias_expansion` selects the library default.
+Every `bool` in the options struct zeroes to `false`, and `false` is a real
+setting. A zeroed struct has `validate_utf8` off, `resolve_tags` off,
+`allow_aliases` off and `allow_merge_keys` off. Some of those are stricter
+than the defaults and some are looser. None of them is the defaults.
 
 **Start from `gtext_yaml_parse_options_default()` and change what you mean
 to change.** That is the only spelling that means "the defaults", and
@@ -274,7 +249,7 @@ untrusted input.
 GTEXT_YAML_Stream *parser = gtext_yaml_stream_new(NULL, cb, NULL);
 
 // GOOD: With limits
-GTEXT_YAML_Parse_Options opts = {0};
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
 opts.max_depth = 32;
 opts.max_total_bytes = 1024 * 1024;
 opts.max_alias_expansion = 10000;
@@ -284,6 +259,8 @@ GTEXT_YAML_Stream *parser = gtext_yaml_stream_new(&opts, cb, NULL);
 ### Set Limits Based on Use Case
 
 ```c
+GTEXT_YAML_Parse_Options opts = gtext_yaml_parse_options_default();
+
 // Configuration files (strict)
 opts.max_depth = 16;
 opts.max_total_bytes = 256 * 1024;  // 256 KB
@@ -329,7 +306,7 @@ Future options may include:
 
 - [yaml_streaming_basic.c](@ref example_yaml_streaming_basic) - Basic streaming parser
 - [yaml_config_parser.c](@ref example_yaml_config_parser) - Config file parsing
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index
 
 ## See Also
 

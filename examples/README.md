@@ -2,8 +2,6 @@
 
 This directory contains example programs demonstrating how to use the text module APIs.
 
-## Examples
-
 ## YAML Examples
 
 ### yaml_writer_formatting.c
@@ -51,30 +49,18 @@ JSON Schema validation example. Demonstrates:
 
 ## Building Examples
 
-To build an example, you need to:
-1. Build the library first: `make`
-2. Compile the example with the library:
+`make examples` builds every example into `build/linux/release/apps/examples/`.
+On Linux, run one with `LD_LIBRARY_PATH=build/linux/release/apps`.
+
+Against an installed library:
 
 ```bash
-# Example: Building json_basic.c
-gcc -std=c17 -I include/ -L build/linux/release/apps/ \
-    examples/json_basic.c -lghoti.io-text-0 -o json_basic
-
-# Run (set LD_LIBRARY_PATH on Linux)
-LD_LIBRARY_PATH=build/linux/release/apps ./json_basic
+cc -o json_basic examples/json/json_basic.c $(pkg-config --cflags --libs ghoti.io-text-0)
 ```
 
-Or use pkg-config if installed:
-
-```bash
-gcc -std=c17 $(pkg-config --cflags ghoti.io-text-0) \
-    examples/json_basic.c \
-    $(pkg-config --libs ghoti.io-text-0) \
-    -o json_basic
-```
+A line that only adds `-I include` cannot see cutil, chron or unicode.
 
 ## Requirements
 
 - C17-compatible compiler (gcc, clang)
-- The ghoti.io-text library built and installed (or available in build directory)
-- On Linux: may need to set `LD_LIBRARY_PATH` to point to the library location
+- The ghoti.io-text library, and cutil, chron and unicode, on `PKG_CONFIG_PATH`

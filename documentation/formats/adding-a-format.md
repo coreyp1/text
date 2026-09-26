@@ -1,4 +1,4 @@
-@page format_adding Adding a format
+@page text_format_adding Adding a format
 
 # Adding a format
 
@@ -13,7 +13,7 @@ a page with another one: the two grow at different rates, their checklists
 answer different questions, and a reader looking for one of them should not
 have to scroll past the other.
 
-The format pages are not the module pages. \ref modules "Modules" documents
+The format pages are not the module pages. \ref text_modules "Modules" documents
 the API - how to call it, what the options are, what the examples do. The
 format pages document the *format* - which specification, which clauses,
 which deviations, and what evidence exists for each claim. A sentence that
@@ -24,7 +24,7 @@ on a format page.
 
 - [ ] `documentation/formats/<format>.md` exists, opens with
       `@page format_<format> <Title>`, and is linked from the table in
-      \ref format_references "Format and specification references".
+      \ref text_format_references "Format and specification references".
 - [ ] The specification is **named with its version and date** and linked.
       A format with no formal standard says so and links what documentation
       there is; where that documentation is silent, the page states what the

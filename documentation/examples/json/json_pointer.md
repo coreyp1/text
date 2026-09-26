@@ -1,6 +1,6 @@
-@page example_json_pointer json_pointer.c - JSON Pointer (RFC 6901)
+@page example_json_pointer JSON: Pointer
 
-# json_pointer.c - JSON Pointer (RFC 6901)
+# JSON: Pointer
 
 This example demonstrates using JSON Pointers (RFC 6901) to access and modify nested JSON values using path expressions.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

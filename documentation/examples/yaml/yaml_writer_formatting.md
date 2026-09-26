@@ -1,6 +1,6 @@
-@page example_yaml_writer_formatting yaml_writer_formatting.c - Writer Formatting Options
+@page example_yaml_writer_formatting YAML: writer formatting
 
-# yaml_writer_formatting.c - Writer Formatting Options
+# YAML: writer formatting
 
 This example shows how to control YAML formatting when emitting a document from the DOM.
 

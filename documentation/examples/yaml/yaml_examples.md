@@ -1,6 +1,6 @@
-@page yaml_examples YAML Examples
+@page yaml_examples YAML: examples
 
-# YAML Module Examples
+# YAML: examples
 
 This page provides practical examples demonstrating the YAML module's streaming parser API.
 
@@ -8,7 +8,7 @@ This page provides practical examples demonstrating the YAML module's streaming 
 
 ### Getting Started
 
-- **[yaml_streaming_basic.c](@ref example_yaml_streaming_basic)** - Basic streaming YAML parser
+- @subpage example_yaml_streaming_basic "yaml_streaming_basic.c" — Basic streaming YAML parser
   - Event-driven parsing with callbacks
   - Handling chunk boundaries
   - Event types and source locations
@@ -16,7 +16,7 @@ This page provides practical examples demonstrating the YAML module's streaming 
 
 ### Security and Validation
 
-- **[yaml_security.c](@ref example_yaml_security)** - Security limits and validation
+- @subpage example_yaml_security "yaml_security.c" — Security limits and validation
   - Depth, byte, and alias expansion limits
   - Preventing decompression bomb attacks
   - Error handling for limit violations
@@ -24,7 +24,7 @@ This page provides practical examples demonstrating the YAML module's streaming 
 
 ### Practical Applications
 
-- **[yaml_config_parser.c](@ref example_yaml_config_parser)** - Configuration file parser
+- @subpage example_yaml_config_parser "yaml_config_parser.c" — Configuration file parser
   - Building structured data from events
   - Stateful event processing
   - Nested sections and key-value extraction
@@ -32,7 +32,7 @@ This page provides practical examples demonstrating the YAML module's streaming 
 
 ### Writer Output
 
-- **[yaml_writer_formatting.c](@ref example_yaml_writer_formatting)** - Writer formatting options
+- @subpage example_yaml_writer_formatting "yaml_writer_formatting.c" — Writer formatting options
     - Pretty/block output with custom indentation
     - Scalar style selection and line-width folding
     - Buffer sink output
@@ -146,8 +146,8 @@ gcc -o yaml_example yaml_example.c $(pkg-config --cflags --libs ghoti.io-text)
 ## See Also
 
 - [YAML Module Documentation](@ref yaml_module) - Complete module reference
-- [Examples Overview](@ref examples) - All library examples
-- [API Reference](@ref functions_index) - Complete function reference
+- [Examples Overview](@ref text_examples) - All library examples
+- [API Reference](@ref text_functions_index) - Complete function reference
 
 ## Contributing Examples
 

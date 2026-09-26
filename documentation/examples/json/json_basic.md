@@ -1,6 +1,6 @@
-@page example_json_basic json_basic.c - Basic JSON Parsing and Writing
+@page example_json_basic JSON: parsing and writing
 
-# json_basic.c - Basic JSON Parsing and Writing
+# JSON: parsing and writing
 
 This example demonstrates the fundamental operations for working with JSON data: parsing JSON from a string, accessing values in the DOM, writing JSON to a buffer, and error handling.
 
@@ -38,4 +38,4 @@ This is the ideal starting point if you're new to the JSON module. It shows the 
 
 - [json_create.c](@ref example_json_create) - Creating JSON programmatically
 - [json_file_io.c](@ref example_json_file_io) - Reading and writing JSON files
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index

@@ -1,6 +1,6 @@
-@page example_yaml_streaming_basic Basic Streaming YAML Parser
+@page example_yaml_streaming_basic YAML: streaming
 
-# Basic Streaming YAML Parser
+# YAML: streaming
 
 This example demonstrates the fundamental streaming YAML parser: parsing YAML documents using the event-driven callback interface.
 
@@ -203,7 +203,7 @@ The parser buffers internally as needed.
 ## Related Examples
 
 - [yaml_config_parser.c](@ref example_yaml_config_parser) - Build config structure from YAML
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index
 
 ## Status Note
 

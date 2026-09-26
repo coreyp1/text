@@ -1,6 +1,6 @@
-@page example_json_patch json_patch.c - JSON Patch and Merge Patch
+@page example_json_patch JSON: Patch
 
-# json_patch.c - JSON Patch and Merge Patch
+# JSON: Patch
 
 This example demonstrates applying JSON Patch operations and JSON Merge Patch to modify JSON documents.
 
@@ -18,4 +18,4 @@ See the source code comments and implementation for details.
 
 ## Related Examples
 
-- [Examples Overview](@ref examples) - Return to examples index
+- [Examples Overview](@ref text_examples) - Return to examples index
