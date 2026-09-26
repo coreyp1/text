@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """How an oracle is spelled, so that no tool here spells one itself.
 
-The pattern is the suite-wide one in `notes/suite/CONTAINERS.md`; `unicode`
-landed it first, then `chron`, `font`, `compress` and `regex`. This library is
+The pattern is the suite-wide one; `unicode` landed it first, then `chron`,
+`font`, `compress` and `regex`. This library is
 the sixth and the last with an oracle to take it, and it had two references
 living on whatever this machine happened to have installed:
 

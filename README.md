@@ -234,10 +234,10 @@ make test
 sudo make install
 ```
 
-From the workspace, which builds those three first:
+From the parent of a suite checkout, which installs cutil, chron, and unicode first:
 
 ```bash
-./bootstrap.sh
+./suite/install.sh
 export PKG_CONFIG_PATH="$PWD/.local/share/pkgconfig"
 make -C libs/text test PREFIX="$PWD/.local"
 ```
