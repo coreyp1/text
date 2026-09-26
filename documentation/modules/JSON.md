@@ -2,7 +2,7 @@
 
 # JSON
 
-This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/coreyp1/unicode); the first two appear in *public* headers and unicode is a link dependency only, so a consumer needs their headers to compile against this one. See the [Dependencies](README.md#dependencies) section of the README.
+This document describes the **full‑featured JSON parsing/writing library in C** implemented in the `text` library in the `ghoti.io` family. The implementation is **cross‑platform** and prioritizes **correctness** and **spec compliance** over simplicity. It is not dependency‑free: the library requires [ghoti.io-cutil](https://github.com/Ghoti-io/cutil), [ghoti.io-chron](https://github.com/Ghoti-io/chron) and [ghoti.io-unicode](https://github.com/Ghoti-io/unicode); the first two appear in *public* headers and unicode is a link dependency only, so a consumer needs their headers to compile against this one. See the [Dependencies](README.md#dependencies) section of the README.
 
 ---
 
@@ -544,7 +544,7 @@ needs neither the network nor Python:
 There were four. `nfc_tables.c` - the combining classes, canonical
 decompositions and composition pairs - and the narrow Script, Joining_Type,
 Bidi_Class and virama tables inside `idna_tables.c` were about 2,600 lines of
-UCD data that [ghoti.io-unicode](https://github.com/coreyp1/unicode) now holds
+UCD data that [ghoti.io-unicode](https://github.com/Ghoti-io/unicode) now holds
 for the whole suite. What is still generated here is what Unicode does not
 define: RFC 5892's derived property, and UTS #46's mapping table, which is not
 part of the UCD and versions on its own schedule.

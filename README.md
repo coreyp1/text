@@ -224,7 +224,7 @@ installs `ghoti.io-text-dev` instead.
 
 [cutil](https://github.com/Ghoti-io/cutil),
 [chron](https://github.com/Ghoti-io/chron) and
-[unicode](https://github.com/coreyp1/unicode) must already be installed
+[unicode](https://github.com/Ghoti-io/unicode) must already be installed
 where pkg-config can see them. A dependency it cannot find is a hard error
 naming the fix.
 
@@ -290,7 +290,7 @@ them, so a program that links `ghoti.io-text-0` links these too.
   and JSON Schema's `date`, `date-time`, `time` and `duration` formats.
   `chron.h` is included from the YAML DOM header, so a program that reads a
   timestamp gets the type.
-- [ghoti.io-unicode](https://github.com/coreyp1/unicode) — normalisation and
+- [ghoti.io-unicode](https://github.com/Ghoti-io/unicode) — normalisation and
   the character properties JSON5 names, JSON5 whitespace and IDNA need. It
   is a link dependency: it does not appear in a public header.
 
